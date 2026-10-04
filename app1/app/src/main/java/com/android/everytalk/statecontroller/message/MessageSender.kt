@@ -108,7 +108,7 @@ internal fun builtInWebFetchToolDefinition(): Map<String, Any> {
         "type" to "function",
         "function" to mapOf(
             "name" to BUILT_IN_WEBFETCH_TOOL_NAME,
-            "description" to "Fetch a web page and return its text content. Use when the user provides a URL or when you need content from a specific webpage.",
+            "description" to "读取网页正文及正文图片，或直接读取网络图片并作为视觉输入返回。用户提供网页或图片 URL 时优先使用本工具；不要通过文本接口读取图片二进制。无扩展名的图片地址请指定 format=image。只有图片读取成功才能描述画面，失败时不要猜测。",
             "parameters" to mapOf(
                 "type" to "object",
                 "properties" to mapOf(
@@ -119,6 +119,11 @@ internal fun builtInWebFetchToolDefinition(): Map<String, Any> {
                     "max_chars" to mapOf(
                         "type" to "integer",
                         "description" to "Maximum characters to return."
+                    ),
+                    "format" to mapOf(
+                        "type" to "string",
+                        "enum" to listOf("auto", "image"),
+                        "description" to "默认 auto 自动识别常见图片直链；已知是图片但无扩展名时使用 image，直接下载为视觉输入。"
                     )
                 ),
                 "required" to listOf("url")
@@ -213,7 +218,14 @@ internal fun prepareMcpDispatch(
     enabled: Boolean = true,
 ): PreparedMcpDispatch {
     val intent = classifyMcpIntent(messageText)
-    val candidates = selectMcpCandidates(intent, allCandidates)
+    // 明确给出网址时，网页内容读取必须先交给内置 webfetch。
+    // 如果把 MCP 浏览器工具同时暴露给模型，模型可能直接选择 MCP，绕过
+    // 内置抓取。内置 webfetch 失败时仍会通过执行层的 fallback 使用这些候选。
+    val candidates = if (intent == QueryIntent.WEB_CONTENT_READ) {
+        emptyList()
+    } else {
+        selectMcpCandidates(intent, allCandidates)
+    }
     // 感知与执行权限分离：关闭时只提供带能力目录的申请工具，不提供外部工具的执行接口。
     val tools = if (enabled) candidates.map { it.toToolDefinition() }
     else if (candidates.isNotEmpty()) listOf(

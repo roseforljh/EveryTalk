@@ -1134,10 +1134,16 @@ internal fun MessageSender.sendMessageInternal(
             }
         }
         sendJob.invokeOnCompletion {
-            if (!accepted.get()) {
-                onSendRejected?.invoke()
-            } else if (!handedToApi.get()) {
-                notifyTurnFinished()
+            try {
+                if (!accepted.get()) {
+                    onSendRejected?.invoke()
+                }
+            } finally {
+                // 只要消息未成功移交给 ApiClient 异步流（包含校验失败、附件失败、持久化失败等早期退出），
+                // 必须在收尾时触发 notifyTurnFinished，避免外部 UI/调度器永久停留在等待态。
+                if (!handedToApi.get()) {
+                    notifyTurnFinished()
+                }
             }
         }
     }

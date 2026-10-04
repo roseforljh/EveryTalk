@@ -12,12 +12,14 @@ import org.junit.Test
 class ComposerForceStopTest {
     private val visibleId = MutableStateFlow<String?>("ai-1")
     private val stopping = MutableStateFlow(false)
+    private val running = MutableStateFlow(true)
     private val snapshots = MutableStateFlow(mapOf(
         "ai-1" to AgentRunControlSnapshot("run-1", "ai-1", AgentRunControlState.PAUSE_REQUESTED),
     ))
     private val holder = mockk<ViewModelStateHolder> {
         every { _currentTextStreamingAiMessageId } returns visibleId
         every { _isRemoteCancellationPending } returns stopping
+        every { _isTextApiCalling } returns running
     }
     private val handler = mockk<ApiHandler>(relaxed = true) {
         every { agentRunControlSnapshots } returns snapshots
@@ -43,6 +45,28 @@ class ComposerForceStopTest {
         }
         snapshots.value = emptyMap()
         viewModel.forceStopPendingPause("ai-1")
+        verify(exactly = 0) { handler.cancelCurrentApiJob(any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun `等待审批无控制快照时停止走完整取消入口且不接受重复点击`() {
+        snapshots.value = emptyMap()
+        every { handler.cancelCurrentApiJob(any(), any(), any(), any()) } answers { stopping.value = true }
+        viewModel.stopUncontrolledRun("ai-1")
+        viewModel.stopUncontrolledRun("ai-1")
+        verify(exactly = 1) { handler.cancelCurrentApiJob(any(), false, false, true) }
+    }
+
+    @Test
+    fun `无控制器停止入口不能误停已注册新会话或已完成任务`() {
+        // 按钮渲染后控制器刚登记：不能再按旧 STOP 图标取消。
+        viewModel.stopUncontrolledRun("ai-1")
+        snapshots.value = emptyMap()
+        visibleId.value = "ai-2"
+        viewModel.stopUncontrolledRun("ai-1")
+        viewModel.stopUncontrolledRun(null)
+        running.value = false
+        viewModel.stopUncontrolledRun("ai-2")
         verify(exactly = 0) { handler.cancelCurrentApiJob(any(), any(), any(), any()) }
     }
 

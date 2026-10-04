@@ -57,6 +57,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.isActive
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
@@ -93,7 +96,45 @@ internal fun reconcileMessageAfterStatusClear(updatedMessage: Message, clearedMe
 internal fun shouldKeepApprovalUiActive(
     waitingForAgentApproval: Boolean,
     isImageGeneration: Boolean,
-): Boolean = waitingForAgentApproval && !isImageGeneration
+    completedNormally: Boolean = true,
+): Boolean = waitingForAgentApproval && !isImageGeneration && completedNormally
+
+/**
+ * 恢复流结束时对 UI 状态的收尾契约。
+ * 遇到二次审批等待时（waitingForAgentApproval=true 且 completedNormally=true）必须保留 running 态与 messageId，
+ * 绝不能像旧逻辑一样无条件将 _isTextApiCalling 置为 false。
+ */
+internal fun finalizeResumedAgentStreamingState(
+    stateHolder: ViewModelStateHolder,
+    visibleAssistantMessageId: String,
+    waitingForAgentApproval: Boolean,
+    completedNormally: Boolean,
+) {
+    stateHolder.textApiJob = null
+    if (shouldKeepApprovalUiActive(waitingForAgentApproval, isImageGeneration = false, completedNormally = completedNormally)) {
+        stateHolder._isTextApiCalling.value = true
+        stateHolder._currentTextStreamingAiMessageId.value = visibleAssistantMessageId
+    } else {
+        stateHolder._isTextApiCalling.value = false
+        stateHolder._currentTextStreamingAiMessageId.value = null
+    }
+}
+
+/** 单次等待远端停止确认的上限；超时后仍保留任务和取消意图，允许用户核对/重试。 */
+internal const val REMOTE_STOP_CONFIRMATION_TIMEOUT_MS = 15_000L
+
+/** 只限制 UI 等待，不取消远端停止 Job；后台仍可完成停止，重试时复用尚未结束的同一个 Job。 */
+internal suspend fun awaitRemoteStopConfirmation(job: Job, succeeded: () -> Boolean): Boolean =
+    withTimeoutOrNull(REMOTE_STOP_CONFIRMATION_TIMEOUT_MS) {
+        job.join()
+        succeeded()
+    } == true
+
+/** 固定停止点击时的消息和会话，不允许异步返回影响新会话；成功值由不同线程回调，必须原子读写。 */
+private class PendingAgentStop(val messageId: String, val conversationId: String, val showFeedback: Boolean) {
+    var remoteJob: Job? = null
+    val remoteSucceeded = AtomicBoolean(false)
+}
 
 /**
  * 应用级 Agent 续写没有 ViewModel Job 负责 UI 收尾，这里统一判断事件是否仍属运行过程。
@@ -151,16 +192,46 @@ internal fun mergeStreamingCompletionMessage(syncedMessage: Message, finalizedMe
     )
 }
 
-/** 启动恢复协程并登记为当前任务；登记顺序由此公共入口统一保证。 */
+/**
+ * 先登记当前 Job，再启动请求，避免极快完成的请求与准备 Job 的交接产生竞态。
+ * onCompletion 只负责非挂起的状态兜底：scope 已取消时函数体根本不会执行，finally 也不会进入。
+ */
 internal fun CoroutineScope.launchRegisteredJob(
     register: (Job) -> Unit,
+    onCompletion: (Job) -> Unit = {},
     block: suspend CoroutineScope.() -> Unit,
 ): Job {
-    // LAZY 保证极快的恢复流也必须等登记完成后才能进入 finally。
     val job = launch(start = CoroutineStart.LAZY, block = block)
     register(job)
+    job.invokeOnCompletion { onCompletion(job) }
     job.start()
     return job
+}
+
+/**
+ * 仅清理仍由该 Job 拥有的流式状态。旧任务结束不得覆盖新任务，远端取消确认标记也不能被清除。
+ * 这里只写线程安全的 StateFlow 和 Job 引用，不操作 Compose 消息列表或执行挂起调用。
+ * 正常审批等待会先释放 Job 所有权，因此不会被此兜底误判为完成。
+ */
+internal fun clearCompletedStreamingJob(
+    stateHolder: ViewModelStateHolder,
+    job: Job,
+    messageId: String,
+    isImageGeneration: Boolean,
+) {
+    if (isImageGeneration) {
+        if (stateHolder.imageApiJob !== job) return
+        stateHolder.imageApiJob = null
+        if (stateHolder._currentImageStreamingAiMessageId.value != messageId) return
+        stateHolder._isImageApiCalling.value = false
+        stateHolder._currentImageStreamingAiMessageId.value = null
+    } else {
+        if (stateHolder.textApiJob !== job) return
+        stateHolder.textApiJob = null
+        if (stateHolder._currentTextStreamingAiMessageId.value != messageId) return
+        stateHolder._isTextApiCalling.value = false
+        stateHolder._currentTextStreamingAiMessageId.value = null
+    }
 }
 
 internal fun mergeWebSearchResults(
@@ -299,7 +370,8 @@ class ApiHandler(
     private val triggerScrollToBottom: () -> Unit,
     private val cancelComputerExecutions: (String, String?, (Boolean) -> Unit) -> Job = { _, _, onComplete ->
         onComplete(true)
-        Job()
+        // 无 Computer 执行器时返回已完成 Job，不能让停止流程永久挂在 join()。
+        Job().apply { complete() }
     },
     private val computerSessionStateProvider: suspend (ComputerRequestContext?) -> String? = { null },
     private val prepareAgentResumeRequest: suspend (String, ChatRequest, List<String>) -> ChatRequest = { _, request, _ -> request },
@@ -347,6 +419,11 @@ class ApiHandler(
 
     val agentRunControlSnapshots: StateFlow<Map<String, AgentRunControlSnapshot>>
         get() = agentRunCoordinator.runControlSnapshots
+    private var pendingAgentStop: PendingAgentStop? = null
+    private val _retryableRemoteStopMessageId = MutableStateFlow<String?>(null)
+    /** 远端未确认且本轮等待已结束时才提供重试；取消屏障仍保持，Pending 不能偷偷派发。 */
+    val retryableRemoteStopMessageId: StateFlow<String?> = _retryableRemoteStopMessageId.asStateFlow()
+
     val pendingInterventions: StateFlow<List<com.android.everytalk.data.agent.PendingIntervention>>
         get() = agentRunCoordinator.pendingInterventions
 
@@ -927,8 +1004,13 @@ class ApiHandler(
             logger.debug("开始注册恢复后的 Agent 流: runId=${run.id}")
             viewModelScope.launchRegisteredJob(
                 register = { job -> stateHolder.textApiJob = job },
+                onCompletion = { job ->
+                    clearCompletedStreamingJob(stateHolder, job, run.visibleAssistantMessageId, false)
+                },
             ) {
                 val thisJob = coroutineContext[Job]
+                var waitingForAgentApproval = false
+                var completedNormally = false
                 try {
                     agentRunCoordinator.run(
                         AgentLoopRequest(
@@ -942,7 +1024,13 @@ class ApiHandler(
                         ),
                     ).collect { event ->
                         processStreamEvent(event, run.visibleAssistantMessageId, isImageGeneration = false)
+                        if (event is AppStreamEvent.AgentApprovalRequired ||
+                            event is AppStreamEvent.AgentInterventionRequired
+                        ) {
+                            waitingForAgentApproval = true
+                        }
                     }
+                    completedNormally = true
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (error: Exception) {
@@ -959,9 +1047,12 @@ class ApiHandler(
                         stateHolder.syncStreamingMessageToList(run.visibleAssistantMessageId, false)
                         stateHolder.clearStreamingBuffer(run.visibleAssistantMessageId)
                         if (stateHolder.textApiJob == thisJob) {
-                            stateHolder.textApiJob = null
-                            stateHolder._isTextApiCalling.value = false
-                            stateHolder._currentTextStreamingAiMessageId.value = null
+                            finalizeResumedAgentStreamingState(
+                                stateHolder = stateHolder,
+                                visibleAssistantMessageId = run.visibleAssistantMessageId,
+                                waitingForAgentApproval = waitingForAgentApproval,
+                                completedNormally = completedNormally,
+                            )
                         }
                         try {
                             restorePendingAgentApproval()
@@ -1227,35 +1318,10 @@ class ApiHandler(
             if (showFeedback) stateHolder.showSnackbar("正在停止任务")
             finishMessageExecutionForUserStop(messageIdBeingCancelled)
             agentRunCoordinator.cancelVisibleRun(messageIdBeingCancelled, AgentTerminalReasons.USER_STOP)
-            viewModelScope.launch(Dispatchers.IO) {
-                var resultMessage = "停止尚未确认，请重新核对任务状态"
-                try {
-                    // 先持久化 USER_STOP。远端失败也不能恢复 Run，否则停止后会再次执行模型。
-                    val run = agentRunStore.cancelActiveRunByVisibleMessage(
-                        messageIdBeingCancelled, AgentTerminalReasons.USER_STOP,
-                    )
-                    val activeRunId = run?.id
-                    var success = activeRunId == null
-                    if (activeRunId != null) {
-                        // 固定点击时的会话和 Run，不能在异步返回时取消用户新打开的会话。
-                        cancelComputerExecutions(conversationIdBeingCancelled, activeRunId) { success = it }.join()
-                    }
-                    resultMessage = if (success) "任务已停止" else "本地任务已停止，远端停止尚未确认"
-                } catch (error: CancellationException) {
-                    throw error
-                } catch (error: Exception) {
-                    android.util.Log.e("AgentRuntime", "stop_failed type=${error.javaClass.simpleName}")
-                } finally {
-                    withContext(kotlinx.coroutines.NonCancellable + Dispatchers.Main.immediate) {
-                        updateMessageExecutionStatus(messageIdBeingCancelled, resultMessage)
-                        if (cancellingMessageId == messageIdBeingCancelled) {
-                            cancellingMessageId = null
-                            stateHolder._isRemoteCancellationPending.value = false
-                            if (showFeedback) stateHolder.showSnackbar(resultMessage)
-                        }
-                    }
-                }
-            }
+            val operation = PendingAgentStop(messageIdBeingCancelled, conversationIdBeingCancelled, showFeedback)
+            pendingAgentStop = operation
+            _retryableRemoteStopMessageId.value = null
+            launchStopConfirmation(operation)
         }
         if (showFeedback && !isNewMessageSend && messageIdBeingCancelled == null && !isImageGeneration) {
             // 用户点击与任务结束竞争时静默对账；启动/切页的空清理不触发额外恢复。
@@ -1327,6 +1393,76 @@ class ApiHandler(
             stateHolder._isTextApiCalling.value = false
             stateHolder._currentTextStreamingAiMessageId.value = null
         }
+    }
+
+    /**
+     * 单次停止确认结束后，只有确认成功才解除取消屏障。
+     * 超时/失败保留 USER_STOP 与远端取消记录，按钮提供重试而不是永久灰圈或自动派发新任务。
+     */
+    private fun launchStopConfirmation(operation: PendingAgentStop) {
+        viewModelScope.launch(Dispatchers.IO) {
+            var confirmed = false
+            var resultMessage = "停止尚未确认，请重新核对任务状态"
+            try {
+                // 先持久化 USER_STOP，再发远端取消；重试也只针对原消息所属 Run。
+                val run = agentRunStore.cancelActiveRunByVisibleMessage(operation.messageId, AgentTerminalReasons.USER_STOP)
+                confirmed = if (run == null) {
+                    true
+                } else {
+                    val job = operation.remoteJob?.takeIf { !it.isCompleted || operation.remoteSucceeded.get() } ?: run {
+                        operation.remoteSucceeded.set(false)
+                        cancelComputerExecutions(operation.conversationId, run.id) { operation.remoteSucceeded.set(it) }
+                            .also { operation.remoteJob = it }
+                    }
+                    // 等待超时后 Job 仍在后台。迟到的成功也必须主动解锁，不能要求用户再点一次。
+                    job.invokeOnCompletion { cause ->
+                        if (cause == null && operation.remoteSucceeded.get()) {
+                            viewModelScope.launch(Dispatchers.Main.immediate) { completeConfirmedAgentStop(operation) }
+                        }
+                    }
+                    awaitRemoteStopConfirmation(job) { operation.remoteSucceeded.get() }
+                }
+                resultMessage = if (confirmed) "任务已停止" else "本地任务已停止，远端停止尚未确认"
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                android.util.Log.e("AgentRuntime", "stop_failed type=${error.javaClass.simpleName}")
+            } finally {
+                withContext(kotlinx.coroutines.NonCancellable + Dispatchers.Main.immediate) {
+                    // 用操作对象身份核对，即使同一消息被重新恢复也不让旧等待覆盖新的取消操作。
+                    if (pendingAgentStop === operation && cancellingMessageId == operation.messageId) {
+                        if (confirmed) {
+                            completeConfirmedAgentStop(operation)
+                        } else {
+                            updateMessageExecutionStatus(operation.messageId, resultMessage)
+                            _retryableRemoteStopMessageId.value = operation.messageId
+                            if (operation.showFeedback) stateHolder.showSnackbar(resultMessage)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /** 只在主线程确认当前操作，迟到的远端成功不能解除另一轮取消屏障或重复提示。 */
+    private fun completeConfirmedAgentStop(operation: PendingAgentStop) {
+        if (pendingAgentStop !== operation || cancellingMessageId != operation.messageId) return
+        pendingAgentStop = null
+        cancellingMessageId = null
+        _retryableRemoteStopMessageId.value = null
+        stateHolder._isRemoteCancellationPending.value = false
+        updateMessageExecutionStatus(operation.messageId, "任务已停止")
+        if (operation.showFeedback) stateHolder.showSnackbar("任务已停止")
+    }
+
+    /** 重试前同步隐藏入口防止连点；尚未结束的停止 Job 会被复用，不重复创建 SSH 取消请求。 */
+    fun retryRemoteStopConfirmation(expectedMessageId: String?) {
+        val operation = pendingAgentStop ?: return
+        if (expectedMessageId == null || _retryableRemoteStopMessageId.value != expectedMessageId ||
+            operation.messageId != expectedMessageId || !stateHolder._isRemoteCancellationPending.value
+        ) return
+        _retryableRemoteStopMessageId.value = null
+        launchStopConfirmation(operation)
     }
 
     fun streamChatResponse(
@@ -1423,21 +1559,21 @@ class ApiHandler(
             logger.debug("🔧 Using pre-created AI message ID: $aiMessageId")
         }
 
-        val job = viewModelScope.launch {
+        viewModelScope.launchRegisteredJob(
+            register = { job ->
+                if (isImageGeneration) stateHolder.imageApiJob = job else stateHolder.textApiJob = job
+            },
+            onCompletion = { job ->
+                clearCompletedStreamingJob(stateHolder, job, aiMessageId, isImageGeneration)
+                // 协程结束时必须通知发送闭包，使外部发送协程生命周期正常闭环并释放调度槽位，不可在此抑制
+                runCatching(onRequestFinished).onFailure { error ->
+                    logger.warn("Request finished callback failed: ${error.message}")
+                }
+            },
+        ) {
             val thisJob = coroutineContext[Job]
             var waitingForAgentApproval = false
-            if (preCreatedAiMessageId != null && contextUsageSnapshot != null) {
-                withContext(Dispatchers.Main.immediate) {
-                    val messageList = if (isImageGeneration) {
-                        stateHolder.imageGenerationMessages
-                    } else {
-                        stateHolder.messages
-                    }
-                    if (!updateMessageContextUsageSnapshot(messageList, aiMessageId, contextUsageSnapshot)) {
-                        logger.warn("预创建消息不存在，无法同步上下文快照: $aiMessageId")
-                    }
-                }
-            }
+            var completedNormally = false
             var finalSyncDone = false
             suspend fun ensureFinalStreamingSync(source: String) {
                 if (finalSyncDone) return
@@ -1449,12 +1585,16 @@ class ApiHandler(
                     logger.warn("Final streaming sync from $source failed: ${e.message}")
                 }
             }
-            if (isImageGeneration) {
-                stateHolder.imageApiJob = thisJob
-            } else {
-                stateHolder.textApiJob = thisJob
-            }
             try {
+                // 初始化也必须在收尾保护内；取消或状态同步失败时不能遗留运行标记。
+                if (preCreatedAiMessageId != null && contextUsageSnapshot != null) {
+                    withContext(Dispatchers.Main.immediate) {
+                        val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
+                        if (!updateMessageContextUsageSnapshot(messageList, aiMessageId, contextUsageSnapshot)) {
+                            logger.warn("预创建消息不存在，无法同步上下文快照: $aiMessageId")
+                        }
+                    }
+                }
                if (isImageGeneration) {
                     try {
                         val response = ApiClient.generateImage(requestBody)
@@ -1591,6 +1731,7 @@ class ApiHandler(
                         }
                     }
                }
+               completedNormally = true
              } catch (e: CancellationException) {
                  val currentMessageProcessor = messageProcessorMap[aiMessageId] ?: MessageProcessor()
                  val partialText = currentMessageProcessor.getCurrentText().trim()
@@ -1619,52 +1760,50 @@ class ApiHandler(
                  updateMessageWithError(aiMessageId, e, isImageGeneration)
                  onRequestFailed(e)
              } finally {
-                // 🎯 最终安全网：如果在 onCompletion 中因异常未执行同步，这里再尝试一次
-                // 但为了避免重复执行，syncStreamingMessageToList 内部有空值检查
-                // 注意：在 finally 中不应抛出异常
-                ensureFinalStreamingSync("job.finally")
-
-                // 🎯 最后统一清理 StreamingBuffer，确保 sync 完成后再清理
-                try {
-                    stateHolder.clearStreamingBuffer(aiMessageId)
-                    logger.debug("Cleared StreamingBuffer in finally block for message: $aiMessageId")
-                } catch (e: Exception) {
-                    logger.warn("Clear StreamingBuffer in finally block failed: ${e.message}")
-                }
-
-                // 流结束后这些对象不再参与后续消息处理，及时释放，避免长会话按消息累积。
-                messageProcessorMap.remove(aiMessageId)
-                processedMessageIds.remove(aiMessageId)
-                promptLeakDetectors.remove(aiMessageId)
-                generatedImageSourceFingerprints.remove(aiMessageId)
-                retryCountMap.remove(aiMessageId)
-
-                val currentJob = if (isImageGeneration) stateHolder.imageApiJob else stateHolder.textApiJob
                 var clearedCurrentTextJob = false
-                if (currentJob == thisJob) {
-                    if (isImageGeneration) {
-                        stateHolder.imageApiJob = null
-                        stateHolder._isImageApiCalling.value = false
-                        stateHolder._currentImageStreamingAiMessageId.value = null
-                    } else {
-                        stateHolder.textApiJob = null
-                        if (shouldKeepApprovalUiActive(waitingForAgentApproval, isImageGeneration)) {
-                            // request_agent 和 Secret 申请只暂停模型。保留进行中状态，输入框和气泡不能假装结束。
-                            stateHolder._isTextApiCalling.value = true
-                            stateHolder._currentTextStreamingAiMessageId.value = aiMessageId
+                // 只有本地同步和状态清理不可取消；不能把可能访问网络的恢复流程放进此区域。
+                withContext(kotlinx.coroutines.NonCancellable + Dispatchers.Main.immediate) {
+                    ensureFinalStreamingSync("job.finally")
+                    try {
+                        stateHolder.clearStreamingBuffer(aiMessageId)
+                    } catch (error: Exception) {
+                        logger.warn("Clear StreamingBuffer in finally block failed: ${error.message}")
+                    }
+                    messageProcessorMap.remove(aiMessageId)
+                    processedMessageIds.remove(aiMessageId)
+                    promptLeakDetectors.remove(aiMessageId)
+                    generatedImageSourceFingerprints.remove(aiMessageId)
+                    retryCountMap.remove(aiMessageId)
+
+                    val currentJob = if (isImageGeneration) stateHolder.imageApiJob else stateHolder.textApiJob
+                    if (currentJob == thisJob) {
+                        if (isImageGeneration) {
+                            stateHolder.imageApiJob = null
+                            stateHolder._isImageApiCalling.value = false
+                            stateHolder._currentImageStreamingAiMessageId.value = null
                         } else {
-                            stateHolder._isTextApiCalling.value = false
-                            stateHolder._currentTextStreamingAiMessageId.value = null
-                            clearedCurrentTextJob = true
+                            stateHolder.textApiJob = null
+                            if (shouldKeepApprovalUiActive(waitingForAgentApproval, isImageGeneration, completedNormally)) {
+                                // 正常等待审批仍阻止 Pending 自动派发；取消或异常不能依据旧事件保留加载。
+                                stateHolder._isTextApiCalling.value = true
+                                stateHolder._currentTextStreamingAiMessageId.value = aiMessageId
+                            } else {
+                                stateHolder._isTextApiCalling.value = false
+                                stateHolder._currentTextStreamingAiMessageId.value = null
+                                clearedCurrentTextJob = true
+                            }
                         }
                     }
                 }
-                if (clearedCurrentTextJob) {
-                    restoreVisibleAgentState()
-                    restorePendingAgentApproval()
-                }
-                runCatching(onRequestFinished).onFailure { error ->
-                    logger.warn("Request finished callback failed: ${error.message}")
+                if (clearedCurrentTextJob && coroutineContext.isActive) {
+                    try {
+                        restoreVisibleAgentState()
+                        restorePendingAgentApproval()
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Exception) {
+                        logger.warn("请求结束后的状态核对失败: ${error.message}")
+                    }
                 }
              }
         }

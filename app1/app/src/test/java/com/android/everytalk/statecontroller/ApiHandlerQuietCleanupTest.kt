@@ -121,6 +121,150 @@ class ApiHandlerQuietCleanupTest {
     )
 
     @Test
+    fun `首次流请求在启动前取消也会结束Pending派发回调并清理加载状态`() {
+        holder._currentTextStreamingAiMessageId.value = "prepared"
+        holder._isTextApiCalling.value = true
+        var finishedCount = 0
+        handler.streamChatResponse(
+            requestBody = ChatRequest(
+                messages = listOf(SimpleTextApiMessage(role = "user", content = "测试")),
+                provider = "OpenAI", channel = "OpenAI", apiAddress = "https://example.test",
+                apiKey = "test", model = "test",
+            ),
+            attachmentsToPassToApiClient = emptyList(),
+            applicationContextForApiClient = ApplicationProvider.getApplicationContext(),
+            userMessageTextForContext = "测试",
+            afterUserMessageId = "user",
+            onMessagesProcessed = {}, onRequestFailed = {}, onNewAiMessageAdded = {},
+            preCreatedAiMessageId = "prepared",
+            onRequestFinished = { finishedCount++ },
+        )
+        assertFalse(holder._isTextApiCalling.value)
+        assertNull(holder._currentTextStreamingAiMessageId.value)
+        assertNull(holder.textApiJob)
+        assertEquals(1, finishedCount)
+    }
+
+    /** 真实停止入口：远端失败不放行队列，可重试，旧消息点击不能取消新会话。 */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun `远端停止失败保留取消屏障且重试成功后才解锁`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        val database = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
+            .allowMainThreadQueries().build()
+        val parent = SupervisorJob()
+        val liveScope = CoroutineScope(parent + Dispatchers.Unconfined)
+        Dispatchers.setMain(UnconfinedTestDispatcher())
+        mockkObject(AppDatabase.Companion, AgentRunCoordinator.Companion)
+        try {
+            every { AppDatabase.getDatabase(any()) } returns database
+            val coordinator = mockk<AgentRunCoordinator>(relaxed = true)
+            every { coordinator.events } returns MutableSharedFlow<Pair<String, AppStreamEvent>>()
+            every { AgentRunCoordinator.shared(any(), any()) } returns coordinator
+            val state = ViewModelStateHolder()
+            state.setCurrentConversationId("stop-session")
+            database.chatDao().insertSession(ChatSessionEntity("stop-session", 1L, 1L, false))
+            val store = AgentRunStore(database.agentDao())
+            val run = store.createRun("stop-session", "user", "assistant", "config", ChatRequest(
+                messages = listOf(SimpleTextApiMessage(role = "user", content = "任务")),
+                provider = "OpenAI", channel = "OpenAI", apiAddress = "https://example.test",
+                apiKey = "test", model = "test",
+            ))
+            var attempts = 0
+            val liveHandler = ApiHandler(context, state, liveScope, mockk(relaxed = true), { _, _ -> }, {},
+                cancelComputerExecutions = { sessionId, runId, complete ->
+                    assertEquals("stop-session", sessionId)
+                    assertEquals(run.id, runId)
+                    attempts++
+                    complete(attempts > 1)
+                    Job().apply { complete() }
+                })
+            val collectors = parent.children.toSet()
+            state._currentTextStreamingAiMessageId.value = "assistant"
+            state._isTextApiCalling.value = true
+            liveHandler.cancelCurrentApiJob("用户停止", showFeedback = true)
+            withTimeout(5_000) { parent.children.filter { it !in collectors }.toList().joinAll() }
+            assertTrue(state._isRemoteCancellationPending.value)
+            assertEquals("assistant", liveHandler.retryableRemoteStopMessageId.value)
+            assertEquals("CANCELLED", database.agentDao().getRun(run.id)?.status)
+            // 重试必须沿用点击时的会话，不能读取当前已经切换的会话。
+            state.setCurrentConversationId("new-session")
+            liveHandler.retryRemoteStopConfirmation("wrong-message")
+            assertEquals(1, attempts)
+            liveHandler.retryRemoteStopConfirmation("assistant")
+            liveHandler.retryRemoteStopConfirmation("assistant")
+            withTimeout(5_000) { parent.children.filter { it !in collectors }.toList().joinAll() }
+            assertEquals(2, attempts)
+            assertFalse(state._isRemoteCancellationPending.value)
+            assertNull(liveHandler.retryableRemoteStopMessageId.value)
+        } finally {
+            parent.cancelAndJoin()
+            unmockkObject(AppDatabase.Companion, AgentRunCoordinator.Companion)
+            Dispatchers.resetMain()
+            database.close()
+        }
+    }
+
+    /** 使用真实超时路径，验证迟到的远端确认主动解锁，而不是必须再点停止。 */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun `远端停止超时后迟到的成功会自动解锁且旧等待不能覆盖成功`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        val database = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
+            .allowMainThreadQueries().build()
+        val parent = SupervisorJob()
+        val liveScope = CoroutineScope(parent + Dispatchers.Unconfined)
+        val remote = Job()
+        Dispatchers.setMain(UnconfinedTestDispatcher())
+        mockkObject(AppDatabase.Companion, AgentRunCoordinator.Companion)
+        try {
+            every { AppDatabase.getDatabase(any()) } returns database
+            val coordinator = mockk<AgentRunCoordinator>(relaxed = true)
+            every { coordinator.events } returns MutableSharedFlow<Pair<String, AppStreamEvent>>()
+            every { AgentRunCoordinator.shared(any(), any()) } returns coordinator
+            val state = ViewModelStateHolder()
+            state.setCurrentConversationId("slow-stop")
+            database.chatDao().insertSession(ChatSessionEntity("slow-stop", 1L, 1L, false))
+            AgentRunStore(database.agentDao()).createRun("slow-stop", "user", "assistant", "config", ChatRequest(
+                messages = listOf(SimpleTextApiMessage(role = "user", content = "任务")),
+                provider = "OpenAI", channel = "OpenAI", apiAddress = "https://example.test",
+                apiKey = "test", model = "test",
+            ))
+            var callback: ((Boolean) -> Unit)? = null
+            var attempts = 0
+            val liveHandler = ApiHandler(context, state, liveScope, mockk(relaxed = true), { _, _ -> }, {},
+                cancelComputerExecutions = { _, _, complete -> attempts++; callback = complete; remote })
+            val collectors = parent.children.toSet()
+            state._currentTextStreamingAiMessageId.value = "assistant"
+            state._isTextApiCalling.value = true
+            liveHandler.cancelCurrentApiJob("用户停止")
+            withTimeout(REMOTE_STOP_CONFIRMATION_TIMEOUT_MS + 5_000) {
+                while (liveHandler.retryableRemoteStopMessageId.value == null) kotlinx.coroutines.delay(10)
+            }
+            assertTrue(state._isRemoteCancellationPending.value)
+            assertEquals("assistant", liveHandler.retryableRemoteStopMessageId.value)
+            assertTrue(remote.isActive)
+            // 超时后重试必须复用后台取消 Job，不能不断创建新 SSH 任务。
+            liveHandler.retryRemoteStopConfirmation("assistant")
+            assertNull(liveHandler.retryableRemoteStopMessageId.value)
+            requireNotNull(callback).invoke(true)
+            remote.complete()
+            withTimeout(5_000) {
+                while (state._isRemoteCancellationPending.value) kotlinx.coroutines.delay(10)
+            }
+            assertEquals(1, attempts)
+            assertFalse(state._isRemoteCancellationPending.value)
+            assertNull(liveHandler.retryableRemoteStopMessageId.value)
+        } finally {
+            remote.cancel()
+            parent.cancelAndJoin()
+            unmockkObject(AppDatabase.Companion, AgentRunCoordinator.Companion)
+            Dispatchers.resetMain()
+            database.close()
+        }
+    }
+
+    @Test
     fun `启动新聊天切换配置加载历史的空清理不弹提示`() {
         listOf("开始新聊天", "Switching selected config to ID test", "加载文本模式历史索引 0").forEach {
             handler.cancelCurrentApiJob(it)

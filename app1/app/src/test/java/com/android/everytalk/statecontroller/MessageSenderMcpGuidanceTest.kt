@@ -52,6 +52,21 @@ class MessageSenderMcpGuidanceTest {
     }
 
     @Test
+    fun `url request hides mcp browser tools so built in webfetch is selected first`() {
+        val tools = prepareMcpDispatch(
+            messageText = "请总结 https://example.com 的内容",
+            allCandidates = listOf(
+                com.android.everytalk.statecontroller.mcp.dispatch.toMcpToolCandidate(
+                    serverName = "Firecrawl",
+                    tool = com.android.everytalk.data.mcp.McpTool("crawl_page", "Read page"),
+                ),
+            ),
+        ).tools
+
+        assertTrue(tools.isEmpty())
+    }
+
+    @Test
     fun `disabled mcp exposes an approval tool and capability catalog instead of external tools`() {
         val tools = prepareMcpDispatch(
             messageText = "帮我创建一个客户工单",

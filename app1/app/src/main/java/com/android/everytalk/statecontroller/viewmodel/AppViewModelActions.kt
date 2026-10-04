@@ -1041,6 +1041,21 @@ import java.util.UUID
     }
 
     /**
+     * 停止准备请求或等待审批的可见任务；没有暂停控制器不代表没有任务。
+     * 点击前重新核对消息和最新控制状态，避免旧图标误停已切换的任务或刚注册的 Run。
+     * 不直接清空 UI：公共取消入口会取消准备 Job、持久化 USER_STOP 并停止远端执行。
+     */
+    internal fun AppViewModel.stopUncontrolledRun(expectedMessageId: String?) {
+        if (expectedMessageId == null ||
+            stateHolder._currentTextStreamingAiMessageId.value != expectedMessageId ||
+            !stateHolder._isTextApiCalling.value ||
+            stateHolder._isRemoteCancellationPending.value ||
+            apiHandler.agentRunControlSnapshots.value[expectedMessageId] != null
+        ) return
+        apiHandler.cancelCurrentApiJob("用户停止准备中或等待确认的任务", isImageGeneration = false, showFeedback = true)
+    }
+
+    /**
      * 手动「立即压缩」：不看阈值，直接给当前会话压出一条新检查点。
      * 要真发一次模型请求，置位期间按钮转圈并禁用，避免连点发出两次压缩。
      */

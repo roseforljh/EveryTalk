@@ -201,18 +201,28 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     .flatMap(Message::attachments)
             }
         },
-        onDownloaded = { conversationId, attachment ->
-            withContext(Dispatchers.Main.immediate) {
-                if (stateHolder._currentConversationId.value != conversationId) return@withContext
-                val targetMessageId = stateHolder._currentTextStreamingAiMessageId.value
-                val targetIndex = stateHolder.messages.indexOfFirst { message -> message.id == targetMessageId }
-                if (targetIndex >= 0) {
-                    val message = stateHolder.messages[targetIndex]
-                    if (message.attachments.none { it.id == attachment.id }) {
-                        stateHolder.messages[targetIndex] = message.copy(attachments = message.attachments + attachment)
-                        stateHolder.isTextConversationDirty.value = true
-                    }
+        onDownloaded = { conversationId, runId, attachment ->
+            // 工具结果属于固定 AgentRun；当前流式 ID 可能已经切到另一条消息或另一会话。
+            val chatDao = com.android.everytalk.data.database.AppDatabase.getDatabase(application).chatDao()
+            val run = com.android.everytalk.data.database.AppDatabase.getDatabase(application)
+                .agentDao().getRun(runId)
+                ?: error("下载所属的 Agent 任务不存在")
+            require(run.sessionId == conversationId) { "下载会话与 Agent 任务不一致" }
+            val attachedToVisibleMessage = withContext(Dispatchers.Main.immediate) {
+                if (stateHolder._currentConversationId.value != conversationId) return@withContext false
+                val index = stateHolder.messages.indexOfFirst { it.id == run.visibleAssistantMessageId }
+                if (index < 0) return@withContext false
+                val message = stateHolder.messages[index]
+                if (message.attachments.none { it.id == attachment.id }) {
+                    stateHolder.messages[index] = message.copy(attachments = message.attachments + attachment)
+                    stateHolder.isTextConversationDirty.value = true
                 }
+                true
+            }
+            if (attachedToVisibleMessage) {
+                historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = false)
+            } else if (!chatDao.appendDownloadedAttachment(run.sessionId, run.visibleAssistantMessageId, attachment)) {
+                error("下载所属的聊天消息不存在，附件未交付")
             }
         },
     )

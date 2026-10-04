@@ -18,8 +18,10 @@ import com.android.everytalk.ui.screens.viewmodel.ConfigManager
 import com.android.everytalk.ui.screens.viewmodel.DataPersistenceManager
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkObject
+import io.mockk.mockkStatic
 import io.mockk.slot
 import io.mockk.unmockkAll
 import io.mockk.verify
@@ -129,7 +131,7 @@ class ModelAndConfigControllerTest {
             source = ModelCapabilitySource.LIVE_ENDPOINT,
         )
         coEvery {
-            ApiClient.getModelCapabilities(
+            ApiClient.getFreshModelCapabilities(
                 "https://api.example.com",
                 "secret",
                 "Gemini",
@@ -163,7 +165,7 @@ class ModelAndConfigControllerTest {
         )
         verify(exactly = 0) { configManager.updateConfig(any(), any()) }
         coVerify(exactly = 1) {
-            ApiClient.getModelCapabilities(
+            ApiClient.getFreshModelCapabilities(
                 "https://api.example.com",
                 "secret",
                 "Gemini",
@@ -171,6 +173,90 @@ class ModelAndConfigControllerTest {
                 "Gemini",
             )
         }
+    }
+
+    @Test
+    fun `手动获取用实时值覆盖之前保存的错误手动参数`() = runTest(UnconfinedTestDispatcher()) {
+        mockkObject(ApiClient)
+        val config = ApiConfig(
+            address = "https://api.example.com",
+            key = "secret",
+            model = "gemini-3.8-flash",
+            provider = "Gemini",
+            name = "Gemini 3.8 Flash",
+            channel = "Gemini",
+        ).withUserTokenLimits(ModelTokenLimits(4_000, 100_000))
+        coEvery { ApiClient.getFreshModelCapabilities(any(), any(), any(), any(), any()) } returns listOf(
+            ModelCapabilityCandidate(
+                modelId = config.model,
+                protocol = ModelParameterProtocol.GEMINI,
+                endpointIdentity = config.address,
+                contextWindowTokens = 1_000_000,
+                maxOutputTokens = 64_000,
+                source = ModelCapabilitySource.LIVE_ENDPOINT,
+            )
+        )
+
+        val loaded = controller(this, ViewModelStateHolder()).loadModelParameters(config).getOrThrow()
+
+        assertEquals(64_000, loaded.maxTokens)
+        assertEquals(1_000_000, loaded.modelParameters.maxContextTokens)
+        assertEquals(ModelCapabilitySource.LIVE_ENDPOINT, loaded.modelParameters.resolvedCapability?.maxOutputSource)
+        assertEquals(ModelCapabilitySource.LIVE_ENDPOINT, loaded.modelParameters.resolvedCapability?.contextWindowSource)
+        coVerify(exactly = 1) {
+            ApiClient.getFreshModelCapabilities(config.address, config.key, "Gemini", config.model, config.provider)
+        }
+    }
+
+    @Test
+    fun `实时来源全失败时不把旧参数当成获取成功`() = runTest(UnconfinedTestDispatcher()) {
+        mockkObject(ApiClient)
+        mockkStatic(android.util.Log::class)
+        every { android.util.Log.e(any(), any(), any()) } returns 0
+        val config = ApiConfig(
+            address = "https://api.example.com",
+            key = "secret",
+            model = "gemini-3.8-flash",
+            provider = "Gemini",
+            name = "Gemini 3.8 Flash",
+            channel = "Gemini",
+        ).withUserTokenLimits(ModelTokenLimits(4_000, 100_000))
+        coEvery { ApiClient.getFreshModelCapabilities(any(), any(), any(), any(), any()) } returns emptyList()
+
+        val result = controller(this, ViewModelStateHolder()).loadModelParameters(config)
+
+        assertTrue(result.isFailure)
+        assertEquals(4_000, config.maxTokens)
+        assertEquals(100_000, config.modelParameters.maxContextTokens)
+    }
+
+    @Test
+    fun `实时来源缺少最大输出时不使用估算值冒充还原结果`() = runTest(UnconfinedTestDispatcher()) {
+        mockkObject(ApiClient)
+        mockkStatic(android.util.Log::class)
+        every { android.util.Log.e(any(), any(), any()) } returns 0
+        val config = ApiConfig(
+            address = "https://api.example.com",
+            key = "secret",
+            model = "gemini-3.8-flash",
+            provider = "Gemini",
+            name = "Gemini 3.8 Flash",
+            channel = "Gemini",
+        ).withUserTokenLimits(ModelTokenLimits(4_000, 100_000))
+        coEvery { ApiClient.getFreshModelCapabilities(any(), any(), any(), any(), any()) } returns listOf(
+            ModelCapabilityCandidate(
+                modelId = config.model,
+                protocol = ModelParameterProtocol.GEMINI,
+                endpointIdentity = config.address,
+                contextWindowTokens = 1_000_000,
+                source = ModelCapabilitySource.LIVE_ENDPOINT,
+            )
+        )
+
+        val result = controller(this, ViewModelStateHolder()).loadModelParameters(config)
+
+        assertTrue(result.isFailure)
+        assertEquals(4_000, config.maxTokens)
     }
 
     @Test

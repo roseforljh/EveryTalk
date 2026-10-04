@@ -100,7 +100,7 @@ class ModelAndConfigController(
 
     suspend fun loadModelParameters(config: ApiConfig): Result<ApiConfig> = try {
         val candidates = withContext(Dispatchers.IO) {
-            ApiClient.getModelCapabilities(
+            ApiClient.getFreshModelCapabilities(
                 apiUrl = config.address,
                 apiKey = config.key,
                 channel = config.effectiveModelChannel(),
@@ -108,7 +108,26 @@ class ModelAndConfigController(
                 providerHint = config.provider,
             )
         }
-        Result.success(config.withModelCapabilityDefaults(candidates))
+        // 全部实时来源都不可用时明确报错，不把旧草稿或保守默认值伪装成获取结果。
+        if (candidates.isEmpty()) {
+            throw IllegalStateException("未获取到实时模型参数，请检查网络和模型接口")
+        }
+        // 用户主动获取是为了用新数据恢复参数；旧的手动 Token 值不能再次参与优先级合并。
+        // 其余设置仍保留在草稿中，只有用户保存对话框后才写入配置。
+        val freshConfig = config.copy(
+            maxTokens = null,
+            modelParameters = config.modelParameters.copy(
+                maxContextTokens = DEFAULT_MAX_CONTEXT_TOKENS,
+                resolvedCapability = null,
+            ),
+        )
+        val loaded = freshConfig.withModelCapabilityDefaults(candidates)
+        val outputSource = loaded.modelParameters.resolvedCapability?.maxOutputSource
+        if (outputSource == ModelCapabilitySource.FAMILY_FALLBACK ||
+            outputSource == ModelCapabilitySource.CONSERVATIVE_DEFAULT) {
+            throw IllegalStateException("实时来源未提供最大输出限制，无法还原这个参数")
+        }
+        Result.success(loaded)
     } catch (error: Exception) {
         error.rethrowIfCancellation()
         Log.e("ModelAndConfig", "自动获取模型参数失败", error)

@@ -206,7 +206,7 @@ class ComputerManager(
     context: Context,
     private val scope: CoroutineScope,
     attachmentsForConversation: (String) -> List<SelectedMediaItem>,
-    onDownloaded: suspend (String, SelectedMediaItem.GenericFile) -> Unit,
+    onDownloaded: suspend (String, String, SelectedMediaItem.GenericFile) -> Unit,
 ) : AutoCloseable {
     private val appContext = context.applicationContext
 
@@ -580,7 +580,7 @@ class ComputerManager(
                         workspaceId = localWorkspaceId(currentConversationId),
                         permissionMode = ComputerPermissionMode.MANUAL,
                     ),
-                    environmentPrompt = "当前使用 EveryTalk 内置本地 Workspace。local_bash 在临时内存快照中执行，文件变化不会自动保存；需要保存时使用 local_file_save，用户确认后返回可打开附件。不能访问系统文件或网络。",
+                    environmentPrompt = "当前使用 EveryTalk 内置本地 Workspace。local_bash 在临时内存快照中执行，文件变化不会自动保存；用户要求附件时必须使用 local_file_save，获得保存成功结果后才能说附件已发送。不能访问系统文件或网络。",
                     permissionMode = ComputerPermissionMode.MANUAL,
                     provider = ComputerProvider.SSH,
                     localOnly = true,
@@ -724,6 +724,8 @@ class ComputerManager(
         val prepared = prepareComputer(computer, requestContext).await()
         val currentContext = prepared.context.copy(
             conversationId = requestContext.conversationId,
+            // 准备 Workspace 会重建上下文；必须保留原 Run 身份，下载才能绑定原消息。
+            runId = requestContext.runId,
             permissionMode = requestContext.permissionMode,
             approvedToolCallId = requestContext.approvedToolCallId,
             retryUnknownToolCallId = requestContext.retryUnknownToolCallId,
@@ -1061,6 +1063,7 @@ class ComputerManager(
         }
         return "Agent server tools are enabled for this request. The Android app connects to the VPS directly over SSH. " +
             "For exec, use target=container by default for code, scripts, builds, tests, dependency installation, and file-producing work. " +
+            "When the user requests a file attachment, call download for the finished /workspace file. Only claim it is attached after download returns an attachment_id. " +
             "Use target=host only when inspecting or managing the VPS operating system, services, processes, ports, logs, packages, or deployed applications. " +
             "$permissionInstruction " +
             "All file, terminal, upload, and download tools operate in the persistent /workspace Container. " +
