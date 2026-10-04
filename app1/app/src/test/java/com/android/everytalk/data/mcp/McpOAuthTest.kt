@@ -95,7 +95,7 @@ class McpOAuthTest {
                     "/register" -> {
                         val registration = Json.parseToJsonElement(body).jsonObject
                         assertEquals("none", registration["token_endpoint_auth_method"]!!.jsonPrimitive.content)
-                        assertEquals(listOf("everytalk://oauth/mcp/notion"),
+                        assertEquals(listOf(provider.appRedirectUri),
                             registration["redirect_uris"]!!.jsonArray.map { it.jsonPrimitive.content })
                         respond("""{"client_id":"notion-client"}""", HttpStatusCode.Created, headersOf("Content-Type", "application/json"))
                     }

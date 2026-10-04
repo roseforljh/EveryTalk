@@ -37,7 +37,7 @@ enum class McpOAuthProvider(val key: String, val serverId: String, val displayNa
 
     // Notion 直接接受原生回调；Gmail 通过 ET Worker 交换 client secret 并转发回调。
     val redirectUri: String get() = if (this == NOTION) appRedirectUri else "https://oauth.everytalk.cc/oauth/mcp/$key"
-    val appRedirectUri: String get() = "everytalk://oauth/mcp/$key"
+    val appRedirectUri: String get() = "${mcpOAuthScheme()}://oauth/mcp/$key"
     val authorizationOrigin: String get() = when (this) {
         GITHUB -> "https://github.com"
         CLOUDFLARE -> "https://mcp.cloudflare.com"
@@ -112,6 +112,8 @@ internal fun parseMcpCallback(raw: String, provider: McpOAuthProvider): Map<Stri
     }
 }
 
+internal fun mcpOAuthScheme(): String = BuildConfig.APP_OAUTH_SCHEME
+
 internal fun mcpPkceChallenge(verifier: String): String = Base64.getUrlEncoder().withoutPadding()
     .encodeToString(MessageDigest.getInstance("SHA-256").digest(verifier.toByteArray(Charsets.US_ASCII)))
 
@@ -157,7 +159,10 @@ class McpOAuthManager(
                 require(it.isNotBlank()) { "微软邮箱 Client ID 未配置" }
             }
         }
-        val pending = PendingMcpOAuth(randomToken(), randomToken(), clientId, now())
+        val rawToken = randomToken()
+        val scheme = mcpOAuthScheme()
+        val state = if (scheme != "everytalk") "$scheme:$rawToken" else rawToken
+        val pending = PendingMcpOAuth(state, randomToken(), clientId, now())
         secrets.write("pending:${provider.key}", json.encodeToString(pending))
         val params = linkedMapOf(
             "client_id" to clientId, "redirect_uri" to provider.redirectUri,

@@ -105,6 +105,9 @@ android {
         buildConfigField("String", "GITHUB_MCP_OAUTH_CLIENT_ID", "\"${getConfigValue("GITHUB_MCP_OAUTH_CLIENT_ID")}\"")
         buildConfigField("String", "GMAIL_MCP_OAUTH_CLIENT_ID", "\"${getConfigValue("GMAIL_MCP_OAUTH_CLIENT_ID")}\"")
         buildConfigField("String", "MICROSOFT_MCP_OAUTH_CLIENT_ID", "\"${getConfigValue("MICROSOFT_MCP_OAUTH_CLIENT_ID")}\"")
+        // 默认协议头，各构建变体可覆盖
+        manifestPlaceholders["appOAuthScheme"] = "everytalk"
+        buildConfigField("String", "APP_OAUTH_SCHEME", "\"everytalk\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
             useSupportLibrary = true
@@ -183,6 +186,8 @@ android {
             buildConfigField("String", "CLOUDFLARE_OAUTH_CLIENT_ID", "\"${getConfigValue("CLOUDFLARE_OAUTH_CLIENT_ID")}\"")
             buildConfigField("String", "CLOUDFLARE_OAUTH_REDIRECT_URI", "\"${getConfigValue("CLOUDFLARE_OAUTH_REDIRECT_URI", "everytalk://oauth/cloudflare")}\"")
             buildConfigField("String", "TEMPORARY_WORKER_GATEWAY_URL", "\"${getConfigValue("TEMPORARY_WORKER_GATEWAY_URL")}\"")
+            manifestPlaceholders["appOAuthScheme"] = "everytalk"
+            buildConfigField("String", "APP_OAUTH_SCHEME", "\"everytalk\"")
         }
         debug {
             isProfileable = false // debug 构建也可以设为 profileable,方便测试
@@ -206,8 +211,12 @@ android {
             buildConfigField("String", "WEBFETCH_API_KEY", "\"${getConfigValue("WEBFETCH_API_KEY")}\"")
             buildConfigField("String", "AI_CONTENT_REPORT_URL", "\"${getConfigValue("AI_CONTENT_REPORT_URL")}\"")
             buildConfigField("String", "CLOUDFLARE_OAUTH_CLIENT_ID", "\"${getConfigValue("CLOUDFLARE_OAUTH_CLIENT_ID")}\"")
-            buildConfigField("String", "CLOUDFLARE_OAUTH_REDIRECT_URI", "\"${getConfigValue("CLOUDFLARE_OAUTH_REDIRECT_URI", "everytalk://oauth/cloudflare")}\"")
+            buildConfigField("String", "CLOUDFLARE_OAUTH_REDIRECT_URI", "\"${getConfigValue("CLOUDFLARE_OAUTH_REDIRECT_URI", "everytalk-debug://oauth/cloudflare")}\"")
             buildConfigField("String", "TEMPORARY_WORKER_GATEWAY_URL", "\"${getConfigValue("TEMPORARY_WORKER_GATEWAY_URL")}\"")
+
+            // Debug 变体使用隔离的 URL Scheme，避免与 Release 版本冲突
+            manifestPlaceholders["appOAuthScheme"] = "everytalk-debug"
+            buildConfigField("String", "APP_OAUTH_SCHEME", "\"everytalk-debug\"")
 
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
@@ -424,7 +433,7 @@ val verifyMathJaxAssets = tasks.register("verifyMathJaxAssets") {
         }
 
         val expectedHashes = mapOf(
-            "index.html" to "a6b136d600bbe1c660433df17a3e41afadecb01b41f386e523cf0468fde2af40",
+            "index.html" to "bff97c8e728fde79803d11924fea709983166a8f0230dbd85cdd71c630110d7d",
             "tex-svg.js" to "23c036deccc0f2374834a47e4032e452419f3ac027bf17e17c104e2746b19f4c",
             "LICENSE" to "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
         )
@@ -472,7 +481,7 @@ val verifyMathJaxAssets = tasks.register("verifyMathJaxAssets") {
         check(versionManifest.contains("@mathjax/mathjax-newcm-font")) {
             "MathJax VERSION.json 缺少 NewCM 字体包来源"
         }
-        check(versionManifest.contains("12b8c2ab9827b146e579bb0f01e101faefc4c8081fa47d915c3e142957a82bf7")) {
+        check(versionManifest.contains("000416b44930766045721acfb95055df4a71c1ba85cea025f1ed48fd72d4d1b3")) {
             "MathJax VERSION.json 缺少固定渲染配置哈希"
         }
     }
