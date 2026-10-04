@@ -427,7 +427,7 @@ class MathJaxSvgRenderer(
     companion object {
         const val MATHJAX_VERSION = "4.1.3"
         const val MATHJAX_CONFIG_HASH =
-            "12b8c2ab9827b146e579bb0f01e101faefc4c8081fa47d915c3e142957a82bf7"
+            "000416b44930766045721acfb95055df4a71c1ba85cea025f1ed48fd72d4d1b3"
         const val PAGE_URL =
             "https://appassets.androidplatform.net/assets/mathjax/index.html"
         const val MAX_QUEUE_SIZE = 64

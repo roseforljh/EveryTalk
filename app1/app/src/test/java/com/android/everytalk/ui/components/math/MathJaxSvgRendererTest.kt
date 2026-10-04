@@ -215,14 +215,17 @@ class MathJaxSvgRendererTest {
         assertTrue(index.contains("window.renderBatch = async function"))
         assertTrue(index.contains("fontCache: 'local'"))
         assertTrue(index.contains("dynamicPrefix: './font/svg/dynamic'"))
+        assertTrue(index.contains("linebreaks: {"))
+        assertTrue(index.contains("inline: false"))
         assertTrue(index.contains("maxMacros: 1000"))
         assertTrue(index.contains("const MAX_SVG_NODES = 8192"))
+        assertTrue(index.contains("value === null || value === undefined || value === ''"))
         assertTrue(index.contains(MathJaxSvgRenderer.MATHJAX_CONFIG_HASH))
         assertFalse(index.contains("cdn.jsdelivr.net"))
         assertTrue(version.contains("\"version\": \"4.1.3\""))
         assertTrue(version.contains("@mathjax/mathjax-newcm-font"))
         assertTrue(version.contains(MathJaxSvgRenderer.MATHJAX_CONFIG_HASH))
-        assertTrue(version.contains("a6b136d600bbe1c660433df17a3e41afadecb01b41f386e523cf0468fde2af40"))
+        assertTrue(version.contains("bff97c8e728fde79803d11924fea709983166a8f0230dbd85cdd71c630110d7d"))
         assertTrue(version.contains("a4100bbac386b90c364ac74fb9d923706eb22b3c929c4325dcdf46216051275f"))
         assertEquals(
             "f102fa970da97f3cfa5adb8cd38ec6db24e3fe8571877bb1a89f512c1a3d788b",

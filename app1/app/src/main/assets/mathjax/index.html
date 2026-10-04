@@ -23,7 +23,12 @@
         fontCache: 'local',
         localID: 'everytalk',
         dynamicPrefix: './font/svg/dynamic',
-        useXlink: false
+        useXlink: false,
+        // 行内公式必须保持为一个 SVG；否则 MathJax 会按运算符拆成多个 SVG，
+        // Android 端只取第一个 SVG 时就会丢失后半段内容。
+        linebreaks: {
+          inline: false
+        }
       },
       options: {
         enableMenu: false,
@@ -54,7 +59,7 @@
       'use strict';
 
        const ENGINE_VERSION = '4.1.3';
-       const CONFIG_HASH = '12b8c2ab9827b146e579bb0f01e101faefc4c8081fa47d915c3e142957a82bf7';
+       const CONFIG_HASH = '000416b44930766045721acfb95055df4a71c1ba85cea025f1ed48fd72d4d1b3';
        const MAX_FORMULA_LENGTH = 4096;
        const MAX_BATCH_SIZE = 16;
        const MAX_SVG_BYTES = 1048576;
@@ -84,6 +89,8 @@
       }
 
        function safeNumber(value, fallback, min, max) {
+         // null 经过 Number(null) 会变成 0，随后被限制成 1px；这里必须先走默认值。
+         if (value === null || value === undefined || value === '') return fallback;
          const number = Number(value);
          return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : fallback;
        }

@@ -119,9 +119,9 @@ internal fun rememberMathFormulaRenderStates(
                 display = formula.displayMode == FormulaDisplayMode.BLOCK,
                 fontSizePx = fontSizePx,
                 color = color,
-                maxWidthPx = blockMaxWidthPx.takeIf {
-                    formula.displayMode == FormulaDisplayMode.BLOCK
-                },
+                // 行内公式也使用当前气泡的可用宽度，避免 MathJax 把缺省宽度解释成极窄容器，
+                // 导致公式只绘制开头的数字、后续运算符和数字被裁掉。
+                maxWidthPx = blockMaxWidthPx,
                 // 公式 ID 已由 LaTeX 与显示模式生成。后续只追加普通文本时保持请求身份稳定，
                 // 防止已经完成的公式反复回到 Loading。
                 requestVersion = mathFormulaRequestVersion(formula),
