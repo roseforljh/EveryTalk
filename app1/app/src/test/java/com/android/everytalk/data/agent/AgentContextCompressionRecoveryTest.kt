@@ -133,6 +133,92 @@ class AgentContextCompressionRecoveryTest {
     }
 
     @Test
+    fun `上游404后发送继续只继承已生成正文不继承界面错误`() = runBlocking {
+        val sessionId = "provider-404-follow-up"
+        seedSession(sessionId)
+        val first = loopRequest(sessionId, compactThresholdTokens = 8_000)
+        val loop = AgentLoop(
+            runStore = store,
+            modelTransport = ModelTurnTransport {
+                flowOf(
+                    AppStreamEvent.Content("已经生成的半句"),
+                    AppStreamEvent.Error("Gemini HTTP 404", code = "http_404", type = "provider_error"),
+                )
+            },
+        )
+
+        loop.run(first).toList()
+        assertEquals(AgentRunStatus.FAILED.name, database.agentDao().getRunsForSession(sessionId).single().status)
+
+        val expanded = store.expandTranscript(
+            sessionId,
+            first.request.messages + listOf(
+                SimpleTextApiMessage(
+                    id = first.visibleAssistantMessageId,
+                    role = "assistant",
+                    content = "已经生成的半句\n\n⚠️ Gemini HTTP 404",
+                ),
+                SimpleTextApiMessage(id = "continue-user", role = "user", content = "继续"),
+            ),
+        )
+
+        assertEquals("已经生成的半句", (expanded[expanded.lastIndex - 1] as SimpleTextApiMessage).content)
+        assertEquals("继续", (expanded.last() as SimpleTextApiMessage).content)
+        assertTrue(expanded.none { it.toString().contains("HTTP 404") })
+    }
+
+    @Test
+    fun `上游404发生在首个输出前时继续不会继承错误气泡`() = runBlocking {
+        val sessionId = "provider-404-before-output"
+        seedSession(sessionId)
+        val first = loopRequest(sessionId, compactThresholdTokens = 8_000)
+        val loop = AgentLoop(
+            runStore = store,
+            modelTransport = ModelTurnTransport {
+                flowOf(AppStreamEvent.Error("Gemini HTTP 404", code = "http_404", type = "provider_error"))
+            },
+        )
+
+        loop.run(first).toList()
+        val expanded = store.expandTranscript(
+            sessionId,
+            first.request.messages + listOf(
+                SimpleTextApiMessage(first.visibleAssistantMessageId, "assistant", "⚠️ Gemini HTTP 404"),
+                SimpleTextApiMessage("continue-user", "user", "继续"),
+            ),
+        )
+
+        assertEquals(first.request.messages.size + 1, expanded.size)
+        assertEquals("继续", (expanded.last() as SimpleTextApiMessage).content)
+        assertTrue(expanded.none { it.toString().contains("HTTP 404") })
+    }
+
+    @Test
+    fun `正文被上游截断时提示用户并停止`() = runBlocking {
+        val sessionId = "truncated-text-output-limit"
+        seedSession(sessionId)
+        var requests = 0
+        val loop = AgentLoop(
+            runStore = store,
+            modelTransport = ModelTurnTransport {
+                requests++
+                flowOf(AppStreamEvent.Content("前半段"), AppStreamEvent.Finish("length"))
+            },
+        )
+
+        val events = loop.run(loopRequest(sessionId, compactThresholdTokens = 8_000)).toList()
+
+        assertEquals(1, requests)
+        assertEquals(AgentRunStatus.FAILED.name, database.agentDao().getRunsForSession(sessionId).single().status)
+        assertEquals(1, events.count { it is AppStreamEvent.Finish })
+        assertTrue(events.any {
+            it is AppStreamEvent.Error &&
+                it.code == "provider_output_limit" &&
+                it.message.contains("不代表模型参数设置错误")
+        })
+    }
+
+    @Test
     fun `每次 Provider attempt 都重新解析 API Key`() = runBlocking {
         val sessionId = "dynamic-api-key"
         seedSession(sessionId)

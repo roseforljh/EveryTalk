@@ -75,6 +75,8 @@ class AgentSteeringCancellation : CancellationException("agent steering requeste
 
 enum class AgentEntryKind {
     ASSISTANT,
+    /** 本轮已发送的临时状态，作为下一轮的不可变历史前缀。 */
+    RUNTIME_CONTEXT,
     TOOL_EXECUTION_STARTED,
     TOOL_RESULT,
     APPROVAL_REQUEST,

@@ -21,7 +21,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import com.android.everytalk.data.skill.SkillRuntimeTools
 
-private const val MAX_AGENT_TOOL_RESULT_TOKENS = 64_000L
+internal const val MAX_AGENT_TOOL_RESULT_TOKENS = 8_192L
 
 /**
  * 统一工具执行入口。服务器三档权限仍由 ComputerToolExecutor 内的公共策略处理。
@@ -59,10 +59,16 @@ class AgentToolRuntime(
             return try {
                 val name = skillRuntimeTools.displayName(preparedCall, runId) ?: preparedCall.name
                 emit(AppStreamEvent.ExecutionStatusUpdate("正在读取技能：$name"))
+                val raw = skillRuntimeTools.execute(preparedCall, runId)
+                val bounded = boundModelToolResult(
+                    result = raw,
+                    maxTokens = maxModelResultTokens.coerceIn(64L, MAX_AGENT_TOOL_RESULT_TOKENS),
+                )
                 AgentContentBlock.ToolResult(
                     toolCallId = preparedCall.id,
                     toolName = preparedCall.name,
-                    content = skillRuntimeTools.execute(preparedCall, runId),
+                    content = bounded.content,
+                    truncated = bounded.truncated,
                 )
             } catch (error: kotlinx.coroutines.CancellationException) {
                 throw error

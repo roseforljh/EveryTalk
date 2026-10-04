@@ -673,6 +673,7 @@ class AgentRunStore(
         requestId: String,
         turn: AgentAssistantTurn,
         status: AgentEntryStatus = AgentEntryStatus.FINAL,
+        runtimeContext: List<SimpleTextApiMessage> = emptyList(),
     ): AgentEntryEntity = entryAppendLock.withLock {
         val payloadJson = json.encodeToString(
             kotlinx.serialization.builtins.ListSerializer(AgentContentBlock.serializer()),
@@ -694,6 +695,19 @@ class AgentRunStore(
             dao.upsertEntry(checkpoint)
             checkpoint
         } else {
+            // 状态快照先于 Assistant 落库；没有最终 Assistant 的孤立快照不会进入恢复上下文。
+            runtimeContext.forEach { message ->
+                dao.upsertEntry(newEntry(
+                    runId = runId,
+                    sequence = dao.nextEntrySequence(runId),
+                    kind = AgentEntryKind.RUNTIME_CONTEXT,
+                    requestId = requestId,
+                    toolCallId = null,
+                    payloadJson = json.encodeToString(SimpleTextApiMessage.serializer(), message),
+                    status = AgentEntryStatus.FINAL,
+                    now = now,
+                ))
+            }
             // 先写最终事实，再清理检查点。即使两步之间进程退出，恢复读取也会优先最终事实。
             val finalEntry = newEntry(
                 runId = runId,
@@ -1250,8 +1264,10 @@ class AgentRunStore(
                     add(message)
                     return@forEach
                 }
-                val expanded = decodeFinalTranscriptEntries(run.id, visibleMessageIds)
-                if (expanded.isEmpty()) add(message) else addAll(expanded)
+                val failed = run.status == AgentRunStatus.FAILED.name
+                val expanded = decodeFinalTranscriptEntries(run.id, visibleMessageIds, includeFailedPartial = failed)
+                // 失败气泡包含前端错误文案，不能把它伪装成模型已说过的话送回上游。
+                if (expanded.isEmpty() && !failed) add(message) else addAll(expanded)
             }
         }
     }
@@ -1617,8 +1633,18 @@ class AgentRunStore(
             finalizedAt = now.takeIf { status == AgentEntryStatus.FINAL },
         )
 
-    private suspend fun decodeFinalTranscriptEntries(runId: String, visibleMessageIds: Set<String>? = null): List<AbstractApiMessage> {
-        val requestsById = dao.getRequests(runId).associateBy(AgentRequestEntity::id)
+    private suspend fun decodeFinalTranscriptEntries(
+        runId: String,
+        visibleMessageIds: Set<String>? = null,
+        includeFailedPartial: Boolean = false,
+    ): List<AbstractApiMessage> {
+        val requests = dao.getRequests(runId)
+        val requestsById = requests.associateBy(AgentRequestEntity::id)
+        val failedRequestId = if (includeFailedPartial) {
+            requests.lastOrNull { it.purpose == AgentRequestPurpose.AGENT_TURN.name }
+                ?.takeIf { it.status == AgentRequestStatus.FAILED.name }
+                ?.id
+        } else null
         val sourceProtocol = dao.getRun(runId)
             ?.let { run -> decodeRequestSnapshot(run) }
             ?.channel
@@ -1630,9 +1656,32 @@ class AgentRunStore(
                 entry.kind !in setOf(AgentEntryKind.STEERING.name, AgentEntryKind.FOLLOW_UP.name) ||
                 json.decodeFromString(AgentSteeringInstruction.serializer(), entry.payloadJson).id in visibleMessageIds
         }
+        val finalizedAssistantRequests = entries.asSequence()
+            .filter { it.kind == AgentEntryKind.ASSISTANT.name && it.status == AgentEntryStatus.FINAL.name }
+            .mapNotNull { it.requestId }
+            .toSet()
         return entries.mapNotNull { entry ->
+            if (failedRequestId != null &&
+                entry.status == AgentEntryStatus.PARTIAL.name &&
+                entry.kind == AgentEntryKind.ASSISTANT.name &&
+                entry.requestId == failedRequestId &&
+                entry.requestId !in finalizedAssistantRequests
+            ) {
+                // 404 等上游错误后，用户发“继续”时只恢复已生成的正文；未完成的工具调用不能重放。
+                val text = runCatching { decodeAssistantBlocks(entry) }
+                    .getOrNull()
+                    ?.filterIsInstance<AgentContentBlock.Text>()
+                    ?.joinToString("") { it.text }
+                    ?.takeIf(String::isNotBlank)
+                return@mapNotNull text?.let {
+                    SimpleTextApiMessage(id = "assistant:partial:${entry.requestId}", role = "assistant", content = it)
+                }
+            }
             if (entry.status != AgentEntryStatus.FINAL.name) return@mapNotNull null
             when (entry.kind) {
+                AgentEntryKind.RUNTIME_CONTEXT.name -> entry.requestId
+                    ?.takeIf(finalizedAssistantRequests::contains)
+                    ?.let { runCatching { json.decodeFromString(SimpleTextApiMessage.serializer(), entry.payloadJson) }.getOrNull() }
                 AgentEntryKind.ASSISTANT.name -> decodeAssistantEntry(
                     entry,
                     entry.requestId?.let(requestsById::get),

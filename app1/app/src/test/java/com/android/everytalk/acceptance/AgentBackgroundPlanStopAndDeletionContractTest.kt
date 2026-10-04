@@ -24,9 +24,11 @@ class AgentBackgroundPlanStopAndDeletionContractTest {
             "停止入口不能继续只把 conversationId 传给取消器",
             executor.contains("cancelActiveExecutions(conversationId: String)"),
         )
-        val stopBlock = apiHandler.substringAfter("AgentTerminalReasons.USER_STOP", "")
-            .substringBefore("jobToCancel?.cancel", "")
-        assertTrue("停止入口必须把当前 run.id 传给远端取消器", stopBlock.contains("run?.id"))
+        val stopBlock = apiHandler.substringAfter("private fun launchStopConfirmation", "")
+            .substringBefore("fun retryRemoteStopConfirmation", "")
+        assertTrue("停止入口必须把原 Run 的 ID 和固定会话传给远端取消器",
+            stopBlock.contains("cancelComputerExecutions(operation.conversationId, run.id)"))
+        assertTrue("重试必须保留点击时的消息身份", stopBlock.contains("operation.messageId"))
     }
 
     @Test
@@ -43,9 +45,10 @@ class AgentBackgroundPlanStopAndDeletionContractTest {
 
     @Test
     fun `用户点击停止必须先写USER_STOP再写取消意图再发SSH`() {
-        val stopBlock = apiHandler.substringAfter("specificCancelReason", "")
-            .substringBefore("jobToCancel?.cancel", "")
-        val userStop = stopBlock.indexOf("AgentTerminalReasons.USER_STOP")
+        // 首次停止和重试共用确认函数；检查真实持久化调用，不能只检查注释或外层取消登记。
+        val stopBlock = apiHandler.substringAfter("private fun launchStopConfirmation", "")
+            .substringBefore("fun retryRemoteStopConfirmation", "")
+        val userStop = stopBlock.indexOf("agentRunStore.cancelActiveRunByVisibleMessage(operation.messageId, AgentTerminalReasons.USER_STOP)")
         val cancelCall = stopBlock.indexOf("cancelComputerExecutions")
         assertTrue("输入框停止没有保存 USER_STOP", userStop >= 0)
         assertTrue("必须先保存 USER_STOP，再发远端取消", cancelCall > userStop)

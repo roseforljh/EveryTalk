@@ -20,6 +20,12 @@ import com.android.everytalk.data.network.AppStreamEvent
 import com.android.everytalk.data.network.AppToolExecutionResult
 import com.android.everytalk.data.network.AppToolExecutor
 import com.android.everytalk.data.network.ModelTurnTransport
+import com.android.everytalk.data.network.SystemPromptInjector
+import com.android.everytalk.data.network.estimateToolLoopJsonTokens
+import io.mockk.coEvery
+import io.mockk.every
+import io.mockk.mockk
+import com.android.everytalk.data.skill.SkillRuntimeTools
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
@@ -120,6 +126,119 @@ class AgentParallelToolExecutionTest {
                 .toSet(),
         )
         assertTrue(events.any { it is AppStreamEvent.Content && it.text == "并发结果已处理" })
+        val firstState = SystemPromptInjector.freezeRuntimeContext(observedRequests[0].messages, "first")
+        val replayedState = observedRequests[1].messages.filterIsInstance<SimpleTextApiMessage>()
+            .filter { it.id.startsWith("runtime-context:") }
+        assertEquals(firstState.map { it.content }, replayedState.map { it.content })
+        val assistantIndex = observedRequests[1].messages.indexOfFirst { it is AgentAssistantApiMessage }
+        assertTrue(assistantIndex > observedRequests[1].messages.indexOf(replayedState.last()))
+        // 新建 Store 模拟进程重建，确认历史前缀来自数据库而非内存 transcript。
+        val run = store.getRunsForSession("parallel-session").single()
+        val restored = AgentRunStore(database.agentDao())
+            .appendRunTranscript(run.id, loopRequest("parallel-session").request.messages)
+        val restoredState = restored.filterIsInstance<SimpleTextApiMessage>()
+            .filter { it.id.startsWith("runtime-context:") }
+        assertEquals(firstState.map { it.content }, restoredState.take(firstState.size).map { it.content })
+    }
+
+    @Test
+    fun `普通工具和Skill结果都限制为单项八千token`() = runBlocking {
+        val largeResult = JsonPrimitive("A".repeat(100_000))
+        val ordinary = AgentToolRuntime(
+            executorProvider = { { _, _, _, _, _ -> AppToolExecutionResult(largeResult) } },
+            approvalProvider = { null },
+        ).execute(
+            call = AgentContentBlock.ToolCall("ordinary", "exec", buildJsonObject {}),
+            computerContext = null,
+            maxModelResultTokens = 32_000L,
+            emit = {},
+        )
+        val skillTools = mockk<SkillRuntimeTools>()
+        every { skillTools.handles(any()) } returns true
+        coEvery { skillTools.displayName(any(), any()) } returns null
+        coEvery { skillTools.execute(any(), any()) } returns largeResult
+        val skill = AgentToolRuntime(
+            executorProvider = { null },
+            approvalProvider = { null },
+            skillRuntimeTools = skillTools,
+        ).execute(
+            call = AgentContentBlock.ToolCall("skill", "load_skill", buildJsonObject {}),
+            computerContext = null,
+            maxModelResultTokens = 32_000L,
+            runId = "test-run",
+            emit = {},
+        )
+        listOf(ordinary, skill).forEach { result ->
+            assertTrue(result.truncated)
+            assertTrue(estimateToolLoopJsonTokens(result.content) < 8_300L)
+            assertFalse(result.content.toString().contains("A".repeat(40_000)))
+        }
+    }
+
+    @Test
+    fun `同轮多项工具结果共享八千token额度`() = runBlocking {
+        val sessionId = "shared-tool-result-budget"
+        seedSession(sessionId)
+        val observed = mutableListOf<ChatRequest>()
+        var turn = 0
+        val loop = AgentLoop(
+            runStore = store,
+            toolRuntime = AgentToolRuntime(
+                executorProvider = {
+                    { _, _, _, _, _ -> AppToolExecutionResult(JsonPrimitive("A".repeat(100_000))) }
+                },
+                approvalProvider = { null },
+            ),
+            modelTransport = ModelTurnTransport { request ->
+                observed += request.request
+                turn++
+                if (turn == 1) flowOf(
+                    toolCall("budget-1", "tool-one"),
+                    toolCall("budget-2", "tool-two"),
+                    toolCall("budget-3", "tool-three"),
+                    AppStreamEvent.Finish("tool_calls"),
+                ) else flowOf(AppStreamEvent.Content("完成"), AppStreamEvent.Finish("stop"))
+            },
+        )
+        loop.run(loopRequest(sessionId).copy(
+            tokenLimits = ModelTokenLimits(maxOutputTokens = 512, maxContextTokens = 64_000),
+        )).toList()
+        val results = observed[1].messages.filterIsInstance<AgentToolResultApiMessage>()
+        assertEquals(3, results.size)
+        assertTrue(results.sumOf { estimateToolLoopJsonTokens(it.content) } < 8_500L)
+    }
+
+    @Test
+    fun `恢复时跳过没有最终Assistant的孤立状态快照`() = runBlocking {
+        val sessionId = "orphan-runtime-context-session"
+        seedSession(sessionId)
+        val input = loopRequest(sessionId)
+        val run = store.createRun(
+            sessionId = sessionId,
+            userMessageId = input.userMessageId,
+            visibleAssistantMessageId = input.visibleAssistantMessageId,
+            configIdSnapshot = null,
+            request = input.request,
+        )
+        val frozen = SimpleTextApiMessage(
+            id = "runtime-context:finished:agent-execution-checkpoint",
+            role = "user",
+            content = "已完成请求的状态",
+        )
+        store.appendAssistant(
+            run.id, "finished", AgentAssistantTurn(listOf(AgentContentBlock.Text("完成"))),
+            runtimeContext = listOf(frozen),
+        )
+        val dao = database.agentDao()
+        val savedContext = dao.getEntries(run.id).first { it.kind == AgentEntryKind.RUNTIME_CONTEXT.name }
+        dao.upsertEntry(savedContext.copy(
+            id = "orphan-runtime-context",
+            sequence = dao.nextEntrySequence(run.id),
+            requestId = "unfinished",
+        ))
+        val restored = AgentRunStore(dao).appendRunTranscript(run.id, input.request.messages)
+        assertTrue(restored.any { it.id == frozen.id })
+        assertEquals(1, restored.count { it.id.startsWith("runtime-context:") })
     }
 
     @Test

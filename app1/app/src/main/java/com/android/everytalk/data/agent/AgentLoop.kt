@@ -693,7 +693,14 @@ class AgentLoop(
                     }
                 }
 
-                runStore.appendAssistant(checkNotNull(run).id, requestId, assistant)
+                val frozenRuntimeContext = com.android.everytalk.data.network.SystemPromptInjector
+                    .freezeRuntimeContext(prepared.messages, requestId)
+                runStore.appendAssistant(
+                    checkNotNull(run).id,
+                    requestId,
+                    assistant,
+                    runtimeContext = frozenRuntimeContext,
+                )
                 val finalUsage = usage?.copy(isFinal = true, requestOrdinal = ordinal) ?: TokenUsage(
                     inputTokens = prepared.snapshot.activeContextTokens,
                     isFinal = true,
@@ -708,7 +715,7 @@ class AgentLoop(
                     firstEventAt = firstEventAt,
                     finishedAt = finishedAt,
                 )
-                transcript = transcript + assistant.toApiMessage(requestId, turnRequest)
+                transcript = transcript + frozenRuntimeContext + assistant.toApiMessage(requestId, turnRequest)
                 providerContinuation = nextProviderContinuation
                 nextProviderContinuation?.let { continuation ->
                     runStore.saveContinuation(
@@ -719,6 +726,43 @@ class AgentLoop(
                         toolSchemaFingerprint = toolSchemaFingerprint,
                         compactionId = activeCompaction?.id,
                     )
+                }
+
+                if (assistant.toolCalls.isEmpty() && finishReason == "length") {
+                    // 上游因输出长度结束本轮时保留已有正文，并明确告知前端发生了截断。
+                    // length 可能来自不同供应商，不能据此断定用户的模型参数设置错误。
+                    val outputLimitMessage =
+                        "本轮回复被上游提前截断（输出长度限制）。这不代表模型参数设置错误；请重试，若反复出现请查看请求日志中的实际输出上限、结束原因和 Token 用量。"
+                    requestFact = runStore.updateRequest(
+                        request = requestFact,
+                        status = AgentRequestStatus.FAILED,
+                        finishReason = "length",
+                        firstEventAt = firstEventAt,
+                        finishedAt = finishedAt,
+                    )
+                    runStore.updateRunStatus(
+                        run = checkNotNull(run),
+                        status = AgentRunStatus.FAILED,
+                        requestOrdinal = ordinal,
+                        terminalReason = outputLimitMessage,
+                    )
+                    lifecycleSink(
+                        AgentLifecycleEvent(
+                            phase = AgentLifecyclePhase.TURN_END,
+                            runId = checkNotNull(run).id,
+                            modelTurnOrdinal = modelTurnOrdinal,
+                            requestId = requestId,
+                        ),
+                    )
+                    emit(
+                        AppStreamEvent.Error(
+                            message = outputLimitMessage,
+                            code = "provider_output_limit",
+                            type = "provider_error",
+                        ),
+                    )
+                    emit(AppStreamEvent.Finish("length"))
+                    return@flow
                 }
 
                 if (assistant.toolCalls.isEmpty()) {
@@ -1226,6 +1270,10 @@ class AgentLoop(
         approvedGate: AgentApprovalRecord? = null,
     ): ToolBatchOutcome {
         var currentTranscript = transcript
+        // 同一轮可能返回多项结果。按调用数分摊总额度，避免每项都占满上下文。
+        val perCallModelResultTokens =
+            (maxModelResultTokens.coerceAtMost(MAX_AGENT_TOOL_RESULT_TOKENS) / calls.size.coerceAtLeast(1))
+                .coerceAtLeast(64L)
         val contextualComputerContext = computerContext?.copy(runId = run.id)
         val snapshot = runStore.decodeRequestSnapshot(run)?.skillSnapshot
         val allowedSkillIds = snapshot?.let { value ->
@@ -1264,7 +1312,7 @@ class AgentLoop(
             val results = if (batch.isEmpty()) emptyList() else executeToolCallBatch(
                     calls = batch,
                     computerContext = contextualComputerContext,
-                    maxModelResultTokens = maxModelResultTokens,
+                    maxModelResultTokens = perCallModelResultTokens,
                     runId = run.id,
                     emit = emit,
                 )
@@ -1320,7 +1368,7 @@ class AgentLoop(
                     run = run,
                     record = approvedGate,
                     baseContext = computerContext,
-                    maxModelResultTokens = maxModelResultTokens,
+                    maxModelResultTokens = perCallModelResultTokens,
                     emit = emit,
                 )
                 persistResult(handled.result)
@@ -1491,7 +1539,7 @@ class AgentLoop(
                 // 先写等待状态，再让 Executor 连接 VPS。进程在此窗口退出时仍可恢复。
                 runStore.updateRunStatus(run, AgentRunStatus.WAITING_REMOTE_EXECUTION)
             }
-            val result = executeToolObserved(call, contextualComputerContext, maxModelResultTokens, run.id, emit)
+            val result = executeToolObserved(call, contextualComputerContext, perCallModelResultTokens, run.id, emit)
             val resourceTarget = com.android.everytalk.data.computer.cloudflareResourceTarget(call.name)
                 ?.takeIf { result.requiresCloudflareResourceSelection() }
             if (result.requiresCloudflareReauthorization() || resourceTarget != null) {
