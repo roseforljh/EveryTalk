@@ -532,6 +532,31 @@ object ApiClient {
             providerHint = providerHint,
         )
     }
+
+    /**
+     * 用户主动点击“获取模型参数”时使用的强制实时入口。
+     * 这个入口不会读取或写入端点能力、pi 和 models.dev 的本地缓存，
+     * 这样页面上的错误手动值才能通过实时结果恢复。
+     */
+    suspend fun getFreshModelCapabilities(
+        apiUrl: String,
+        apiKey: String,
+        channel: String?,
+        modelId: String,
+        providerHint: String,
+    ): List<ModelCapabilityCandidate> {
+        if (!isInitialized) {
+            throw IllegalStateException("ApiClient not initialized. Call initialize() first.")
+        }
+        return modelCatalogService.getCapabilities(
+            apiUrl = apiUrl,
+            apiKey = apiKey,
+            channel = channel,
+            modelId = modelId,
+            providerHint = providerHint,
+            allowCache = false,
+        )
+    }
     /**
      * 强制直连模式 - 图像生成直接调用 API 提供商
      * 根据模型类型自动选择 Gemini 或 OpenAI 兼容的直连客户端

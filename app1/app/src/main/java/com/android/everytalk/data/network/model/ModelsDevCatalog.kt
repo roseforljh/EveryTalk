@@ -40,9 +40,12 @@ internal class ModelsDevCatalog(
         providerHint: String,
         apiAddress: String,
         protocol: ModelParameterProtocol,
+        allowCache: Boolean = true,
         fetchRemote: suspend () -> String,
     ): List<ModelCapabilityCandidate> {
-        return findCatalogCapabilities(listOf(modelId), providerHint, apiAddress, protocol, fetchRemote)
+        return findCatalogCapabilities(
+            listOf(modelId), providerHint, apiAddress, protocol, allowCache, fetchRemote,
+        )
     }
 
     /** 一次加载社区目录后匹配整批模型；即使远端不可用，也不会逐模型重复下载。 */
@@ -51,9 +54,10 @@ internal class ModelsDevCatalog(
         providerHint: String,
         apiAddress: String,
         protocol: ModelParameterProtocol,
+        allowCache: Boolean = true,
         fetchRemote: suspend () -> String,
     ): List<ModelCapabilityCandidate> {
-        val index = cache.load(fetchRemote) ?: return emptyList()
+        val index = cache.load(fetchRemote, allowCache) ?: return emptyList()
         return modelIds.flatMap { modelId ->
             matchCapabilities(index, modelId, providerHint, apiAddress, protocol)
         }

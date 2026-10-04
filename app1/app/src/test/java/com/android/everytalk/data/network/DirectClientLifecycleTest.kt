@@ -582,6 +582,118 @@ class DirectClientLifecycleTest {
     }
 
     @Test
+    fun `OpenAI Chat在明确收到DONE但缺失finish_reason时对纯文本流有边界兼容正常结束`() = runBlocking {
+        val body = buildString {
+            append("data: {\"choices\":[{\"delta\":{\"content\":\"你好，EveryTalk！\"}}]}\n\n")
+            append("data: [DONE]\n\n")
+        }
+
+        withHttpClient(body = body) { client ->
+            val events = OpenAIDirectClient.streamChatDirect(client, request("OpenAI", "OpenAI")).toList()
+
+            assertTrue(events.none { it is AppStreamEvent.Error })
+            val finalContent = events.filterIsInstance<AppStreamEvent.ContentFinal>().single()
+            assertEquals("你好，EveryTalk！", finalContent.text)
+            val finish = events.filterIsInstance<AppStreamEvent.Finish>().single()
+            assertEquals("stop", finish.reason)
+        }
+    }
+
+    @Test
+    fun `OpenAI Chat未收到DONE且缺失finish_reason的裸EOF必须抛出异常`() = runBlocking {
+        val body = buildString {
+            append("data: {\"choices\":[{\"delta\":{\"content\":\"半截文本\"}}]}\n\n")
+            // 没有 [DONE]，也没有 finish_reason，直接结束流（模拟连接截断裸 EOF）
+        }
+
+        withHttpClient(body = body) { client ->
+            val events = OpenAIDirectClient.streamChatDirect(client, request("OpenAI", "OpenAI")).toList()
+
+            assertTrue(events.any { it is AppStreamEvent.Error })
+            // 客户端仍会发送错误终态供界面收尾，禁止的是成功终态和完整正文事件。
+            assertTrue(events.none { it is AppStreamEvent.ContentFinal })
+            assertTrue(events.filterIsInstance<AppStreamEvent.Finish>().none { it.reason == "stop" || it.reason == "tool_use" })
+        }
+    }
+
+    @Test
+    fun `OpenAI Chat明确收到DONE且缺少finish_reason但工具参数完整时允许正常执行工具`() = runBlocking {
+        val body = buildString {
+            append(
+                "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-valid\"," +
+                    "\"function\":{\"name\":\"exec\",\"arguments\":\"{\\\"command\\\":\\\"ls\\\"}\"}}]}}]}\n\n",
+            )
+            append("data: [DONE]\n\n")
+        }
+
+        withHttpClient(body = body) { client ->
+            val events = OpenAIDirectClient.streamChatDirect(client, request("OpenAI", "OpenAI")).toList()
+
+            assertTrue(events.none { it is AppStreamEvent.Error })
+            val call = events.filterIsInstance<AppStreamEvent.ToolCall>().single()
+            assertEquals("call-valid", call.id)
+            assertEquals("exec", call.name)
+            assertEquals("ls", call.argumentsObj.getValue("command").jsonPrimitive.content)
+            val finish = events.filterIsInstance<AppStreamEvent.Finish>().single()
+            assertEquals("tool_use", finish.reason)
+        }
+    }
+
+    @Test
+    fun `OpenAI Chat缺失finish_reason且工具缺少id时禁止执行`() = runBlocking {
+        val body = buildString {
+            append(
+                "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0," +
+                    "\"function\":{\"name\":\"exec\",\"arguments\":\"{\\\"command\\\":\\\"ls\\\"}\"}}]}}]}\n\n",
+            )
+            append("data: [DONE]\n\n")
+        }
+
+        withHttpClient(body = body) { client ->
+            val events = OpenAIDirectClient.streamChatDirect(client, request("OpenAI", "OpenAI")).toList()
+
+            assertTrue(events.any { it is AppStreamEvent.Error })
+            assertTrue(events.none { it is AppStreamEvent.Finish && it.reason == "tool_use" })
+        }
+    }
+
+    @Test
+    fun `OpenAI Chat缺失finish_reason且工具缺少name时禁止执行`() = runBlocking {
+        val body = buildString {
+            append(
+                "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-1\"," +
+                    "\"function\":{\"arguments\":\"{\\\"command\\\":\\\"ls\\\"}\"}}]}}]}\n\n",
+            )
+            append("data: [DONE]\n\n")
+        }
+
+        withHttpClient(body = body) { client ->
+            val events = OpenAIDirectClient.streamChatDirect(client, request("OpenAI", "OpenAI")).toList()
+
+            assertTrue(events.any { it is AppStreamEvent.Error })
+            assertTrue(events.none { it is AppStreamEvent.Finish && it.reason == "tool_use" })
+        }
+    }
+
+    @Test
+    fun `OpenAI Chat缺失finish_reason且工具参数为非对象JSON时禁止执行`() = runBlocking {
+        val body = buildString {
+            append(
+                "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-1\"," +
+                    "\"function\":{\"name\":\"exec\",\"arguments\":\"[\\\"ls\\\"]\"}}]}}]}\n\n",
+            )
+            append("data: [DONE]\n\n")
+        }
+
+        withHttpClient(body = body) { client ->
+            val events = OpenAIDirectClient.streamChatDirect(client, request("OpenAI", "OpenAI")).toList()
+
+            assertTrue(events.any { it is AppStreamEvent.Error })
+            assertTrue(events.none { it is AppStreamEvent.Finish && it.reason == "tool_use" })
+        }
+    }
+
+    @Test
     fun `OpenAI Chat流式工具id和名称晚到时仍合并为同一调用`() = runBlocking {
         val body = buildString {
             append(

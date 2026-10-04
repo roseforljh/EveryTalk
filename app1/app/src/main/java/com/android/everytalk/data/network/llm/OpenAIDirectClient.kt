@@ -503,6 +503,7 @@ object OpenAIDirectClient {
         val reasoningDetails = mutableListOf<JsonObject>()
         var rawFinishReason: String? = null
         var sawFinishReason = false
+        var sawDone = false
 
         // 兼容端点可能把 id、name、arguments 拆到不同 chunk，必须按 index 更新同一个调用。
         val toolCallsMap = mutableMapOf<Int, OpenAIStreamingToolCall>()
@@ -516,6 +517,7 @@ object OpenAIDirectClient {
                         val chunk = lineBuffer.toString().trim()
                         if (chunk.isNotEmpty()) {
                             if (chunk == "[DONE]") {
+                                sawDone = true
                                 if (reasoningStarted && !reasoningFinished) {
                                     emitEvent(AppStreamEvent.ReasoningFinish(null))
                                     reasoningFinished = true
@@ -657,7 +659,21 @@ object OpenAIDirectClient {
             }
 
             if (!sawFinishReason) {
-                throw IllegalStateException("OpenAI Chat stream ended before a finish_reason")
+                // 流断开绝不能无条件算成功。若未收到 [DONE] 且未收到 finish_reason，属于网络裸断开，保留为失败
+                if (!sawDone) {
+                    throw IllegalStateException("OpenAI Chat stream ended before a finish_reason")
+                }
+                // 若明确收到 [DONE] 但缺少 finish_reason，且存在工具调用，必须严格校验原始 id/name 非空及 arguments 为有效 JsonObject，禁止执行不完整工具
+                if (hasToolCalls) {
+                    val allValid = toolCallsMap.values.all { state ->
+                        state.id.isNotBlank() &&
+                            state.name.isNotBlank() &&
+                            runCatching { Json.parseToJsonElement(state.arguments.toString()) as? JsonObject }.getOrNull() != null
+                    }
+                    if (!allValid) {
+                        throw IllegalStateException("OpenAI Chat stream ended before finish_reason with incomplete tool call")
+                    }
+                }
             }
 
             // 冲刷 thinkRouter 剩余内容
@@ -746,7 +762,7 @@ object OpenAIDirectClient {
         }
     }
 
-    /** Pi OpenAI Chat Completions stopReason 映射。 */
+    /** Pi OpenAI Chat Completions stopReason 映射。保留未知 reason 与 provider error 为失败。 */
     private fun mapOpenAIChatStopReason(reason: String?, hasToolCalls: Boolean): String = when (reason) {
         null -> if (hasToolCalls) "tool_use" else "stop"
         "stop", "end" -> "stop"

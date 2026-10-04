@@ -21,8 +21,23 @@ internal class RemoteModelCatalogCache<T : Any>(
     private val mutex = Mutex()
     private var memoryEntry: MemoryEntry<T>? = null
 
-    suspend fun load(fetchRemote: suspend () -> String): T? = mutex.withLock {
+    suspend fun load(
+        fetchRemote: suspend () -> String,
+        allowCache: Boolean = true,
+    ): T? = mutex.withLock {
         val now = nowEpochMillis()
+        // 强制获取用于用户主动刷新模型参数。此路径只解析本次网络响应，
+        // 不读旧文件、不读进程内缓存，也不把本次结果写回缓存，避免旧目录影响恢复结果。
+        if (!allowCache) {
+            val body = try {
+                fetchRemote()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                return@withLock null
+            }
+            return@withLock parse(body, now)
+        }
         memoryEntry?.takeIf { it.checkedAt >= now - ttlMillis }?.let { return@withLock it.index }
         val diskText = runCatching { cacheFile.takeIf(File::isFile)?.readText(Charsets.UTF_8) }.getOrNull()
         val diskTimestamp = cacheFile.lastModified().coerceAtLeast(0L)

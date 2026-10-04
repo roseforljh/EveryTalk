@@ -331,6 +331,79 @@ class ModelCatalogServiceTest {
         }
     }
 
+    @Test
+    fun `强制获取绕过端点和远程目录缓存`() = runTest {
+        var fresh = false
+        val requests = mutableListOf<String>()
+        val engine = testEngine { request ->
+            requests += request.url.host + request.url.encodedPath
+            val output = if (fresh) 64_000 else 4_000
+            when (request.url.host) {
+                "pi.dev" -> jsonResponse(
+                    """{"google":{"model-a":{"id":"model-a","contextWindow":1000000,"maxTokens":$output}}}"""
+                )
+                "models.dev" -> jsonResponse(
+                    """{"google":{"models":{"model-a":{"limit":{"context":1000000,"output":$output}}}}}"""
+                )
+                else -> when (request.url.encodedPath) {
+                    "/v1/models/model-a" -> respond("unsupported", HttpStatusCode.NotFound)
+                    "/v1/models" -> jsonResponse("""{"data":[{"id":"model-a"}]}""")
+                    else -> error("未预期的请求：${request.url}")
+                }
+            }
+        }
+        withService(engine) { service ->
+            val old = service.getCapabilities("https://api.example/v1", "key", "OpenAI兼容", "model-a", "Google")
+            assertEquals(4_000, resolveModelCapability(
+                "model-a", ModelParameterProtocol.OPENAI_COMPATIBLE, "https://api.example/v1", old,
+            ).maxOutputTokens)
+
+            fresh = true
+            val current = service.getCapabilities(
+                "https://api.example/v1", "key", "OpenAI兼容", "model-a", "Google", allowCache = false,
+            )
+            val resolved = resolveModelCapability(
+                "model-a", ModelParameterProtocol.OPENAI_COMPATIBLE, "https://api.example/v1", current,
+            )
+            assertEquals(64_000, resolved.maxOutputTokens)
+            assertEquals(ModelCapabilitySource.PI_CATALOG, resolved.maxOutputSource)
+            assertEquals(2, requests.count { it == "api.example/v1/models" })
+            assertEquals(2, requests.count { it == "pi.dev/api/models" })
+            assertEquals(2, requests.count { it == "models.dev/api.json" })
+        }
+    }
+
+    @Test
+    fun `强制获取网络失败时不返回已保存的端点和目录缓存`() = runTest {
+        var online = true
+        val engine = testEngine { request ->
+            if (!online) return@testEngine respond("offline", HttpStatusCode.ServiceUnavailable)
+            when (request.url.host) {
+                "pi.dev" -> jsonResponse(
+                    """{"google":{"model-a":{"id":"model-a","contextWindow":1000000,"maxTokens":4000}}}"""
+                )
+                "models.dev" -> jsonResponse(
+                    """{"google":{"models":{"model-a":{"limit":{"context":1000000,"output":4000}}}}}"""
+                )
+                else -> when (request.url.encodedPath) {
+                    "/v1/models/model-a" -> respond("unsupported", HttpStatusCode.NotFound)
+                    "/v1/models" -> jsonResponse("""{"data":[{"id":"model-a","max_output_tokens":4000}]}""")
+                    else -> error("未预期的请求：${request.url}")
+                }
+            }
+        }
+        withService(engine) { service ->
+            val old = service.getCapabilities("https://api.example/v1", "key", "OpenAI兼容", "model-a", "Google")
+            assertTrue(old.isNotEmpty())
+
+            online = false
+            val current = service.getCapabilities(
+                "https://api.example/v1", "key", "OpenAI兼容", "model-a", "Google", allowCache = false,
+            )
+            assertTrue(current.isEmpty())
+        }
+    }
+
     /** 让模拟网络与超时共享测试时钟，避免虚拟时间先于真实 IO 线程跳到截止时间。 */
     private fun TestScope.testEngine(
         handler: suspend MockRequestHandleScope.(HttpRequestData) -> HttpResponseData,

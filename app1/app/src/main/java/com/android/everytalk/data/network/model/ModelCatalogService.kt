@@ -76,19 +76,24 @@ internal class ModelCatalogService(
         apiUrl: String,
         apiKey: String,
         channel: String?,
+        allowEndpointCache: Boolean = true,
     ): List<ModelCapabilityCandidate> {
         val endpoint = resolveModelCatalogEndpoint(apiUrl, channel)
         val cleanedApiKey = apiKey.filterNot(Char::isWhitespace)
         return try {
             val catalog = fetchAllPages(endpoint, cleanedApiKey)
-            endpointCache.put(catalog)
+            if (allowEndpointCache) endpointCache.put(catalog)
             catalog
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            val cached = endpointCache.get(endpoint.protocol, endpoint.normalizedBase)
-            if (cached.isNotEmpty()) {
-                cached
+            if (allowEndpointCache) {
+                val cached = endpointCache.get(endpoint.protocol, endpoint.normalizedBase)
+                if (cached.isNotEmpty()) {
+                    cached
+                } else {
+                    throw IOException("获取模型列表失败: ${error.message}", error)
+                }
             } else {
                 throw IOException("获取模型列表失败: ${error.message}", error)
             }
@@ -101,6 +106,7 @@ internal class ModelCatalogService(
         channel: String?,
         modelId: String,
         providerHint: String,
+        allowCache: Boolean = true,
     ): List<ModelCapabilityCandidate> {
         val endpoint = resolveModelCatalogEndpoint(apiUrl, channel)
         val cleanedApiKey = apiKey.filterNot(Char::isWhitespace)
@@ -109,11 +115,11 @@ internal class ModelCatalogService(
 
         fetchDetail(endpoint, cleanedApiKey, normalizedModelId)?.let { detail ->
             candidates += detail
-            endpointCache.put(listOf(detail))
+            if (allowCache) endpointCache.put(listOf(detail))
         }
 
         try {
-            getCatalog(apiUrl, cleanedApiKey, channel)
+            getCatalog(apiUrl, cleanedApiKey, channel, allowEndpointCache = allowCache)
                 .firstOrNull { it.modelId.equals(normalizedModelId, ignoreCase = true) }
                 ?.let(candidates::add)
         } catch (error: CancellationException) {
@@ -121,13 +127,14 @@ internal class ModelCatalogService(
         } catch (_: Exception) {
         }
 
-        candidates += fetchPiCapabilities(listOf(normalizedModelId), endpoint)
+        candidates += fetchPiCapabilities(listOf(normalizedModelId), endpoint, allowCache)
         val community = modelsDevCatalog.findCapabilities(
             modelId = normalizedModelId,
             providerHint = providerHint,
             apiAddress = endpoint.normalizedBase,
             protocol = endpoint.protocol,
             fetchRemote = ::fetchCommunityCatalog,
+            allowCache = allowCache,
         )
         candidates += community
         return candidates
@@ -154,16 +161,22 @@ internal class ModelCatalogService(
     private suspend fun fetchPiCapabilities(
         modelIds: List<String>,
         endpoint: ModelCatalogEndpoint,
-    ): List<ModelCapabilityCandidate> = piModelCatalog.findCapabilities(modelIds, endpoint.protocol) {
-        withTimeoutOrNull(COMMUNITY_CATALOG_TIMEOUT_MS) {
-            val response = client.get(PI_MODEL_CATALOG_URL) {
-                header(HttpHeaders.Accept, "application/json")
-                header(HttpHeaders.UserAgent, "EveryTalk/1.0 (Android)")
-            }
-            if (!response.status.isSuccess()) throw IOException("pi 目录返回 HTTP ${response.status.value}")
-            response.readTextAtMost(MAX_PI_MODEL_CATALOG_BYTES)
-        } ?: throw IOException("pi 目录请求超时")
-    }
+        allowCache: Boolean = true,
+    ): List<ModelCapabilityCandidate> = piModelCatalog.findCapabilities(
+        modelIds = modelIds,
+        protocol = endpoint.protocol,
+        fetchRemote = {
+            withTimeoutOrNull(COMMUNITY_CATALOG_TIMEOUT_MS) {
+                val response = client.get(PI_MODEL_CATALOG_URL) {
+                    header(HttpHeaders.Accept, "application/json")
+                    header(HttpHeaders.UserAgent, "EveryTalk/1.0 (Android)")
+                }
+                if (!response.status.isSuccess()) throw IOException("pi 目录返回 HTTP ${response.status.value}")
+                response.readTextAtMost(MAX_PI_MODEL_CATALOG_BYTES)
+            } ?: throw IOException("pi 目录请求超时")
+        },
+        allowCache = allowCache,
+    )
 
     private suspend fun fetchCommunityCatalog(): String {
         val response = client.get(MODELS_DEV_URL) {

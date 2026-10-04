@@ -33,10 +33,11 @@ internal class PiModelCatalog(
     suspend fun findCapabilities(
         modelIds: List<String>,
         protocol: ModelParameterProtocol,
+        allowCache: Boolean = true,
         fetchRemote: suspend () -> String,
     ): List<ModelCapabilityCandidate> {
         if (modelIds.isEmpty()) return emptyList()
-        val index = cache.load(fetchRemote) ?: return emptyList()
+        val index = cache.load(fetchRemote, allowCache) ?: return emptyList()
         return modelIds.mapNotNull { requested ->
             val id = normalizePiModelId(requested)
             // 精确 ID 优先。只有未命中时才移除目录/代理附加的命名空间，不模糊匹配版本号。

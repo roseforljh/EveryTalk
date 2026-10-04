@@ -157,6 +157,13 @@ object GeminiDirectClient {
             // 添加生成配置（包含 thinkingConfig）
             putJsonObject("generationConfig") {
                 request.generationConfig?.let { config ->
+                    Log.i(
+                        TAG,
+                        "Gemini request generationConfig: maxOutputTokens=${config.maxOutputTokens}, " +
+                            "thinkingBudget=${config.thinkingConfig?.thinkingBudget}, " +
+                            "thinkingLevel=${config.thinkingConfig?.thinkingLevel}, " +
+                            "includeThoughts=${config.thinkingConfig?.includeThoughts}",
+                    )
                     config.temperature?.let { put("temperature", it) }
                     config.topP?.let { put("topP", it) }
                     config.maxOutputTokens?.let { put("maxOutputTokens", it) }
@@ -380,7 +387,17 @@ object GeminiDirectClient {
                                     }
                                 (jsonChunk["usageMetadata"] as? JsonObject)
                                     ?.let(::parseGeminiTokenUsage)
-                                    ?.let { usage -> emitEvent(AppStreamEvent.Usage(usage)) }
+                                    ?.let { usage ->
+                                        if (usage.isFinal) {
+                                            // 只记录最终用量，不记录对话内容，便于核对截断是否与思考 Token 有关。
+                                            Log.i(
+                                                TAG,
+                                                "Gemini usage: input=${usage.inputTokens}, output=${usage.outputTokens}, " +
+                                                    "thoughts=${usage.reasoningTokens}, total=${usage.totalTokens}",
+                                            )
+                                        }
+                                        emitEvent(AppStreamEvent.Usage(usage))
+                                    }
                                 jsonChunk["candidates"]?.jsonArray?.firstOrNull()?.let { candidate ->
                                     val candidateObj = candidate.jsonObject
                                     val candidateContent = candidateObj["content"] as? JsonObject
@@ -459,7 +476,7 @@ object GeminiDirectClient {
                                     
                                     candidateObj["finishReason"]?.jsonPrimitive?.contentOrNull?.let { reason ->
                                         rawFinishReason = reason
-                                        Log.d(TAG, "Finish reason: $reason")
+                                        Log.i(TAG, "Gemini finish reason: $reason")
                                     }
                                 }
                             } catch (e: CancellationException) {

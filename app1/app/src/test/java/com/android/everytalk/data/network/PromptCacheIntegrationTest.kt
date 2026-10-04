@@ -1,6 +1,7 @@
 package com.android.everytalk.data.network
 
 import android.app.Application
+import com.android.everytalk.data.DataClass.AbstractApiMessage
 import com.android.everytalk.data.DataClass.AgentAssistantApiMessage
 import com.android.everytalk.data.DataClass.AgentToolCallApiPart
 import com.android.everytalk.data.DataClass.AgentToolResultApiMessage
@@ -59,8 +60,8 @@ class PromptCacheIntegrationTest {
         apiAddress = "https://api.openai.com/v1", apiKey = "test-key",
     )
 
-    private fun prepared(turn: Int): ChatRequest {
-        val request = baseRequest.copy(messages = baseRequest.messages + SimpleTextApiMessage(
+    private fun prepared(turn: Int, history: List<AbstractApiMessage> = baseRequest.messages): ChatRequest {
+        val request = baseRequest.copy(messages = history + SimpleTextApiMessage(
             id = "computer-session-state", role = "system", content = "已运行 $turn 秒",
         ))
         val prepared = AgentContextManager().prepare(
@@ -69,6 +70,40 @@ class PromptCacheIntegrationTest {
             executionCheckpoint = ExecutionCheckpoint(currentGoal = "检查构建", currentStep = "准备第 $turn 轮"),
         )
         return request.copy(messages = prepared.messages)
+    }
+
+    @Test
+    fun `上一轮状态冻结后成为下一轮Chat和Responses请求的完整前缀`() {
+        val first = prepared(1)
+        val frozen = SystemPromptInjector.freezeRuntimeContext(first.messages, "request-1")
+        assertEquals(2, frozen.size)
+        val languageProbe = SystemPromptInjector.smartInjectSystemPrompt(
+            frozen + SimpleTextApiMessage(id = "new-user", role = "user", content = "继续检查"),
+        )
+        assertTrue((languageProbe.first() as SimpleTextApiMessage).content.contains("# 核心规则"))
+        val nextAssistant = AgentAssistantApiMessage(
+            id = "assistant-2",
+            text = "再次读取构建结果",
+            toolCalls = listOf(AgentToolCallApiPart("call-2", "read_result", JsonObject(emptyMap()))),
+        )
+        val nextResult = AgentToolResultApiMessage(
+            id = "result-2", toolCallId = "call-2", toolName = "read_result",
+            content = JsonPrimitive("第二次构建成功"),
+        )
+        val second = prepared(2, baseRequest.messages + frozen + nextAssistant + nextResult)
+        listOf(
+            "Chat" to { request: ChatRequest -> OpenAIDirectClient.buildOpenAIPayload(request) },
+            "Responses" to { request: ChatRequest -> OpenAIResponsesClient.buildResponsesPayload(request, emptyList()) },
+        ).forEach { (protocol, build) ->
+            val key = if (protocol == "Chat") "messages" else "input"
+            val firstMessages = Json.parseToJsonElement(build(first)).jsonObject.getValue(key).jsonArray
+            val secondMessages = Json.parseToJsonElement(build(second)).jsonObject.getValue(key).jsonArray
+            assertTrue(protocol, secondMessages.size > firstMessages.size)
+            firstMessages.forEachIndexed { index, message ->
+                assertEquals("$protocol 消息 $index", message, secondMessages[index])
+            }
+            assertTrue(protocol, secondMessages.toString().contains("准备第 2 轮"))
+        }
     }
 
     @Test
