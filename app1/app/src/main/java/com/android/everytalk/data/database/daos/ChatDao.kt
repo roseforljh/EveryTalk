@@ -12,6 +12,8 @@ import com.android.everytalk.data.database.entities.MessageStorageState
 import com.android.everytalk.data.database.entities.LightweightMessageRow
 import com.android.everytalk.data.database.entities.PendingMessageEntity
 import com.android.everytalk.data.database.entities.RawMessageRow
+import com.android.everytalk.data.database.entities.toEntity
+import com.android.everytalk.data.database.entities.toMessage
 import com.android.everytalk.models.SelectedMediaItem
 import kotlinx.coroutines.flow.Flow
 
@@ -58,6 +60,19 @@ interface ChatDao {
 
     @Query("SELECT * FROM messages WHERE sessionId = :sessionId ORDER BY timestamp ASC")
     suspend fun getMessagesForSession(sessionId: String): List<MessageEntity>
+
+    @Query("SELECT * FROM messages WHERE sessionId = :sessionId AND id = :messageId LIMIT 1")
+    suspend fun getMessage(sessionId: String, messageId: String): MessageEntity?
+
+    /** 后台 Agent 下载完成时，只更新原消息的附件，避免依赖当前打开的会话。 */
+    @Transaction
+    suspend fun appendDownloadedAttachment(sessionId: String, messageId: String, attachment: SelectedMediaItem.GenericFile): Boolean {
+        val message = getMessage(sessionId, messageId) ?: return false
+        if (message.attachments.none { it.id == attachment.id }) {
+            upsertMessages(listOf(message.toMessage().copy(attachments = message.attachments + attachment).toEntity(sessionId)))
+        }
+        return true
+    }
 
     @Query(
         """

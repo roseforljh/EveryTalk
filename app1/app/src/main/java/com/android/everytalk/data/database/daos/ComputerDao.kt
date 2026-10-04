@@ -204,6 +204,25 @@ interface ComputerDao {
         updatedAt: Long = System.currentTimeMillis(),
     )
 
+    /** 只替换 SSH 主机密钥，保留当前连接状态，避免覆盖正在进行的 Container 配置状态。 */
+    @Query("UPDATE computers SET resolvedAddress = :resolvedAddress, hostKeyAlgorithm = :hostKeyAlgorithm, hostKeyBlobBase64 = :hostKeyBlobBase64, hostKeyFingerprint = :hostKeyFingerprint, lastErrorCode = NULL, updatedAt = :updatedAt WHERE id = :computerId")
+    suspend fun updateComputerHostKey(
+        computerId: String,
+        resolvedAddress: String,
+        hostKeyAlgorithm: String,
+        hostKeyBlobBase64: String,
+        hostKeyFingerprint: String,
+        updatedAt: Long = System.currentTimeMillis(),
+    ): Int
+
+    /** 原专用 Key 失效后只恢复登录凭据状态，不改动正在进行的连接状态。 */
+    @Query("UPDATE computers SET credentialState = :credentialState, updatedAt = :updatedAt WHERE id = :computerId")
+    suspend fun updateComputerCredentialState(
+        computerId: String,
+        credentialState: String,
+        updatedAt: Long = System.currentTimeMillis(),
+    )
+
     @Query("UPDATE computers SET permissionMode = :permissionMode, updatedAt = :updatedAt WHERE id = :computerId")
     suspend fun updatePermissionMode(
         computerId: String,
@@ -277,6 +296,26 @@ interface ComputerDao {
     /** Container 配置成功后补齐迁移自旧 Direct 记录的镜像元数据。 */
     @Query("UPDATE computer_workspaces SET containerImage = :containerImage WHERE computerId = :computerId AND runMode = 'CONTAINER'")
     suspend fun updateContainerWorkspaceImage(computerId: String, containerImage: String)
+
+    /**
+     * 服务器切换 Direct/Container 后同步已有会话的运行目标。
+     * 标记为 RECOVERING，让下一次请求重新准备目录或 Container，避免继续使用旧模式。
+     */
+    @Query(
+        """
+        UPDATE computer_workspaces
+        SET runMode = :runMode,
+            containerName = CASE WHEN :runMode = 'CONTAINER' THEN 'everytalk-' || id ELSE NULL END,
+            containerImage = CASE WHEN :runMode = 'CONTAINER' THEN :containerImage ELSE NULL END,
+            status = 'RECOVERING'
+        WHERE computerId = :computerId
+        """,
+    )
+    suspend fun updateComputerWorkspaceRunMode(
+        computerId: String,
+        runMode: String,
+        containerImage: String?,
+    )
 
     /** 服务器地址、端口或账号改变后，旧 Workspace 保留文件映射并等待新目标重新校验。 */
     @Query("UPDATE computer_workspaces SET status = 'RECOVERING' WHERE computerId = :computerId")

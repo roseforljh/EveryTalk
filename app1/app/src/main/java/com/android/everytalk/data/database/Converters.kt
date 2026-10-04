@@ -112,8 +112,13 @@ class Converters {
 
     @TypeConverter
     fun toSelectedMediaItemList(value: String?): List<SelectedMediaItem> {
-        if (value.isNullOrEmpty()) return emptyList()
-        return json.decodeFromString(ListSerializer(SelectedMediaItem.serializer()), value)
+        if (value.isNullOrBlank()) return emptyList()
+        // 旧版本或损坏的附件 JSON 不能阻止整条消息读取；这里只降级读取，不改写数据库。
+        return try {
+            json.decodeFromString(ListSerializer(SelectedMediaItem.serializer()), value)
+        } catch (_: IllegalArgumentException) {
+            emptyList()
+        }
     }
 
     // List<MarkdownPart>
@@ -126,8 +131,13 @@ class Converters {
 
     @TypeConverter
     fun toMarkdownPartList(value: String?): List<MarkdownPart> {
-        if (value.isNullOrEmpty()) return emptyList()
-        return json.decodeFromString(MarkdownPartSerializer, value)
+        if (value.isNullOrBlank()) return emptyList()
+        // 多态类型不兼容时保留消息的其他字段，避免单条坏数据中断整个会话加载。
+        return try {
+            json.decodeFromString(MarkdownPartSerializer, value)
+        } catch (_: IllegalArgumentException) {
+            emptyList()
+        }
     }
     
     // 模型参数

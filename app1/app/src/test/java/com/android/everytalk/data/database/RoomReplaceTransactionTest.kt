@@ -1,6 +1,7 @@
 package com.android.everytalk.data.database
 
 import android.content.Context
+import android.net.Uri
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -9,6 +10,7 @@ import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.database.entities.ConversationGroupEntity
 import com.android.everytalk.data.database.entities.ChatSessionEntity
 import com.android.everytalk.data.database.entities.toEntity
+import com.android.everytalk.models.SelectedMediaItem
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -92,5 +94,29 @@ class RoomReplaceTransactionTest {
             updated.map { it.id to it.text },
             dao.getMessagesForSession(session.id).map { it.id to it.text },
         )
+    }
+
+    @Test
+    fun `后台下载附件只绑定原消息并保持持久化指纹一致`() = runBlocking {
+        val dao = database.chatDao()
+        val session = ChatSessionEntity("download-session", 1L, 2L, false)
+        val first = Message(id = "assistant-1", text = "第一条", sender = Sender.AI, timestamp = 1L)
+        val second = Message(id = "assistant-2", text = "第二条", sender = Sender.AI, timestamp = 2L)
+        dao.saveSessionWithMessages(session, listOf(first, second).map { it.toEntity(session.id) })
+        val attachment = SelectedMediaItem.GenericFile(
+            uri = Uri.parse("content://test/download"),
+            id = "download-1",
+            displayName = "result.txt",
+            mimeType = "text/plain",
+        )
+
+        assertEquals(true, dao.appendDownloadedAttachment(session.id, second.id, attachment))
+        assertEquals(false, dao.appendDownloadedAttachment(session.id, "missing", attachment))
+        assertEquals(true, dao.appendDownloadedAttachment(session.id, second.id, attachment))
+        val saved = dao.getMessagesForSession(session.id)
+        assertEquals(emptyList<SelectedMediaItem>(), saved.first { it.id == first.id }.attachments)
+        assertEquals(listOf(attachment), saved.first { it.id == second.id }.attachments)
+        assertEquals(second.copy(attachments = listOf(attachment)).toEntity(session.id).storageFingerprint,
+            saved.first { it.id == second.id }.storageFingerprint)
     }
 }
