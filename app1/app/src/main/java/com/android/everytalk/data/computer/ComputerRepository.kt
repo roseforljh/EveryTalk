@@ -21,8 +21,7 @@ import java.util.UUID
 
 /**
  * 恢复查询允许 READY 以及曾经配置成功但暂时断线的服务器。
- * CONFIGURATION_REQUIRED、HOST_KEY_CHANGED 等状态必须先由用户修复，不能让后台
- * 对账绕过配置流程或重新接受一把未知 Host Key。
+ * 配置未完成时不能让后台绕过配置流程；Host Key 变化由连接池自动更新并记录提示。
  */
 internal fun ComputerStatus.canAttemptExecutionRecovery(): Boolean = this in setOf(
     ComputerStatus.READY,
@@ -51,7 +50,14 @@ class ComputerRepository(
     private val dao: ComputerDao = AppDatabase.getDatabase(applicationContext).computerDao()
     private val credentialStore = ComputerCredentialStore(applicationContext)
     private val sshClient = ComputerSshClient()
-    private val connectionPool = ComputerConnectionPoolRegistry.get(sshClient, credentialStore)
+    private val poolCallbackRegistration = ComputerConnectionPoolRegistry.register(
+        onHostKeyChanged = ::acceptChangedHostKey,
+        onDedicatedKeyRejected = ::restoreOriginalCredential,
+    )
+    private val connectionPool = ComputerConnectionPoolRegistry.get(
+        sshClient = sshClient,
+        credentialStore = credentialStore,
+    )
     private val probe = ComputerProbe()
     private val dedicatedKeyManager = ComputerDedicatedKeyManager(sshClient)
     private val provisioner = ComputerProvisioner(applicationContext)
@@ -265,10 +271,12 @@ class ComputerRepository(
             val capabilities = connectionPool.withConnection(current) { connection ->
                 probe.probe(connection, current.port)
             }
-            val refreshed = current.copy(
+            // 连接池可能刚自动保存新 Host Key；从 Room 读取最新记录，避免旧快照将其覆盖。
+            val latest = requireComputer(computerId)
+            val refreshed = latest.copy(
                 status = if (
-                    current.runMode == ComputerRunMode.CONTAINER &&
-                    (!capabilities.dockerAvailable || current.bootstrapVersion != COMPUTER_BOOTSTRAP_VERSION)
+                    latest.runMode == ComputerRunMode.CONTAINER &&
+                    (!capabilities.dockerAvailable || latest.bootstrapVersion != COMPUTER_BOOTSTRAP_VERSION)
                 ) {
                     ComputerStatus.CONFIGURATION_REQUIRED
                 } else {
@@ -338,7 +346,8 @@ class ComputerRepository(
                         onProgress = onProgress,
                     )
                 }
-                val configured = current.copy(
+                // 连接期间 Host Key 可能已自动更新，不能用进入配置前的旧快照回写。
+                val configured = requireComputer(computerId).copy(
                     bootstrapVersion = result.bootstrapVersion,
                     sandboxImage = result.sandboxImage,
                     status = ComputerStatus.VERIFYING,
@@ -442,6 +451,7 @@ class ComputerRepository(
                 current.hostKeyBlobBase64 == confirmedKeyBlob
             val remoteAccountChanged = endpointChanged && !sameRemoteAccount
             val suppliedCredential = request.credential != null
+            val runModeChanged = current.runMode != request.runMode
             val credential = request.credential ?: if (remoteAccountChanged) {
                 credentialStore.loadOriginalComputerCredential(request.id)
                     ?: credentialStore.loadComputerCredential(request.id)
@@ -459,9 +469,12 @@ class ComputerRepository(
                 }.getOrNull()
             }
 
+            // 用户在编辑页明确填入新凭据时，必须替换失效的专用 Key；
+            // 否则测试登录虽成功，保存后连接池仍继续使用旧 Key。
             val keepDedicatedConnection =
-                current.credentialState == ComputerCredentialState.DEDICATED_KEY && !remoteAccountChanged
-            val replaceActiveCredential = remoteAccountChanged || (suppliedCredential && !keepDedicatedConnection)
+                current.credentialState == ComputerCredentialState.DEDICATED_KEY &&
+                    !remoteAccountChanged && !suppliedCredential
+            val replaceActiveCredential = remoteAccountChanged || suppliedCredential
             val candidate = current.copy(
                 displayName = request.displayName.trim().ifEmpty { endpoint.host },
                 host = endpoint.host,
@@ -472,6 +485,7 @@ class ComputerRepository(
                 hostKeyBlobBase64 = confirmedKeyBlob,
                 hostKeyFingerprint = confirmedHostKey.fingerprint,
                 authKind = if (suppliedCredential) credential.kind else current.authKind,
+                runMode = request.runMode,
                 credentialState = when {
                     keepDedicatedConnection -> ComputerCredentialState.DEDICATED_KEY
                     replaceActiveCredential -> ComputerCredentialState.ORIGINAL_ENCRYPTED
@@ -501,9 +515,12 @@ class ComputerRepository(
 
             var updated = candidate.copy(
                 status = if (
-                    remoteAccountChanged ||
-                    !capabilities.dockerAvailable ||
-                    current.bootstrapVersion != COMPUTER_BOOTSTRAP_VERSION
+                    request.runMode == ComputerRunMode.CONTAINER &&
+                    (
+                        runModeChanged ||
+                            !capabilities.dockerAvailable ||
+                            current.bootstrapVersion != COMPUTER_BOOTSTRAP_VERSION
+                        ) || remoteAccountChanged
                 ) {
                     ComputerStatus.CONFIGURATION_REQUIRED
                 } else {
@@ -516,7 +533,15 @@ class ComputerRepository(
                 updatedAt = System.currentTimeMillis(),
             )
             dao.upsertComputer(updated.toEntity(json))
-            if (remoteAccountChanged) dao.markComputerWorkspacesRecovering(updated.id)
+            if (runModeChanged) {
+                dao.updateComputerWorkspaceRunMode(
+                    computerId = updated.id,
+                    runMode = updated.runMode.name,
+                    containerImage = updated.sandboxImage,
+                )
+            } else if (remoteAccountChanged) {
+                dao.markComputerWorkspacesRecovering(updated.id)
+            }
             if (replaceActiveCredential) updated = tryUpgradeToDedicatedKey(updated)
 
             val oldDedicatedKeyRemoved = when {
@@ -1034,6 +1059,54 @@ class ComputerRepository(
     private suspend fun requireComputer(computerId: String): Computer = getComputer(computerId)
         ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
 
+    /**
+     * 保存服务器刚刚提供的新 Host Key，并记录一条可见的安全提示。
+     * 这里只更新密钥字段，避免把正在执行的 PROVISIONING/PROBING 状态覆盖掉。
+     */
+    private suspend fun acceptChangedHostKey(
+        computer: Computer,
+        replacement: HostKeyProbeResult,
+    ): Computer {
+        if (replacement.host != computer.host || replacement.port != computer.port) {
+            throw ComputerException(ComputerErrorCodes.HOST_KEY_CHANGED, "待更新 Host Key 与服务器地址不匹配")
+        }
+        val keyBlob = Base64.getEncoder().encodeToString(replacement.keyBlob)
+        val updatedCount = dao.updateComputerHostKey(
+            computerId = computer.id,
+            resolvedAddress = replacement.resolvedAddress,
+            hostKeyAlgorithm = replacement.algorithm,
+            hostKeyBlobBase64 = keyBlob,
+            hostKeyFingerprint = replacement.fingerprint,
+        )
+        if (updatedCount != 1) {
+            throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录已不存在")
+        }
+        recordAudit(
+            computer.id,
+            "HOST_KEY_AUTO_ACCEPTED",
+            "AUTO_ACCEPTED",
+            replacement.fingerprint,
+        )
+        return computer.copy(
+            resolvedAddress = replacement.resolvedAddress,
+            hostKeyAlgorithm = replacement.algorithm,
+            hostKeyBlobBase64 = keyBlob,
+            hostKeyFingerprint = replacement.fingerprint,
+            lastErrorCode = null,
+            updatedAt = System.currentTimeMillis(),
+        )
+    }
+
+    /** 原专用 Key 在新系统上失效时，沿用已经验证能登录的原始凭据。 */
+    private suspend fun restoreOriginalCredential(
+        computer: Computer,
+        credential: ComputerCredential,
+    ) {
+        credentialStore.saveComputerCredential(computer.id, credential)
+        dao.updateComputerCredentialState(computer.id, ComputerCredentialState.ORIGINAL_ENCRYPTED.name)
+        recordAudit(computer.id, "DEDICATED_KEY_FALLBACK", "SUCCESS", null)
+    }
+
     internal suspend fun recordAudit(
         computerId: String,
         eventType: String,
@@ -1088,6 +1161,7 @@ class ComputerRepository(
     }
 
     override fun close() {
+        poolCallbackRegistration.close()
         connectionStopListener.close()
         // 连接池属于整个 App 进程。关闭某个 Repository 不能切断前台服务正在监听的任务。
     }

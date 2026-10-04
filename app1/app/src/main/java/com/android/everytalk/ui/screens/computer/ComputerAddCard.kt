@@ -342,8 +342,9 @@ internal fun ComputerAddCard(
                         )
                     }
 
-                    if (!keepCredentialHint) {
-                        if (form.provider == ComputerProvider.SSH) {
+                    // 编辑服务器时也必须保留这个开关；keepCredentialHint 只负责提示凭据沿用，
+                    // 不能再把运行模式配置一起隐藏。
+                    if (form.provider == ComputerProvider.SSH) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -375,7 +376,6 @@ internal fun ComputerAddCard(
                                 enabled = !isBusy,
                                 colors = sandboxSwitchColors,
                             )
-                        }
                         }
                     }
 

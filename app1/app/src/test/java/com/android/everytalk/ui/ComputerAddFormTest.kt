@@ -100,12 +100,18 @@ class ComputerAddFormTest {
         assertEquals("ubuntu", form.username)
         assertEquals(ComputerAuthKind.PASSWORD, form.authKind)
         assertEquals("", form.password)
+        assertTrue(form.sandboxEnabled)
         assertNull(form.validationError(computer.authKind))
 
         val prepared = form.prepareUpdate(computer)
         assertNull(prepared.request.credential)
+        assertEquals(ComputerRunMode.CONTAINER, prepared.request.runMode)
         org.junit.Assert.assertFalse(prepared.replaceSudoPassword)
         prepared.clear()
+
+        val directPrepared = form.copy(sandboxEnabled = false).prepareUpdate(computer)
+        assertEquals(ComputerRunMode.DIRECT, directPrepared.request.runMode)
+        directPrepared.clear()
     }
 
     @Test

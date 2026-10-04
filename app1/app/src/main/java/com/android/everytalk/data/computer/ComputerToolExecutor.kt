@@ -1024,10 +1024,12 @@ class ComputerToolExecutor(
     ): JsonElement {
         val bridge = attachmentBridge
             ?: throw ComputerException(ComputerErrorCodes.DOWNLOAD_INTERRUPTED, "当前请求没有下载桥接器")
+        val runId = context.runId
+            ?: throw ComputerException(ComputerErrorCodes.DOWNLOAD_INTERRUPTED, "当前请求没有 Agent 任务 ID")
         val sourcePath = arguments.requiredString("source_path")
         val name = arguments.optionalString("suggested_name")
             ?: sourcePath.substringAfterLast('/').ifBlank { "download.bin" }
-        val downloaded = bridge.receiveDownload(context.conversationId, name) { output ->
+        val downloaded = bridge.receiveDownload(context.conversationId, runId, name) { output ->
             repository.withConnection(context.computerId) { connection, _ ->
                 fileTransfer.download(connection, workspace, sourcePath, output)
             }

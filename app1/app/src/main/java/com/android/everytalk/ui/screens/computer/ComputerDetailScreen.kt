@@ -45,6 +45,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -69,6 +70,9 @@ import com.android.everytalk.R
 import com.android.everytalk.data.computer.Computer
 import com.android.everytalk.data.computer.ComputerAuditEvent
 import com.android.everytalk.data.computer.ComputerCredentialState
+import com.android.everytalk.data.computer.ComputerAuthKind
+import com.android.everytalk.data.computer.ComputerErrorCodes
+import com.android.everytalk.data.computer.ComputerException
 import com.android.everytalk.data.computer.ComputerDiagnostics
 import com.android.everytalk.data.computer.ComputerFailureStage
 import com.android.everytalk.data.computer.ComputerPermissionMode
@@ -136,6 +140,19 @@ fun ComputerDetailScreen(
         }
     }
     val audits by auditFlow.collectAsState(initial = emptyList())
+    val screenOpenedAt = remember(computerId) { System.currentTimeMillis() }
+    var lastShownHostKeyAuditId by remember(computerId) { mutableStateOf<String?>(null) }
+    LaunchedEffect(audits) {
+        val latestHostKeyUpdate = audits.firstOrNull { it.eventType == "HOST_KEY_AUTO_ACCEPTED" }
+        if (
+            latestHostKeyUpdate != null &&
+            latestHostKeyUpdate.createdAt >= screenOpenedAt &&
+            latestHostKeyUpdate.id != lastShownHostKeyAuditId
+        ) {
+            lastShownHostKeyAuditId = latestHostKeyUpdate.id
+            viewModel.showSnackbar(context.getString(R.string.computer_host_key_auto_updated))
+        }
+    }
     val historicalConversations by viewModel.historicalConversations.collectAsState()
     // 会话项目直接显示用户熟悉的会话名称，避免把内部 ID 暴露到界面。
     val conversationNamesById = remember(historicalConversations) {
@@ -305,12 +322,28 @@ fun ComputerDetailScreen(
             onCompletion = current::clear,
         ) {
             try {
-                viewModel.updateComputer(
+                val updated = viewModel.updateComputer(
                     request = current.request,
                     confirmedHostKey = confirmed,
                     sudoPassword = current.sudoPassword,
                     replaceSudoPassword = current.replaceSudoPassword,
                 )
+                if (
+                    updated.runMode == ComputerRunMode.CONTAINER &&
+                    updated.status == ComputerStatus.CONFIGURATION_REQUIRED
+                ) {
+                    withContext(Dispatchers.Main) {
+                        editProgressText = context.getString(R.string.computer_progress_preparing_container)
+                    }
+                    viewModel.provisionComputerContainer(
+                        computerId = updated.id,
+                        onProgress = { stage ->
+                            withContext(Dispatchers.Main) {
+                                editProgressText = context.getString(stage.labelRes())
+                            }
+                        },
+                    )
+                }
                 withContext(Dispatchers.Main) {
                     editPrepared = null
                     editProgressText = null
@@ -324,7 +357,17 @@ fun ComputerDetailScreen(
                 withContext(Dispatchers.Main) {
                     editPrepared = null
                     editProgressText = null
-                    editErrorText = error.message ?: genericFailure
+                    // 密码栏留空时本次使用的是本地旧凭据；认证失败不能误导用户以为刚输入的密码有误。
+                    editErrorText = if (
+                        current.request.credential == null &&
+                        editForm.authKind == ComputerAuthKind.PASSWORD &&
+                        error is ComputerException &&
+                        error.code == ComputerErrorCodes.AUTH_FAILED
+                    ) {
+                        context.getString(R.string.computer_edit_saved_password_rejected)
+                    } else {
+                        error.message ?: genericFailure
+                    }
                 }
             }
         }
@@ -1170,6 +1213,8 @@ private fun auditEventLabel(eventType: String): String = stringResource(
         "CONTAINER_PROVISION" -> R.string.computer_audit_container
         "CREDENTIAL_REPLACED" -> R.string.computer_audit_credential
         "HOST_KEY_REPLACED" -> R.string.computer_audit_host_key
+        "HOST_KEY_AUTO_ACCEPTED" -> R.string.computer_audit_host_key_auto
+        "DEDICATED_KEY_FALLBACK" -> R.string.computer_audit_dedicated_key_fallback
         "DISCONNECT" -> R.string.computer_audit_disconnect
         "PRIVATE_NETWORK" -> R.string.computer_audit_network
         "PERMISSION_MODE" -> R.string.computer_audit_permission_mode
@@ -1192,6 +1237,7 @@ private fun auditOutcomeLabel(outcome: String): String {
         "FAILED" -> R.string.computer_audit_outcome_failed
         "CONFIRMED" -> R.string.computer_audit_outcome_confirmed
         "FALLBACK" -> R.string.computer_audit_outcome_fallback
+        "AUTO_ACCEPTED" -> R.string.computer_audit_outcome_auto_accepted
         else -> null
     }
     return resource?.let { stringResource(it) } ?: outcome

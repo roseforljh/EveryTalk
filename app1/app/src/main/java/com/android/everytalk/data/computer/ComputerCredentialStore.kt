@@ -249,7 +249,8 @@ class ComputerCredentialStore(private val context: Context) {
 
     /**
      * 专用 SSH Key 安装后，连接凭据会被替换；这里单独保留用户最初填写的登录信息，
-     * 仅用于详情页编辑与重新配置，仍由 Android Keystore 加密且不会写入 Room。
+     * 用于详情页编辑、重新配置，以及服务器更换 Host Key 后专用 Key 失效时的登录回退。
+     * 凭据仍由 Android Keystore 加密，不会写入 Room。
      */
     suspend fun saveOriginalComputerCredential(computerId: String, credential: ComputerCredential) =
         saveCredential("original-credential:$computerId", credential)

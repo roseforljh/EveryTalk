@@ -420,6 +420,8 @@ data class UpdateComputerRequest(
     val host: String,
     val port: Int,
     val username: String,
+    /** 编辑后服务器默认执行目标，决定后续 Workspace 是否进入 Docker 沙箱。 */
+    val runMode: ComputerRunMode,
     val credential: ComputerCredential?,
 )
 

@@ -20,15 +20,73 @@ private const val DEFAULT_IDLE_CONNECTION_MILLIS = 5 * 60 * 1000L
 internal object ComputerConnectionPoolRegistry {
     @Volatile private var sharedPool: ComputerConnectionPool? = null
 
+    internal class CallbackEntry(
+        val onHostKeyChanged: suspend (Computer, HostKeyProbeResult) -> Computer,
+        val onDedicatedKeyRejected: suspend (Computer, ComputerCredential) -> Unit,
+    ) : Closeable {
+        private val closed = AtomicBoolean(false)
+        override fun close() {
+            if (closed.compareAndSet(false, true)) {
+                unregister(this)
+            }
+        }
+    }
+
+    private val callbackEntries = java.util.concurrent.CopyOnWriteArrayList<CallbackEntry>()
+
+    internal fun register(
+        onHostKeyChanged: suspend (Computer, HostKeyProbeResult) -> Computer,
+        onDedicatedKeyRejected: suspend (Computer, ComputerCredential) -> Unit,
+    ): Closeable {
+        val entry = CallbackEntry(onHostKeyChanged, onDedicatedKeyRejected)
+        callbackEntries.add(entry)
+        return entry
+    }
+
+    private fun unregister(entry: CallbackEntry) {
+        callbackEntries.remove(entry)
+    }
+
     fun get(
         sshClient: ComputerSshClient,
         credentialStore: ComputerCredentialStore,
     ): ComputerConnectionPool = sharedPool ?: synchronized(this) {
-        sharedPool ?: ComputerConnectionPool(sshClient, credentialStore).also { sharedPool = it }
+        sharedPool ?: ComputerConnectionPool(
+            sshClient = sshClient,
+            credentialStore = credentialStore,
+            onHostKeyChanged = { computer, probe -> routeHostKeyChanged(computer, probe) },
+            onDedicatedKeyRejected = { computer, cred -> routeDedicatedKeyRejected(computer, cred) },
+        ).also { sharedPool = it }
+    }
+
+    private suspend fun routeHostKeyChanged(
+        computer: Computer,
+        probe: HostKeyProbeResult,
+    ): Computer {
+        val target = callbackEntries.lastOrNull()?.onHostKeyChanged
+            ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "无可用 ComputerRepository 回调处理 Host Key 变更")
+        return target(computer, probe)
+    }
+
+    private suspend fun routeDedicatedKeyRejected(
+        computer: Computer,
+        credential: ComputerCredential,
+    ) {
+        val target = callbackEntries.lastOrNull()?.onDedicatedKeyRejected
+            ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "无可用 ComputerRepository 回调处理专用密钥回退")
+        target(computer, credential)
     }
 
     fun closeAll(reason: String) {
         sharedPool?.closeWithReason(reason)
+    }
+
+    internal fun resetForTesting() {
+        synchronized(this) {
+            sharedPool?.closeWithReason("testing_reset")
+            sharedPool = null
+            callbackEntries.clear()
+        }
     }
 }
 
@@ -38,6 +96,13 @@ internal object ComputerConnectionPoolRegistry {
 class ComputerConnectionPool(
     private val sshClient: ComputerSshClient,
     private val credentialStore: ComputerCredentialStore,
+    /**
+     * Host Key 变化后的本地持久化回调。
+     * 回调返回带有新 Host Key 的 Computer，连接池随后只重试当前这次连接。
+     */
+    private val onHostKeyChanged: suspend (Computer, HostKeyProbeResult) -> Computer,
+    /** 原服务器专用 Key 失效、原始凭据可登录时恢复本地活跃凭据。 */
+    private val onDedicatedKeyRejected: suspend (Computer, ComputerCredential) -> Unit,
     private val clock: () -> Long = System::currentTimeMillis,
 ) : Closeable {
     private class Entry(now: Long) {
@@ -60,8 +125,7 @@ class ComputerConnectionPool(
         val connection = entry.mutex.withLock {
             entry.connection?.takeIf(ComputerSshConnection::isUsable) ?: run {
                 entry.connection?.close()
-                val credential = credentialStore.loadComputerCredential(computer.id)
-                sshClient.connect(computer, credential).also { entry.connection = it }
+                connectWithHostKeyRecovery(computer).also { entry.connection = it }
             }
         }
         entry.activeLeases.incrementAndGet()
@@ -69,6 +133,61 @@ class ComputerConnectionPool(
         return ComputerConnectionLease(connection) {
             entry.activeLeases.decrementAndGet()
             entry.lastUsedAt.set(clock())
+        }
+    }
+
+    /**
+     * 使用已保存的 Host Key 连接。指纹变化时先保存新 Key 再重试；
+     * 专用 Key 失效时，只有原始凭据验证通过后才替换本地活跃凭据。
+     */
+    private suspend fun connectWithHostKeyRecovery(computer: Computer): ComputerSshConnection {
+        val credential = credentialStore.loadComputerCredential(computer.id)
+        return try {
+            sshClient.connect(computer, credential)
+        } catch (error: ComputerException) {
+            if (error.code != ComputerErrorCodes.HOST_KEY_CHANGED) {
+                return recoverDedicatedKey(computer, error)
+            }
+
+            val replacement = sshClient.probeHostKey(computer.host, computer.port)
+            val updated = onHostKeyChanged(computer, replacement)
+            val retryCredential = credentialStore.loadComputerCredential(computer.id)
+            try {
+                sshClient.connect(updated, retryCredential)
+            } catch (retryError: ComputerException) {
+                recoverDedicatedKey(updated, retryError)
+            }
+        }
+    }
+
+    /**
+     * 已保存的新指纹也可能对应一台重建后的 VPS；此时旧专用 Key 会单独报认证失败。
+     * 回退逻辑不能只放在 Host Key 变化的同一次连接中。
+     */
+    private suspend fun recoverDedicatedKey(computer: Computer, error: ComputerException): ComputerSshConnection {
+        if (
+            error.code !in setOf(ComputerErrorCodes.AUTH_FAILED, ComputerErrorCodes.PRIVATE_KEY_INVALID) ||
+            computer.credentialState != ComputerCredentialState.DEDICATED_KEY
+        ) throw error
+
+        val original = credentialStore.loadOriginalComputerCredential(computer.id) ?: throw error
+        val credentialToSave = original.copySecret()
+        val restored = try {
+            sshClient.connect(computer, original)
+        } catch (originalError: Throwable) {
+            credentialToSave.clear()
+            throw originalError
+        } finally {
+            original.clear()
+        }
+        try {
+            onDedicatedKeyRejected(computer, credentialToSave)
+            return restored
+        } catch (saveError: Throwable) {
+            restored.close()
+            throw saveError
+        } finally {
+            credentialToSave.clear()
         }
     }
 

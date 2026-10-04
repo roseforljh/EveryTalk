@@ -297,7 +297,11 @@ class ComputerUiAlignmentRulesTest {
         assertTrue(source.contains("computer_form_basic"))
         assertTrue(source.contains("computer_form_login"))
         assertTrue(source.contains("ComputerFormSectionTitle("))
-        assertTrue(source.contains("if (!keepCredentialHint)"))
+        assertTrue(source.contains("if (keepCredentialHint)"))
+        assertTrue(source.contains("form.copy(sandboxEnabled = it)"))
+        val sandboxSection = source.substringAfter("// 编辑服务器时也必须保留这个开关")
+            .substringBefore("if (form.provider == ComputerProvider.SSH && form.username.trim() != \"root\")")
+        assertFalse("编辑时沙箱开关不能被凭据提示条件隐藏", sandboxSection.contains("!keepCredentialHint"))
     }
 
     @Test

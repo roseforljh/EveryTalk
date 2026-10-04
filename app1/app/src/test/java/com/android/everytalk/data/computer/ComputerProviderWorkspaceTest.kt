@@ -26,7 +26,7 @@ class ComputerProviderWorkspaceTest {
     @Test fun `Cloudflare 在连接池获取凭据之前被拒绝`() = runTest {
         val client = mockk<ComputerSshClient>()
         val credentials = mockk<ComputerCredentialStore>()
-        val pool = ComputerConnectionPool(client, credentials)
+        val pool = ComputerConnectionPool(client, credentials, { current, _ -> current }, { _, _ -> })
         val error = runCatching { pool.acquire(computer) }.exceptionOrNull() as ComputerException
         assertEquals("PROVIDER_MISMATCH", error.code)
         coVerify(exactly = 0) { credentials.loadComputerCredential(any()) }

@@ -93,6 +93,7 @@ internal data class ComputerAddFormState(
                 host = host,
                 port = requireNotNull(port.toIntOrNull()),
                 username = username,
+                runMode = if (sandboxEnabled) ComputerRunMode.CONTAINER else ComputerRunMode.DIRECT,
                 credential = credential,
             ),
             sudoPassword = sudoPassword.takeIf { username.trim() != "root" && it.isNotEmpty() }?.toCharArray(),

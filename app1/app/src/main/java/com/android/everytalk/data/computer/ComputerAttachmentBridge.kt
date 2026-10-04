@@ -36,7 +36,7 @@ data class ComputerDownloadedAttachment(
 class ComputerAttachmentBridge(
     context: Context,
     private val attachmentsForConversation: (String) -> List<SelectedMediaItem>,
-    private val onDownloaded: suspend (String, SelectedMediaItem.GenericFile) -> Unit = { _, _ -> },
+    private val onDownloaded: suspend (String, String, SelectedMediaItem.GenericFile) -> Unit = { _, _, _ -> },
 ) {
     private val applicationContext = context.applicationContext
     private val fileManager = FileManager(applicationContext)
@@ -75,6 +75,7 @@ class ComputerAttachmentBridge(
 
     suspend fun receiveDownload(
         conversationId: String,
+        runId: String,
         suggestedName: String,
         writer: suspend (OutputStream) -> ComputerStreamTransferResult,
     ): ComputerDownloadedAttachment = withContext(Dispatchers.IO) {
@@ -101,8 +102,12 @@ class ComputerAttachmentBridge(
                 mimeType = mime,
                 filePath = finalFile.absolutePath,
             )
-            onDownloaded(conversationId, attachment)
+            onDownloaded(conversationId, runId, attachment)
             ComputerDownloadedAttachment(attachment, transfer)
+        } catch (error: Exception) {
+            // 只有附件真正绑定到原消息才算交付成功；失败时不留下失联的完整文件。
+            if (finalFile.exists()) finalFile.delete()
+            throw error
         } finally {
             if (temporaryFile.exists()) temporaryFile.delete()
         }
