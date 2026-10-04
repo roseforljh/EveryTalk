@@ -120,6 +120,31 @@ class WebPreviewContentRulesTest {
     }
 
     @Test
+    fun `preview size signal only accepts the current token and valid dimensions`() {
+        assertEquals(
+            2f,
+            parseWebPreviewHeightRatio(
+                "__EVERYTALK_PREVIEW_SIZE__:load-2:400:800",
+                "load-2",
+            ),
+        )
+        assertEquals(
+            null,
+            parseWebPreviewHeightRatio(
+                "__EVERYTALK_PREVIEW_SIZE__:load-1:400:800",
+                "load-2",
+            ),
+        )
+        assertEquals(
+            null,
+            parseWebPreviewHeightRatio(
+                "__EVERYTALK_PREVIEW_SIZE__:load-2:0:800",
+                "load-2",
+            ),
+        )
+    }
+
+    @Test
     fun `explicit error console signal fails a chart preview with its message`() {
         assertEquals(
             WebPreviewCompletionSignal.Error("Invalid Vega spec"),

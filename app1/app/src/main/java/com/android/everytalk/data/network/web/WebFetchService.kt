@@ -166,6 +166,8 @@ object WebFetchService {
                 ?.takeIf(String::isNotBlank)
                 ?: extractTitleFromMarkdown(finalContent),
             content = finalContent,
+            // 在正文截断前提取，避免文章末尾的图片和引用定义被字符上限截掉。
+            imageUrls = WebFetchImages.extractUrls(content, requestedUrl),
             truncated = truncated,
             truncationReason = if (truncated) "content_truncated" else null,
             statusCode = statusCode,

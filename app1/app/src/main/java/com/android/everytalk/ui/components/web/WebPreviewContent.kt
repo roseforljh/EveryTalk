@@ -113,9 +113,11 @@ fun WebPreviewContent(
     previewBackgroundColor: Color = Color.White,
     previewTextColor: Color = Color.Black,
     onLoadStateChanged: (WebPreviewLoadState) -> Unit = {},
+    onContentHeightChanged: (Float) -> Unit = {},
 ) {
     val context = LocalContext.current
     val latestOnLoadStateChanged by rememberUpdatedState(onLoadStateChanged)
+    val latestOnContentHeightChanged by rememberUpdatedState(onContentHeightChanged)
 
     val previewContent = remember(code, language) {
         prepareWebPreviewContent(code, language)
@@ -226,18 +228,6 @@ fun WebPreviewContent(
         previewContent.requiresExplicitCompletionSignal,
     ) {
         val webView = previewWebView ?: return@LaunchedEffect
-        latestOnLoadStateChanged(resolveInitialWebPreviewLoadState(previewBuildError))
-        if (webView.tag != htmlContent) {
-            val baseUrl = buildWebPreviewBaseUrl(previewLoadToken)
-            webView.tag = htmlContent
-            webView.loadDataWithBaseURL(
-                baseUrl,
-                htmlContent,
-                "text/html",
-                "UTF-8",
-                baseUrl,
-            )
-        }
         if (previewBuildError != null) return@LaunchedEffect
 
         if (previewContent.requiresExplicitCompletionSignal) {
@@ -257,18 +247,6 @@ fun WebPreviewContent(
                 previewLoadSession.completionReported = true
                 latestOnLoadStateChanged(WebPreviewLoadState.ERROR)
             }
-        }
-    }
-
-    DisposableEffect(Unit) {
-        onDispose {
-            previewWebView?.apply {
-                stopLoading()
-                loadUrl("about:blank")
-                removeAllViews()
-                destroy()
-            }
-            previewWebView = null
         }
     }
 
@@ -304,8 +282,8 @@ fun WebPreviewContent(
                                     hasError = loadSession.error != null,
                                 )
                             ) {
-                                loadSession.completionReported = true
-                                latestOnLoadStateChanged(WebPreviewLoadState.READY)
+                                // 先让网页在下一绘制帧报告尺寸，再发布 READY，避免先撑到固定高度。
+                                view?.evaluateJavascript("window.__everytalkPreviewReady();", null)
                             }
                         }
 
@@ -333,6 +311,12 @@ fun WebPreviewContent(
                     webChromeClient = object : WebChromeClient() {
                         override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
                             val loadSession = latestPreviewLoadSession
+                            parseWebPreviewHeightRatio(consoleMessage?.message(), loadSession.token)?.let { ratio ->
+                                // CSS 像素不一定等于 dp（无 viewport 的页面会缩放），以实际宽度换算。
+                                val widthDp = this@apply.width / resources.displayMetrics.density
+                                if (widthDp > 0f) latestOnContentHeightChanged(widthDp * ratio)
+                                return true
+                            }
                             val completionSignal = parseWebPreviewCompletionSignal(
                                 message = consoleMessage?.message(),
                                 expectedToken = loadSession.token,
@@ -340,7 +324,6 @@ fun WebPreviewContent(
                             when (completionSignal) {
                                 WebPreviewCompletionSignal.Ready -> {
                                     if (
-                                        latestRequiresExplicitCompletionSignal &&
                                         loadSession.error == null
                                     ) {
                                         loadSession.completionReported = true
@@ -396,6 +379,22 @@ fun WebPreviewContent(
             },
             update = { webView ->
                 webView.setBackgroundColor(previewBackgroundColor.toArgb())
+                // AndroidView 首次创建和内容变更都在此加载，不依赖 factory 写状态后再启动协程。
+                if (webView.tag != htmlContent) {
+                    webView.tag = htmlContent
+                    latestOnLoadStateChanged(resolveInitialWebPreviewLoadState(previewBuildError))
+                    val baseUrl = buildWebPreviewBaseUrl(previewLoadToken)
+                    webView.loadDataWithBaseURL(baseUrl, htmlContent, "text/html", "UTF-8", baseUrl)
+                }
+            },
+            onRelease = { webView ->
+                // 由 AndroidView 在真正移出视图树后释放，避免 Compose 提前销毁仍挂载的 WebView。
+                if (previewWebView === webView) previewWebView = null
+                webView.stopLoading()
+                webView.webChromeClient = null
+                webView.webViewClient = WebViewClient()
+                webView.removeAllViews()
+                webView.destroy()
             },
             modifier = Modifier.fillMaxSize()
         )

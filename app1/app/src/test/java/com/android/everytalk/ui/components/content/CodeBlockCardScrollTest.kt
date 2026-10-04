@@ -66,6 +66,14 @@ class CodeBlockCardScrollTest {
         assertEquals(450f, readyHeight)
         assertTrue(loadingHeight < readyHeight)
         assertTrue(errorHeight < readyHeight)
+        assertEquals(
+            300f,
+            resolveInlineWebPreviewHeightDp(WebPreviewLoadState.READY, contentHeightDp = 300f),
+        )
+        assertEquals(
+            450f,
+            resolveInlineWebPreviewHeightDp(WebPreviewLoadState.READY, contentHeightDp = 800f),
+        )
     }
 
     @Test

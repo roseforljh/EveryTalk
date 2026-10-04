@@ -146,6 +146,19 @@ internal sealed interface WebPreviewCompletionSignal {
 }
 
 internal const val WEB_PREVIEW_READY_SIGNAL = "__EVERYTALK_PREVIEW_READY__"
+internal const val WEB_PREVIEW_SIZE_SIGNAL_PREFIX = "__EVERYTALK_PREVIEW_SIZE__:"
+
+/** 只接受当前文档的有效尺寸；返回高宽比，供原生端按实际 WebView 宽度换算 dp。 */
+internal fun parseWebPreviewHeightRatio(message: String?, expectedToken: String): Float? {
+    val prefix = "$WEB_PREVIEW_SIZE_SIGNAL_PREFIX$expectedToken:"
+    if (message?.startsWith(prefix) != true) return null
+    val dimensions = message.removePrefix(prefix).split(':')
+    if (dimensions.size != 2) return null
+    val width = dimensions[0].toFloatOrNull() ?: return null
+    val height = dimensions[1].toFloatOrNull() ?: return null
+    if (!width.isFinite() || !height.isFinite() || width <= 0f || height <= 0f) return null
+    return (height / width).takeIf { it.isFinite() && it > 0f }
+}
 internal const val WEB_PREVIEW_ERROR_SIGNAL_PREFIX = "__EVERYTALK_PREVIEW_ERROR__:"
 internal const val WEB_PREVIEW_COMPLETION_TOKEN_PLACEHOLDER = "__EVERYTALK_COMPLETION_TOKEN__"
 internal const val WEB_PREVIEW_COMPLETION_TIMEOUT_MILLIS = 15_000L
@@ -246,7 +259,8 @@ internal fun prepareWebPreviewContent(
 
 internal fun isCompleteHtmlDocument(raw: String): Boolean {
     val lower = raw.lowercase()
-    return lower.contains("<!doctype html") || lower.contains("<html")
+    // 模型也会省略 html 外壳；这类文档不能只提取 body，否则 head 中的样式与脚本会丢失。
+    return lower.contains("<!doctype html") || Regex("""<(html|head|body)(\s|>)""").containsMatchIn(lower)
 }
 
 internal fun formatWebPreviewConsoleMessage(
@@ -289,6 +303,38 @@ $WEB_PREVIEW_DIAGNOSTICS_SCRIPT_TAG
 (function() {
     window.__everytalkPreviewDiagnosticsInstalled = true;
     var completionToken = '$WEB_PREVIEW_COMPLETION_TOKEN_PLACEHOLDER';
+    var reportConsole = console.log.bind(console);
+
+    // 页面解析、图片/字体加载及布局变化都会触发测量，首次打开无需再点一次按钮。
+    // 不使用 documentElement.scrollHeight：它至少等于视口高度，会把原生容器高度反馈回来。
+    var sizeFramePending = false;
+    var lastSize = '';
+    function reportSize() {
+        if (sizeFramePending) return;
+        sizeFramePending = true;
+        requestAnimationFrame(function() {
+            sizeFramePending = false;
+            var body = document.body;
+            if (!body || !window.innerWidth) return;
+            var style = getComputedStyle(body);
+            var height = Math.ceil(Math.max(body.scrollHeight, body.getBoundingClientRect().height) +
+                (parseFloat(style.marginTop) || 0) + (parseFloat(style.marginBottom) || 0));
+            var size = window.innerWidth + ':' + height;
+            if (height > 0 && size !== lastSize) {
+                lastSize = size;
+                reportConsole('$WEB_PREVIEW_SIZE_SIGNAL_PREFIX' + completionToken + ':' + size);
+            }
+        });
+    }
+    document.addEventListener('DOMContentLoaded', function() {
+        reportSize();
+        if (window.ResizeObserver && document.body) {
+            new ResizeObserver(reportSize).observe(document.body);
+        }
+        if (document.fonts) document.fonts.ready.then(reportSize);
+    }, { once: true });
+    window.addEventListener('load', reportSize, true);
+    window.addEventListener('resize', reportSize);
 
     function stringify(value) {
         if (value instanceof Error) return value.stack || value.message || String(value);
@@ -328,7 +374,10 @@ $WEB_PREVIEW_DIAGNOSTICS_SCRIPT_TAG
     }
 
     window.__everytalkPreviewReady = function() {
-        console.log('${WEB_PREVIEW_READY_SIGNAL}:' + completionToken);
+        reportSize();
+        requestAnimationFrame(function() {
+            reportConsole('${WEB_PREVIEW_READY_SIGNAL}:' + completionToken);
+        });
     };
 
     window.__everytalkPreviewError = function(error) {

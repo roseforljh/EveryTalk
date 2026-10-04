@@ -73,10 +73,17 @@ internal const val INLINE_WEB_PREVIEW_LOADING_HEIGHT_DP = 160f
 internal const val INLINE_WEB_PREVIEW_ERROR_HEIGHT_DP = 220f
 internal const val INLINE_WEB_PREVIEW_READY_HEIGHT_DP = 450f
 
-internal fun resolveInlineWebPreviewHeightDp(state: WebPreviewLoadState): Float = when (state) {
+/** 实测高度优先；超长网页保留原来的内联上限，完整交互仍在全屏预览中进行。 */
+internal fun resolveInlineWebPreviewHeightDp(
+    state: WebPreviewLoadState,
+    contentHeightDp: Float? = null,
+): Float = when (state) {
     WebPreviewLoadState.LOADING -> INLINE_WEB_PREVIEW_LOADING_HEIGHT_DP
     WebPreviewLoadState.ERROR -> INLINE_WEB_PREVIEW_ERROR_HEIGHT_DP
-    WebPreviewLoadState.READY -> INLINE_WEB_PREVIEW_READY_HEIGHT_DP
+    WebPreviewLoadState.READY -> contentHeightDp
+        ?.takeIf { it.isFinite() && it > 0f }
+        ?.coerceIn(INLINE_WEB_PREVIEW_LOADING_HEIGHT_DP, INLINE_WEB_PREVIEW_READY_HEIGHT_DP)
+        ?: INLINE_WEB_PREVIEW_READY_HEIGHT_DP
 }
 
 internal fun resolveCodeBlockScrollTarget(isStreaming: Boolean, maxValue: Int): Int {
@@ -220,6 +227,7 @@ fun CodeBlockCard(
     var previewLoadState by remember(code, language) {
         mutableStateOf(WebPreviewLoadState.LOADING)
     }
+    var previewContentHeightDp by remember(code, language) { mutableStateOf<Float?>(null) }
     var showFullScreenPreview by remember { mutableStateOf(false) }
     var cardBoundsInWindow by remember { mutableStateOf(androidx.compose.ui.geometry.Rect.Zero) }
     // 吸顶逻辑状态
@@ -403,7 +411,11 @@ fun CodeBlockCard(
                                                 interactionSource = remember { MutableInteractionSource() },
                                                 indication = null
                                             ) {
-                                                previewLoadState = WebPreviewLoadState.LOADING
+                                                // 已在预览中时不伪造新的加载状态，否则高度会缩小而页面并未重载。
+                                                if (!isPreviewMode) {
+                                                    previewLoadState = WebPreviewLoadState.LOADING
+                                                    previewContentHeightDp = null
+                                                }
                                                 isPreviewMode = true
                                             },
                                         contentAlignment = Alignment.Center
@@ -451,7 +463,7 @@ fun CodeBlockCard(
                     .background(Color.Transparent)
                     .drawWithContent {
                         drawContent()
-                        if (isAtMaxHeight) {
+                        if (!isPreviewMode && isAtMaxHeight) {
                             val totalH = 24.dp.toPx()
                             drawRect(
                                 brush = Brush.verticalGradient(
@@ -470,7 +482,7 @@ fun CodeBlockCard(
                     Surface(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(resolveInlineWebPreviewHeightDp(previewLoadState).dp)
+                            .height(resolveInlineWebPreviewHeightDp(previewLoadState, previewContentHeightDp).dp)
                             .padding(horizontal = 0.dp, vertical = 0.dp)
                             .graphicsLayer {
                                 alpha = previewRevealAlpha
@@ -488,6 +500,7 @@ fun CodeBlockCard(
                                     previewTextColor = previewTextColor,
                                     modifier = Modifier.fillMaxSize(),
                                     onLoadStateChanged = { previewLoadState = it },
+                                    onContentHeightChanged = { previewContentHeightDp = it },
                                 )
                                 // 拦截层，位于 WebView 之上
                                 Box(
