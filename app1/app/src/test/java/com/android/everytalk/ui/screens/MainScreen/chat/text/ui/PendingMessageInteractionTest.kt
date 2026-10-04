@@ -72,6 +72,42 @@ class PendingMessageInteractionTest {
     }
 
     @Test
+    fun `审批等待和请求准备没有暂停控制器时仍能停止已登记消息`() {
+        listOf(ChatRunState.Streaming, ChatRunState.PauseRequested, ChatRunState.Paused).forEach { state ->
+            assertEquals(ComposerPrimaryAction.STOP,
+                resolveComposerPrimaryAction(state, ComposerMode.Normal, false, false,
+                    isRunControllable = false, hasActiveMessage = true))
+            assertEquals(ComposerPrimaryAction.LOADING,
+                resolveComposerPrimaryAction(state, ComposerMode.Normal, false, true,
+                    isRunControllable = false, hasActiveMessage = true))
+        }
+        // 尚未登记消息的 Pending 派发窗口不能误停，也不能把正常暂停改成停止。
+        assertEquals(ComposerPrimaryAction.LOADING,
+            resolveComposerPrimaryAction(ChatRunState.Streaming, ComposerMode.Normal, false, false,
+                isRunControllable = false, hasActiveMessage = false))
+        assertEquals(ComposerPrimaryAction.PAUSE,
+            resolveComposerPrimaryAction(ChatRunState.Streaming, ComposerMode.Normal, false, false,
+                isRunControllable = true, hasActiveMessage = true))
+        assertEquals(ComposerPrimaryAction.VOICE,
+            resolveComposerPrimaryAction(ChatRunState.Idle, ComposerMode.Normal, false, false,
+                isRunControllable = false, hasActiveMessage = true))
+    }
+
+    @Test
+    fun `远端取消超时后可重试但带草稿也不能绕过取消屏障发送`() {
+        listOf(ChatRunState.Idle, ChatRunState.Streaming).forEach { state ->
+            listOf(false, true).forEach { hasDraft ->
+                assertEquals(ComposerPrimaryAction.RETRY_STOP,
+                    resolveComposerPrimaryAction(state, ComposerMode.Normal, hasDraft, true,
+                        canRetryRemoteStop = true))
+                assertEquals(ComposerPrimaryAction.LOADING,
+                    resolveComposerPrimaryAction(state, ComposerMode.Normal, hasDraft, true,
+                        canRetryRemoteStop = false))
+            }
+        }
+    }
+
+    @Test
     fun `暂停请求和已暂停仍允许提交草稿但无草稿只在安全暂停后显示三角形`() {
         listOf(ChatRunState.PauseRequested, ChatRunState.Paused).forEach { state ->
             assertEquals(ComposerPrimaryAction.SEND,
@@ -95,6 +131,9 @@ class PendingMessageInteractionTest {
         assertTrue(click.contains("onPauseStreaming()"))
         assertTrue(click.contains("onResumeStreaming()"))
         assertTrue(click.contains("viewModel.forceStopPendingPause(controlledMessageId)"))
+        assertTrue(click.contains("viewModel.stopUncontrolledRun(controlledMessageId)"))
+        assertTrue(input.contains("hasActiveMessage = controlledMessageId != null"))
+        assertTrue(input.contains("ComposerPrimaryAction.STOP -> painterResource(R.drawable.ic_stop)"))
         assertTrue(!input.contains("IconButton(onClick = viewModel::onCancelAPICall)"))
         assertTrue(input.contains("state == ComposerPrimaryAction.LOADING || state == ComposerPrimaryAction.FORCE_STOP"))
         assertTrue(input.contains("enabled = state == primaryAction && state != ComposerPrimaryAction.LOADING"))

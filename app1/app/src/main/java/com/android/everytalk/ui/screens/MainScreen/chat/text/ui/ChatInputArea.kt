@@ -234,6 +234,7 @@ fun ChatInputArea(
     val chatRunState by viewModel.chatRunState.collectAsState()
     val runControlState by viewModel.currentAgentRunControlState.collectAsState()
     val controlledMessageId by viewModel.stateHolder._currentTextStreamingAiMessageId.collectAsState()
+    val retryableRemoteStopMessageId by viewModel.apiHandler.retryableRemoteStopMessageId.collectAsState()
     val conversationFunctionStates by viewModel.stateHolder.conversationFunctionToggleStates.collectAsState()
     val currentAgentResourceState = conversationFunctionStates[currentConversationId]?.agentResourceState
     val detachedComputerName = conversationFunctionStates[currentConversationId]?.detachedComputerName
@@ -746,6 +747,8 @@ fun ChatInputArea(
         isConvertingLongText = isConvertingLongText || isRestoringMessage,
         isRunControllable = runControlState != null,
         canRestoreMessage = canRestoreMessage,
+        hasActiveMessage = controlledMessageId != null,
+        canRetryRemoteStop = retryableRemoteStopMessageId != null,
     )
     // 不缓存捕获 Skill 引用和回调的闭包，使用本次重组的最新草稿。
     val onSendClick: () -> Unit = send@{
@@ -755,9 +758,13 @@ fun ChatInputArea(
             val contentParts = buildSkillContentParts(localText, skillReferences)
             val displayText = displaySkillEditorText(localText, skillReferences)
             if (primaryAction == ComposerPrimaryAction.LOADING) {
-                // 转换、Run 注册或强停处理中不可重复操作。
+                // 转换、消息登记或强停处理中不可重复操作。
             } else if (primaryAction == ComposerPrimaryAction.RESTORE) {
                 viewModel.restoreOriginalMessages(displayText, selectedMediaItems.toList(), contentParts)
+            } else if (primaryAction == ComposerPrimaryAction.RETRY_STOP) {
+                viewModel.apiHandler.retryRemoteStopConfirmation(retryableRemoteStopMessageId)
+            } else if (primaryAction == ComposerPrimaryAction.STOP) {
+                viewModel.stopUncontrolledRun(controlledMessageId)
             } else if (primaryAction == ComposerPrimaryAction.FORCE_STOP) {
                 viewModel.forceStopPendingPause(controlledMessageId)
             } else if (primaryAction == ComposerPrimaryAction.PAUSE) {
@@ -1549,6 +1556,8 @@ fun ChatInputArea(
                                             } else {
                                                 Icon(
                                                     painter = when (state) {
+                                                        ComposerPrimaryAction.RETRY_STOP,
+                                                        ComposerPrimaryAction.STOP -> painterResource(R.drawable.ic_stop)
                                                         ComposerPrimaryAction.PAUSE -> painterResource(R.drawable.ic_pause)
                                                         ComposerPrimaryAction.RESUME -> painterResource(R.drawable.ic_gpt_play)
                                                         ComposerPrimaryAction.SEND -> painterResource(R.drawable.ic_arrow_up)
@@ -1556,6 +1565,8 @@ fun ChatInputArea(
                                                         else -> painterResource(R.drawable.ic_voice_bold)
                                                     },
                                                     contentDescription = when (state) {
+                                                        ComposerPrimaryAction.RETRY_STOP -> stringResource(R.string.chat_input_stop) + " · " + stringResource(R.string.action_retry)
+                                                        ComposerPrimaryAction.STOP -> stringResource(R.string.chat_input_stop)
                                                         ComposerPrimaryAction.PAUSE -> stringResource(R.string.chat_input_pause)
                                                         ComposerPrimaryAction.RESUME -> stringResource(R.string.chat_input_resume)
                                                         ComposerPrimaryAction.SEND -> stringResource(R.string.chat_input_send)

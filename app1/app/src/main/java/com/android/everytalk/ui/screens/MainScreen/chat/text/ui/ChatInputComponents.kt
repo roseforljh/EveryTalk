@@ -62,6 +62,10 @@ internal enum class ComposerPrimaryAction {
     RESTORE,
     PAUSE,
     RESUME,
+    // 已登记消息但没有暂停控制器（准备请求、审批等待）时，通过完整取消流程退出。
+    STOP,
+    // 远端未确认的取消屏障仍存在，只重试确认，不允许发送新任务。
+    RETRY_STOP,
     // 外观仍是加载圈，但只在等待安全暂停时允许再次点击强停。
     FORCE_STOP,
     LOADING,
@@ -76,13 +80,19 @@ internal fun resolveComposerPrimaryAction(
     isConvertingLongText: Boolean = false,
     isRunControllable: Boolean = true,
     canRestoreMessage: Boolean = false,
+    hasActiveMessage: Boolean = false,
+    canRetryRemoteStop: Boolean = false,
 ): ComposerPrimaryAction = when {
-    isRemoteCancellationPending || isConvertingLongText -> ComposerPrimaryAction.LOADING
+    isConvertingLongText -> ComposerPrimaryAction.LOADING
+    isRemoteCancellationPending ->
+        if (canRetryRemoteStop) ComposerPrimaryAction.RETRY_STOP else ComposerPrimaryAction.LOADING
     composerMode is ComposerMode.EditingPending -> ComposerPrimaryAction.SEND
     canRestoreMessage && runState == ChatRunState.Idle -> ComposerPrimaryAction.RESTORE
     hasDraft -> ComposerPrimaryAction.SEND
-    // Pending 正在派发但 Run 尚未注册时不能显示一个无法执行的暂停按钮。
-    runState != ChatRunState.Idle && !isRunControllable -> ComposerPrimaryAction.LOADING
+    // ponytail: 复用已有停止流程，不为准备和审批等待另外创建暂停控制器。
+    // 只有可见消息已登记才允许取消；Pending 尚未登记消息的短窗口仍保持禁用。
+    runState != ChatRunState.Idle && !isRunControllable ->
+        if (hasActiveMessage) ComposerPrimaryAction.STOP else ComposerPrimaryAction.LOADING
     runState == ChatRunState.PauseRequested -> ComposerPrimaryAction.FORCE_STOP
     runState == ChatRunState.Streaming -> ComposerPrimaryAction.PAUSE
     runState == ChatRunState.Paused -> ComposerPrimaryAction.RESUME

@@ -452,6 +452,25 @@ fun AiMessageFooterItem(
             .fillMaxWidth()
             .padding(start = ChatDimensions.HORIZONTAL_PADDING)
     ) {
+        if (message.attachments.isNotEmpty()) {
+            // AI 产物沿用用户附件的打开方式；放在消息页脚只显示一次。
+            AttachmentsContent(
+                attachments = message.attachments,
+                onAttachmentClick = {},
+                maxWidth = ChatDimensions.USER_BUBBLE_WIDTH_RATIO.let { ratio ->
+                    with(androidx.compose.ui.platform.LocalDensity.current) {
+                        androidx.compose.ui.platform.LocalWindowInfo.current.containerSize.width.toDp() * ratio
+                    }
+                },
+                message = message,
+                onEditRequest = {},
+                onRegenerateRequest = {},
+                onLongPress = { _, _ -> },
+                onImageLoaded = {},
+                scrollStateManager = scrollStateManager,
+                isAiGenerated = true,
+            )
+        }
         Row(
             modifier = Modifier.padding(top = 2.dp),
             horizontalArrangement = Arrangement.Start,

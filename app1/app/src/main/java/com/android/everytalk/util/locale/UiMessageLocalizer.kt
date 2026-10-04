@@ -58,6 +58,8 @@ private val EXACT_MESSAGE_RESOURCES = mapOf(
     "IO 错误" to R.string.ai_error_io,
     "I/O 错误" to R.string.ai_error_io,
     "未知应用错误" to R.string.ai_error_unknown_app,
+    "本轮回复被上游提前截断（输出长度限制）。这不代表模型参数设置错误；请重试，若反复出现请查看请求日志中的实际输出上限、结束原因和 Token 用量。" to
+        R.string.ai_error_output_limit,
     "正在压缩上下文" to R.string.thinking_context_compressing,
     "最大输出必须小于上下文窗口" to R.string.model_token_output_less_than_context,
     "语音识别失败：未能识别出文字" to R.string.voice_error_no_transcription,

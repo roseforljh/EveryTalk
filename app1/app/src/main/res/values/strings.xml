@@ -431,6 +431,7 @@
     <string name="computer_edit_title">Edit server</string>
     <string name="computer_edit_save">Save changes</string>
     <string name="computer_edit_secret_hint">Leave password fields empty when you do not want to change them.</string>
+    <string name="computer_edit_saved_password_rejected">The saved SSH login credential was rejected. Enter the current password in the SSH password field and try again.</string>
     <string name="computer_edit_success">Server details updated</string>
     <string name="computer_host_key_title">Confirm server fingerprint</string>
     <string name="computer_host_key_body">Compare this fingerprint with the one shown by your VPS provider before continuing.</string>
@@ -531,6 +532,10 @@
     <string name="action_stop">Stop</string>
     <string name="computer_host_key_changed_title">Confirm changed server fingerprint</string>
     <string name="computer_host_key_changed_body">Only continue after comparing the new fingerprint with your VPS provider console. An unexpected change may mean someone is intercepting the connection.</string>
+    <string name="computer_host_key_auto_updated">The server SSH fingerprint changed. It was updated automatically and the connection continued.</string>
+    <string name="computer_audit_host_key_auto">Server fingerprint updated automatically</string>
+    <string name="computer_audit_dedicated_key_fallback">Original login credential restored</string>
+    <string name="computer_audit_outcome_auto_accepted">Updated automatically</string>
     <string name="computer_host_key_old">Old fingerprint</string>
     <string name="computer_host_key_new">New fingerprint</string>
     <string name="computer_host_key_address_label">Resolved address</string>
@@ -1294,6 +1299,7 @@
     <string name="ai_error_processing">An error occurred while processing: %1$s</string>
     <string name="ai_error_io">I/O error</string>
     <string name="ai_error_unknown_app">Unknown application error</string>
+    <string name="ai_error_output_limit">The upstream service ended this reply early due to an output length limit. This does not mean your model settings are wrong. Retry; if it happens again, check the request log for the output limit, finish reason, and token usage.</string>
     <string name="network_error_api_key">%1$s: The API key is invalid or expired</string>
     <string name="network_error_access_denied">%1$s: Access denied. Check API permissions</string>
     <string name="network_error_rate_limited">%1$s: Too many requests. Try again later</string>
