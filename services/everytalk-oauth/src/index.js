@@ -72,10 +72,15 @@ function callbackRedirect(request, expectedPath, appRedirect) {
   const keys = [...url.searchParams.keys()];
   if (new Set(keys).size !== keys.length) return json(400, { error: "duplicate_parameter" });
   const target = new URL(appRedirect);
+  const state = url.searchParams.get("state");
+  if (!state) return html(400, "<h1>OAuth state missing</h1>");
+  // 若 state 指明来自 debug 变体，将唤醒协议动态切换为 everytalk-debug://
+  if (state.startsWith("everytalk-debug:")) {
+    target.protocol = "everytalk-debug:";
+  }
   for (const [key, value] of url.searchParams) {
     if (ALLOWED_CALLBACK_FIELDS.has(key)) target.searchParams.set(key, value);
   }
-  if (!target.searchParams.get("state")) return html(400, "<h1>OAuth state missing</h1>");
   const location = target.toString();
   return new Response(
     "<!doctype html><meta charset=\"utf-8\"><title>EveryTalk</title>" +

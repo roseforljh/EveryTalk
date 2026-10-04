@@ -220,7 +220,8 @@ function decodeEmail(message) {
     if (part.filename || part.body?.attachmentId) {
       attachments.push({ filename: part.filename, mimeType: part.mimeType, size: part.body?.size, attachmentId: part.body?.attachmentId });
     } else if ((part.mimeType === "text/plain" || part.mimeType === "text/html") && part.body?.data) {
-      const encoded = part.body.data.replace(/-/g, "+").replace(/_/g, "/");
+      // atob 允许 ASCII 空白，但补齐长度必须先排除折行和空格，否则可能生成错误的 padding。
+      const encoded = part.body.data.replace(/[\t\n\f\r ]/g, "").replace(/-/g, "+").replace(/_/g, "/");
       const binary = atob(encoded + "=".repeat((4 - encoded.length % 4) % 4));
       const contentType = part.headers?.find(header => header.name.toLowerCase() === "content-type")?.value ?? "";
       const charset = /charset\s*=\s*["']?([^\s;"']+)/i.exec(contentType)?.[1] ?? "utf-8";

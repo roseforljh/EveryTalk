@@ -21,6 +21,17 @@ test("Gmail callback forwards only safe fields and pins the callback route", asy
   assert.doesNotMatch(body, /access_token/);
 });
 
+test("Callback redirects to everytalk-debug scheme when state has everytalk-debug prefix", async () => {
+  const response = await handleRequest(new Request(
+    "https://oauth.everytalk.cc/oauth/mcp/github?code=c&state=everytalk-debug%3Asome-token",
+  ), env);
+  const body = await response.text();
+  assert.equal(response.status, 200);
+  assert.match(body, /everytalk-debug:\/\/oauth\/mcp\/github/);
+  assert.match(body, /code=c/);
+  assert.match(body, /state=everytalk-debug%3Asome-token/);
+});
+
 test("Gmail OAuth exchange validates redirect and forwards only Google token fields", async () => {
   const originalFetch = globalThis.fetch;
   let upstreamCalls = 0;
@@ -165,6 +176,25 @@ test("Gmail tools preserve pagination, decode nested Unicode mail, and modify la
       assert.equal((await rpcPayload(await gmailRequest("tools/call", { name, arguments: args }))).result.isError, undefined);
     }
     assert.equal(calls.length, 4);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("Gmail decodes folded Base64url before calculating padding", async () => {
+  const originalFetch = globalThis.fetch;
+  // 非四字节倍数的空白会改变旧实现的补齐结果；同时覆盖中文和不带 padding 的正文。
+  const bodies = ["a", "中文正文", "第二行\n末尾"];
+  globalThis.fetch = async () => Response.json({ id: "folded", payload: {
+    mimeType: "multipart/alternative",
+    parts: bodies.map(text => ({ mimeType: "text/plain", body: {
+      data: ` ${Buffer.from(text).toString("base64url").match(/.{1,3}/g).join("\r\n")}\t\n`,
+    } })),
+  } });
+  try {
+    const read = await rpcPayload(await gmailRequest("tools/call", {
+      name: "read_email", arguments: { messageId: "folded" },
+    }));
+    assert.equal(read.result.isError, undefined);
+    assert.deepEqual(JSON.parse(read.result.content[0].text).bodies.map(body => body.text), bodies);
   } finally { globalThis.fetch = originalFetch; }
 });
 
