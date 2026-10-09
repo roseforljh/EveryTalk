@@ -1,6 +1,6 @@
 # EveryTalk Privacy Policy / EveryTalk 隐私政策
 
-**Effective date / 生效日期: August 9, 2026 / 2026 年 8 月 9 日**
+**Effective date / 生效日期: October 9, 2026 / 2026 年 10 月 9 日**
 
 EveryTalk is an Android AI client maintained by the EveryTalk project maintainers. This policy explains how EveryTalk handles information when you use chat, image, voice, web search, Model Context Protocol (MCP), and AI content reporting features.
 
@@ -62,7 +62,9 @@ EveryTalk blocks cleartext network traffic for production app connections and st
 
 ### 8. Accounts
 
-EveryTalk does not create or manage an EveryTalk user account. Removing local data or uninstalling the app does not delete an account or data held independently by a third-party provider. Requests concerning a provider account must be directed to that provider.
+EveryTalk offers optional Google and email-code account sign-in through the configured Supabase Auth service. Email sign-in transmits the email address and verification code. Google sign-in requests basic identity information (openid, email, profile), not Gmail or Drive access. Supabase stores the account ID, email, linked login identities, registration and login records, and processes authentication requests under its privacy policy. Account sign-in does not upload chat history or model API keys.
+
+The app encrypts session credentials using Android Keystore. Signing out clears the local account session and retains local chats and API configurations. Removing local data or uninstalling does not delete the server account. Contact the maintainers through the project page to request account deletion; do not publish verification codes or credentials in public issues. Separate third-party service accounts must be managed with their respective providers.
 
 ### 9. Policy updates and contact
 
@@ -122,7 +124,9 @@ EveryTalk 会阻止生产版本应用连接使用明文网络流量，并将数�
 
 ### 8. 账号
 
-EveryTalk 不创建或管理 EveryTalk 用户账号。删除本地数据或卸载应用不会删除第三方服务商独立持有的账号或数据。涉及第三方服务商账号的请求，需要直接向相应服务商提出。
+EveryTalk 通过配置的 Supabase Auth 服务提供可选的 Google 和邮箱验证码登录。邮箱登录会发送邮箱地址和验证码；Google 登录只申请基本身份信息（openid、email、profile），不申请 Gmail 或网盘访问权限。Supabase 保存账号 ID、邮箱、关联登录身份、注册和登录记录，并依据其隐私政策处理认证请求。登录账号不会上传聊天记录或模型 API 密钥。
+
+应用通过 Android Keystore 加密保存会话凭据。退出登录会清除本地账号会话，保留聊天记录和 API 配置；删除本地数据或卸载应用不会删除服务端账号。可通过项目页面联系维护者提出账号删除申请，请勿在公开 Issue 中发布验证码或凭据。其他第三方服务账号仍需向相应服务商申请管理或删除。
 
 ### 9. 政策更新与联系
 
