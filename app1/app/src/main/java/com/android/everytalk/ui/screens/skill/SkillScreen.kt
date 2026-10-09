@@ -1,5 +1,7 @@
 package com.android.everytalk.ui.screens.skill
 
+import com.android.everytalk.util.locale.localizeUiMessage
+import androidx.compose.ui.res.pluralStringResource
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -132,7 +134,7 @@ fun SkillScreen(
                             repository.markPackageAvailableUpdate(skillPackage.packageId, update)
                         }
                     }
-                }.exceptionOrNull()?.let { "${skillPackage.name} 补齐失败：${it.message}" }
+                }.exceptionOrNull()?.let { context.getString(R.string.skill_repair_failed, skillPackage.name, context.localizeUiMessage(it.message ?: context.getString(R.string.unknown_error))) }
             }
         }
         if (repairFailures.isNotEmpty()) message = repairFailures.joinToString("\n")
@@ -145,10 +147,10 @@ fun SkillScreen(
                 withContext(Dispatchers.IO) {
                     val packageName = uri.lastPathSegment?.substringAfterLast(':')?.substringBeforeLast('.')
                     context.contentResolver.openInputStream(uri)?.use { repository.importZip(it, packageName) }
-                        ?: error("无法读取压缩包")
+                        ?: error(context.getString(R.string.skill_zip_unreadable))
                 }
-                "Skill 已添加"
-            }.getOrElse { it.message ?: "Skill 添加失败" }
+                context.getString(R.string.skill_added)
+            }.getOrElse { it.message ?: context.getString(R.string.skill_add_failed) }
         }
     }
     val directoryPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -157,8 +159,8 @@ fun SkillScreen(
             message = runCatching {
                 val packageName = uri.lastPathSegment?.substringAfterLast(':')
                 withContext(Dispatchers.IO) { repository.importDocumentTree(uri, packageName) }
-                "Skill 已添加"
-            }.getOrElse { it.message ?: "Skill 添加失败" }
+                context.getString(R.string.skill_added)
+            }.getOrElse { it.message ?: context.getString(R.string.skill_add_failed) }
         }
     }
 
@@ -211,8 +213,8 @@ fun SkillScreen(
                         modifier = Modifier.size(44.dp),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Text("还没有 Skill", style = MaterialTheme.typography.titleLarge)
-                    Text("通过右上角加号添加、下载或创建", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(stringResource(R.string.skill_empty_title), style = MaterialTheme.typography.titleLarge)
+                    Text(stringResource(R.string.skill_empty_body), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             } else {
                 LazyColumn(
@@ -244,7 +246,7 @@ fun SkillScreen(
             ) {
                 TopCircleButton(
                     iconRes = R.drawable.ic_arrow_back,
-                    contentDescription = "返回",
+                    contentDescription = stringResource(R.string.account_back),
                     modifier = Modifier.align(Alignment.CenterStart),
                     onClick = ::returnToChatHome,
                 )
@@ -261,13 +263,13 @@ fun SkillScreen(
                             modifier = Modifier.size(topButtonSize).clip(CircleShape).clickable { showAddMenu = true },
                             contentAlignment = Alignment.Center,
                         ) {
-                            Icon(painterResource(R.drawable.ic_plus), "添加", tint = buttonContent, modifier = Modifier.size(20.dp))
+                            Icon(painterResource(R.drawable.ic_plus), stringResource(R.string.action_add), tint = buttonContent, modifier = Modifier.size(20.dp))
                         }
                         Box(
                             modifier = Modifier.size(topButtonSize).clip(CircleShape).clickable { showTabMenu = true },
                             contentAlignment = Alignment.Center,
                         ) {
-                            Icon(painterResource(R.drawable.ic_dots_horizontal), "更多", tint = buttonContent, modifier = Modifier.size(20.dp))
+                            Icon(painterResource(R.drawable.ic_dots_horizontal), stringResource(R.string.action_more), tint = buttonContent, modifier = Modifier.size(20.dp))
                         }
                     }
                     AppFloatingCardPopup(
@@ -278,12 +280,12 @@ fun SkillScreen(
                         modifier = Modifier.widthIn(min = 100.dp, max = 136.dp),
                     ) {
                         Column(modifier = Modifier.padding(vertical = 4.dp)) {
-                            SkillMenuRow("添加") { showAddMenu = false; showSourcePicker = true }
-                            SkillMenuRow("下载") {
+                            SkillMenuRow(stringResource(R.string.action_add)) { showAddMenu = false; showSourcePicker = true }
+                            SkillMenuRow(stringResource(R.string.skill_download)) {
                                 showAddMenu = false
                                 navController.navigate(Screen.SKILL_DOWNLOAD_SCREEN)
                             }
-                            SkillMenuRow("创建 Skill") { showAddMenu = false; showCreateDialog = true }
+                            SkillMenuRow(stringResource(R.string.skill_create_title)) { showAddMenu = false; showCreateDialog = true }
                         }
                     }
                     SettingsTabMenu(
@@ -297,6 +299,7 @@ fun SkillScreen(
                         onImportExport = onImportExport,
                         onOpenComputers = { navController.navigate(Screen.COMPUTER_SCREEN) },
                         onOpenSkills = { showTabMenu = false },
+                        onOpenAccount = { navController.navigate(Screen.ACCOUNT_SCREEN) { launchSingleTop = true } },
                         isSkillSelected = true,
                         onDismiss = { showTabMenu = false },
                     )
@@ -315,14 +318,14 @@ fun SkillScreen(
             titleContentColor = dialogContent,
             textContentColor = dialogContent,
             onDismissRequest = { showSourcePicker = false },
-            title = { Text("添加 Skill", fontSize = 20.sp, fontWeight = FontWeight.Bold) },
-            text = { Text("选择包含 SKILL.md 的文件夹或 ZIP 压缩包。", style = MaterialTheme.typography.bodyMedium, color = dialogContent.copy(alpha = 0.8f)) },
+            title = { Text(stringResource(R.string.skill_add_title), fontSize = 20.sp, fontWeight = FontWeight.Bold) },
+            text = { Text(stringResource(R.string.skill_import_description), style = MaterialTheme.typography.bodyMedium, color = dialogContent.copy(alpha = 0.8f)) },
             confirmButton = {
                 Button(
                     onClick = { showSourcePicker = false; directoryPicker.launch(null) },
                     shape = AppDialogButtonShape,
                     colors = ButtonDefaults.buttonColors(containerColor = dialogContent, contentColor = dialogBg),
-                ) { Text("选择文件夹", fontWeight = FontWeight.SemiBold) }
+                ) { Text(stringResource(R.string.skill_choose_folder), fontWeight = FontWeight.SemiBold) }
             },
             dismissButton = {
                 OutlinedButton(
@@ -330,7 +333,7 @@ fun SkillScreen(
                     shape = AppDialogButtonShape,
                     colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.Transparent, contentColor = dialogContent),
                     border = BorderStroke(1.dp, dialogBorder),
-                ) { Text("选择 ZIP", fontWeight = FontWeight.SemiBold) }
+                ) { Text(stringResource(R.string.skill_choose_zip), fontWeight = FontWeight.SemiBold) }
             },
         )
     }
@@ -344,8 +347,8 @@ fun SkillScreen(
             titleContentColor = dialogContent,
             textContentColor = dialogContent,
             onDismissRequest = { pendingDeletePackage = null },
-            title = { Text("删除 ${skillPackage.name}？", fontSize = 20.sp, fontWeight = FontWeight.Bold) },
-            text = { Text("已安装文件和记录会一起删除。历史消息中的标签仍会保留显示。", style = MaterialTheme.typography.bodyMedium, color = dialogContent.copy(alpha = 0.8f)) },
+            title = { Text(stringResource(R.string.skill_delete_title, skillPackage.name), fontSize = 20.sp, fontWeight = FontWeight.Bold) },
+            text = { Text(stringResource(R.string.skill_delete_description), style = MaterialTheme.typography.bodyMedium, color = dialogContent.copy(alpha = 0.8f)) },
             confirmButton = {
                 Button(
                     onClick = {
@@ -354,7 +357,7 @@ fun SkillScreen(
                     },
                     shape = AppDialogButtonShape,
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF5350), contentColor = Color.White),
-                ) { Text("删除", fontWeight = FontWeight.SemiBold) }
+                ) { Text(stringResource(R.string.action_delete), fontWeight = FontWeight.SemiBold) }
             },
             dismissButton = {
                 OutlinedButton(
@@ -362,7 +365,7 @@ fun SkillScreen(
                     shape = AppDialogButtonShape,
                     colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.Transparent, contentColor = dialogContent),
                     border = BorderStroke(1.dp, dialogBorder),
-                ) { Text("取消", fontWeight = FontWeight.SemiBold) }
+                ) { Text(stringResource(R.string.account_cancel), fontWeight = FontWeight.SemiBold) }
             },
         )
     }
@@ -374,8 +377,8 @@ fun SkillScreen(
                     message = runCatching {
                         withContext(Dispatchers.IO) { repository.create(name, description, rules) }
                         showCreateDialog = false
-                        "Skill 已创建"
-                    }.getOrElse { it.message ?: "Skill 创建失败" }
+                        context.getString(R.string.skill_created)
+                    }.getOrElse { it.message ?: context.getString(R.string.skill_create_failed) }
                 }
             },
         )
@@ -390,13 +393,13 @@ fun SkillScreen(
             titleContentColor = dialogContent,
             textContentColor = dialogContent,
             onDismissRequest = { message = null },
-            text = { Text(text, style = MaterialTheme.typography.bodyMedium, color = dialogContent) },
+            text = { Text(context.localizeUiMessage(text), style = MaterialTheme.typography.bodyMedium, color = dialogContent) },
             confirmButton = {
                 Button(
                     onClick = { message = null },
                     shape = AppDialogButtonShape,
                     colors = ButtonDefaults.buttonColors(containerColor = dialogContent, contentColor = dialogBg),
-                ) { Text("知道了", fontWeight = FontWeight.SemiBold) }
+                ) { Text(stringResource(R.string.action_got_it), fontWeight = FontWeight.SemiBold) }
             },
         )
     }
@@ -466,7 +469,7 @@ private fun SkillCard(
                 ) {
                     Icon(
                         painter = painterResource(R.drawable.ic_trash),
-                        contentDescription = "删除",
+                        contentDescription = stringResource(R.string.action_delete),
                         tint = MaterialTheme.colorScheme.error,
                         modifier = Modifier.size(20.dp),
                     )
@@ -482,8 +485,8 @@ private fun SkillCard(
             )
 
             Text(
-                text = "${skillPackage.children.size} 个 Skill · ${skillPackage.sourceType.name}" +
-                    if (skillPackage.updateHash != null) " · 有更新" else "",
+                text = pluralStringResource(R.plurals.skill_count, skillPackage.children.size, skillPackage.children.size) + " · " + stringResource(skillPackage.sourceType.labelRes) +
+                    if (skillPackage.updateHash != null) " · " + stringResource(R.string.skill_update_badge) else "",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
             )
@@ -536,13 +539,13 @@ private fun CreateSkillDialog(
         titleContentColor = dialogContent,
         textContentColor = dialogContent,
         onDismissRequest = onDismiss,
-        title = { Text("创建 Skill", fontSize = 20.sp, fontWeight = FontWeight.Bold) },
+        title = { Text(stringResource(R.string.skill_create_title), fontSize = 20.sp, fontWeight = FontWeight.Bold) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("名称") },
+                    label = { Text(stringResource(R.string.mcp_name_label)) },
                     singleLine = true,
                     shape = AppDialogTextFieldShape,
                     colors = appDialogTextFieldColors(),
@@ -551,7 +554,7 @@ private fun CreateSkillDialog(
                 OutlinedTextField(
                     value = description,
                     onValueChange = { description = it },
-                    label = { Text("用途说明") },
+                    label = { Text(stringResource(R.string.skill_description)) },
                     shape = AppDialogTextFieldShape,
                     colors = appDialogTextFieldColors(),
                     modifier = Modifier.fillMaxWidth(),
@@ -559,7 +562,7 @@ private fun CreateSkillDialog(
                 OutlinedTextField(
                     value = rules,
                     onValueChange = { rules = it },
-                    label = { Text("具体规则") },
+                    label = { Text(stringResource(R.string.skill_rules)) },
                     minLines = 4,
                     shape = AppDialogTextFieldShape,
                     colors = appDialogTextFieldColors(),
@@ -573,7 +576,7 @@ private fun CreateSkillDialog(
                 enabled = name.isNotBlank() && description.isNotBlank() && rules.isNotBlank(),
                 shape = AppDialogButtonShape,
                 colors = ButtonDefaults.buttonColors(containerColor = dialogContent, contentColor = dialogBg),
-            ) { Text("创建", fontWeight = FontWeight.SemiBold) }
+            ) { Text(stringResource(R.string.action_create), fontWeight = FontWeight.SemiBold) }
         },
         dismissButton = {
             OutlinedButton(
@@ -581,7 +584,16 @@ private fun CreateSkillDialog(
                 shape = AppDialogButtonShape,
                 colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.Transparent, contentColor = dialogContent),
                 border = BorderStroke(1.dp, dialogBorder),
-            ) { Text("取消", fontWeight = FontWeight.SemiBold) }
+            ) { Text(stringResource(R.string.account_cancel), fontWeight = FontWeight.SemiBold) }
         },
     )
 }
+
+/** 来源枚举用于持久化，资源 ID 只用于展示；语言变化不会改写安装记录。 */
+@get:androidx.annotation.StringRes
+internal val SkillSourceType.labelRes: Int
+    get() = when (this) {
+        SkillSourceType.REMOTE -> R.string.skill_source_remote
+        SkillSourceType.LOCAL_IMPORT -> R.string.skill_source_local_import
+        SkillSourceType.USER_CREATED -> R.string.skill_source_user_created
+    }

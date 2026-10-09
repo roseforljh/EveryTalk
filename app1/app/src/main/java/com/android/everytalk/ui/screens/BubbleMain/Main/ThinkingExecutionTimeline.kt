@@ -126,7 +126,7 @@ internal fun localizedExecutionStatusText(status: String?): String? {
             R.string.thinking_context_compression_failed,
             context.localizeUiMessage(text.removePrefix(CONTEXT_COMPRESSION_FAILURE_PREFIX)),
         )
-        else -> text
+        else -> context.localizeUiMessage(text)
     }
 }
 

@@ -1,6 +1,7 @@
 /** 远端终态必须先持久化 appendToolResult，再恢复模型 continueRun */
 package com.android.everytalk.service
 
+import com.android.everytalk.util.locale.appLanguageContext
 import com.android.everytalk.util.AgentNotificationManager
 
 import android.app.NotificationChannel
@@ -680,15 +681,16 @@ class ComputerConnectionService : Service() {
     }
 
     private fun createNotificationChannel() {
+        val languageContext = appLanguageContext()
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(
             NotificationChannel(
                 CHANNEL_ID,
-                getString(R.string.computer_connection_channel),
+                languageContext.getString(R.string.computer_connection_channel),
                 NotificationManager.IMPORTANCE_LOW,
             ).apply {
-                description = getString(R.string.computer_connection_channel_description)
+                description = languageContext.getString(R.string.computer_connection_channel_description)
                 setShowBadge(false)
             },
         )
@@ -731,22 +733,23 @@ class ComputerConnectionService : Service() {
     private fun buildNotification(
         state: ForegroundNotificationState = notificationState,
     ): android.app.Notification {
+        val languageContext = appLanguageContext()
         val elapsedText = state.startedAtElapsedMillis?.let { startedAt ->
             agentNotificationElapsedText(startedAt, SystemClock.elapsedRealtime())
         }
 
         val title = if (state.activeTaskCount > 0) {
-            "Agent 运行中 · ${elapsedText ?: "0s"}"
+            languageContext.getString(R.string.notification_agent_running, elapsedText ?: "0s")
         } else if (state.pendingApprovalCount > 0) {
-            "Agent 待处理 · ${elapsedText ?: "0s"}"
+            languageContext.getString(R.string.notification_agent_pending, elapsedText ?: "0s")
         } else {
-            getString(R.string.computer_connection_notification_title)
+            languageContext.getString(R.string.computer_connection_notification_title)
         }
 
         val text = if (state.activeTaskCount > 0) {
-            "点击查看进度"
+            languageContext.getString(R.string.notification_agent_view_progress)
         } else {
-            getString(R.string.computer_connection_notification_text)
+            languageContext.getString(R.string.computer_connection_notification_text)
         }
 
         val intent = Intent(this, MainActivity::class.java).apply {

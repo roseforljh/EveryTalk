@@ -1,5 +1,8 @@
 package com.android.everytalk.ui.screens.skill
 
+import com.android.everytalk.util.locale.localizeUiMessage
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.painterResource
 
 import android.provider.OpenableColumns
@@ -153,10 +156,10 @@ fun SkillDetailScreen(navController: NavController, skillId: String) {
                 withContext(Dispatchers.IO) {
                     context.contentResolver.openInputStream(uri)?.use { input ->
                         repository.addOrReplaceFile(installation.skillId, "$category/$displayName", input)
-                    } ?: error("无法读取文件")
+                    } ?: error(context.getString(R.string.skill_file_unreadable))
                 }
-                "文件已保存"
-            }.getOrElse { it.message ?: "文件保存失败" }
+                context.getString(R.string.skill_file_saved)
+            }.getOrElse { it.message ?: context.getString(R.string.skill_file_save_failed) }
         }
     }
 
@@ -164,7 +167,7 @@ fun SkillDetailScreen(navController: NavController, skillId: String) {
     Scaffold(containerColor = MaterialTheme.colorScheme.background, contentWindowInsets = WindowInsets(0.dp)) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             if (installation == null) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Skill 已删除") }
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(stringResource(R.string.skill_deleted)) }
             } else {
                 LazyColumn(
                     contentPadding = PaddingValues(
@@ -177,7 +180,7 @@ fun SkillDetailScreen(navController: NavController, skillId: String) {
                 ) {
                     item {
                         Text(skillPackage?.name?.substringAfterLast('/').orEmpty(), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
-                        Text("${skillPackage?.children?.size ?: 0} 个 Skill", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(pluralStringResource(R.plurals.skill_count, skillPackage?.children?.size ?: 0, skillPackage?.children?.size ?: 0), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     items(skillPackage?.children.orEmpty(), key = { it.skillId }) { child ->
                         val selected = child.skillId == installation.skillId
@@ -194,18 +197,18 @@ fun SkillDetailScreen(navController: NavController, skillId: String) {
                         ) {
                             Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 11.dp)) {
                                 Text(child.name, fontWeight = FontWeight.SemiBold)
-                                Text(child.description, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(context.localizeUiMessage(child.description), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
                     }
                     item {
                         Text(installation.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                        Text(installation.description, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(context.localizeUiMessage(installation.description), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     item {
-                        DetailCard("来源", installation.sourceRepository ?: installation.sourceType)
-                        DetailCard("当前版本", installation.currentHash)
-                        skillPackage?.updateHash?.let { DetailCard("可更新版本", it) }
+                        DetailCard(stringResource(R.string.skill_source), installation.sourceRepository ?: (runCatching { SkillSourceType.valueOf(installation.sourceType) }.getOrNull()?.let { stringResource(it.labelRes) } ?: installation.sourceType))
+                        DetailCard(stringResource(R.string.skill_current_version), installation.currentHash)
+                        skillPackage?.updateHash?.let { DetailCard(stringResource(R.string.skill_available_version), it) }
                     }
                     item {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -215,14 +218,14 @@ fun SkillDetailScreen(navController: NavController, skillId: String) {
                                         scope.launch {
                                             runCatching { withContext(Dispatchers.IO) { repository.copyAsUserSkill(installation.skillId) } }
                                                 .onSuccess { copy -> navController.navigate(Screen.skillDetail(copy.effectivePackageId())) }
-                                                .onFailure { message = it.message ?: "复制失败" }
+                                                .onFailure { message = it.message ?: context.getString(R.string.ui_message_copy_failed) }
                                         }
                                     },
                                     shape = AppDialogButtonShape,
                                     colors = ButtonDefaults.buttonColors(containerColor = dialogContent, contentColor = dialogBg),
                                 ) {
                                     Icon(painterResource(R.drawable.ic_gpt_edit), null, modifier = Modifier.size(18.dp))
-                                    Text(" 复制并编辑", fontWeight = FontWeight.SemiBold)
+                                    Text(stringResource(R.string.skill_copy_and_edit), fontWeight = FontWeight.SemiBold)
                                 }
                                 if (skillPackage?.updateHash != null && remoteDetail != null) {
                                     OutlinedButton(
@@ -231,7 +234,7 @@ fun SkillDetailScreen(navController: NavController, skillId: String) {
                                         colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.Transparent, contentColor = dialogContent),
                                         border = BorderStroke(1.dp, dialogBorder),
                                     ) {
-                                        Text("查看更新", fontWeight = FontWeight.SemiBold)
+                                        Text(stringResource(R.string.skill_view_update), fontWeight = FontWeight.SemiBold)
                                     }
                                 }
                             } else {
@@ -241,16 +244,16 @@ fun SkillDetailScreen(navController: NavController, skillId: String) {
                                     colors = ButtonDefaults.buttonColors(containerColor = dialogContent, contentColor = dialogBg),
                                 ) {
                                     Icon(painterResource(R.drawable.ic_gpt_edit), null, modifier = Modifier.size(18.dp))
-                                    Text(" 编辑规则", fontWeight = FontWeight.SemiBold)
+                                    Text(stringResource(R.string.skill_edit_rules), fontWeight = FontWeight.SemiBold)
                                 }
                             }
                         }
                     }
                     if (installation.sourceType != SkillSourceType.REMOTE.name) {
                         item {
-                            Text("附带文件", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                            Text(stringResource(R.string.skill_attached_files), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                listOf("scripts" to "脚本", "references" to "参考", "templates" to "模板", "assets" to "图片").forEach { (path, label) ->
+                                listOf("scripts" to stringResource(R.string.skill_scripts), "references" to stringResource(R.string.skill_references), "templates" to stringResource(R.string.skill_templates), "assets" to stringResource(R.string.chat_input_image)).forEach { (path, label) ->
                                     OutlinedButton(
                                         onClick = { pendingCategory = path; filePicker.launch(arrayOf("*/*")) },
                                         modifier = Modifier.weight(1f),
@@ -281,17 +284,17 @@ fun SkillDetailScreen(navController: NavController, skillId: String) {
                                     Text("${file.size} B · ${file.sha256.take(10)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
                                 }
                                 if (installation.sourceType != SkillSourceType.REMOTE.name && file.path != "SKILL.md") {
-                                    IconButton(onClick = { pendingDelete = file.path }) { Icon(painterResource(R.drawable.ic_trash), "删除文件", tint = MaterialTheme.colorScheme.error) }
+                                    IconButton(onClick = { pendingDelete = file.path }) { Icon(painterResource(R.drawable.ic_trash), stringResource(R.string.skill_delete_file), tint = MaterialTheme.colorScheme.error) }
                                 }
                             }
                         }
                     }
                     if (savedSecrets.isNotEmpty()) {
-                        item { Text("已保存的密钥名", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
+                        item { Text(stringResource(R.string.skill_saved_secrets), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
                         items(savedSecrets, key = SkillSecretMetadata::name) { secret ->
                             Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Text(secret.name, Modifier.weight(1f))
-                                IconButton(onClick = { pendingSecretDelete = secret.name }) { Icon(painterResource(R.drawable.ic_trash), "删除密钥", tint = MaterialTheme.colorScheme.error) }
+                                IconButton(onClick = { pendingSecretDelete = secret.name }) { Icon(painterResource(R.drawable.ic_trash), stringResource(R.string.skill_delete_secret), tint = MaterialTheme.colorScheme.error) }
                             }
                         }
                     }
@@ -304,11 +307,11 @@ fun SkillDetailScreen(navController: NavController, skillId: String) {
             ) {
                 TopCircleButton(
                     iconRes = R.drawable.ic_arrow_back,
-                    contentDescription = "返回",
+                    contentDescription = stringResource(R.string.account_back),
                     modifier = Modifier.align(Alignment.CenterStart),
                     onClick = { navController.popBackStack() },
                 )
-                Text("Skill 详情", Modifier.align(Alignment.Center), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(stringResource(R.string.skill_detail_title), Modifier.align(Alignment.Center), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             }
         }
     }
@@ -324,7 +327,7 @@ fun SkillDetailScreen(navController: NavController, skillId: String) {
             titleContentColor = dialogContent,
             textContentColor = dialogContent,
             onDismissRequest = { showEditor = false },
-            title = { Text("编辑 SKILL.md", fontSize = 20.sp, fontWeight = FontWeight.Bold) },
+            title = { Text(stringResource(R.string.skill_edit_markdown), fontSize = 20.sp, fontWeight = FontWeight.Bold) },
             text = {
                 OutlinedTextField(
                     value = edited,
@@ -339,13 +342,13 @@ fun SkillDetailScreen(navController: NavController, skillId: String) {
                 Button(
                     onClick = {
                         scope.launch {
-                            message = runCatching { withContext(Dispatchers.IO) { repository.updateSkillMarkdown(installation.skillId, edited) }; showEditor = false; "规则已保存" }
-                                .getOrElse { it.message ?: "保存失败" }
+                            message = runCatching { withContext(Dispatchers.IO) { repository.updateSkillMarkdown(installation.skillId, edited) }; showEditor = false; context.getString(R.string.skill_rules_saved) }
+                                .getOrElse { it.message ?: context.getString(R.string.skill_save_failed) }
                         }
                     },
                     shape = AppDialogButtonShape,
                     colors = ButtonDefaults.buttonColors(containerColor = dialogContent, contentColor = dialogBg),
-                ) { Text("保存", fontWeight = FontWeight.SemiBold) }
+                ) { Text(stringResource(R.string.action_save), fontWeight = FontWeight.SemiBold) }
             },
             dismissButton = {
                 OutlinedButton(
@@ -353,7 +356,7 @@ fun SkillDetailScreen(navController: NavController, skillId: String) {
                     shape = AppDialogButtonShape,
                     colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.Transparent, contentColor = dialogContent),
                     border = BorderStroke(1.dp, dialogBorder),
-                ) { Text("取消", fontWeight = FontWeight.SemiBold) }
+                ) { Text(stringResource(R.string.account_cancel), fontWeight = FontWeight.SemiBold) }
             },
         )
     }
@@ -368,17 +371,17 @@ fun SkillDetailScreen(navController: NavController, skillId: String) {
             titleContentColor = dialogContent,
             textContentColor = dialogContent,
             onDismissRequest = { pendingDelete = null },
-            title = { Text("删除文件？", fontSize = 20.sp, fontWeight = FontWeight.Bold) },
+            title = { Text(stringResource(R.string.skill_delete_file_title), fontSize = 20.sp, fontWeight = FontWeight.Bold) },
             text = { Text(path, style = MaterialTheme.typography.bodyMedium, color = dialogContent.copy(alpha = 0.8f)) },
             confirmButton = {
                 Button(
                     onClick = {
                         pendingDelete = null
-                        scope.launch { message = runCatching { withContext(Dispatchers.IO) { repository.deleteFile(currentInstallation.skillId, path) }; "文件已删除" }.getOrElse { it.message ?: "删除失败" } }
+                        scope.launch { message = runCatching { withContext(Dispatchers.IO) { repository.deleteFile(currentInstallation.skillId, path) }; context.getString(R.string.skill_file_deleted) }.getOrElse { it.message ?: context.getString(R.string.skill_delete_failed) } }
                     },
                     shape = AppDialogButtonShape,
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF5350), contentColor = Color.White),
-                ) { Text("删除", fontWeight = FontWeight.SemiBold) }
+                ) { Text(stringResource(R.string.action_delete), fontWeight = FontWeight.SemiBold) }
             },
             dismissButton = {
                 OutlinedButton(
@@ -386,7 +389,7 @@ fun SkillDetailScreen(navController: NavController, skillId: String) {
                     shape = AppDialogButtonShape,
                     colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.Transparent, contentColor = dialogContent),
                     border = BorderStroke(1.dp, dialogBorder),
-                ) { Text("取消", fontWeight = FontWeight.SemiBold) }
+                ) { Text(stringResource(R.string.account_cancel), fontWeight = FontWeight.SemiBold) }
             },
         )
     }
@@ -401,7 +404,7 @@ fun SkillDetailScreen(navController: NavController, skillId: String) {
             titleContentColor = dialogContent,
             textContentColor = dialogContent,
             onDismissRequest = { pendingSecretDelete = null },
-            title = { Text("删除已保存的密钥？", fontSize = 20.sp, fontWeight = FontWeight.Bold) },
+            title = { Text(stringResource(R.string.skill_delete_secret_title), fontSize = 20.sp, fontWeight = FontWeight.Bold) },
             text = { Text(name, style = MaterialTheme.typography.bodyMedium, color = dialogContent.copy(alpha = 0.8f)) },
             confirmButton = {
                 Button(
@@ -409,12 +412,12 @@ fun SkillDetailScreen(navController: NavController, skillId: String) {
                         pendingSecretDelete = null
                         scope.launch {
                             withContext(Dispatchers.IO) { secretStore.delete(currentInstallation.skillId, name); savedSecrets = secretStore.list(currentInstallation.skillId) }
-                            message = "密钥已删除"
+                            message = context.getString(R.string.skill_secret_deleted)
                         }
                     },
                     shape = AppDialogButtonShape,
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF5350), contentColor = Color.White),
-                ) { Text("删除", fontWeight = FontWeight.SemiBold) }
+                ) { Text(stringResource(R.string.action_delete), fontWeight = FontWeight.SemiBold) }
             },
             dismissButton = {
                 OutlinedButton(
@@ -422,7 +425,7 @@ fun SkillDetailScreen(navController: NavController, skillId: String) {
                     shape = AppDialogButtonShape,
                     colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.Transparent, contentColor = dialogContent),
                     border = BorderStroke(1.dp, dialogBorder),
-                ) { Text("取消", fontWeight = FontWeight.SemiBold) }
+                ) { Text(stringResource(R.string.account_cancel), fontWeight = FontWeight.SemiBold) }
             },
         )
     }
@@ -438,11 +441,11 @@ fun SkillDetailScreen(navController: NavController, skillId: String) {
             titleContentColor = dialogContent,
             textContentColor = dialogContent,
             onDismissRequest = { if (!updating) showUpdateDialog = false },
-            title = { Text("更新 ${skillPackage.name.substringAfterLast('/')}？", fontSize = 20.sp, fontWeight = FontWeight.Bold) },
+            title = { Text(stringResource(R.string.skill_update_title, skillPackage.name.substringAfterLast('/')), fontSize = 20.sp, fontWeight = FontWeight.Bold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("整包更新为 ${detail.contentHash.take(12)}", fontWeight = FontWeight.Medium)
-                    Text("包含 ${detail.skills.size} 个 Skill，全部校验成功后一起切换")
+                    Text(stringResource(R.string.skill_update_version, detail.contentHash.take(12)), fontWeight = FontWeight.Medium)
+                    Text(pluralStringResource(R.plurals.skill_update_count, detail.skills.size, detail.skills.size))
                     detail.skills.take(12).forEach { child ->
                         Text(child.name, style = MaterialTheme.typography.labelSmall, color = dialogContent.copy(alpha = 0.7f))
                     }
@@ -464,14 +467,14 @@ fun SkillDetailScreen(navController: NavController, skillId: String) {
                                     )
                                 }
                                 showUpdateDialog = false
-                                "Skill 已更新"
-                            }.getOrElse { it.message ?: "更新失败" }
+                                context.getString(R.string.skill_updated)
+                            }.getOrElse { it.message ?: context.getString(R.string.skill_update_failed) }
                             updating = false
                         }
                     },
                     shape = AppDialogButtonShape,
                     colors = ButtonDefaults.buttonColors(containerColor = dialogContent, contentColor = dialogBg),
-                ) { Text("确认更新", fontWeight = FontWeight.SemiBold) }
+                ) { Text(stringResource(R.string.skill_confirm_update), fontWeight = FontWeight.SemiBold) }
             },
             dismissButton = {
                 OutlinedButton(
@@ -480,7 +483,7 @@ fun SkillDetailScreen(navController: NavController, skillId: String) {
                     shape = AppDialogButtonShape,
                     colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.Transparent, contentColor = dialogContent),
                     border = BorderStroke(1.dp, dialogBorder),
-                ) { Text("取消", fontWeight = FontWeight.SemiBold) }
+                ) { Text(stringResource(R.string.account_cancel), fontWeight = FontWeight.SemiBold) }
             },
         )
     }
@@ -494,13 +497,13 @@ fun SkillDetailScreen(navController: NavController, skillId: String) {
             titleContentColor = dialogContent,
             textContentColor = dialogContent,
             onDismissRequest = { message = null },
-            text = { Text(text, style = MaterialTheme.typography.bodyMedium, color = dialogContent) },
+            text = { Text(context.localizeUiMessage(text), style = MaterialTheme.typography.bodyMedium, color = dialogContent) },
             confirmButton = {
                 Button(
                     onClick = { message = null },
                     shape = AppDialogButtonShape,
                     colors = ButtonDefaults.buttonColors(containerColor = dialogContent, contentColor = dialogBg),
-                ) { Text("知道了", fontWeight = FontWeight.SemiBold) }
+                ) { Text(stringResource(R.string.action_got_it), fontWeight = FontWeight.SemiBold) }
             },
         )
     }

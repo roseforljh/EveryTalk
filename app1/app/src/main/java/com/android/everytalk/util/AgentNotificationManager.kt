@@ -1,5 +1,7 @@
 package com.android.everytalk.util
 
+import com.android.everytalk.util.locale.localizeUiMessage
+import com.android.everytalk.util.locale.appLanguageContext
 import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
@@ -63,17 +65,17 @@ object AgentNotificationManager {
     fun ensureEventChannel(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
-        if (manager.getNotificationChannel(CHANNEL_EVENTS_ID) == null) {
-            manager.createNotificationChannel(
-                NotificationChannel(
-                    CHANNEL_EVENTS_ID,
-                    "Agent Task Events",
-                    NotificationManager.IMPORTANCE_DEFAULT,
-                ).apply {
-                    description = "Notifications for Agent task execution events"
-                },
-            )
-        }
+        val languageContext = context.appLanguageContext()
+        // 重建同一渠道会更新名称和说明，系统会保留用户设置的通知重要性。
+        manager.createNotificationChannel(
+            NotificationChannel(
+                CHANNEL_EVENTS_ID,
+                languageContext.getString(R.string.notification_agent_events_channel),
+                NotificationManager.IMPORTANCE_DEFAULT,
+            ).apply {
+                description = languageContext.getString(R.string.notification_agent_events_description)
+            },
+        )
     }
 
     /** App 一进入前台就立即关闭后续事件通知，避免后台清理期间又弹出新通知。 */
@@ -145,7 +147,10 @@ object AgentNotificationManager {
                 val title = statusBarNotification.notification.extras
                     .getCharSequence(Notification.EXTRA_TITLE)
                     ?.toString()
-                if (title == "SSH 连接断开") manager.cancel(statusBarNotification.id)
+                // 新通知用稳定事件码识别，兼容升级前没有事件码的中文或英文通知。
+                if (statusBarNotification.notification.extras.getString("everytalk.agent.event") == "CONNECTION_LOST" ||
+                    title in setOf("SSH 连接断开", "SSH connection lost")
+                ) manager.cancel(statusBarNotification.id)
             }
         }
         lostConnections.clear()
@@ -223,9 +228,10 @@ object AgentNotificationManager {
         )
 
         val notification = NotificationCompat.Builder(context, CHANNEL_EVENTS_ID)
+            .addExtras(android.os.Bundle().apply { putString("everytalk.agent.event", eventType) })
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle(title)
-            .setContentText(message)
+            .setContentTitle(context.localizeUiMessage(title))
+            .setContentText(context.localizeUiMessage(message))
             .setContentIntent(contentIntent)
             .setAutoCancel(true)
             .setOnlyAlertOnce(true)

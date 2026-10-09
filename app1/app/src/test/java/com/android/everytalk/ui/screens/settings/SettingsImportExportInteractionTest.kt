@@ -123,6 +123,7 @@ class SettingsImportExportInteractionTest {
                                         onImportExport = { visible = true },
                                         onOpenComputers = { error("导入导出不得导航") },
                                         onOpenSkills = { error("导入导出不得导航") },
+                                        onOpenAccount = { error("导入导出不得导航") },
                                         isComputerSelected = page == "computers",
                                         isSkillSelected = page == "skills",
                                         onDismiss = { menu = false },
@@ -226,7 +227,7 @@ class SettingsImportExportInteractionTest {
 
     @Test
     fun `设置菜单路由所有双向组合使用同一动画且不影响外部页面`() {
-        val routes = listOf(Screen.SETTINGS_SCREEN, Screen.COMPUTER_SCREEN, Screen.SKILL_SCREEN)
+        val routes = listOf(Screen.SETTINGS_SCREEN, Screen.COMPUTER_SCREEN, Screen.SKILL_SCREEN, Screen.ACCOUNT_SCREEN)
         routes.forEach { from ->
             routes.forEach { to -> assertTrue(isSettingsMenuTransition(from, to)) }
             listOf(null, Screen.CHAT_SCREEN, Screen.COMPUTER_DETAIL_SCREEN, Screen.SKILL_DETAIL_SCREEN).forEach { other ->

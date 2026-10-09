@@ -103,6 +103,10 @@ private val privacySections = listOf(
         titleRes = R.string.privacy_section_8_title,
         bodyRes = R.string.privacy_section_8_body,
     ),
+    PrivacySection(
+        titleRes = R.string.privacy_account_title,
+        bodyRes = R.string.privacy_account_body,
+    ),
 )
 
 @Composable

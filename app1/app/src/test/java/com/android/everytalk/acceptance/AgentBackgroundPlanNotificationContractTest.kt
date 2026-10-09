@@ -9,6 +9,7 @@ import com.android.everytalk.service.ComputerConnectionService
 import com.android.everytalk.service.agentNotificationElapsedText
 import com.android.everytalk.data.agent.AgentRunStatus
 import com.android.everytalk.util.AgentNotificationManager
+import com.android.everytalk.util.locale.localizeUiMessage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -98,7 +99,7 @@ class AgentBackgroundPlanNotificationContractTest {
 
         val notifications = notifications(context)
         assertEquals("终态到达后只能保留终态通知", 1, notifications.size)
-        assertEquals("任务完成", notifications.single().extras.getCharSequence(Notification.EXTRA_TITLE)?.toString())
+        assertEquals(context.localizeUiMessage("任务完成"), notifications.single().extras.getCharSequence(Notification.EXTRA_TITLE)?.toString())
     }
 
     @Test
@@ -111,7 +112,7 @@ class AgentBackgroundPlanNotificationContractTest {
 
         val notifications = notifications(context)
         assertEquals("成功后的迟到断线事件不能生成第二条通知", 1, notifications.size)
-        assertEquals("任务完成", notifications.single().extras.getCharSequence(Notification.EXTRA_TITLE)?.toString())
+        assertEquals(context.localizeUiMessage("任务完成"), notifications.single().extras.getCharSequence(Notification.EXTRA_TITLE)?.toString())
     }
 
     @Test

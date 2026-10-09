@@ -1,5 +1,7 @@
 package com.android.everytalk.ui.screens.skill
 
+import com.android.everytalk.util.locale.localizeUiMessage
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.painterResource
 
 import com.android.everytalk.util.AppToast
@@ -139,7 +141,7 @@ fun SkillDownloadScreen(navController: NavController) {
     var usingOfflineCache by remember { mutableStateOf(false) }
     var installStartedAt by remember { mutableStateOf(0L) }
     var installElapsedSeconds by remember { mutableStateOf(0L) }
-    var installStatusText by remember { mutableStateOf("正在准备下载") }
+    var installStatusText by remember { mutableStateOf(context.getString(R.string.skill_preparing_download)) }
     val installProgress = remember { AtomicReference<RemoteSkillInstallProgress?>(null) }
 
     val dialogBg = appDialogContainerColor()
@@ -180,7 +182,7 @@ fun SkillDownloadScreen(navController: NavController) {
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (cause: Exception) {
-            if (catalogItems.isEmpty()) error = cause.message ?: "云目录加载失败"
+            if (catalogItems.isEmpty()) error = cause.message ?: context.getString(R.string.skill_catalog_failed)
         } finally {
             loading = false
             refreshing = false
@@ -205,8 +207,8 @@ fun SkillDownloadScreen(navController: NavController) {
             installElapsedSeconds = ((System.currentTimeMillis() - installStartedAt) / 1_000L).coerceAtLeast(0)
             installProgress.get()?.let { progress ->
                 installStatusText = when (progress.stage) {
-                    RemoteSkillInstallStage.DOWNLOADING -> formatDownloadProgress(progress)
-                    RemoteSkillInstallStage.INSTALLING -> "正在安装文件 ${progress.completed}/${progress.total}"
+                    RemoteSkillInstallStage.DOWNLOADING -> formatDownloadProgress(context, progress)
+                    RemoteSkillInstallStage.INSTALLING -> context.getString(R.string.skill_installing_files, progress.completed, progress.total)
                 }
             }
             delay(250)
@@ -218,7 +220,7 @@ fun SkillDownloadScreen(navController: NavController) {
         installError = null
         installStartedAt = System.currentTimeMillis()
         installElapsedSeconds = 0
-        installStatusText = "正在读取远端版本"
+        installStatusText = context.getString(R.string.skill_reading_version)
         installProgress.set(null)
         val packageItem = item.toRemotePackageCatalogItem()
         scope.launch {
@@ -234,9 +236,9 @@ fun SkillDownloadScreen(navController: NavController) {
                     )
                 }
             }.onSuccess { installedPackage ->
-                AppToast.show(context, "${item.name} 已安装，共 ${installedPackage.children.size} 个 Skill")
+                AppToast.show(context, context.resources.getQuantityString(R.plurals.skill_installed_count, installedPackage.children.size, item.name, installedPackage.children.size))
                 selected = null
-            }.onFailure { installError = it.message ?: "Skill 安装失败" }
+            }.onFailure { installError = it.message ?: context.getString(R.string.skill_install_failed) }
             installing = false
         }
     }
@@ -263,7 +265,7 @@ fun SkillDownloadScreen(navController: NavController) {
                 if (usingOfflineCache) {
                     item {
                         Text(
-                            "云目录刷新失败，当前显示缓存，点此重试",
+                            stringResource(R.string.skill_catalog_cached),
                             modifier = Modifier
                                 .padding(vertical = 2.dp)
                                 .clickable { refreshRetry += 1 },
@@ -295,7 +297,7 @@ fun SkillDownloadScreen(navController: NavController) {
                                     .padding(32.dp),
                                 contentAlignment = Alignment.Center,
                             ) {
-                                Text(error.orEmpty(), color = MaterialTheme.colorScheme.error)
+                                Text(context.localizeUiMessage(error.orEmpty()), color = MaterialTheme.colorScheme.error)
                             }
                         }
                     }
@@ -307,7 +309,7 @@ fun SkillDownloadScreen(navController: NavController) {
                                     .height(260.dp),
                                 contentAlignment = Alignment.Center,
                             ) {
-                                Text("没有找到相关 Skill", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(stringResource(R.string.skill_search_empty), color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
                     }
@@ -334,7 +336,7 @@ fun SkillDownloadScreen(navController: NavController) {
                                     } catch (cancelled: CancellationException) {
                                         throw cancelled
                                     } catch (cause: Exception) {
-                                        loadMoreError = cause.message ?: "更多 Skill 加载失败"
+                                        loadMoreError = cause.message ?: context.getString(R.string.skill_more_failed)
                                     } finally {
                                         loadingMore = false
                                     }
@@ -360,7 +362,7 @@ fun SkillDownloadScreen(navController: NavController) {
                                         )
                                     } else {
                                         Text(
-                                            "加载更多失败，点此重试",
+                                            stringResource(R.string.skill_load_more_failed),
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             style = MaterialTheme.typography.bodySmall,
                                         )
@@ -388,7 +390,7 @@ fun SkillDownloadScreen(navController: NavController) {
                 ) {
                     TopCircleButton(
                         iconRes = R.drawable.ic_arrow_back,
-                        contentDescription = "返回",
+                        contentDescription = stringResource(R.string.account_back),
                         modifier = Modifier,
                         onClick = { navController.popBackStack() },
                     )
@@ -405,7 +407,7 @@ fun SkillDownloadScreen(navController: NavController) {
                                 query = ""
                             }
                         },
-                        placeholder = "搜索 Skill",
+                        placeholder = stringResource(R.string.skill_search_hint),
                         modifier = Modifier.weight(1f),
                         collapsedContent = {
                             Row(
@@ -413,15 +415,15 @@ fun SkillDownloadScreen(navController: NavController) {
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                CatalogChip("热门", collection == SkillCatalogCollection.POPULAR) {
+                                CatalogChip(stringResource(R.string.skill_popular), collection == SkillCatalogCollection.POPULAR) {
                                     query = ""
                                     collection = SkillCatalogCollection.POPULAR
                                 }
-                                CatalogChip("趋势", collection == SkillCatalogCollection.TRENDING) {
+                                CatalogChip(stringResource(R.string.skill_trending), collection == SkillCatalogCollection.TRENDING) {
                                     query = ""
                                     collection = SkillCatalogCollection.TRENDING
                                 }
-                                CatalogChip("官方精选", collection == SkillCatalogCollection.OFFICIAL) {
+                                CatalogChip(stringResource(R.string.skill_official_collection), collection == SkillCatalogCollection.OFFICIAL) {
                                     query = ""
                                     collection = SkillCatalogCollection.OFFICIAL
                                 }
@@ -453,16 +455,16 @@ fun SkillDownloadScreen(navController: NavController) {
                         .heightIn(min = 160.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text("来源：${skill.source}", style = MaterialTheme.typography.bodyMedium, color = dialogContent.copy(alpha = 0.8f))
-                    Text("安装量：${formatInstalls(skill.installs)}", style = MaterialTheme.typography.bodyMedium, color = dialogContent.copy(alpha = 0.8f))
-                    Text(if (skill.isOfficial) "skills.sh 官方标记" else "第三方维护", style = MaterialTheme.typography.bodyMedium, color = dialogContent.copy(alpha = 0.8f))
+                    Text(stringResource(R.string.skill_source_value, skill.source), style = MaterialTheme.typography.bodyMedium, color = dialogContent.copy(alpha = 0.8f))
+                    Text(stringResource(R.string.skill_installs_value, formatInstalls(skill.installs)), style = MaterialTheme.typography.bodyMedium, color = dialogContent.copy(alpha = 0.8f))
+                    Text(if (skill.isOfficial) stringResource(R.string.skill_official_label) else stringResource(R.string.skill_third_party), style = MaterialTheme.typography.bodyMedium, color = dialogContent.copy(alpha = 0.8f))
                     Text(
-                        "下载后会安装该来源仓库内的全部 Skill",
+                        stringResource(R.string.skill_download_scope),
                         style = MaterialTheme.typography.bodySmall,
                         color = dialogContent.copy(alpha = 0.7f),
                     )
                     if (skill.githubRepository == null) {
-                        Text("当前来源暂不支持 Android 端下载", color = MaterialTheme.colorScheme.error)
+                        Text(stringResource(R.string.skill_download_unsupported), color = MaterialTheme.colorScheme.error)
                     }
                     if (installing) {
                         Surface(
@@ -475,7 +477,7 @@ fun SkillDownloadScreen(navController: NavController) {
                                 verticalArrangement = Arrangement.spacedBy(2.dp),
                             ) {
                                 Text(installStatusText, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
-                                Text("已用时 ${installElapsedSeconds} 秒", style = MaterialTheme.typography.labelSmall, color = dialogContent.copy(alpha = 0.65f))
+                                Text(stringResource(R.string.skill_install_elapsed, installElapsedSeconds), style = MaterialTheme.typography.labelSmall, color = dialogContent.copy(alpha = 0.65f))
                             }
                         }
                     } else {
@@ -489,7 +491,7 @@ fun SkillDownloadScreen(navController: NavController) {
                             shape = RoundedCornerShape(12.dp),
                         ) {
                             Text(
-                                text = "安装失败：$message",
+                                text = stringResource(R.string.skill_install_error, context.localizeUiMessage(message)),
                                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
                                 style = MaterialTheme.typography.bodySmall,
                             )
@@ -517,7 +519,7 @@ fun SkillDownloadScreen(navController: NavController) {
                             strokeWidth = 2.dp,
                         )
                     } else {
-                        Text(if (isInstalled) "已安装" else "下载并安装", fontWeight = FontWeight.SemiBold)
+                        Text(if (isInstalled) stringResource(R.string.skill_installed) else stringResource(R.string.skill_download_install), fontWeight = FontWeight.SemiBold)
                     }
                 }
             },
@@ -528,7 +530,7 @@ fun SkillDownloadScreen(navController: NavController) {
                     shape = AppDialogButtonShape,
                     colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.Transparent, contentColor = dialogContent),
                     border = BorderStroke(1.dp, dialogBorder),
-                ) { Text("取消", fontWeight = FontWeight.SemiBold) }
+                ) { Text(stringResource(R.string.account_cancel), fontWeight = FontWeight.SemiBold) }
             },
         )
     }
@@ -586,17 +588,17 @@ private fun RemoteSkillCard(
                     Text(skill.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     if (skill.isOfficial) {
                         Spacer(Modifier.width(6.dp))
-                        Text("官方", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.primary)
+                        Text(stringResource(R.string.skill_official_badge), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.primary)
                     }
                 }
                 Text(skill.source, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(
-                    "${formatInstalls(skill.installs)} 次安装",
+                    stringResource(R.string.skill_installs_badge, formatInstalls(skill.installs)),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                 )
             }
-            if (installed) Icon(painterResource(R.drawable.ic_check_circle), "已安装", tint = if (isDark) Color.White else Color.Black)
+            if (installed) Icon(painterResource(R.drawable.ic_check_circle), stringResource(R.string.skill_installed), tint = if (isDark) Color.White else Color.Black)
         }
     }
 }
@@ -604,9 +606,9 @@ private fun RemoteSkillCard(
 private fun catalogPageCount(total: Int, pageSize: Int): Int =
     if (pageSize <= 0) 1 else ceil(total.toDouble() / pageSize).toInt().coerceAtLeast(1)
 
-private fun formatDownloadProgress(progress: RemoteSkillInstallProgress): String {
+private fun formatDownloadProgress(context: android.content.Context, progress: RemoteSkillInstallProgress): String {
     val completed = formatBytes(progress.completed)
-    return if (progress.total > 0) "正在下载仓库 $completed/${formatBytes(progress.total)}" else "正在下载仓库 $completed"
+    return if (progress.total > 0) context.getString(R.string.skill_downloading_progress, completed, formatBytes(progress.total)) else context.getString(R.string.skill_downloading, completed)
 }
 
 private fun formatBytes(value: Long): String = when {

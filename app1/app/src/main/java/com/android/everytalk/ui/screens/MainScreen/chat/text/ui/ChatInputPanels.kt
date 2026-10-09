@@ -314,7 +314,7 @@ internal fun ComputerSelectionCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Button(onClick = onAddComputer, modifier = Modifier.fillMaxWidth()) {
-                Text("添加服务器")
+                Text(stringResource(R.string.computer_audit_added))
             }
         } else {
             // 每行固定三枚等宽胶囊，多出来的自动换行；末行不足三枚时用占位补齐，保持列对齐。

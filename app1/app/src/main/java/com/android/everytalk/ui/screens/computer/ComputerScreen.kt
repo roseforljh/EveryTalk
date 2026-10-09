@@ -133,7 +133,7 @@ fun ComputerScreen(
                 val result = cloudflareOAuthFlow.consume(uri, form.id)
                 try {
                     val accounts = withContext(Dispatchers.IO) { viewModel.listCloudflareAccounts(result.accessToken) }
-                    require(accounts.isNotEmpty()) { "Cloudflare 没有可用 Account" }
+                    require(accounts.isNotEmpty()) { context.getString(R.string.cloudflare_no_accounts_short) }
                     val identity = try { withContext(Dispatchers.IO) { viewModel.cloudflareLoginIdentity(result.accessToken) } }
                     catch (cancelled: CancellationException) { throw cancelled }
                     catch (_: Exception) { null }
@@ -153,7 +153,7 @@ fun ComputerScreen(
                     result.accessToken.fill('\u0000')
                     result.refreshToken?.fill('\u0000')
                 }
-            }.onFailure { errorText = it.message ?: "Cloudflare 登录失败" }
+            }.onFailure { errorText = it.message ?: context.getString(R.string.cloudflare_login_failed) }
             isBusy = false
         }
     }
@@ -226,11 +226,11 @@ fun ComputerScreen(
 
     fun startHostKeyProbe() {
         if (form.provider == com.android.everytalk.data.computer.ComputerProvider.CLOUDFLARE) {
-            errorText = cloudflareAddError(form)
+            errorText = cloudflareAddError(form)?.let(context::getString)
             if (errorText != null) return
-            val token = cloudflareToken ?: run { errorText = "请先登录 Cloudflare"; return }
+            val token = cloudflareToken ?: run { errorText = context.getString(R.string.cloudflare_sign_in_first); return }
             val account = cloudflareAccounts.firstOrNull { it.id == form.cloudflareAccountId }
-                ?: run { errorText = "请选择 Cloudflare Account"; return }
+                ?: run { errorText = context.getString(R.string.cloudflare_select_account); return }
             isBusy = true
             scope.launch {
                 try {
@@ -238,10 +238,10 @@ fun ComputerScreen(
                     // 尚未过期的 OAuth 结果供重试，避免“界面已登录但 Token 已清零”。
                     withContext(Dispatchers.IO) { viewModel.createCloudflareComputer(form.displayName,
                         token.copy(accessToken = token.accessToken.copyOf(), refreshToken = token.refreshToken?.copyOf()), account) }
-                    viewModel.showSnackbar("Cloudflare Computer 已添加")
+                    viewModel.showSnackbar(context.getString(R.string.cloudflare_computer_added))
                     token.accessToken.fill('\u0000'); token.refreshToken?.fill('\u0000')
                     cloudflareToken = null; showAddCard = false; form = ComputerAddFormState()
-                } catch (error: Throwable) { errorText = error.message ?: "Cloudflare 保存失败" }
+                } catch (error: Throwable) { errorText = error.message ?: context.getString(R.string.cloudflare_save_failed) }
                 finally { isBusy = false }
             }
             return
@@ -478,6 +478,7 @@ fun ComputerScreen(
                         onImportExport = onImportExport,
                         onOpenComputers = { showTabMenu = false },
                         onOpenSkills = { navController.navigate(Screen.SKILL_SCREEN) { launchSingleTop = true } },
+                        onOpenAccount = { navController.navigate(Screen.ACCOUNT_SCREEN) { launchSingleTop = true } },
                         isComputerSelected = true,
                         onDismiss = { showTabMenu = false },
                     )
@@ -504,7 +505,7 @@ fun ComputerScreen(
                 cloudflareOAuthFlow.let { flow ->
                     com.android.everytalk.data.computer.CloudflareOAuthLaunchCoordinator(context, flow)
                         .launch(form.id)
-                        .onFailure { launchError -> errorText = launchError.message ?: "Cloudflare OAuth 配置错误" }
+                        .onFailure { launchError -> errorText = launchError.message ?: context.getString(R.string.cloudflare_oauth_config_error) }
                 }
             },
             onCloudflareAccountSelected = { id, name -> form = form.copy(cloudflareAccountId = id, cloudflareAccountName = name) },

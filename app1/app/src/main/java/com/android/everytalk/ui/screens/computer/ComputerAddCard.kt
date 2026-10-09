@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.screens.computer
 
+import com.android.everytalk.util.locale.localizeUiMessage
 import android.view.WindowManager
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
@@ -201,13 +202,13 @@ internal fun ComputerAddCard(
 
                     if (form.provider == ComputerProvider.CLOUDFLARE) {
                         Text(
-                            text = if (form.cloudflareAuthorized) "已登录：${form.cloudflareIdentity ?: "身份信息暂不可用"}" else "尚未登录 Cloudflare",
+                            text = if (form.cloudflareAuthorized) stringResource(R.string.cloudflare_signed_in_as, form.cloudflareIdentity ?: stringResource(R.string.cloudflare_identity_unavailable)) else stringResource(R.string.cloudflare_not_signed_in),
                             color = contentColor,
                         )
                         if (form.cloudflareAuthorized) {
                             // 只报数量，不铺开 17 条 scope 原文。
                             Text(
-                                text = "授权范围：已授予 ${form.cloudflareScopes.size} 项权限",
+                                text = stringResource(R.string.cloudflare_granted_scopes, form.cloudflareScopes.size),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = contentColor.copy(alpha = 0.7f),
                             )
@@ -223,9 +224,9 @@ internal fun ComputerAddCard(
                                 disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
                                 disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
                             ),
-                        ) { Text(if (form.cloudflareAuthorized) "重新登录" else "登录 Cloudflare") }
+                        ) { Text(if (form.cloudflareAuthorized) stringResource(R.string.mcp_oauth_relogin) else stringResource(R.string.cloudflare_sign_in)) }
                         if (form.cloudflareAccountName.isNotBlank()) {
-                            Text("Account：${form.cloudflareAccountName}", color = contentColor, modifier = Modifier.padding(top = 10.dp))
+                            Text(stringResource(R.string.cloudflare_account_value, form.cloudflareAccountName), color = contentColor, modifier = Modifier.padding(top = 10.dp))
                         }
                         // 只有一个 Account 且已经选中时不再摆一个没有选择余地的按钮。
                         if (cloudflareAccounts.size > 1 || form.cloudflareAccountId.isBlank()) {
@@ -410,7 +411,7 @@ internal fun ComputerAddCard(
                     }
                     if (errorText != null) {
                         Text(
-                            text = errorText,
+                            text = androidx.compose.ui.platform.LocalContext.current.localizeUiMessage(errorText),
                             color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodyMedium,
                             modifier = Modifier.padding(bottom = 12.dp),

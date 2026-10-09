@@ -69,6 +69,59 @@ class AppLanguageConfigurationTest {
         assertTrue(chineseVoiceStrings.getValue("voice_mode_prompt").contains("标准中文"))
     }
 
+    @Test
+    fun `中英文格式参数一致且资源不重复或为空`() {
+        val english = resourceValues(mainFile("res/values/strings.xml"))
+        val chinese = resourceValues(mainFile("res/values-zh/strings.xml"))
+        assertEquals(english.keys, chinese.keys)
+        english.forEach { (name, values) ->
+            val expected = formatArguments(values.first())
+            (values + chinese.getValue(name)).forEach { value ->
+                assertTrue("$name 不能为空", value.isNotBlank())
+                assertEquals("$name 的格式参数不一致", expected, formatArguments(value))
+            }
+        }
+    }
+
+    @Test
+    fun `全部界面的固定显示文案不得直接写中文`() {
+        val uiRoot = requireNotNull(mainFile("java/com/android/everytalk/ui/screens/skill/SkillScreen.kt")
+            .parentFile?.parentFile?.parentFile)
+        // 只检查显示入口，代码中的兼容标签、日志和动画调试名称不属于显示文案。
+        val displayLiteral = Regex("""(?:Text\s*\(\s*|(?:text|contentDescription|placeholder)\s*=\s*)"[^"\r\n]*[\u4e00-\u9fff][^"\r\n]*"""")
+        val violations = uiRoot.walkTopDown().filter { it.extension == "kt" }.flatMap { file ->
+            val source = file.readText()
+                .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), "")
+                .replace(Regex("""(?m)^\s*//.*$"""), "")
+            displayLiteral.findAll(source).map { "${file.name}: ${it.value}" }
+        }.toList()
+        assertTrue(violations.joinToString("\n"), violations.isEmpty())
+    }
+
+    private fun resourceValues(file: File): Map<String, List<String>> {
+        val root = parseXml(file).documentElement
+        val values = linkedMapOf<String, List<String>>()
+        for (index in 0 until root.childNodes.length) {
+            val element = root.childNodes.item(index) as? Element ?: continue
+            if (element.tagName !in setOf("string", "plurals")) continue
+            val key = "${element.tagName}:${element.getAttribute("name")}"
+            val translations = if (element.tagName == "string") listOf(element.textContent) else {
+                val items = element.getElementsByTagName("item")
+                val quantities = (0 until items.length).map { items.item(it) as Element }
+                assertTrue("$key 必须提供 other", quantities.any { it.getAttribute("quantity") == "other" })
+                assertEquals("$key 的复数项重复", quantities.size, quantities.map { it.getAttribute("quantity") }.toSet().size)
+                quantities.map { it.textContent }
+            }
+            assertFalse("资源名称重复：$key", values.containsKey(key))
+            values[key] = translations
+        }
+        return values
+    }
+
+    private fun formatArguments(value: String): List<String> =
+        Regex("""%(?:\d+\$)?[-+0, (#]*\d*(?:\.\d+)?[a-zA-Z]""")
+            .findAll(value).map { it.value }.sorted().toList()
+
     private fun localizedResourceNames(file: File): Set<String> {
         val document = parseXml(file)
         return listOf("string", "plurals").flatMap { tag ->

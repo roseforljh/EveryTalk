@@ -290,7 +290,7 @@ fun ChatInputArea(
                 if (failure is CancellationException) throw failure
                 // 授权失败不解决 Suspension。用户可以重新点按钮，重新生成 state/verifier。
                 cloudflareReauthRunning = false
-                onShowSnackbar(failure.message ?: "Cloudflare 重新授权失败，请重试")
+                onShowSnackbar(failure.message ?: context.getString(R.string.cloudflare_reauthorization_failed))
             }
         }
     }
@@ -298,13 +298,13 @@ fun ChatInputArea(
     fun startCloudflareReauthorization(pending: PendingIntervention) {
         val computerId = pending.parameters["computer_id"]?.takeIf(String::isNotBlank)
         if (computerId == null) {
-            onShowSnackbar("Cloudflare 重新授权目标无效")
+            onShowSnackbar(context.getString(R.string.cloudflare_reauthorization_invalid))
             return
         }
         pendingCloudflareReauthorization = pending
         CloudflareOAuthLaunchCoordinator(context, cloudflareOAuthFlow)
             .launch("agent:${pending.suspensionId}")
-            .onFailure { failure -> onShowSnackbar(failure.message ?: "Cloudflare OAuth 配置错误") }
+            .onFailure { failure -> onShowSnackbar(failure.message ?: context.getString(R.string.cloudflare_oauth_config_error)) }
     }
 
     BackHandler(enabled = composerMode is ComposerMode.EditingPending) {
@@ -1695,7 +1695,7 @@ fun ChatInputArea(
                         withContext(Dispatchers.IO) { viewModel.selectCloudflareResource(pending, resourceId) }
                         pending.resolutionNonce?.let { viewModel.resolveIntervention(pending.suspensionId, pending.rowVersion, it) }
                     } catch (cancelled: CancellationException) { throw cancelled }
-                    catch (error: Exception) { onShowSnackbar(error.message ?: "资源选择失败，请重试") }
+                    catch (error: Exception) { onShowSnackbar(error.message ?: context.getString(R.string.agent_resource_selection_failed)) }
                 }
             },
             onReject = { pending ->
@@ -1727,7 +1727,7 @@ fun ChatInputArea(
             containerColor = dialogBg,
             titleContentColor = dialogContent,
             textContentColor = dialogContent,
-            title = { Text("开启 Agent？", fontWeight = FontWeight.Bold) },
+            title = { Text(stringResource(R.string.agent_enable_approval_title), fontWeight = FontWeight.Bold) },
             text = { Text(request.reason) },
             confirmButton = {
                 Button(
@@ -1765,7 +1765,7 @@ fun ChatInputArea(
                         containerColor = dialogContent,
                         contentColor = dialogBg,
                     ),
-                ) { Text("允许", fontWeight = FontWeight.SemiBold) }
+                ) { Text(stringResource(R.string.action_allow), fontWeight = FontWeight.SemiBold) }
             },
             dismissButton = {
                 OutlinedButton(
@@ -1783,7 +1783,7 @@ fun ChatInputArea(
                         contentColor = dialogContent,
                     ),
                     border = BorderStroke(1.dp, dialogBorder),
-                ) { Text("拒绝", fontWeight = FontWeight.SemiBold) }
+                ) { Text(stringResource(R.string.agent_host_command_reject), fontWeight = FontWeight.SemiBold) }
             },
         )
     }
@@ -1803,16 +1803,16 @@ fun ChatInputArea(
             textContentColor = dialogContent,
             title = {
                 Text(
-                    if (request.scope == com.android.everytalk.data.agent.SecretScope.SKILL) "提供 Skill 密钥？"
-                    else "提供受保护 Secret？",
+                    if (request.scope == com.android.everytalk.data.agent.SecretScope.SKILL) stringResource(R.string.agent_skill_secret_title)
+                    else stringResource(R.string.agent_protected_secret_title),
                     fontWeight = FontWeight.Bold,
                 )
             },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        "${request.skillName} 申请 ${request.name}" +
-                            (request.targetId?.let { "（目标：$it）" } ?: ""),
+                        stringResource(R.string.agent_secret_requested, request.skillName, request.name) +
+                            (request.targetId?.let { stringResource(R.string.agent_secret_target, it) } ?: ""),
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium,
                         color = dialogContent,
@@ -1849,8 +1849,8 @@ fun ChatInputArea(
                         )
                         Spacer(Modifier.width(4.dp))
                         Text(
-                            if (request.scope == com.android.everytalk.data.agent.SecretScope.SKILL) "记住此密钥"
-                            else "仅本次任务使用",
+                            if (request.scope == com.android.everytalk.data.agent.SecretScope.SKILL) stringResource(R.string.agent_secret_remember)
+                            else stringResource(R.string.agent_secret_this_task),
                             style = MaterialTheme.typography.bodyMedium,
                             color = dialogContent,
                         )
@@ -1877,7 +1877,7 @@ fun ChatInputArea(
                         disabledContainerColor = dialogContent.copy(alpha = 0.4f),
                         disabledContentColor = dialogBg.copy(alpha = 0.4f),
                     ),
-                ) { Text("继续", fontWeight = FontWeight.SemiBold) }
+                ) { Text(stringResource(R.string.chat_input_resume), fontWeight = FontWeight.SemiBold) }
             },
             dismissButton = {
                 OutlinedButton(
@@ -1896,7 +1896,7 @@ fun ChatInputArea(
                         contentColor = dialogContent,
                     ),
                     border = BorderStroke(1.dp, dialogBorder),
-                ) { Text("拒绝", fontWeight = FontWeight.SemiBold) }
+                ) { Text(stringResource(R.string.agent_host_command_reject), fontWeight = FontWeight.SemiBold) }
             },
         )
     }
@@ -1985,7 +1985,7 @@ private fun EmptySkillSlashRow() {
         )
         Spacer(Modifier.width(9.dp))
         Text(
-            text = "暂无 Skill",
+            text = stringResource(R.string.skill_no_suggestions),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

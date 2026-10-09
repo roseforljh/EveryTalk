@@ -1,5 +1,7 @@
 package com.android.everytalk.ui.screens.computer
 
+import com.android.everytalk.util.locale.localizeUiMessage
+import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -53,6 +55,7 @@ import kotlinx.coroutines.flow.collectLatest
 import org.koin.java.KoinJavaComponent
 import io.ktor.client.HttpClient
 import com.android.everytalk.BuildConfig
+import com.android.everytalk.R
 
 /** Cloudflare 专用详情，账号选择只能来自可信 API，页面不持有 Token、不调用 SSH 维护操作。 */
 @Composable
@@ -99,7 +102,7 @@ internal fun CloudflareComputerDetail(
     fun openExternalUrl(url: String) {
         runCatching {
             context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-        }.onFailure { temporaryError = "无法打开链接：${it.message ?: "系统没有可用浏览器"}" }
+        }.onFailure { temporaryError = context.getString(R.string.cloudflare_open_link_failed, it.message ?: context.getString(R.string.cloudflare_no_browser)) }
     }
 
     fun temporaryAction(block: suspend () -> Unit) {
@@ -116,7 +119,7 @@ internal fun CloudflareComputerDetail(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
-                temporaryError = failure.message ?: "临时 Worker 操作失败，请重试"
+                temporaryError = failure.message ?: context.getString(R.string.cloudflare_temporary_action_failed)
             } finally {
                 temporaryBusy = false
             }
@@ -130,7 +133,7 @@ internal fun CloudflareComputerDetail(
         scope.launch {
             try { block() }
             catch (cancelled: CancellationException) { throw cancelled }
-            catch (failure: Exception) { error = failure.message ?: "Cloudflare 操作失败，请重试" }
+            catch (failure: Exception) { error = failure.message ?: context.getString(R.string.cloudflare_action_failed) }
             finally { busy = false }
         }
     }
@@ -138,7 +141,7 @@ internal fun CloudflareComputerDetail(
     LaunchedEffect(computer.id, computer.status, workspaces) {
         try { reload() }
         catch (cancelled: CancellationException) { throw cancelled }
-        catch (failure: Exception) { error = failure.message ?: "读取 Cloudflare 配置失败" }
+        catch (failure: Exception) { error = failure.message ?: context.getString(R.string.cloudflare_load_failed) }
     }
     LaunchedEffect(computer.id) {
         // consume 会更新同一个 StateFlow；collectLatest 会在这里取消尚未完成的重新授权。
@@ -166,7 +169,7 @@ internal fun CloudflareComputerDetail(
             Modifier.padding(insets).padding(horizontal = 20.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            TextButton(onClick = { navController.popBackStack() }) { Text("返回") }
+            TextButton(onClick = { navController.popBackStack() }) { Text(stringResource(R.string.account_back)) }
             Text(computer.displayName, style = MaterialTheme.typography.headlineSmall)
             Text("Cloudflare Computer", style = MaterialTheme.typography.labelLarge)
             val authorization = details?.authorization
@@ -176,50 +179,50 @@ internal fun CloudflareComputerDetail(
             }
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    CloudflareInfoRow("连接状态", computer.status.name)
-                    CloudflareInfoRow("授权", when {
-                        authorization == null -> "需要登录"
-                        authorization.revoked -> "已退出登录"
-                        authorization.expiresAt?.let { it <= System.currentTimeMillis() } == true -> "已过期，需要重新授权"
-                        else -> "已授权"
+                    CloudflareInfoRow(stringResource(R.string.cloudflare_connection_status), stringResource(com.android.everytalk.ui.screens.MainScreen.chat.text.ui.computerStatusLabelRes(computer)))
+                    CloudflareInfoRow(stringResource(R.string.cloudflare_authorization), when {
+                        authorization == null -> stringResource(R.string.cloudflare_login_required)
+                        authorization.revoked -> stringResource(R.string.cloudflare_logged_out)
+                        authorization.expiresAt?.let { it <= System.currentTimeMillis() } == true -> stringResource(R.string.cloudflare_auth_expired)
+                        else -> stringResource(R.string.cloudflare_authorized)
                     })
-                    CloudflareInfoRow("登录身份", authorization?.identityDisplayName ?: "暂不可用")
-                    if (grantedScopeCount > 0) CloudflareInfoRow("授权范围", "已授予 $grantedScopeCount 项")
+                    CloudflareInfoRow(stringResource(R.string.cloudflare_identity), authorization?.identityDisplayName ?: stringResource(R.string.cloudflare_unavailable))
+                    if (grantedScopeCount > 0) CloudflareInfoRow(stringResource(R.string.cloudflare_scopes), stringResource(R.string.cloudflare_scope_count, grantedScopeCount))
                     // 只有真的有部署或探测记录时才占版面，没记录不再铺一行“暂无”。
-                    deployments.firstOrNull()?.status?.let { CloudflareInfoRow("最近部署", it) }
+                    deployments.firstOrNull()?.status?.let { CloudflareInfoRow(stringResource(R.string.cloudflare_recent_deployments), localizedCloudflareStatus(it)) }
                     details?.latestHealth?.let { health ->
                         CloudflareInfoRow(
-                            "运行时",
-                            "${health.status}，HTTP ${health.httpStatus ?: "—"}，${health.latencyMs ?: "—"} ms",
+                            stringResource(R.string.cloudflare_runtime),
+                            "${localizedCloudflareStatus(health.status)} · HTTP ${health.httpStatus ?: "—"} · ${health.latencyMs ?: "—"} ms",
                         )
                     }
                 }
             }
             if (busy) CircularProgressIndicator(Modifier.size(24.dp))
-            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            error?.let { Text(context.localizeUiMessage(it), color = MaterialTheme.colorScheme.error) }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
                 Button(
                     onClick = {
                         runCatching { CloudflareOAuthLaunchCoordinator(context, oauthFlow).launch(oauthBinding).getOrThrow() }
-                            .onFailure { error = it.message ?: "Cloudflare OAuth 配置错误" }
+                            .onFailure { error = it.message ?: context.getString(R.string.cloudflare_oauth_config_error) }
                     },
                     enabled = !busy,
                     modifier = Modifier.weight(1f),
-                ) { Text(if (authorization == null) "登录 Cloudflare" else "重新授权") }
+                ) { Text(if (authorization == null) stringResource(R.string.cloudflare_sign_in) else stringResource(R.string.cloudflare_reauthorize)) }
                 OutlinedButton(
                     onClick = { perform { reload() } },
                     enabled = !busy,
                     modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                ) { Text("刷新") }
+                ) { Text(stringResource(R.string.action_refresh)) }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
                 OutlinedButton(
                     onClick = {
                         perform {
                             val available = withContext(Dispatchers.IO) { viewModel.listCloudflareComputerAccounts(computer.id) }
-                            check(available.isNotEmpty()) { "当前身份没有可用 Account" }
+                            check(available.isNotEmpty()) { context.getString(R.string.cloudflare_no_accounts) }
                             selectedAccount = null
                             accounts = available
                         }
@@ -228,21 +231,21 @@ internal fun CloudflareComputerDetail(
                     modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                ) { Text("切换 Account") }
+                ) { Text(stringResource(R.string.cloudflare_switch_account)) }
                 OutlinedButton(
                     onClick = { pendingAction = "logout" },
                     enabled = !busy,
                     modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                ) { Text("退出登录") }
+                ) { Text(stringResource(R.string.account_logout)) }
             }
             TextButton(
                 onClick = { pendingAction = "delete" },
                 enabled = !busy,
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
-            ) { Text("删除本地 Computer") }
+            ) { Text(stringResource(R.string.cloudflare_delete_local)) }
             ComputerPermissionSettingsCard(
                 computer = computer,
                 busyAction = if (busy) "permission-mode" else null,
@@ -260,11 +263,11 @@ internal fun CloudflareComputerDetail(
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Temporary Worker", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "把当前 Cloudflare Workspace 临时部署为可测试 URL；它不创建正式 Computer。",
+                        stringResource(R.string.cloudflare_temporary_description),
                         style = MaterialTheme.typography.bodySmall,
                     )
                     if (workspaces.isEmpty()) {
-                        Text("当前没有可用的本地 Workspace。先在会话中使用此 Cloudflare Computer 创建 Workspace。", style = MaterialTheme.typography.bodySmall)
+                        Text(stringResource(R.string.cloudflare_workspace_empty), style = MaterialTheme.typography.bodySmall)
                     } else {
                         Button(
                             onClick = {
@@ -273,9 +276,9 @@ internal fun CloudflareComputerDetail(
                                 temporaryError = null
                             },
                             enabled = !temporaryBusy,
-                        ) { Text("创建临时 Worker") }
+                        ) { Text(stringResource(R.string.cloudflare_create_temporary)) }
                     }
-                    temporaryError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    temporaryError?.let { Text(context.localizeUiMessage(it), color = MaterialTheme.colorScheme.error) }
                     temporaryWorkers.forEach { deployment ->
                         TemporaryWorkerCard(
                             deployment = deployment,
@@ -299,14 +302,14 @@ internal fun CloudflareComputerDetail(
                 }
             }
             if (deployments.isNotEmpty()) {
-                Text("最近部署", style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(R.string.cloudflare_recent_deployments), style = MaterialTheme.typography.titleMedium)
                 deployments.forEach { deployment ->
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(12.dp)) {
                             Text(deployment.workerName)
-                            Text("状态：${deployment.status}")
-                            Text(deployment.safeSummary ?: "无摘要", style = MaterialTheme.typography.bodySmall)
-                            deployment.versionId?.let { Text("版本：$it", style = MaterialTheme.typography.bodySmall) }
+                            Text(stringResource(R.string.cloudflare_deployment_status, localizedCloudflareStatus(deployment.status)))
+                            Text(deployment.safeSummary?.let(context::localizeUiMessage) ?: stringResource(R.string.cloudflare_no_summary), style = MaterialTheme.typography.bodySmall)
+                            deployment.versionId?.let { Text(stringResource(R.string.about_version, it), style = MaterialTheme.typography.bodySmall) }
                         }
                     }
                 }
@@ -320,7 +323,7 @@ internal fun CloudflareComputerDetail(
             onDismissRequest = { if (!busy) accounts = null },
             shape = AppDialogShape, containerColor = appDialogContainerColor(),
             titleContentColor = appDialogContentColor(), textContentColor = appDialogContentColor(),
-            title = { Text("选择 Cloudflare Account") },
+            title = { Text(stringResource(R.string.cloudflare_choose_account)) },
             text = {
                 Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
                     available.forEach { account ->
@@ -328,7 +331,7 @@ internal fun CloudflareComputerDetail(
                             Text((if (selectedAccount == account.id) "✓ " else "") + account.name)
                         }
                     }
-                    error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    error?.let { Text(context.localizeUiMessage(it), color = MaterialTheme.colorScheme.error) }
                 }
             },
             confirmButton = {
@@ -339,9 +342,9 @@ internal fun CloudflareComputerDetail(
                         reload()
                         accounts = null
                     }
-                }, enabled = !busy && selectedAccount != null) { Text("确认切换") }
+                }, enabled = !busy && selectedAccount != null) { Text(stringResource(R.string.cloudflare_confirm_switch)) }
             },
-            dismissButton = { TextButton(onClick = { accounts = null }, enabled = !busy) { Text("取消") } },
+            dismissButton = { TextButton(onClick = { accounts = null }, enabled = !busy) { Text(stringResource(R.string.account_cancel)) } },
         )
     }
 
@@ -350,8 +353,8 @@ internal fun CloudflareComputerDetail(
             onDismissRequest = { if (!busy) pendingAction = null },
             shape = AppDialogShape, containerColor = appDialogContainerColor(),
             titleContentColor = appDialogContentColor(), textContentColor = appDialogContentColor(),
-            title = { Text(if (action == "logout") "退出 Cloudflare 登录" else "删除本地 Computer") },
-            text = { Text(if (action == "logout") "清除本机授权，共用此授权的连接将需要重新登录。云端资源保留。" else "删除本机连接和绑定，云端资源保留。") },
+            title = { Text(if (action == "logout") stringResource(R.string.cloudflare_logout_title) else stringResource(R.string.cloudflare_delete_local)) },
+            text = { Text(if (action == "logout") stringResource(R.string.cloudflare_logout_description) else stringResource(R.string.cloudflare_delete_description)) },
             confirmButton = {
                 Button(onClick = {
                     perform {
@@ -362,9 +365,9 @@ internal fun CloudflareComputerDetail(
                         pendingAction = null
                         if (action == "delete") navController.popBackStack() else reload()
                     }
-                }, enabled = !busy) { Text("确认") }
+                }, enabled = !busy) { Text(stringResource(R.string.action_confirm)) }
             },
-            dismissButton = { TextButton(onClick = { pendingAction = null }, enabled = !busy) { Text("取消") } },
+            dismissButton = { TextButton(onClick = { pendingAction = null }, enabled = !busy) { Text(stringResource(R.string.account_cancel)) } },
         )
     }
 
@@ -385,10 +388,10 @@ internal fun CloudflareComputerDetail(
             containerColor = appDialogContainerColor(),
             titleContentColor = appDialogContentColor(),
             textContentColor = appDialogContentColor(),
-            title = { Text("选择部署 Workspace") },
+            title = { Text(stringResource(R.string.cloudflare_choose_workspace)) },
             text = {
                 Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
-                    Text("Temporary Worker 会读取所选 App 私有 Workspace，先执行入口、敏感文件和大小检查。", style = MaterialTheme.typography.bodySmall)
+                    Text(stringResource(R.string.cloudflare_workspace_checks), style = MaterialTheme.typography.bodySmall)
                     Spacer(Modifier.height(8.dp))
                     workspaces.forEach { workspace ->
                         TextButton(
@@ -411,10 +414,10 @@ internal fun CloudflareComputerDetail(
                         }
                     },
                     enabled = !temporaryBusy && selectedTemporaryWorkspace != null,
-                ) { Text("创建") }
+                ) { Text(stringResource(R.string.action_create)) }
             },
             dismissButton = {
-                TextButton(onClick = { temporaryWorkspaceDialogVisible = false }, enabled = !temporaryBusy) { Text("取消") }
+                TextButton(onClick = { temporaryWorkspaceDialogVisible = false }, enabled = !temporaryBusy) { Text(stringResource(R.string.account_cancel)) }
             },
         )
     }
@@ -439,10 +442,11 @@ private fun CloudflareInfoRow(label: String, value: String) {
 }
 
 /** Cloudflare 没有容器和端口，权限模式说明要用云端写入来解释，不能复用 VPS 的容器文案。 */
+@Composable
 private fun cloudflarePermissionSummary(mode: ComputerPermissionMode): String = when (mode) {
-    ComputerPermissionMode.MANUAL -> "云端写操作（部署、删除、D1/KV/R2 写入等）会先请你确认；读取直接执行。"
-    ComputerPermissionMode.SMART -> "由模型判断哪些云端写操作需要你确认；读取直接执行。"
-    ComputerPermissionMode.FULL -> "所有合法操作直接执行，不再弹确认。"
+    ComputerPermissionMode.MANUAL -> stringResource(R.string.cloudflare_permission_manual)
+    ComputerPermissionMode.SMART -> stringResource(R.string.cloudflare_permission_smart)
+    ComputerPermissionMode.FULL -> stringResource(R.string.cloudflare_permission_full)
 }
 
 /** Temporary Worker 的状态和可恢复操作集中显示，避免用户误以为它已经成为正式 Computer。 */
@@ -458,26 +462,50 @@ private fun TemporaryWorkerCard(
 ) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("${workspace?.id ?: deployment.sourceWorkspaceId} · ${deployment.claimStatus}")
+            Text("${workspace?.id ?: deployment.sourceWorkspaceId} · ${localizedCloudflareStatus(deployment.claimStatus.name)}")
             deployment.workerUrl?.let { url ->
                 Text(url, style = MaterialTheme.typography.bodySmall)
-                TextButton(onClick = onOpenWorker, enabled = !busy) { Text("打开 Worker URL") }
+                TextButton(onClick = onOpenWorker, enabled = !busy) { Text(stringResource(R.string.cloudflare_open_worker)) }
             }
-            Text("过期时间：${java.text.DateFormat.getDateTimeInstance().format(java.util.Date(deployment.expiresAt))}", style = MaterialTheme.typography.bodySmall)
+            Text(stringResource(R.string.cloudflare_expires, java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.DEFAULT, java.text.DateFormat.DEFAULT, androidx.compose.ui.platform.LocalConfiguration.current.locales[0]).format(java.util.Date(deployment.expiresAt))), style = MaterialTheme.typography.bodySmall)
             when (deployment.claimStatus) {
                 TemporaryWorkerStatus.ACTIVE -> {
-                    Text("Claim 会打开外部登录页面；完成登录后返回此处点击完成 Claim。", style = MaterialTheme.typography.bodySmall)
-                    TextButton(onClick = onStartClaim, enabled = !busy) { Text("开始 Claim") }
+                    Text(stringResource(R.string.cloudflare_claim_description), style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = onStartClaim, enabled = !busy) { Text(stringResource(R.string.cloudflare_start_claim)) }
                 }
                 TemporaryWorkerStatus.CLAIM_PENDING -> {
-                    TextButton(onClick = onCompleteClaim, enabled = !busy) { Text("完成 Claim") }
-                    TextButton(onClick = onCancelClaim, enabled = !busy) { Text("取消 Claim") }
+                    TextButton(onClick = onCompleteClaim, enabled = !busy) { Text(stringResource(R.string.cloudflare_complete_claim)) }
+                    TextButton(onClick = onCancelClaim, enabled = !busy) { Text(stringResource(R.string.cloudflare_cancel_claim)) }
                 }
-                TemporaryWorkerStatus.FAILED -> Text("创建失败，可重新选择 Workspace 重试。", style = MaterialTheme.typography.bodySmall)
-                TemporaryWorkerStatus.EXPIRED -> Text("已过期，请重新创建。", style = MaterialTheme.typography.bodySmall)
-                TemporaryWorkerStatus.CLAIMED -> Text("已 Claim；请在 Cloudflare Account 中继续管理该资源。", style = MaterialTheme.typography.bodySmall)
-                TemporaryWorkerStatus.CREATING -> Text("正在创建……", style = MaterialTheme.typography.bodySmall)
+                TemporaryWorkerStatus.FAILED -> Text(stringResource(R.string.cloudflare_temporary_failed), style = MaterialTheme.typography.bodySmall)
+                TemporaryWorkerStatus.EXPIRED -> Text(stringResource(R.string.cloudflare_temporary_expired), style = MaterialTheme.typography.bodySmall)
+                TemporaryWorkerStatus.CLAIMED -> Text(stringResource(R.string.cloudflare_temporary_claimed), style = MaterialTheme.typography.bodySmall)
+                TemporaryWorkerStatus.CREATING -> Text(stringResource(R.string.cloudflare_creating), style = MaterialTheme.typography.bodySmall)
             }
         }
     }
+}
+
+/** 云端状态码保持原样存储，仅在界面转换为本地化标签；未知状态保留供排查。 */
+@Composable
+private fun localizedCloudflareStatus(status: String): String {
+    val resource = when (status) {
+        "REQUEST_NOT_SENT" -> R.string.cloudflare_status_not_sent
+        "REQUEST_ACCEPTED" -> R.string.cloudflare_status_accepted
+        "DEPLOYMENT_PENDING" -> R.string.cloudflare_status_pending
+        "DEPLOYMENT_SUCCEEDED" -> R.string.cloudflare_status_succeeded
+        "DEPLOYMENT_FAILED" -> R.string.cloudflare_status_failed
+        "RESULT_UNKNOWN" -> R.string.cloudflare_status_unknown
+        "HEALTHY" -> R.string.cloudflare_status_healthy
+        "UNHEALTHY" -> R.string.cloudflare_status_unhealthy
+        "UNKNOWN" -> R.string.cloudflare_status_unknown_runtime
+        "ACTIVE" -> R.string.agent_server_ready
+        "CLAIM_PENDING" -> R.string.cloudflare_status_claim_pending
+        "CLAIMED" -> R.string.cloudflare_status_claimed
+        "CREATING" -> R.string.computer_workspace_status_creating
+        "FAILED" -> R.string.cloudflare_status_creation_failed
+        "EXPIRED" -> R.string.cloudflare_status_expired
+        else -> null
+    }
+    return resource?.let { stringResource(it) } ?: status
 }

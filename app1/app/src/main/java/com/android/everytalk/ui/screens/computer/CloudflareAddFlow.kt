@@ -9,8 +9,9 @@ internal fun cloudflareAddState(form: ComputerAddFormState): CloudflareAddState 
     else -> CloudflareAddState.READY
 }
 
-internal fun cloudflareAddError(form: ComputerAddFormState): String? = when (cloudflareAddState(form)) {
-    CloudflareAddState.AUTH_REQUIRED -> "请先登录 Cloudflare"
-    CloudflareAddState.ACCOUNT_SELECTION_REQUIRED -> "请选择一个 Cloudflare Account"
-    CloudflareAddState.READY -> form.displayName.trim().takeIf { it.isBlank() }?.let { "请输入名称" }
+@androidx.annotation.StringRes
+internal fun cloudflareAddError(form: ComputerAddFormState): Int? = when (cloudflareAddState(form)) {
+    CloudflareAddState.AUTH_REQUIRED -> com.android.everytalk.R.string.cloudflare_sign_in_first
+    CloudflareAddState.ACCOUNT_SELECTION_REQUIRED -> com.android.everytalk.R.string.cloudflare_select_account_required
+    CloudflareAddState.READY -> form.displayName.trim().takeIf { it.isBlank() }?.let { com.android.everytalk.R.string.cloudflare_name_required }
 }

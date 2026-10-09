@@ -141,10 +141,10 @@ internal fun ChatInputDialogs(
             containerColor = dialogBg,
             titleContentColor = dialogContent,
             textContentColor = dialogContent,
-            title = { Text("开启 MCP？") },
+            title = { Text(stringResource(R.string.mcp_enable_approval_title)) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("AI 发现当前任务可能需要已配置的 MCP 工具。")
+                    Text(stringResource(R.string.mcp_enable_approval_body))
                     Text(request.reason, color = dialogContent.copy(alpha = 0.72f))
                 }
             },
@@ -153,14 +153,14 @@ internal fun ChatInputDialogs(
                     onClick = { viewModel.respondToMcpEnableApproval(request.runId, request.approvalRequestId, true) },
                     shape = AppDialogButtonShape,
                     colors = ButtonDefaults.buttonColors(containerColor = dialogContent, contentColor = dialogBg),
-                ) { Text("允许") }
+                ) { Text(stringResource(R.string.action_allow)) }
             },
             dismissButton = {
                 OutlinedButton(
                     onClick = { viewModel.respondToMcpEnableApproval(request.runId, request.approvalRequestId, false) },
                     shape = AppDialogButtonShape,
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = dialogContent),
-                ) { Text("拒绝") }
+                ) { Text(stringResource(R.string.agent_host_command_reject)) }
             },
         )
     }

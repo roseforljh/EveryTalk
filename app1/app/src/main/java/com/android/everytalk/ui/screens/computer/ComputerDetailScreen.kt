@@ -669,8 +669,8 @@ fun ComputerDetailScreen(
     if (cloudflareLocalAction != null && computer.provider == com.android.everytalk.data.computer.ComputerProvider.CLOUDFLARE) {
         AlertDialog(
             onDismissRequest = { if (busyAction == null) cloudflareLocalAction = null },
-            title = { Text(if (cloudflareLocalAction == "logout") "退出 Cloudflare 登录" else "删除本地 Cloudflare Computer") },
-            text = { Text("只清除本机授权和绑定，云端资源不会删除。") },
+            title = { Text(if (cloudflareLocalAction == "logout") stringResource(R.string.cloudflare_logout_title) else stringResource(R.string.cloudflare_delete_computer_title)) },
+            text = { Text(stringResource(R.string.cloudflare_clear_local_description)) },
             confirmButton = {
                 Button(onClick = {
                     val action = cloudflareLocalAction ?: return@Button
@@ -681,9 +681,9 @@ fun ComputerDetailScreen(
                             withContext(Dispatchers.Main) { navController.popBackStack() }
                         }
                     }
-                }, enabled = busyAction == null) { Text("确认") }
+                }, enabled = busyAction == null) { Text(stringResource(R.string.action_confirm)) }
             },
-            dismissButton = { TextButton(onClick = { cloudflareLocalAction = null }, enabled = busyAction == null) { Text("取消") } },
+            dismissButton = { TextButton(onClick = { cloudflareLocalAction = null }, enabled = busyAction == null) { Text(stringResource(R.string.account_cancel)) } },
         )
     }
 
@@ -1000,10 +1000,10 @@ private fun ComputerMoreSettingsCard(
                     HorizontalDivider()
                     if (computer.provider == com.android.everytalk.data.computer.ComputerProvider.CLOUDFLARE) {
                         OutlinedButton(onClick = onCloudflareLogout, enabled = busyAction == null, modifier = Modifier.height(48.dp)) {
-                            Text("退出 Cloudflare 登录")
+                            Text(stringResource(R.string.cloudflare_logout_title))
                         }
                         OutlinedButton(onClick = onCloudflareDeleteLocal, enabled = busyAction == null, modifier = Modifier.height(48.dp)) {
-                            Text("删除本地 Cloudflare Computer")
+                            Text(stringResource(R.string.cloudflare_delete_computer_title))
                         }
                         HorizontalDivider()
                     }

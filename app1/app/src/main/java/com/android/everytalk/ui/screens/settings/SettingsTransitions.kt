@@ -17,6 +17,6 @@ internal fun settingsMenuExitTransition(): ExitTransition =
 
 /** 仅统一设置菜单内的切换；聊天、服务器详情等页面继续使用原有导航动画。 */
 internal fun isSettingsMenuTransition(from: String?, to: String?): Boolean {
-    val routes = setOf(Screen.SETTINGS_SCREEN, Screen.COMPUTER_SCREEN, Screen.SKILL_SCREEN)
+    val routes = setOf(Screen.SETTINGS_SCREEN, Screen.COMPUTER_SCREEN, Screen.SKILL_SCREEN, Screen.ACCOUNT_SCREEN)
     return from in routes && to in routes
 }

@@ -1,5 +1,8 @@
 package com.android.everytalk.ui.screens.MainScreen.chat.text.ui
 
+import com.android.everytalk.R
+import com.android.everytalk.util.locale.localizeUiMessage
+import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -61,6 +64,7 @@ internal fun AgentInterventionDialog(
     onConfirmUnknownDelivered: (PendingIntervention) -> Unit,
     onContinueUnknown: (PendingIntervention) -> Unit,
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val dialogBg = appDialogContainerColor()
     val dialogContent = appDialogContentColor()
     val dialogBorder = appDialogBorderColor()
@@ -85,7 +89,7 @@ internal fun AgentInterventionDialog(
             selectedId = null
             try { resources = onLoadCloudflareResources(intervention) }
             catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-            catch (error: Exception) { resourceError = error.message ?: "读取资源失败" }
+            catch (error: Exception) { resourceError = error.message ?: context.getString(R.string.agent_intervention_resource_failed) }
             finally { loading = false }
         }
     }
@@ -103,7 +107,7 @@ internal fun AgentInterventionDialog(
         containerColor = dialogBg,
         titleContentColor = dialogContent,
         textContentColor = dialogContent,
-        title = { Text("需要你接力", fontWeight = FontWeight.Bold) },
+        title = { Text(stringResource(R.string.agent_intervention_title), fontWeight = FontWeight.Bold) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
@@ -125,14 +129,14 @@ internal fun AgentInterventionDialog(
                 }
                 if (requiresUserDecision) {
                     Text(
-                        text = "外部动作是否完成无法自动确认。旧密码或 OTP 已丢弃，禁止重新输入。",
+                        text = stringResource(R.string.agent_intervention_unknown),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.error,
                     )
                 } else if (isResourceSelection) {
-                    Text("请选择当前 Account 的资源。选择不会执行原工具。")
-                    if (loading) Text("正在读取资源列表…")
-                    resourceError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    Text(stringResource(R.string.agent_intervention_select_resource))
+                    if (loading) Text(stringResource(R.string.agent_intervention_loading_resources))
+                    resourceError?.let { Text(context.localizeUiMessage(it), color = MaterialTheme.colorScheme.error) }
                     Column(Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState())) {
                         resources.forEach { resource ->
                             TextButton(onClick = { selectedId = resource.id }, enabled = !loading) {
@@ -143,22 +147,22 @@ internal fun AgentInterventionDialog(
                             }
                         }
                     }
-                    if (!loading && resources.isEmpty()) Text("当前没有可选资源")
-                    TextButton(onClick = { refresh++ }, enabled = !loading) { Text("刷新资源列表") }
+                    if (!loading && resources.isEmpty()) Text(stringResource(R.string.agent_intervention_no_resources))
+                    TextButton(onClick = { refresh++ }, enabled = !loading) { Text(stringResource(R.string.agent_intervention_refresh_resources)) }
                 } else if (isCloudflareReauthorization) {
                     Text(
-                        text = "Cloudflare 授权已失效。点击下方按钮登录同一 Cloudflare Computer；原工具调用会在授权恢复后重新交给模型决定。",
+                        text = stringResource(R.string.agent_intervention_cloudflare_expired),
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 } else when (intervention.materialKind) {
                     ResolutionMaterialKind.NONE -> Text(
-                        text = field?.label ?: "确认当前操作",
+                        text = field?.label?.let(context::localizeUiMessage) ?: stringResource(R.string.agent_intervention_confirm_action),
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     ResolutionMaterialKind.EPHEMERAL -> OutlinedTextField(
                         value = sensitiveInput,
                         onValueChange = { sensitiveInput = it },
-                        label = { Text(field?.label ?: "敏感输入") },
+                        label = { Text(field?.label?.let(context::localizeUiMessage) ?: stringResource(R.string.agent_intervention_sensitive_input)) },
                         singleLine = true,
                         enabled = !submitting,
                         shape = AppDialogTextFieldShape,
@@ -169,7 +173,7 @@ internal fun AgentInterventionDialog(
                     ResolutionMaterialKind.DURABLE_REFERENCE -> OutlinedTextField(
                         value = sensitiveInput,
                         onValueChange = { sensitiveInput = it },
-                        label = { Text(field?.label ?: "授权凭据") },
+                        label = { Text(field?.label?.let(context::localizeUiMessage) ?: stringResource(R.string.agent_intervention_credentials)) },
                         singleLine = true,
                         enabled = !submitting,
                         shape = AppDialogTextFieldShape,
@@ -180,9 +184,9 @@ internal fun AgentInterventionDialog(
                 }
                 if (!submitting) {
                     val error = submissionError ?: if (intervention.state == SuspensionState.WAITING_USER_REENTRY) {
-                        "上次输入未送达，旧内容已清除，请重新输入后继续。"
+                        stringResource(R.string.agent_intervention_reenter)
                     } else null
-                    error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    error?.let { Text(context.localizeUiMessage(it), color = MaterialTheme.colorScheme.error) }
                 }
                 if (fieldKind in setOf(
                         AgentInterventionPolicyRegistry.FieldKind.SENSITIVE_TEXT,
@@ -191,9 +195,9 @@ internal fun AgentInterventionDialog(
                 ) {
                     Text(
                         text = if (fieldKind == AgentInterventionPolicyRegistry.FieldKind.AUTHORIZATION_SECRET) {
-                            "凭据会由 Android Keystore 加密保存，模型只能使用当前操作的受限能力。"
+                            stringResource(R.string.agent_intervention_secret_notice)
                         } else {
-                            "内容只交给本地可信 Adapter，不会发送给模型或写入聊天记录。"
+                            stringResource(R.string.agent_intervention_input_notice)
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = appDialogSubtextColor(0.64f),
@@ -226,12 +230,12 @@ internal fun AgentInterventionDialog(
                                     val accepted = if (intervention.materialKind == ResolutionMaterialKind.EPHEMERAL) {
                                         onResolveEphemeral(intervention, chars)
                                     } else onCreateAuthorization(intervention, chars)
-                                    if (!accepted) submissionError = "接力状态已更新，本次输入未被接收，请重新输入后继续。"
+                                    if (!accepted) submissionError = context.getString(R.string.agent_intervention_input_not_accepted)
                                 } catch (error: kotlinx.coroutines.CancellationException) {
                                     throw error
                                 } catch (_: Exception) {
                                     // 异常可能包含凭据，只展示固定错误提示。
-                                    submissionError = "接力提交未完成，请核对当前状态后重试。"
+                                    submissionError = context.getString(R.string.agent_intervention_submit_failed)
                                 } finally {
                                     chars.fill('\u0000')
                                     submitting = false
@@ -247,9 +251,9 @@ internal fun AgentInterventionDialog(
                 ),
             ) {
                 AppDialogActionContent(
-                    label = if (submitting) "正在处理" else if (requiresUserDecision) "确认已完成" else if (isCloudflareReauthorization) "重新授权" else "继续",
+                    label = if (submitting) stringResource(R.string.voice_processing) else if (requiresUserDecision) stringResource(R.string.agent_intervention_confirm_completed) else if (isCloudflareReauthorization) stringResource(R.string.cloudflare_reauthorize) else stringResource(R.string.chat_input_resume),
                     isLoading = reauthBusy || submitting,
-                    loadingContentDescription = if (submitting) "正在提交接力内容" else "正在完成 Cloudflare 重新授权",
+                    loadingContentDescription = if (submitting) stringResource(R.string.agent_intervention_submitting) else stringResource(R.string.agent_intervention_reauthorizing),
                 )
             }
         },
@@ -263,11 +267,11 @@ internal fun AgentInterventionDialog(
                         submissionError = null
                         scope.launch {
                             try {
-                                if (!onReject(intervention)) submissionError = "拒绝操作未被接收，请重试。"
+                                if (!onReject(intervention)) submissionError = context.getString(R.string.agent_intervention_reject_not_accepted)
                             } catch (error: kotlinx.coroutines.CancellationException) {
                                 throw error
                             } catch (_: Exception) {
-                                submissionError = "拒绝操作未完成，请重试。"
+                                submissionError = context.getString(R.string.agent_intervention_reject_failed)
                             } finally {
                                 submitting = false
                             }
@@ -282,7 +286,7 @@ internal fun AgentInterventionDialog(
                 border = BorderStroke(1.dp, dialogBorder),
             ) {
                 Text(
-                    if (requiresUserDecision) "保持未知并重规划" else "拒绝",
+                    if (requiresUserDecision) stringResource(R.string.agent_intervention_replan) else stringResource(R.string.agent_host_command_reject),
                     fontWeight = FontWeight.SemiBold,
                 )
             }
@@ -290,14 +294,15 @@ internal fun AgentInterventionDialog(
     )
 }
 
+@Composable
 private fun capabilityTitle(capability: String): String = when (capability) {
-    "cloudflare.reauthorize" -> "恢复 Cloudflare 授权"
-    "cloudflare.resource.select" -> "选择 Cloudflare 资源"
-    "git.push" -> "提供 Git 仓库授权"
-    "ssh.connect" -> "提供 SSH 登录能力"
-    "privilege.sudo.execute" -> "输入 sudo 密码"
-    "terminal.interaction" -> "接管终端输入"
-    "server.restart.confirm" -> "确认服务器操作"
-    "skill.openai_api_access" -> "提供 API 授权"
-    else -> "提供执行能力"
+    "cloudflare.reauthorize" -> stringResource(R.string.agent_capability_cloudflare)
+    "cloudflare.resource.select" -> stringResource(R.string.agent_capability_resource)
+    "git.push" -> stringResource(R.string.agent_capability_git)
+    "ssh.connect" -> stringResource(R.string.agent_capability_ssh)
+    "privilege.sudo.execute" -> stringResource(R.string.agent_capability_sudo)
+    "terminal.interaction" -> stringResource(R.string.agent_capability_terminal)
+    "server.restart.confirm" -> stringResource(R.string.agent_capability_server)
+    "skill.openai_api_access" -> stringResource(R.string.agent_capability_api)
+    else -> stringResource(R.string.agent_capability_default)
 }
