@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.30.0](https://github.com/roseforljh/EveryTalk/compare/v1.29.0...v1.30.0) (2026-10-09)
+
+
+### Features
+
+* 接入账号登录认证体系与账户管理页面 ([bf36cd2](https://github.com/roseforljh/EveryTalk/commit/bf36cd270a4fc7d07ea8b25c24df4dc6c93c35c0))
+
+
+### Bug Fixes
+
+* 完善多语言国际化文案适配与本地化提示解析机制 ([b58af3c](https://github.com/roseforljh/EveryTalk/commit/b58af3cea612c4f9433828d6d36cfece0e70047c))
+
 ## [1.29.0](https://github.com/roseforljh/EveryTalk/compare/v1.28.1...v1.29.0) (2026-10-04)
 
 
