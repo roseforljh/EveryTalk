@@ -49,8 +49,6 @@ app1/.claude/
 app1/captures/
 app1/.externalNativeBuild/
 app1/.cxx/
-app1/graphify-out/cache/
-app1/app/src/main/java/**/graphify-out/
 app1/**/node_modules/
 
 # ===== 允许的 Android 源代码和资源 =====
@@ -87,6 +85,7 @@ docs/plans/*
 !docs/plans/2026-06-19-gpt-level-native-markdown-renderer.md
 !docs/plans/Markdown与MathJax统一渲染方案.md
 !docs/plans/动态系统提示词路由方案.md
+!docs/plans/2026-10-09-账号登录接入与验收.md
 !app1/*.md
 !app1/preview/
 !app1/preview/**

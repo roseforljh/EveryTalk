@@ -3,6 +3,7 @@ object Screen {
     const val HOME_SCREEN = "home_screen"
     const val CHAT_SCREEN = "chat_screen"
     const val SETTINGS_SCREEN = "settings_screen"
+    const val ACCOUNT_SCREEN = "account_screen"
     const val COMPUTER_SCREEN = "computer_screen"
     const val COMPUTER_DETAIL_SCREEN = "computer_detail/{computerId}"
     const val SKILL_SCREEN = "skill_screen"

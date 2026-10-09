@@ -123,6 +123,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     /** 设置、Computer 详情和聊天页共用一份 OAuth 草稿，避免 PKCE verifier 丢失。 */
     val cloudflareOAuthStore: CloudflareSettingsOAuthStore = CloudflareSettingsOAuthStore()
 
+    /** EveryTalk 会员身份独立于模型配置、MCP 授权和 Computer 账号。 */
+    internal val accountManager = com.android.everytalk.data.account.AccountManager.create(application, viewModelScope)
+
     internal val json = Json {
         prettyPrint = true
         isLenient = true
@@ -1297,6 +1300,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
      */
 
    override fun onCleared() {
+       accountManager.close()
        cloudflareOAuthStore.clear()
        (localBashRuntime as? AutoCloseable)?.close()
         AgentToolExecutorRegistry.clear(mcpToolExecutorOwner)

@@ -21,6 +21,11 @@ keyPassword=your_key_password
 ## 直连模式 API 配置
 ## ============================================
 
+## EveryTalk 账号认证（Supabase 项目根地址与公开 publishable key，旧版 anon key 也可用）
+## 不得填写 service_role / sb_secret_ 密钥，也不要把 Google Client Secret 放入 APK。
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_PUBLISHABLE_KEY=sb_publishable_your-public-client-key
+
 ## Google Gemini API
 GOOGLE_API_KEY=your-google-api-key
 GOOGLE_API_BASE_URL=https://generativelanguage.googleapis.com

@@ -3,6 +3,7 @@ import java.util.Properties
 import java.io.FileInputStream
 import java.io.File
 import java.security.MessageDigest
+import java.util.Base64
 
 // Function to safely load properties from a file
 fun loadProperties(project: Project): Properties {
@@ -82,6 +83,22 @@ plugins {
     // alias(libs.plugins.hilt.android)
 }
 
+// 在生成 BuildConfig 前拒绝管理员密钥，不能等 APK 安装后才检查，避免密钥已经进入产物。
+val accountPublicKey = getConfigValue("SUPABASE_PUBLISHABLE_KEY")
+if (accountPublicKey.isNotBlank()) {
+    val isAnon = runCatching {
+        val parts = accountPublicKey.split('.')
+        if (parts.size != 3) false else {
+            val payload = Base64.getUrlDecoder().decode(parts[1]).toString(Charsets.UTF_8)
+            (groovy.json.JsonSlurper().parseText(payload) as? Map<*, *>)?.get("role") == "anon"
+        }
+    }.getOrDefault(false)
+    require(accountPublicKey.length in 20..4096 && accountPublicKey.none(Char::isWhitespace) &&
+        (accountPublicKey.startsWith("sb_publishable_") || isAnon)) {
+        "SUPABASE_PUBLISHABLE_KEY 只能填写公开 publishable key 或 anon key，禁止使用管理员密钥"
+    }
+}
+
 android {
     namespace = "com.android.everytalk"
     compileSdk = 37
@@ -105,6 +122,9 @@ android {
         buildConfigField("String", "GITHUB_MCP_OAUTH_CLIENT_ID", "\"${getConfigValue("GITHUB_MCP_OAUTH_CLIENT_ID")}\"")
         buildConfigField("String", "GMAIL_MCP_OAUTH_CLIENT_ID", "\"${getConfigValue("GMAIL_MCP_OAUTH_CLIENT_ID")}\"")
         buildConfigField("String", "MICROSOFT_MCP_OAUTH_CLIENT_ID", "\"${getConfigValue("MICROSOFT_MCP_OAUTH_CLIENT_ID")}\"")
+        // 账号认证只注入公开配置；Supabase 管理员 Key 和 Google Secret 留在服务端。
+        buildConfigField("String", "SUPABASE_URL", "\"${getConfigValue("SUPABASE_URL")}\"")
+        buildConfigField("String", "SUPABASE_PUBLISHABLE_KEY", "\"$accountPublicKey\"")
         // 默认协议头，各构建变体可覆盖
         manifestPlaceholders["appOAuthScheme"] = "everytalk"
         buildConfigField("String", "APP_OAUTH_SCHEME", "\"everytalk\"")

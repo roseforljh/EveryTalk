@@ -477,6 +477,7 @@ fun SettingsScreen(
                                     showTabMenu = false
                                 },
                                 onImportExport = onImportExport,
+                                onOpenAccount = { navController.navigate(Screen.ACCOUNT_SCREEN) { launchSingleTop = true } },
                                 onOpenComputers = {
                                     showTabMenu = false
                                     navController.navigate(Screen.COMPUTER_SCREEN) { launchSingleTop = true }
@@ -541,6 +542,7 @@ fun SettingsScreen(
                                 currentTabIndex = -1,
                                 onTabSelected = { showTabMenu = false },
                                 onImportExport = onImportExport,
+                                onOpenAccount = { navController.navigate(Screen.ACCOUNT_SCREEN) { launchSingleTop = true } },
                                 onOpenComputers = {
                                     showTabMenu = false
                                     navController.navigate(Screen.COMPUTER_SCREEN) { launchSingleTop = true }
@@ -800,6 +802,7 @@ internal fun SettingsTabMenu(
     onImportExport: () -> Unit,
     onOpenComputers: () -> Unit,
     onOpenSkills: () -> Unit,
+    onOpenAccount: () -> Unit,
     isComputerSelected: Boolean = false,
     isSkillSelected: Boolean = false,
     onDismiss: () -> Unit
@@ -820,6 +823,13 @@ internal fun SettingsTabMenu(
         Column(
             modifier = Modifier.padding(vertical = 6.dp)
         ) {
+            Box(
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                    .clickable { onOpenAccount(); onDismiss() }.padding(horizontal = 14.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(stringResource(R.string.account_title), fontSize = 16.sp, color = textColor)
+            }
             // 菜单顺序与设置页页签一致，服务器入口固定紧跟 MCP。
             tabs.forEachIndexed { index, title ->
                 val isSelected = index == currentTabIndex
@@ -893,7 +903,7 @@ internal fun SettingsTabMenu(
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = "技能",
+                    text = stringResource(R.string.settings_skills),
                     fontSize = 16.sp,
                     fontWeight = if (isSkillSelected) FontWeight.SemiBold else FontWeight.Medium,
                     color = textColor,

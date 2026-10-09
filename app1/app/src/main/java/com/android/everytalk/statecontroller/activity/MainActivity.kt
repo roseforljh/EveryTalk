@@ -136,6 +136,8 @@ class MainActivity : AppCompatActivity() {
 
     private var fileContentToSave: String? = null
     private lateinit var appViewModel: AppViewModel
+    /** 浏览器回调只请求打开账户页；是否登录成功仍由认证层核验。 */
+    private var openAccountAfterCallback by mutableStateOf(false)
     private val createDocument = registerForActivityResult(ActivityResultContracts.CreateDocument("text/markdown")) { uri ->
         val content = fileContentToSave.also { fileContentToSave = null }
         if (uri != null && content != null) {
@@ -159,6 +161,9 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         intent.data?.let(com.android.everytalk.data.computer.CloudflareOAuthCallbackBus::publish)
         intent.data?.let(com.android.everytalk.data.mcp.McpOAuthCallbackBus::publish)
+        intent.data?.let { uri ->
+            if (com.android.everytalk.data.account.AccountOAuthCallbackBus.publish(uri)) openAccountAfterCallback = true
+        }
         
         // 异步初始化ProfileInstaller
         lifecycleScope.launch(Dispatchers.IO) {
@@ -213,6 +218,14 @@ class MainActivity : AppCompatActivity() {
                             application
                         )
                     )
+
+                    // 即使浏览器授权期间进程被回收，也把回调结果展示在账户页，而不是停留在聊天首页。
+                    LaunchedEffect(openAccountAfterCallback) {
+                        if (openAccountAfterCallback) {
+                            navController.navigate(Screen.ACCOUNT_SCREEN) { launchSingleTop = true }
+                            openAccountAfterCallback = false
+                        }
+                    }
 
                     val expandedDrawerItemIndex by appViewModel.expandedDrawerItemIndex.collectAsState()
                     val isLoadingHistoryData by appViewModel.isLoadingHistoryData.collectAsState()
@@ -590,6 +603,19 @@ class MainActivity : AppCompatActivity() {
                                      )
                                  }
                                 composable(
+                                    route = Screen.ACCOUNT_SCREEN,
+                                    enterTransition = { settingsMenuEnterTransition() },
+                                    exitTransition = { settingsMenuExitTransition() },
+                                    popEnterTransition = { settingsMenuEnterTransition() },
+                                    popExitTransition = { settingsMenuExitTransition() },
+                                ) {
+                                    com.android.everytalk.ui.screens.account.AccountScreen(
+                                        manager = appViewModel.accountManager,
+                                        onBack = { navController.popBackStack() },
+                                        onPrivacy = { navController.navigate(Screen.PRIVACY_POLICY_SCREEN) },
+                                    )
+                                }
+                                composable(
                                     route = Screen.COMPUTER_SCREEN,
                                     enterTransition = {
                                         if (isSettingsMenuTransition(initialState.destination.route, targetState.destination.route)) {
@@ -931,6 +957,9 @@ class MainActivity : AppCompatActivity() {
         setIntent(intent)
         intent.data?.let(com.android.everytalk.data.computer.CloudflareOAuthCallbackBus::publish)
         intent.data?.let(com.android.everytalk.data.mcp.McpOAuthCallbackBus::publish)
+        intent.data?.let { uri ->
+            if (com.android.everytalk.data.account.AccountOAuthCallbackBus.publish(uri)) openAccountAfterCallback = true
+        }
         // 处理分享过来的内容（应用已在运行时）
         handleIncomingShareIntent(intent)
     }

@@ -82,6 +82,19 @@
             </intent-filter>
         </activity-alias>
 
+        <!-- 账号登录使用独立回调；随机标识与 PKCE 由认证层核验，不能凭链接直接建立会话。 -->
+        <activity-alias
+            android:name=".AccountOAuthCallback"
+            android:targetActivity="com.android.everytalk.statecontroller.MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="${appOAuthScheme}" android:host="oauth" android:path="/account" />
+            </intent-filter>
+        </activity-alias>
+
         <activity-alias
             android:name=".ShareReceiver"
             android:targetActivity="com.android.everytalk.statecontroller.MainActivity"
