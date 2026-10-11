@@ -1,6 +1,6 @@
 # EveryTalk Privacy Policy / EveryTalk 隐私政策
 
-**Effective date / 生效日期: October 9, 2026 / 2026 年 10 月 9 日**
+**Effective date / 生效日期: October 11, 2026 / 2026 年 10 月 11 日**
 
 EveryTalk is an Android AI client maintained by the EveryTalk project maintainers. This policy explains how EveryTalk handles information when you use chat, image, voice, web search, Model Context Protocol (MCP), and AI content reporting features.
 
@@ -66,7 +66,39 @@ EveryTalk offers optional Google and email-code account sign-in through the conf
 
 The app encrypts session credentials using Android Keystore. Signing out clears the local account session and retains local chats and API configurations. Removing local data or uninstalling does not delete the server account. Contact the maintainers through the project page to request account deletion; do not publish verification codes or credentials in public issues. Separate third-party service accounts must be managed with their respective providers.
 
-### 9. Policy updates and contact
+### 9. Google user data, Gmail MCP and Limited Use
+
+#### Google user data and Gmail MCP
+
+Google account sign-in and Gmail connection are separate features. Account sign-in uses only basic identity information (openid, email and profile). Gmail MCP accesses mail only after you separately connect Gmail and grant gmail.modify. Current features search and read messages, list labels, add or remove message labels, and send plain-text email at your request. There are no tools for creating drafts or permanently deleting mail.
+
+To provide these features, the app may process your mailbox address, message and thread IDs, senders and recipients, subjects, bodies, message dates, labels, search queries and the content you request to send. Google identity information is used only for account authentication and display. Gmail data is used only for visible mail operations and related responses, not for unrelated purposes.
+
+#### Processing path and third-party AI services
+
+Gmail requests communicate with the Google Gmail API through the EveryTalk OAuth/MCP Worker hosted on Cloudflare. The Worker exchanges or refreshes tokens and processes mail operations during requests; its application code does not write tokens, mail bodies or user profiles to persistent storage. Google access and refresh tokens are encrypted on Android and are not sent as model prompts.
+
+When you use AI for a Gmail task, mail information returned by tools may be sent as conversation context to your currently selected model service to interpret your request, display or summarize mail and generate related responses. If a proxy or aggregator provides the model, its operator and upstream model providers may also process that content. AI mail features therefore do not mean that mail always stays on your device.
+
+Google data may be transferred to necessary processors only with user consent to provide the visible features described above. AI services and their upstream providers receiving Google data must follow the same Limited Use restrictions and must not use it for generalized model training. EveryTalk supports custom endpoints, but currently does not automatically verify every endpoint, plan or upstream provider's training or retention policy. Services whose compliance has not been verified must not receive Gmail data; user consent does not waive the prohibition on training.
+
+#### Limited Use commitment and prohibited uses
+
+EveryTalk's use and transfer to any other app of information received from Google APIs, including raw Gmail data and its aggregated, anonymized or derived forms, will adhere to the Google API Services User Data Policy and the Google Workspace API User Data and Developer Policy, including the Limited Use requirements. This section takes precedence over general third-party service disclosures in this policy; a third party's policy cannot expand the permitted uses of Google data.
+
+EveryTalk does not use, sell or transfer Google user data to create, train or improve foundational or generalized AI or machine learning models, or for advertising, remarketing, data brokerage, credit assessment or lending decisions. Aggregation, anonymization, derived summaries and user authorization must not be used to bypass these restrictions.
+
+Maintainers must not read Google user data unless you explicitly consent to access to specific data, it is necessary for a security investigation or legal compliance, or aggregated and anonymized data is used for internal operations as permitted by Google's policy. Legal or security processing is limited to what is necessary. When reporting an issue or requesting support, provide only content you agree to have reviewed; do not upload real mail or credentials in public issues.
+
+#### Google data retention, deletion and revocation
+
+Gmail tool results and related responses may be retained in local chat history, Agent execution records or summaries and may be supplied to the current model again with the relevant conversation. You can delete the relevant conversation and associated records; clearing app data or uninstalling removes data in private app storage. Exports and separately saved copies must be deleted at their respective locations. Retention and deletion of data already received by third parties depend on the actual service and plan and must comply with the Google data restrictions above; deleting local records alone cannot delete third-party copies.
+
+Signing out of the Gmail connection deletes local Gmail authorization tokens; it does not automatically delete earlier chats or messages in your Google mailbox. You can also revoke EveryTalk access in your Google account's third-party connections settings to prevent further access. Signing out of the EveryTalk account and disconnecting Gmail are separate operations. Contact the maintainers through the project page for Google data privacy or deletion requests and obtain a private channel first; do not publicly submit mail bodies, passwords, verification codes or tokens.
+
+[Google API Services User Data Policy](https://developers.google.com/terms/api-services-user-data-policy) · [Google Workspace API User Data and Developer Policy](https://developers.google.com/workspace/workspace-api-user-data-developer-policy) · [Google third-party connections / Google 第三方连接](https://myaccount.google.com/connections)
+
+### 10. Policy updates and contact
 
 This policy may be updated when EveryTalk features or legal requirements change. The effective date at the top identifies the current version. Questions or privacy requests may be submitted through [EveryTalk GitHub Issues](https://github.com/roseforljh/EveryTalk/issues).
 
@@ -128,6 +160,40 @@ EveryTalk 通过配置的 Supabase Auth 服务提供可选的 Google 和邮箱�
 
 应用通过 Android Keystore 加密保存会话凭据。退出登录会清除本地账号会话，保留聊天记录和 API 配置；删除本地数据或卸载应用不会删除服务端账号。可通过项目页面联系维护者提出账号删除申请，请勿在公开 Issue 中发布验证码或凭据。其他第三方服务账号仍需向相应服务商申请管理或删除。
 
-### 9. 政策更新与联系
+### 9. Google 用户数据、Gmail MCP 与受限使用
+
+#### Google 用户数据与 Gmail MCP
+
+Google 账号登录与 Gmail 连接是两个独立功能。账号登录仅使用 openid、email 和 profile 基本身份信息；只有你单独连接 Gmail 并授予 gmail.modify 权限后，Gmail MCP 才能访问邮件。当前功能包括搜索和读取邮件、列出标签、给邮件添加或移除标签，以及按你的要求发送纯文本邮件；不提供创建草稿或永久删除邮件的工具。
+
+为完成这些功能，应用可能处理邮箱地址、邮件和会话标识符、发件人与收件人、主题、正文、邮件时间、标签、搜索条件，以及你要求发送的内容。Google 身份信息仅用于账号认证和展示；Gmail 数据仅用于你可见的邮件操作及相关回答，不用于与这些功能无关的目的。
+
+#### 处理路径与第三方 AI 服务
+
+Gmail 请求通过部署在 Cloudflare 的 EveryTalk OAuth/MCP Worker 与 Google Gmail API 通信。Worker 使用授权凭据换取或刷新令牌，并在请求期间处理邮件操作；其应用代码不将令牌、邮件正文或用户资料写入持久存储。Google 访问令牌和刷新令牌在 Android 端加密保存，不作为模型提示词发送。
+
+当你使用 AI 执行 Gmail 任务时，工具返回的邮件信息可能作为会话上下文发送到当前选择的模型服务，用于理解请求、展示或总结邮件及生成相关回答。若模型经代理或聚合平台提供，网关运营方和上游模型服务商也可能处理这些内容。因此，使用 AI 邮件功能并不意味着邮件始终只在设备本地处理。
+
+Google 数据只能在用户同意的范围内，为提供上述可见功能而传输给必要的处理方。接收 Google 数据的 AI 服务及其上游必须遵守同样的受限使用要求，不得将这些数据用于通用模型训练。EveryTalk 支持用户自定义接口，但当前不会自动核验每个接口、套餐和上游服务的训练或保存政策；未经核实符合这些要求的服务不得接收 Gmail 数据，用户同意也不能豁免禁止训练的限制。
+
+#### 受限使用承诺与禁止用途
+
+EveryTalk 对通过 Google API 获得的信息（包括 Gmail 原始数据及其汇总、匿名化或派生数据）的使用和向其他应用的传输，将遵守 Google API Services User Data Policy 和 Google Workspace API User Data and Developer Policy，包括 Limited Use（受限使用）要求。本节优先于本政策中一般性的第三方服务说明；第三方政策不能扩大 Google 数据的允许用途。
+
+EveryTalk 不使用、出售或传输 Google 用户数据来创建、训练或改进基础模型或通用 AI/机器学习模型，不将其用于广告投放、再营销、数据经纪、信用评估或借贷决策。不得通过汇总、匿名化、派生摘要或用户授权规避这些限制。
+
+维护者不得人工阅读 Google 用户数据，除非获得你对具体数据的明确同意、为必要的安全调查或遵守法律，或在 Google 政策允许的范围内使用汇总匿名数据进行内部运营。需要法律或安全目的的数据处理仅限必要范围。主动举报或寻求支持时，请仅提供你同意审核的内容，不要在公开 Issue 中上传真实邮件或凭据。
+
+#### Google 数据的保存、删除与撤销授权
+
+Gmail 工具结果及相关回答可能保存在设备的聊天记录、Agent 执行记录或摘要中，并可能随相关会话再次提供给当前模型。可删除相关会话与关联记录；清除应用数据或卸载会移除应用私有存储中的数据。导出文件和另行保存的副本需要在各自位置删除。第三方已经收到的数据的保存期限和删除方式取决于实际服务及套餐，必须符合上述 Google 数据限制；EveryTalk 不能仅通过删除本地记录来删除第三方副本。
+
+在应用中退出 Gmail 连接会删除本地 Gmail 授权令牌，不会自动删除此前的聊天记录，也不会删除 Google 邮箱中的邮件。还可在 Google 账号的第三方连接设置中撤销 EveryTalk 的访问权限，以阻止后续访问。普通 EveryTalk 账号退出与 Gmail 断开连接是独立操作。Google 数据隐私或删除请求可通过项目页面联系维护者，请先获取私密联系渠道，不要公开提交邮件正文、密码、验证码或令牌。
+
+EveryTalk's use and transfer to any other app of information received from Google APIs will adhere to the Google API Services User Data Policy, including the Limited Use requirements.
+
+[Google API Services User Data Policy](https://developers.google.com/terms/api-services-user-data-policy) · [Google Workspace API User Data and Developer Policy](https://developers.google.com/workspace/workspace-api-user-data-developer-policy) · [Google third-party connections / Google 第三方连接](https://myaccount.google.com/connections)
+
+### 10. 政策更新与联系
 
 本政策可能随 EveryTalk 功能或法律要求变化而更新，页面顶部的生效日期用于标识当前版本。隐私相关问题或请求可通过 [EveryTalk GitHub Issues](https://github.com/roseforljh/EveryTalk/issues) 提交。
