@@ -114,6 +114,8 @@ fun AppInfoScreen(
     onBack: () -> Unit,
     onOpenDataManagement: () -> Unit,
     onOpenPrivacyPolicy: () -> Unit,
+    onOpenAccountManagement: () -> Unit,
+    onOpenSubscription: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var showAboutDialog by rememberSaveable { mutableStateOf(false) }
@@ -151,6 +153,26 @@ fun AppInfoScreen(
                 ),
             ) {
                 Column {
+                    AppInfoEntry(
+                        iconRes = R.drawable.gpt_user,
+                        title = stringResource(R.string.account_title),
+                        description = stringResource(R.string.account_management_description),
+                        onClick = onOpenAccountManagement,
+                    )
+                    HorizontalDivider(
+                        modifier = Modifier.padding(start = 80.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
+                    )
+                    AppInfoEntry(
+                        iconRes = R.drawable.ic_gpt_sparkle,
+                        title = stringResource(R.string.subscription_title),
+                        description = stringResource(R.string.subscription_entry_description),
+                        onClick = onOpenSubscription,
+                    )
+                    HorizontalDivider(
+                        modifier = Modifier.padding(start = 80.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
+                    )
                     AppInfoEntry(
                         iconRes = R.drawable.ic_globe,
                         title = stringResource(R.string.app_info_language_title),

@@ -54,6 +54,7 @@ import com.android.everytalk.ui.screens.ImageGeneration.ImageGenerationScreen
 import com.android.everytalk.ui.screens.appinfo.AppInfoScreen
 import com.android.everytalk.ui.screens.appinfo.DataManagementScreen
 import com.android.everytalk.ui.screens.appinfo.PrivacyPolicyScreen
+import com.android.everytalk.ui.screens.appinfo.SubscriptionScreen
 import com.android.everytalk.ui.screens.settings.SettingsScreen
 import com.android.everytalk.ui.components.splash.PixelPenguinSplash
 import com.android.everytalk.ui.theme.App1Theme
@@ -222,7 +223,10 @@ class MainActivity : AppCompatActivity() {
                     // 即使浏览器授权期间进程被回收，也把回调结果展示在账户页，而不是停留在聊天首页。
                     LaunchedEffect(openAccountAfterCallback) {
                         if (openAccountAfterCallback) {
-                            navController.navigate(Screen.ACCOUNT_SCREEN) { launchSingleTop = true }
+                            // 启动登录页尚未挂载主导航时，由启动入口等待认证结果后直接进入 App。
+                            if (navController.currentDestination != null) {
+                                navController.navigate(Screen.ACCOUNT_SCREEN) { launchSingleTop = true }
+                            }
                             openAccountAfterCallback = false
                         }
                     }
@@ -243,6 +247,7 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
 
+                    com.android.everytalk.ui.screens.account.AccountEntryGate(appViewModel.accountManager) {
                     Scaffold(
                         modifier = Modifier.fillMaxSize(),
                         containerColor = MaterialTheme.colorScheme.background,
@@ -296,7 +301,11 @@ class MainActivity : AppCompatActivity() {
                                     }
 
                                     key(drawerSessionKey, isImageGenerationMode) {
+                                        // 监听同一个账户状态，修改头像或昵称后侧栏立即更新，无需重启。
+                                        val accountState by appViewModel.accountManager.state.collectAsState()
                                         AppDrawerContent(
+                                            accountAvatarUrl = accountState.user?.avatarUrl,
+                                            accountName = accountState.user?.displayName,
                                             historicalConversations = if (isImageGenerationMode) appViewModel.imageGenerationHistoricalConversations.collectAsState().value else appViewModel.historicalConversations.collectAsState().value,
                                             loadedHistoryIndex = if (isImageGenerationMode) appViewModel.loadedImageGenerationHistoryIndex.collectAsState().value else appViewModel.loadedHistoryIndex.collectAsState().value,
                                             onConversationSearchClick = {
@@ -773,6 +782,12 @@ class MainActivity : AppCompatActivity() {
                                 ) {
                                     AppInfoScreen(
                                         onBack = { navController.popBackStack() },
+                                        onOpenAccountManagement = {
+                                            navController.navigate(Screen.ACCOUNT_SCREEN) { launchSingleTop = true }
+                                        },
+                                        onOpenSubscription = {
+                                            navController.navigate(Screen.SUBSCRIPTION_SCREEN) { launchSingleTop = true }
+                                        },
                                         onOpenDataManagement = {
                                             navController.navigate(Screen.DATA_MANAGEMENT_SCREEN) {
                                                 launchSingleTop = true
@@ -784,6 +799,23 @@ class MainActivity : AppCompatActivity() {
                                             }
                                         },
                                     )
+                                }
+                                composable(
+                                    route = Screen.SUBSCRIPTION_SCREEN,
+                                    enterTransition = {
+                                        androidx.compose.animation.slideInHorizontally(
+                                            initialOffsetX = { fullWidth -> fullWidth },
+                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
+                                        )
+                                    },
+                                    popExitTransition = {
+                                        androidx.compose.animation.slideOutHorizontally(
+                                            targetOffsetX = { fullWidth -> fullWidth },
+                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
+                                        )
+                                    },
+                                ) {
+                                    SubscriptionScreen(onBack = { navController.popBackStack() })
                                 }
                                 composable(
                                     route = Screen.DATA_MANAGEMENT_SCREEN,
@@ -946,6 +978,7 @@ class MainActivity : AppCompatActivity() {
                             }
                         }
                }
+                    }
                     }
                 }
            }
