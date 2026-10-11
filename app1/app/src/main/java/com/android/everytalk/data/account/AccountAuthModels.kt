@@ -5,6 +5,9 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.JsonPrimitive
 import java.net.URI
 import java.net.URLDecoder
 import java.security.MessageDigest
@@ -15,6 +18,12 @@ import java.util.Locale
 internal const val ACCOUNT_OAUTH_TTL_MILLIS = 10 * 60 * 1000L
 internal const val ACCOUNT_CODE_COOLDOWN_MILLIS = 60_000L
 internal val accountJson = Json { ignoreUnknownKeys = true }
+
+/** 只开放已支持的身份提供方；GitHub 仅申请身份和邮箱，不申请仓库权限。 */
+internal enum class AccountOAuthProvider(val apiName: String, val scopes: String) {
+    Google("google", "openid email profile"),
+    GitHub("github", "read:user user:email"),
+}
 
 /**
  * 只接受 HTTPS 项目地址和公开客户端 Key。管理员密钥不得进入 APK；
@@ -55,7 +64,23 @@ internal data class AccountUser(
     val id: String,
     val email: String? = null,
     @SerialName("created_at") val createdAt: String? = null,
-)
+    @SerialName("user_metadata") val metadata: JsonObject = JsonObject(emptyMap()),
+) {
+    /** 用户编辑字段优先于提供方资料；这些字段只用于显示，不参与任何权限判断。 */
+    val displayName: String get() = listOf("everytalk_name", "full_name", "name", "user_name")
+        .firstNotNullOfOrNull { key -> (metadata[key] as? JsonPrimitive)?.contentOrNull
+            ?.takeIf { it.isNotBlank() && it.none(Char::isISOControl) } }
+        ?.take(50) ?: email?.substringBefore('@').orEmpty()
+
+    /** Google/GitHub 的头像随用户资料返回；只加载 HTTPS 图片，不将凭据发送到图片服务器。 */
+    val avatarUrl: String? get() = listOf("everytalk_avatar_url", "avatar_url", "picture")
+        .firstNotNullOfOrNull { key -> (metadata[key] as? JsonPrimitive)?.contentOrNull?.takeIf { value ->
+            value.length <= 2048 && runCatching {
+                val uri = URI(value)
+                uri.scheme == "https" && !uri.host.isNullOrBlank() && uri.rawUserInfo == null
+            }.getOrDefault(false)
+        } }
+}
 
 @Serializable
 internal data class AccountSession(
@@ -67,11 +92,13 @@ internal data class AccountSession(
 
 internal data class AccountUiState(
     val configured: Boolean = false,
+    /** 本地会话恢复结束后才决定启动页面，避免已登录用户短暂看到登录表单。 */
+    val initialized: Boolean = false,
     val user: AccountUser? = null,
     val busy: Boolean = false,
     val pendingEmail: String? = null,
     val resendAtMillis: Long = 0,
-    val awaitingGoogle: Boolean = false,
+    val awaitingOAuth: Boolean = false,
     val message: String? = null,
 )
 
@@ -107,12 +134,12 @@ internal data class PendingAccountOAuth(val state: String, val verifier: String,
         val values = pairs.toMap()
         require(values["login_state"] == state) { "登录回调不属于本次授权" }
         require(nowMillis >= createdAtMillis && nowMillis - createdAtMillis < ACCOUNT_OAUTH_TTL_MILLIS) {
-            "Google 登录已过期，请重新开始"
+            "第三方登录已过期，请重新开始"
         }
         require(values.keys.none { it in setOf("access_token", "refresh_token", "id_token") }) {
             "登录回调不能包含会话凭据"
         }
-        if (values["error"] != null) throw AccountAuthException("Google 登录未完成，请重试")
+        if (values["error"] != null) throw AccountAuthException("第三方登录未完成，请重试")
         return requireNotNull(values["code"]?.takeIf { it.length in 1..2048 && it.none(Char::isISOControl) }) {
             "登录回调缺少有效授权码"
         }

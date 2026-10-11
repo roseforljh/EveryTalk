@@ -245,6 +245,7 @@ class LauncherIconResourceTest {
             resDir.resolve("drawable-nodpi/pixel_penguin_splash_start.png").exists(),
         )
 
+        assertFalse("Old colorful splash logo must be removed", resDir.resolve("drawable-nodpi/splash_logo.png").exists())
         assertFalse("Duplicate dark splash asset must be removed", resDir.resolve("drawable-night-nodpi/splash_logo.png").exists())
         assertFalse("Dark splash XML wrapper must be deleted", resDir.resolve("drawable-night/splash_logo.xml").exists())
         assertFalse("Old light splash intermediate PNG must be deleted", resDir.resolve("drawable/splash_logo_black_asset.png").exists())

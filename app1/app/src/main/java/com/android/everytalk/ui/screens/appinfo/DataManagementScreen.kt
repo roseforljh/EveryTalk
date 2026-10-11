@@ -281,7 +281,6 @@ private fun DataManagementOverview(
         title = stringResource(R.string.data_management_title),
         onBack = onBack,
         modifier = modifier,
-        opaqueTopBar = true,
     ) {
         when {
             snapshot == null && !loadFailed -> item(key = "loading") { StorageLoadingState() }

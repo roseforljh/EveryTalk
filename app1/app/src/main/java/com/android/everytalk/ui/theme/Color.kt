@@ -3,12 +3,6 @@ import com.android.everytalk.statecontroller.*
 
 import androidx.compose.ui.graphics.Color
 
-// 亮色主题颜色
-val Purple80 = Color(0xFFD0BCFF)
-
-val Purple40 = Color(0xFF6650a4)
-val PurpleGrey40 = Color(0xFF625b71)
-val Pink40 = Color(0xFF7D5260)
 val SeaBlue = Color(0xFF0091ff)
 
 // 夜间模式专用颜色 - 统一和谐的设计
@@ -30,20 +24,18 @@ val DarkOnSurface = Color(0xFFFFFFFF)          // 表面上的文字 - 纯白
 val DarkOnSurfaceVariant = Color(0xFFBBBBBB)   // 表面变体上的文字 - 中等灰
 val DarkOnCard = Color(0xFFFFFFFF)             // 卡片上的文字 - 纯白
 
-// 深色主色调 - 温和的蓝色系
-val DarkPrimary = Color(0xFF6C9EFF)            // 主色调 - 更亮的蓝色
-val DarkOnPrimary = Color(0xFFFFFFFF)          // 主色调上的文字
-val DarkPrimaryContainer = Color(0xFF1E3A5F)   // 主色调容器 - 深蓝
+// 操作颜色统一为灰阶：暗色主题白底黑字，容器保留深灰层级。
+val DarkPrimary = Color.White
+val DarkOnPrimary = Color.Black
+val DarkPrimaryContainer = Color(0xFF242424)
 
-// 深色次要色调 - 温和的绿色系
-val DarkSecondary = Color(0xFF6FD68B)          // 次要色调 - 更亮的绿色
-val DarkOnSecondary = Color(0xFFFFFFFF)        // 次要色调上的文字
-val DarkSecondaryContainer = Color(0xFF1A2E1A) // 次要色调容器
+val DarkSecondary = Color(0xFFDDDDDD)
+val DarkOnSecondary = Color.Black
+val DarkSecondaryContainer = Color(0xFF242424)
 
-// 深色强调色 - 温和的暖色
-val DarkTertiary = Color(0xFFD2A84F)           // 强调色 - 柔和金黄
-val DarkOnTertiary = Color(0xFF000000)         // 强调色上的文字
-val DarkTertiaryContainer = Color(0xFF3D2F00)  // 强调色容器
+val DarkTertiary = Color(0xFFBBBBBB)
+val DarkOnTertiary = Color.Black
+val DarkTertiaryContainer = Color(0xFF242424)
 
 // 深色错误状态 - 柔和的红色
 val DarkError = Color(0xFFE57373)              // 错误色 - 柔和红

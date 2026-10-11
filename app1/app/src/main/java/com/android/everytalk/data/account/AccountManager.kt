@@ -18,8 +18,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.JsonObject
 
 /** 存储边界允许测试使用内存实现；生产实现始终使用现有 Keystore 加密，不写明文配置。 */
 internal interface AccountSecrets {
@@ -57,7 +61,7 @@ internal object AccountOAuthCallbackBus {
 
 /**
  * 管理注册/登录、会话恢复与退出。所有操作通过同一把锁更新加密记录和页面状态，
- * 防止刷新、Google 回调和退出互相覆盖。页面从不持有 Token，也不参与账号权限判断。
+ * 防止刷新、第三方登录回调和退出互相覆盖。页面从不持有 Token，也不参与账号权限判断。
  */
 internal class AccountManager(
     private val client: AccountAuthClient?,
@@ -70,6 +74,7 @@ internal class AccountManager(
     private val mutex = Mutex()
     private val mutableState = MutableStateFlow(AccountUiState(
         configured = client != null,
+        initialized = client == null,
         message = configurationError,
     ))
     val state = mutableState.asStateFlow()
@@ -78,10 +83,13 @@ internal class AccountManager(
     private val pendingReference: String get() = "$reference:pending"
 
     init {
-        if (client != null) scope.launch { perform { restoreSession() } }
+        if (client != null) scope.launch {
+            try { perform { restoreSession() } }
+            finally { mutableState.update { it.copy(initialized = true) } }
+        }
         scope.launch {
             AccountOAuthCallbackBus.flow.filterNotNull().collect { uri ->
-                try { handleGoogleCallback(uri.toString()).join() }
+                try { handleOAuthCallback(uri.toString()).join() }
                 finally { AccountOAuthCallbackBus.clear(uri) }
             }
         }
@@ -92,9 +100,9 @@ internal class AccountManager(
             val email = normalizeAccountEmail(rawEmail)
             require(clock() >= mutableState.value.resendAtMillis) { "请稍后再获取验证码" }
             requireNotNull(client).sendEmailCode(email)
-            // 开始邮箱登录时取消此前的 Google 草稿，避免迟到回调把账号切回去。
+            // 开始邮箱登录时取消此前的第三方登录草稿，避免迟到回调把账号切回去。
             secrets.remove(pendingReference)
-            mutableState.update { it.copy(pendingEmail = email, awaitingGoogle = false,
+            mutableState.update { it.copy(pendingEmail = email, awaitingOAuth = false,
                 resendAtMillis = clock() + ACCOUNT_CODE_COOLDOWN_MILLIS,
                 message = "验证码已发送，请查看邮箱") }
         }
@@ -112,53 +120,82 @@ internal class AccountManager(
     }
 
     /** 先保存 PKCE 草稿，再打开外部浏览器；浏览器打开失败时立即撤销草稿。 */
-    fun startGoogleLogin(openBrowser: (String) -> Unit): Job = scope.launch {
+    fun startOAuthLogin(provider: AccountOAuthProvider, openBrowser: (String) -> Unit): Job = scope.launch {
         perform {
             val pending = PendingAccountOAuth.create(clock())
             secrets.write(pendingReference, accountJson.encodeToString(pending))
             try {
-                openBrowser(requireNotNull(client).googleAuthorizationUrl(pending))
+                openBrowser(requireNotNull(client).oauthAuthorizationUrl(provider, pending))
             } catch (error: Exception) {
                 secrets.remove(pendingReference)
                 throw AccountAuthException("无法打开浏览器，请检查设备是否安装浏览器")
             }
-            mutableState.update { it.copy(awaitingGoogle = true, pendingEmail = null,
-                message = "请在浏览器中完成 Google 登录") }
+            mutableState.update { it.copy(awaitingOAuth = true, pendingEmail = null,
+                message = "请在浏览器中完成第三方登录") }
         }
     }
 
     /** 无效地址或随机标识不会消费合法草稿；匹配后的授权码只允许交换一次。 */
-    fun handleGoogleCallback(raw: String): Job = scope.launch {
+    fun handleOAuthCallback(raw: String): Job = scope.launch {
         perform {
             val api = requireNotNull(client)
             val saved = secrets.read(pendingReference)
             if (saved == null) {
                 // Activity 重建可能再次带入旧 Intent；已完成的登录不重复交换，也不显示错误。
                 if (session != null) return@perform
-                throw AccountAuthException("没有等待中的 Google 登录，请重新开始")
+                throw AccountAuthException("没有等待中的第三方登录，请重新开始")
             }
             val pending = accountJson.decodeFromString<PendingAccountOAuth>(saved)
             val code = try {
                 pending.consumeCode(raw, api.config.redirectUri, clock())
             } catch (error: AccountAuthException) {
                 secrets.remove(pendingReference)
-                mutableState.update { it.copy(awaitingGoogle = false) }
+                mutableState.update { it.copy(awaitingOAuth = false) }
                 throw error
             }
             secrets.remove(pendingReference)
-            mutableState.update { it.copy(awaitingGoogle = false) }
-            saveSession(api.exchangeGoogleCode(code, pending.verifier))
+            mutableState.update { it.copy(awaitingOAuth = false) }
+            saveSession(api.exchangeOAuthCode(code, pending.verifier))
         }
     }
 
-    fun cancelGoogleLogin(): Job = scope.launch {
+    fun cancelOAuthLogin(): Job = scope.launch {
         perform {
             secrets.remove(pendingReference)
-            mutableState.update { it.copy(awaitingGoogle = false, message = null) }
+            mutableState.update { it.copy(awaitingOAuth = false, message = null) }
         }
     }
 
     fun refreshAccount(): Job = scope.launch { perform { restoreSession() } }
+
+    /** 名称在客户端先校验，再用当前真实会话更新；成功保存后侧栏和账户页同时刷新。 */
+    fun updateDisplayName(rawName: String): Job = scope.launch {
+        perform {
+            val name = rawName.trim()
+            require(name.length in 1..50 && name.none(Char::isISOControl)) { "名称需为 1 至 50 个字符，不能包含换行" }
+            updateProfile(buildJsonObject { put("everytalk_name", JsonPrimitive(name)) })
+        }
+    }
+
+    /** 系统图片选择器只授权用户选择的图片；处理和上传失败时保留现有账号资料。 */
+    fun updateAvatar(context: Context, uri: Uri): Job = scope.launch {
+        perform {
+            val png = withContext(Dispatchers.IO) { readAccountAvatar(context, uri) }
+            restoreSession()
+            val active = requireNotNull(session) { "请先登录账号" }
+            val url = requireNotNull(client).uploadAvatar(active.accessToken, active.user.id, png)
+            updateProfile(buildJsonObject { put("everytalk_avatar_url", JsonPrimitive(url)) })
+        }
+    }
+
+    private suspend fun updateProfile(data: JsonObject): Unit {
+        restoreSession()
+        val active = requireNotNull(session) { "请先登录账号" }
+        val updated = requireNotNull(client).updateProfile(active.accessToken, data)
+        require(updated.id == active.user.id) { "会话的账号不匹配，请重新登录" }
+        saveSession(active.copy(user = updated))
+        mutableState.update { it.copy(message = "账号资料已更新") }
+    }
 
     /**
      * 退出只影响此设备，聊天和自带 API 配置继续保留。
@@ -178,7 +215,7 @@ internal class AccountManager(
                     secrets.remove(reference)
                     secrets.remove(pendingReference)
                     session = null
-                    mutableState.update { it.copy(user = null, pendingEmail = null, awaitingGoogle = false,
+                    mutableState.update { it.copy(user = null, pendingEmail = null, awaitingOAuth = false,
                         message = if (revoked) "已退出登录" else "已退出此设备；服务端会话撤销失败，请稍后检查网络") }
                 }
             }
@@ -188,10 +225,10 @@ internal class AccountManager(
     private suspend fun restoreSession(): Unit {
         val api = requireNotNull(client)
         val pending = secrets.read(pendingReference)?.let { accountJson.decodeFromString<PendingAccountOAuth>(it) }
-        val awaitingGoogle = pending != null && clock() >= pending.createdAtMillis &&
+        val awaitingOAuth = pending != null && clock() >= pending.createdAtMillis &&
             clock() - pending.createdAtMillis < ACCOUNT_OAUTH_TTL_MILLIS
-        if (pending != null && !awaitingGoogle) secrets.remove(pendingReference)
-        mutableState.update { it.copy(awaitingGoogle = awaitingGoogle) }
+        if (pending != null && !awaitingOAuth) secrets.remove(pendingReference)
+        mutableState.update { it.copy(awaitingOAuth = awaitingOAuth) }
         var stored = session ?: secrets.read(reference)?.let { accountJson.decodeFromString<AccountSession>(it) }
             ?: return
         try {
@@ -221,7 +258,7 @@ internal class AccountManager(
         secrets.write(reference, accountJson.encodeToString(value))
         secrets.remove(pendingReference)
         session = value
-        mutableState.update { it.copy(user = value.user, pendingEmail = null, awaitingGoogle = false,
+        mutableState.update { it.copy(user = value.user, pendingEmail = null, awaitingOAuth = false,
             message = "登录成功") }
     }
 

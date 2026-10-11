@@ -81,6 +81,8 @@ fun AppDrawerContent(
     modifier: Modifier = Modifier,
     isLoadingHistoryData: Boolean = false, // 新增：历史数据加载状态
     onShareConversation: (Int) -> Unit = {}, // 新增：分享会话回调
+    accountAvatarUrl: String? = null,
+    accountName: String? = null,
 ) {
     val selectedSet = remember { mutableStateListOf<Int>() }
     var showDeleteConfirm by remember { mutableStateOf(false) }
@@ -476,7 +478,7 @@ fun AppDrawerContent(
                     .padding(end = 16.dp, bottom = 16.dp)
                     .zIndex(2f),
             ) {
-                DrawerAppInfoButton(onClick = onAppInfoClick)
+                DrawerAppInfoButton(onClick = onAppInfoClick, avatarUrl = accountAvatarUrl, accountName = accountName)
             }
              // --- 对话框 ---
              DeleteConfirmationDialog(

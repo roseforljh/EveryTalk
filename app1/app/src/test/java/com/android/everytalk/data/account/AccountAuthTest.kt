@@ -9,6 +9,8 @@ import io.ktor.client.request.HttpRequestData
 import io.ktor.client.request.HttpResponseData
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.TextContent
+import io.ktor.http.content.OutgoingContent
+import io.ktor.http.ContentType
 import io.ktor.http.headersOf
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -18,6 +20,8 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.*
 import org.junit.Test
 import java.net.URI
@@ -49,6 +53,19 @@ class AccountAuthTest {
     private fun query(raw: String): Map<String, String> = URI(raw).rawQuery.split('&').associate {
         val parts = it.split('=', limit = 2)
         URLDecoder.decode(parts[0], "UTF-8") to URLDecoder.decode(parts[1], "UTF-8")
+    }
+
+    @Test fun `启动等待会话恢复且未配置时也允许显示游客入口`() = runTest {
+        val http = http { error("没有已保存会话时不请求网络") }
+        val manager = AccountManager(AccountAuthClient(config, http), MemorySecrets(), backgroundScope)
+        assertFalse(manager.state.value.initialized)
+        runCurrent()
+        assertTrue(manager.state.value.initialized)
+        assertNull(manager.state.value.user)
+        val unconfigured = AccountManager(null, MemorySecrets(), backgroundScope)
+        assertTrue(unconfigured.state.value.initialized)
+        assertFalse(unconfigured.state.value.configured)
+        http.close()
     }
 
     @Test fun `客户端拒绝管理员密钥和不安全项目地址`() {
@@ -135,7 +152,7 @@ class AccountAuthTest {
         val manager = AccountManager(AccountAuthClient(config, http), secrets, backgroundScope)
         runCurrent()
         var authorizationUrl = ""
-        manager.startGoogleLogin { authorizationUrl = it }.join()
+        manager.startOAuthLogin(AccountOAuthProvider.Google) { authorizationUrl = it }.join()
         val params = query(authorizationUrl)
         assertEquals("openid email profile", params["scopes"])
         assertEquals("s256", params["code_challenge_method"])
@@ -143,14 +160,127 @@ class AccountAuthTest {
         assertEquals(pending.challenge, params["code_challenge"])
         val callback = config.redirectUri + "?login_state=${pending.state}&code=valid-code"
         for (bad in listOf(callback.replace(pending.state, "stolen-state"), callback + "&code=other", callback + "#access_token=leak")) {
-            manager.handleGoogleCallback(bad).join()
+            manager.handleOAuthCallback(bad).join()
             assertTrue(secrets.values.containsKey(config.storageReference + ":pending"))
             assertEquals(0, exchanges)
         }
-        manager.handleGoogleCallback(callback).join()
+        manager.handleOAuthCallback(callback).join()
         assertEquals(user.id, manager.state.value.user?.id)
-        manager.handleGoogleCallback(callback).join()
+        manager.handleOAuthCallback(callback).join()
         assertEquals(1, exchanges)
+        http.close()
+    }
+
+    @Test fun `GitHub仅申请身份邮箱且重启后可完成授权而旧Google回调失效`() = runTest {
+        var exchanges = 0
+        val http = http { request ->
+            exchanges++
+            assertEquals("pkce", request.url.parameters["grant_type"])
+            assertEquals("github-code", body(request)["auth_code"]?.jsonPrimitive?.content)
+            assertNotNull(body(request)["code_verifier"])
+            respond(sessionResponse, HttpStatusCode.OK)
+        }
+        val secrets = MemorySecrets()
+        val manager = AccountManager(AccountAuthClient(config, http), secrets, backgroundScope)
+        runCurrent()
+        manager.startOAuthLogin(AccountOAuthProvider.Google) {}.join()
+        val old = accountJson.decodeFromString<PendingAccountOAuth>(secrets.values.getValue(config.storageReference + ":pending"))
+        var authorizationUrl = ""
+        manager.startOAuthLogin(AccountOAuthProvider.GitHub) { authorizationUrl = it }.join()
+        val params = query(authorizationUrl)
+        assertEquals("github", params["provider"])
+        assertEquals("read:user user:email", params["scopes"])
+        assertEquals("s256", params["code_challenge_method"])
+        val pending = accountJson.decodeFromString<PendingAccountOAuth>(secrets.values.getValue(config.storageReference + ":pending"))
+        assertEquals(pending.challenge, params["code_challenge"])
+        assertEquals(config.redirectUri + "?login_state=${pending.state}", params["redirect_to"])
+        manager.handleOAuthCallback(config.redirectUri + "?login_state=${old.state}&code=old-code").join()
+        assertEquals(0, exchanges)
+        assertTrue(manager.state.value.awaitingOAuth)
+
+        // 使用同一份加密草稿模拟进程重建，仍能交换 GitHub 授权码并且只消费一次。
+        val restored = AccountManager(AccountAuthClient(config, http), secrets, backgroundScope)
+        runCurrent()
+        assertTrue(restored.state.value.awaitingOAuth)
+        val callback = config.redirectUri + "?login_state=${pending.state}&code=github-code"
+        restored.handleOAuthCallback(callback).join()
+        assertEquals(user.id, restored.state.value.user?.id)
+        assertFalse(restored.state.value.awaitingOAuth)
+        restored.handleOAuthCallback(callback).join()
+        assertEquals(1, exchanges)
+        http.close()
+    }
+
+    @Test fun `提供方头像作为默认且自定义资料优先并且修改名称保留身份和会话`() = runTest {
+        val provider = user.copy(metadata = JsonObject(mapOf(
+            "full_name" to JsonPrimitive("Provider name"), "avatar_url" to JsonPrimitive("https://avatars.example.com/provider.png"))))
+        assertEquals("Provider name", provider.displayName)
+        assertEquals("https://avatars.example.com/provider.png", provider.avatarUrl)
+        val custom = provider.copy(metadata = JsonObject(provider.metadata + mapOf(
+            "everytalk_name" to JsonPrimitive("My name"), "everytalk_avatar_url" to JsonPrimitive("https://example.supabase.co/avatar.png"))))
+        assertEquals("My name", custom.displayName)
+        assertEquals("https://example.supabase.co/avatar.png", custom.avatarUrl)
+        val malformed = user.copy(metadata = JsonObject(mapOf("full_name" to JsonObject(emptyMap()),
+            "avatar_url" to JsonPrimitive("http://unsafe.example.com/image.png"))))
+        assertEquals("hello", malformed.displayName)
+        assertNull(malformed.avatarUrl)
+
+        var calls = 0
+        var current = provider
+        val http = http { request ->
+            calls++
+            assertEquals("Bearer access", request.headers["Authorization"])
+            assertEquals("/auth/v1/user", request.url.encodedPath)
+            if (request.method.value == "PUT") {
+                val payload = body(request)
+                assertEquals(setOf("data"), payload.keys)
+                assertEquals(setOf("everytalk_name"), payload.getValue("data").jsonObject.keys)
+                assertEquals("My name", payload.getValue("data").jsonObject["everytalk_name"]?.jsonPrimitive?.content)
+                current = provider.copy(metadata = JsonObject(provider.metadata + ("everytalk_name" to JsonPrimitive("My name"))))
+            }
+            respond(accountJson.encodeToString(current), HttpStatusCode.OK)
+        }
+        val secrets = MemorySecrets()
+        secrets.values[config.storageReference] = accountJson.encodeToString(AccountSession("access", "refresh", Long.MAX_VALUE, provider))
+        val manager = AccountManager(AccountAuthClient(config, http), secrets, backgroundScope)
+        runCurrent()
+        val callsBeforeEdit = calls
+        manager.updateDisplayName("\n").join()
+        assertEquals(callsBeforeEdit, calls)
+        assertEquals("Provider name", manager.state.value.user?.displayName)
+        manager.updateDisplayName(" My name ").join()
+        assertEquals("My name", manager.state.value.user?.displayName)
+        assertEquals(provider.avatarUrl, manager.state.value.user?.avatarUrl)
+        val saved = accountJson.decodeFromString<AccountSession>(secrets.values.getValue(config.storageReference))
+        assertEquals("refresh", saved.refreshToken)
+        assertEquals(user.id, saved.user.id)
+        assertEquals("My name", saved.user.displayName)
+        http.close()
+    }
+
+    @Test fun `头像仅用本人会话上传且重复更换覆盖原文件`() = runTest {
+        val png = byteArrayOf(1, 2, 3)
+        var calls = 0
+        var captured: HttpRequestData? = null
+        val http = http { request ->
+            calls++
+            captured = request
+            respond("{}", HttpStatusCode.OK)
+        }
+        val client = AccountAuthClient(config, http) { 1000 }
+        assertTrue(runCatching { client.uploadAvatar("access", "../another-user", png) }.isFailure)
+        assertTrue(runCatching { client.uploadAvatar("access", "user-1", byteArrayOf()) }.isFailure)
+        assertEquals(0, calls)
+        assertEquals(config.projectUrl + "/storage/v1/object/public/account-avatars/user-1/avatar.png?v=1000",
+            client.uploadAvatar("access", "user-1", png))
+        assertEquals(1, calls)
+        val request = requireNotNull(captured)
+        assertEquals("/storage/v1/object/account-avatars/user-1/avatar.png", request.url.encodedPath)
+        assertEquals("Bearer access", request.headers["Authorization"])
+        assertEquals(config.publicKey, request.headers["apikey"])
+        assertEquals("true", request.headers["x-upsert"])
+        assertEquals(ContentType.Image.PNG, request.body.contentType)
+        assertArrayEquals(png, (request.body as OutgoingContent.ByteArrayContent).bytes())
         http.close()
     }
 
@@ -219,13 +349,13 @@ class AccountAuthTest {
         val manager = AccountManager(AccountAuthClient(config, http), secrets, backgroundScope)
         runCurrent()
         assertEquals(user.id, manager.state.value.user?.id)
-        manager.startGoogleLogin { }.join()
+        manager.startOAuthLogin(AccountOAuthProvider.Google) { }.join()
         val pending = accountJson.decodeFromString<PendingAccountOAuth>(secrets.values.getValue(config.storageReference + ":pending"))
         manager.logout().join()
         assertNull(manager.state.value.user)
         assertTrue(secrets.values.isEmpty())
         assertTrue(manager.state.value.message.orEmpty().contains("撤销失败"))
-        manager.handleGoogleCallback(config.redirectUri + "?login_state=${pending.state}&code=c").join()
+        manager.handleOAuthCallback(config.redirectUri + "?login_state=${pending.state}&code=c").join()
         assertNull(manager.state.value.user)
         http.close()
     }

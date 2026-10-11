@@ -13,19 +13,19 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 
 private val DarkColorScheme = darkColorScheme(
-    // 主色调 - 使用柔和的蓝色
+    // 标准 Material 控件共用灰阶主色，按钮、链接和进度圈不再各自回落到蓝色。
     primary = DarkPrimary,
     onPrimary = DarkOnPrimary,
     primaryContainer = DarkPrimaryContainer,
     onPrimaryContainer = DarkTextPrimary,
     
-    // 次要色调 - 柔和的绿色
+    // 次要操作同样使用中性灰阶。
     secondary = DarkSecondary,
     onSecondary = DarkOnSecondary,
     secondaryContainer = DarkSecondaryContainer,
     onSecondaryContainer = DarkTextPrimary,
     
-    // 强调色 - 柔和的金黄色
+    // 强调层级靠亮度区分。
     tertiary = DarkTertiary,
     onTertiary = DarkOnTertiary,
     tertiaryContainer = DarkTertiaryContainer,
@@ -54,7 +54,7 @@ private val DarkColorScheme = darkColorScheme(
     scrim = Color.Black.copy(alpha = 0.7f),       // 稍微透明的遮罩
     inverseSurface = DarkTextPrimary,              // 反色表面
     inverseOnSurface = DarkBackground,             // 反色表面文字
-    inversePrimary = Purple40,                     // 反色主色调
+    inversePrimary = Color.Black,
     
     // Material 3 新增颜色
     surfaceTint = DarkPrimary,                     // 表面色调
@@ -68,22 +68,22 @@ private val DarkColorScheme = darkColorScheme(
 
 private val LightColorScheme = lightColorScheme(
     // 主色调
-    primary = Purple40,
+    primary = Color.Black,
     onPrimary = Color.White,
-    primaryContainer = Color.White, // 纯白按钮背景
-    onPrimaryContainer = Color(0xFF21005D),
+    primaryContainer = Color(0xFFE8E8E8),
+    onPrimaryContainer = Color.Black,
 
     // 次要色调
-    secondary = PurpleGrey40,
+    secondary = Color(0xFF333333),
     onSecondary = Color.White,
-    secondaryContainer = Color.White, // 纯白按钮背景
-    onSecondaryContainer = Color(0xFF1D192B),
+    secondaryContainer = Color(0xFFE8E8E8),
+    onSecondaryContainer = Color.Black,
 
     // 强调色
-    tertiary = Pink40,
+    tertiary = Color(0xFF555555),
     onTertiary = Color.White,
-    tertiaryContainer = Color.White, // 纯白按钮背景
-    onTertiaryContainer = Color(0xFF31111D),
+    tertiaryContainer = Color(0xFFE8E8E8),
+    onTertiaryContainer = Color.Black,
 
     // 背景和表面 - 全部改为纯白
     background = Color.White, // 主聊天背景改为纯白
@@ -91,7 +91,7 @@ private val LightColorScheme = lightColorScheme(
     surface = Color.White, // 卡片、对话框表面改为纯白
     onSurface = Color(0xFF000000),
     surfaceVariant = Color.White, // 表面变体改为纯白
-    onSurfaceVariant = Color(0xFF49454F),
+    onSurfaceVariant = Color(0xFF494949),
 
     // 错误状态
     error = Color(0xFFBA1A1A),
@@ -100,14 +100,14 @@ private val LightColorScheme = lightColorScheme(
     onErrorContainer = Color(0xFF410002),
 
     // 轮廓线
-    outline = Color(0xFF79747E),
-    outlineVariant = Color(0xFFCAC4D0),
+    outline = Color(0xFF797979),
+    outlineVariant = Color(0xFFCACACA),
 
     // 其他颜色
     scrim = Color.Black,
-    inverseSurface = Color(0xFF313033),
-    inverseOnSurface = Color(0xFFF4EFF4),
-    inversePrimary = Purple80,
+    inverseSurface = Color(0xFF313131),
+    inverseOnSurface = Color(0xFFF4F4F4),
+    inversePrimary = Color.White,
 
     // Material 3 新增颜色 - 优化弹出选项卡颜色
     surfaceTint = Color.White,
@@ -128,8 +128,8 @@ internal fun lightThemeOnSurfaceVariant(): Color = LightColorScheme.onSurfaceVar
 @Composable
 fun App1Theme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    // Dynamic color is available on Android 12+
-    dynamicColor: Boolean = true,
+    // 默认保持品牌黑白主题，只有显式启用时才使用系统壁纸配色。
+    dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {
     val colorScheme = when {

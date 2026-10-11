@@ -30,12 +30,13 @@ internal class AccountAuthClient(
     private val http: HttpClient,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
-    fun googleAuthorizationUrl(pending: PendingAccountOAuth): String {
+    /** 两个提供方共用 PKCE 和回调校验，仅身份标识与最小权限范围不同。 */
+    fun oauthAuthorizationUrl(provider: AccountOAuthProvider, pending: PendingAccountOAuth): String {
         val redirect = config.redirectUri + "?login_state=" + pending.state
         return config.authUrl + "/authorize?" + listOf(
-            "provider" to "google", "redirect_to" to redirect,
+            "provider" to provider.apiName, "redirect_to" to redirect,
             "code_challenge" to pending.challenge, "code_challenge_method" to "s256",
-            "scopes" to "openid email profile",
+            "scopes" to provider.scopes,
         ).joinToString("&") { (key, value) -> "$key=${URLEncoder.encode(value, "UTF-8")}" }
     }
 
@@ -58,7 +59,7 @@ internal class AccountAuthClient(
     }
 
     /** 授权码与本机草稿的 verifier 必须同时交给认证服务，不能用回调中的 Token 登录。 */
-    suspend fun exchangeGoogleCode(code: String, verifier: String): AccountSession = parseSession(
+    suspend fun exchangeOAuthCode(code: String, verifier: String): AccountSession = parseSession(
         request("/token?grant_type=pkce", body = buildJsonObject {
             put("auth_code", JsonPrimitive(code))
             put("code_verifier", JsonPrimitive(verifier))
@@ -81,21 +82,42 @@ internal class AccountAuthClient(
         request("/logout?scope=local", accessToken = accessToken)
     }
 
+    /** 只更新显示资料；Supabase 合并 metadata，不覆盖 Google/GitHub 已有关联身份。 */
+    suspend fun updateProfile(accessToken: String, data: JsonObject): AccountUser = parseUser(
+        request("/user", method = HttpMethod.Put, accessToken = accessToken,
+            body = buildJsonObject { put("data", data) }),
+    )
+
+    /** 上传到当前账号的固定位置，重复更换覆盖旧文件，避免头像文件无限累积。 */
+    suspend fun uploadAvatar(accessToken: String, userId: String, png: ByteArray): String {
+        require(userId.matches(Regex("[A-Za-z0-9_-]{1,128}"))) { "头像所属账号无效" }
+        require(png.size in 1..2 * 1024 * 1024) { "头像图片过大" }
+        request("/object/account-avatars/$userId/avatar.png", accessToken = accessToken, image = png)
+        return config.projectUrl.trimEnd('/') + "/storage/v1/object/public/account-avatars/$userId/avatar.png?v=" + clock()
+    }
+
     private suspend fun request(
         path: String,
         method: HttpMethod = HttpMethod.Post,
         body: JsonObject? = null,
         accessToken: String? = null,
         refresh: Boolean = false,
+        image: ByteArray? = null,
     ): JsonObject = try {
         withTimeout(15_000L) {
-            http.prepareRequest(config.authUrl + path) {
+            val baseUrl = if (image == null) config.authUrl else config.projectUrl.trimEnd('/') + "/storage/v1"
+            http.prepareRequest(baseUrl + path) {
                 this.method = method
                 header("apikey", config.publicKey)
                 if (accessToken != null) header(HttpHeaders.Authorization, "Bearer $accessToken")
                 if (body != null) {
                     contentType(ContentType.Application.Json)
                     setBody(body.toString())
+                }
+                if (image != null) {
+                    contentType(ContentType.Image.PNG)
+                    header("x-upsert", "true")
+                    setBody(image)
                 }
             }.execute { response ->
                 val text = response.readTextAtMost(128 * 1024L)

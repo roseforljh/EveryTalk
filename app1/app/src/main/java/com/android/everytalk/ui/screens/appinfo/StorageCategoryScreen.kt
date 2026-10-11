@@ -70,7 +70,6 @@ internal fun StorageCategoryScreen(
         title = stringResource(visual.titleRes),
         onBack = onBack,
         modifier = modifier,
-        opaqueTopBar = true,
         bottomBar = {
             StorageSelectionBar(
                 protected = protected,

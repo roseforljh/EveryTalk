@@ -30,6 +30,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.android.everytalk.R
+import com.android.everytalk.ui.screens.account.AccountAvatar
 
 @Composable
 internal fun DrawerHeader(
@@ -167,6 +168,8 @@ private fun DrawerActionButton(
 internal fun DrawerAppInfoButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    avatarUrl: String? = null,
+    accountName: String? = null,
 ) {
     Surface(
         onClick = onClick,
@@ -181,7 +184,9 @@ internal fun DrawerAppInfoButton(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center,
         ) {
-            Icon(
+            if (accountName != null) AccountAvatar(avatarUrl, accountName,
+                stringResource(R.string.drawer_app_info_content_description), modifier = Modifier.size(40.dp))
+            else Icon(
                 painter = painterResource(R.drawable.gpt_user),
                 contentDescription = stringResource(R.string.drawer_app_info_content_description),
                 modifier = Modifier.size(24.dp),
