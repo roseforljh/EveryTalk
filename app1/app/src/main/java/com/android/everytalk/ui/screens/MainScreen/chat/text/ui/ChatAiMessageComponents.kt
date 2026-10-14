@@ -233,6 +233,14 @@ fun AiMessageItem(
             }
 
             Column(modifier = Modifier.fillMaxWidth()) {
+                if (message.isIncomplete) {
+                    Text(
+                        text = stringResource(R.string.chat_reply_incomplete),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = ChatMarkdownTextStyle.ASSISTANT_CONTENT_START_PADDING_DP.dp, bottom = 4.dp),
+                    )
+                }
                 if (pageSources.isNotEmpty()) {
                     PageSourcesButton(
                         pageSources = pageSources,

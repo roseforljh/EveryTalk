@@ -37,7 +37,8 @@ internal fun ViewModelStateHolder.reconcileAgentRun(
         else -> status
     }
     val replaceAttempt = status == AgentRunStatus.MODEL_CONTINUATION_PENDING || status == AgentRunStatus.RETRYING
-    val hasTranscript = trace.isNotEmpty() || replaceAttempt
+    // 停止和崩溃恢复已封存部分正文，晚到的 Agent 账本只能更新本地状态，不能覆盖正式内容。
+    val hasTranscript = !baseline.isIncomplete && (trace.isNotEmpty() || replaceAttempt)
     val text = if (hasTranscript) {
         trace.filterIsInstance<ExecutionTraceEvent.Content>().joinToString("") { it.text }
     } else baseline.text

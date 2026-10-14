@@ -40,7 +40,26 @@ interface AgentDao {
     @Upsert suspend fun upsertContextSnapshot(snapshot: AgentContextSnapshotEntity)
     @Upsert suspend fun upsertCompaction(compaction: AgentCompactionEntryEntity)
     @Upsert suspend fun upsertContinuationState(state: ProviderContinuationStateEntity)
-    @Upsert suspend fun upsertAgentUserMessage(message: MessageEntity)
+    @androidx.room.Insert(onConflict = androidx.room.OnConflictStrategy.IGNORE)
+    suspend fun insertAgentUserMessage(message: MessageEntity)
+
+    @Query("SELECT * FROM messages WHERE id = :id OR uuid = :uuid LIMIT 1")
+    suspend fun getStoredAgentUserMessage(id: String, uuid: String): MessageEntity?
+
+    @Query("SELECT EXISTS(SELECT 1 FROM chat_sessions WHERE id = :sessionId AND deleted = 0)")
+    suspend fun hasActiveMessageSession(sessionId: String): Boolean
+
+    /** Agent 追加的用户指令也只能新增，重复投递不能覆盖正式消息或复活墓碑。 */
+    @Transaction
+    suspend fun upsertAgentUserMessage(message: MessageEntity) {
+        if (!hasActiveMessageSession(message.sessionId)) return
+        val stored = getStoredAgentUserMessage(message.id, message.uuid)
+        if (stored != null) {
+            acceptFormalMessageUpdate(stored, message)
+            return
+        }
+        insertAgentUserMessage(message.copy(syncStatus = com.android.everytalk.data.database.entities.SyncStatus.PENDING))
+    }
     @androidx.room.Insert(onConflict = androidx.room.OnConflictStrategy.IGNORE)
     suspend fun insertSuspensionIfAbsent(suspension: AgentSuspensionEntity): Long
     @Upsert suspend fun upsertSuspension(suspension: AgentSuspensionEntity)
@@ -814,13 +833,14 @@ interface AgentDao {
         )
         AND (
             NOT EXISTS (
-                SELECT 1 FROM messages
-                WHERE messages.id = agent_runs.visibleAssistantMessageId
+                SELECT 1 FROM (SELECT id, sessionId FROM messages WHERE deleted = 0 UNION ALL SELECT id, sessionId FROM message_drafts) AS visible
+                WHERE visible.id = agent_runs.visibleAssistantMessageId
+                  AND visible.sessionId IN (SELECT id FROM chat_sessions WHERE deleted = 0)
             )
             OR EXISTS (
-                SELECT 1 FROM messages
-                WHERE messages.id = agent_runs.visibleAssistantMessageId
-                  AND (messages.isError = 1 OR messages.executionFinishedAt IS NOT NULL)
+                SELECT 1 FROM (SELECT id, isError, executionFinishedAt FROM messages WHERE deleted = 0 UNION ALL SELECT id, isError, executionFinishedAt FROM message_drafts) AS visible
+                WHERE visible.id = agent_runs.visibleAssistantMessageId
+                  AND (visible.isError = 1 OR visible.executionFinishedAt IS NOT NULL)
             )
         )
         """
@@ -971,8 +991,8 @@ interface AgentDao {
     @Query("SELECT * FROM agent_context_snapshots WHERE requestId = :requestId LIMIT 1")
     suspend fun getContextSnapshot(requestId: String): AgentContextSnapshotEntity?
 
-    @Query("SELECT * FROM agent_compactions WHERE sessionId = :sessionId AND status = 'COMPLETED' ORDER BY createdAt DESC LIMIT 1")
-    suspend fun getLatestCompaction(sessionId: String): AgentCompactionEntryEntity?
+    @Query("SELECT * FROM agent_compactions WHERE sessionId = :sessionId AND status = 'COMPLETED' ORDER BY createdAt DESC")
+    suspend fun getCompactions(sessionId: String): List<AgentCompactionEntryEntity>
 
     @Query(
         """

@@ -280,6 +280,8 @@ internal fun DataPersistenceManager.loadInitialDataInternal(
                     Log.d(TAG, "loadInitialData: 阶段2 - 开始异步加载历史数据...")
 
                     try {
+                        // 必须先收尾上次进程的草稿，再读预览和恢复 Agent；避免残留草稿成为孤儿。
+                        roomDataSource.recoverInterruptedDrafts()
                         // 检查是否需要加载历史数据
                         val shouldLoadHistory = stateHolder._historicalConversations.value.isEmpty()
                         var textHistoryLoadedCompletely = false

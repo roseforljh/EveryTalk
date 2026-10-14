@@ -108,10 +108,12 @@ object ConversationNameHelper {
     }
     /**
      * 解析会话的稳定ID（用于置顶标识、缓存键等）
-     * 优先使用首条User消息ID，其次非占位System消息ID，最后使用首条消息ID
+     * 已知会话身份优先；兼容旧数据时才从首条 User 消息推断。
+     * 编辑、复原或移动首条问题后，消息身份会变化，但会话、置顶与分组身份不能跟着变化。
      */
     fun resolveStableId(conversation: List<Message>?): String? {
         if (conversation.isNullOrEmpty()) return null
+        conversation.firstNotNullOfOrNull { it.conversationId }?.let { return it }
         return conversation.firstOrNull { it.sender == Sender.User }?.id
             ?: conversation.firstOrNull { it.sender == Sender.System && !it.isPlaceholderName }?.id
             ?: conversation.firstOrNull()?.id

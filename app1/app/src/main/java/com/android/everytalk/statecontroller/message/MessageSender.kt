@@ -397,6 +397,7 @@ internal fun appendAgentRequestTool(
         add(com.android.everytalk.data.agent.skillSecretRequestToolDefinition())
         add(com.android.everytalk.data.agent.protectedSecretRequestToolDefinition())
         add(com.android.everytalk.data.agent.capabilityRequestToolDefinition())
+        add(com.android.everytalk.data.agent.userInputRequestToolDefinition())
     }
 }
 
@@ -422,16 +423,17 @@ internal fun addOrReplaceRegeneratedUserMessage(
 ): Int {
     return Snapshot.withMutableSnapshot {
         if (isFromRegeneration && !manualMessageId.isNullOrBlank()) {
+            val conversationId = com.android.everytalk.util.ConversationNameHelper.resolveStableId(messageList)
+            val replacement = newUserMessage.copy(
+                id = if (newUserMessage.id == manualMessageId) "user_${UUID.randomUUID()}" else newUserMessage.id,
+                conversationId = newUserMessage.conversationId ?: conversationId,
+            )
             val existingIndex = messageList.indexOfFirst { it.id == manualMessageId }
             if (existingIndex >= 0) {
-                if (existingIndex == messageList.lastIndex) {
-                    messageList[existingIndex] = newUserMessage
-                    return@withMutableSnapshot existingIndex
-                }
                 messageList.removeAt(existingIndex)
-                messageList.add(newUserMessage)
-                return@withMutableSnapshot messageList.lastIndex
             }
+            messageList.add(replacement)
+            return@withMutableSnapshot messageList.lastIndex
         }
         messageList.add(newUserMessage)
         messageList.lastIndex
@@ -869,6 +871,7 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
         isImageGeneration: Boolean = false,
         manualMessageId: String? = null,
         contentParts: List<MessageContentPart> = emptyList(),
+        onUserMessageDisplayed: (() -> Unit)? = null,
         onUserMessageAccepted: (() -> Unit)? = null,
         onSendRejected: (() -> Unit)? = null,
         onTurnFinished: (() -> Unit)? = null,
@@ -883,6 +886,7 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
             isImageGeneration,
             manualMessageId,
             contentParts,
+            onUserMessageDisplayed,
             onUserMessageAccepted,
             onSendRejected,
             onTurnFinished,

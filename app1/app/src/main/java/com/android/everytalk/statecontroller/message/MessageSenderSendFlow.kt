@@ -132,6 +132,7 @@ internal fun MessageSender.sendMessageInternal(
         isImageGeneration: Boolean = false,
         manualMessageId: String? = null,
         contentParts: List<MessageContentPart> = emptyList(),
+        onUserMessageDisplayed: (() -> Unit)? = null,
         onUserMessageAccepted: (() -> Unit)? = null,
         onSendRejected: (() -> Unit)? = null,
         onTurnFinished: (() -> Unit)? = null,
@@ -350,7 +351,9 @@ internal fun MessageSender.sendMessageInternal(
             val attachmentsForApiClient = attachmentResult.processedAttachmentsForUi
 
             val newUserMessageForUi = UiMessage(
-                id = manualMessageId ?: "user_${UUID.randomUUID()}", text = textToActuallySend, sender = UiSender.User,
+                // 重答参数里的 manualMessageId 是旧问题的定位 ID，不能用作新问题身份。
+                id = if (isFromRegeneration) "user_${UUID.randomUUID()}" else manualMessageId ?: "user_${UUID.randomUUID()}",
+                text = textToActuallySend, sender = UiSender.User,
                 contentParts = contentPartsToActuallySend,
                 timestamp = System.currentTimeMillis(), contentStarted = true,
                 imageUrls = attachmentResult.imageUriStringsForUi,
@@ -381,7 +384,11 @@ internal fun MessageSender.sendMessageInternal(
                 }
             }
 
-            if (onUserMessageAccepted != null) {
+            // 发送准备可能包含附件处理、Agent 快照和本地存储。输入框只能在这一步之后清空，
+            // 否则任一准备阶段失败都会让用户误以为消息已发送并丢失原草稿。
+            onUserMessageDisplayed?.invoke()
+
+            if (onUserMessageAccepted != null || isFromRegeneration) {
                 val persisted = runCatching {
                     withContext(Dispatchers.IO) {
                         historyManager.run {
@@ -582,59 +589,19 @@ internal fun MessageSender.sendMessageInternal(
                 } else {
                     emptyList()
                 }
-                // 规范化图像尺寸：为空或包含占位符时回退到 1024x1024（基础兜底）
-                val baseSanitizedImageSize = currentConfig.imageSize?.takeIf { it.isNotBlank() && !it.contains("<") } ?: "1024x1024"
-                
-                // 根据模型家族 + 所选比例，推导 Kolors/Qwen 的精确分辨率（image_size）
-                // - Kolors: 使用映射表或精确选择（含 3:4 的两个选项）
-                // - Qwen-Image: 必须指定推荐分辨率；Qwen-Image-Edit 不支持 image_size（保持 null）
+                // 在同一次发送中固定比例快照，尺寸和 aspectRatio 必须来自同一选择。
                 val detectedFamilyForImage = com.android.everytalk.ui.components.ImageGenCapabilities.detectFamily(
                     modelName = currentConfig.model,
                     provider = currentConfig.provider,
                     apiAddress = currentConfig.address
                 )
-                val isQwenEditModel = currentConfig.model.contains("Image-Edit", ignoreCase = true)
                 val selectedRatioForImage = stateHolder._selectedImageRatio.value
-                
-                val familyBasedImageSize: String? = when (detectedFamilyForImage) {
-                    com.android.everytalk.ui.components.ImageGenCapabilities.ModelFamily.KOLORS -> {
-                        val labelFromRatio = "${selectedRatioForImage.width}x${selectedRatioForImage.height}"
-                        val mapped = com.android.everytalk.ui.components.ImageGenCapabilities
-                            .getKolorsSizesByRatio(selectedRatioForImage.displayName)
-                            .firstOrNull()?.label
-                        if (mapped.isNullOrBlank()) labelFromRatio else mapped
-                    }
-                    com.android.everytalk.ui.components.ImageGenCapabilities.ModelFamily.QWEN -> {
-                        if (isQwenEditModel) {
-                            null // 按文档：Qwen-Image-Edit 不支持 image_size
-                        } else {
-                            val mapped = com.android.everytalk.ui.components.ImageGenCapabilities
-                                .getQwenSizesByRatio(selectedRatioForImage.displayName)
-                            (mapped.firstOrNull()?.label ?: "1328x1328")
-                        }
-                    }
-                    com.android.everytalk.ui.components.ImageGenCapabilities.ModelFamily.GPT_IMAGE -> {
-                        if (selectedRatioForImage.isAuto) {
-                            null
-                        } else {
-                            com.android.everytalk.ui.components.ImageGenCapabilities
-                                .getGptImageSize(selectedRatioForImage.displayName)
-                                ?.label
-                        }
-                    }
-                    else -> null
-                }
-                
-                val finalImageSize = familyBasedImageSize ?: baseSanitizedImageSize
-                val hasAttachmentImages = attachmentsForApiClient.any {
-                    it is com.android.everytalk.models.SelectedMediaItem.ImageFromUri ||
-                        it is com.android.everytalk.models.SelectedMediaItem.ImageFromBitmap
-                }
-                val imageSizeForRequest: String? = when {
-                    detectedFamilyForImage == com.android.everytalk.ui.components.ImageGenCapabilities.ModelFamily.QWEN && isQwenEditModel -> null
-                    detectedFamilyForImage == com.android.everytalk.ui.components.ImageGenCapabilities.ModelFamily.GPT_IMAGE && selectedRatioForImage.isAuto && hasAttachmentImages -> null
-                    else -> finalImageSize
-                }
+                val imageSizeForRequest = com.android.everytalk.ui.components.ImageGenCapabilities.resolveRequestImageSize(
+                    family = detectedFamilyForImage,
+                    modelName = currentConfig.model,
+                    ratio = selectedRatioForImage,
+                    configuredSize = currentConfig.imageSize,
+                )
                 // 检查是否包含图像生成关键词
                 if (isImageGeneration && hasImageGenerationKeywords(textToActuallySend)) {
                     // 重置重试计数
@@ -1077,7 +1044,7 @@ internal fun MessageSender.sendMessageInternal(
                             // 渠道控制路由：默认平台传"默认"，非默认按"渠道"字段（OpenAI兼容/Gemini）
                             provider = if (isDefaultProvider) currentConfig.provider else effectiveModelChannel,
                             responseModalities = listOf("Image"),
-                            aspectRatio = stateHolder._selectedImageRatio.value.let { r ->
+                            aspectRatio = selectedRatioForImage.let { r ->
                                 if (r.isAuto) null else r.displayName
                             },
                             // 严格会话隔离：把当前图像历史项ID透传到后端

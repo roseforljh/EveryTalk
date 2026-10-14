@@ -1,5 +1,39 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="chat_reply_incomplete">Reply incomplete</string>
+    <string name="memory_title">Memory management</string>
+    <string name="memory_entry_description">Manage information shared across text chats</string>
+    <string name="memory_privacy">Memories are stored on this device. When enabled, selected memories are sent to your current model provider. Clearing chats or cache keeps memories; system Clear storage removes them. Shared across local text chats and model configurations.</string>
+    <string name="memory_use">Use memories</string>
+    <string name="memory_auto">Automatically save new memories</string>
+    <string name="memory_auto_description">Off by default. Each successful text turn may make one extra model request to save stable information. Interrupted turns, tool output, and image generation are excluded. Review saved entries for mistakes.</string>
+    <string name="memory_capacity">%1$d / %2$d memories · %3$d / %4$d characters</string>
+    <string name="memory_add">Add memory</string>
+    <string name="memory_clear">Clear all memories</string>
+    <string name="memory_search">Search memories</string>
+    <string name="memory_empty">No memories yet. Add one here or explicitly ask AI to remember it in chat.</string>
+    <string name="memory_no_results">No matching memories</string>
+    <string name="memory_entry_use">Include this memory</string>
+    <string name="memory_edit">Edit</string>
+    <string name="memory_delete">Delete memory</string>
+    <string name="memory_save">Save</string>
+    <string name="memory_cancel">Cancel</string>
+    <string name="memory_confirm">Confirm deletion</string>
+    <string name="memory_clear_confirmation">Permanently delete all memories? Chats and settings remain. Pending extraction results cannot restore these memories.</string>
+    <string name="memory_delete_confirmation">Delete this memory? Future requests will no longer receive it through memory. Information already in chat history remains.</string>
+    <string name="memory_content">Memory content</string>
+    <string name="memory_category_preference">User preference</string>
+    <string name="memory_category_project">Project fact</string>
+    <string name="memory_category_workflow">Working habit</string>
+    <string name="memory_category_other">Other</string>
+    <string name="memory_origin_auto">Automatically saved</string>
+    <string name="memory_origin_review">Automatically saved · disabled, review before enabling</string>
+    <string name="memory_origin_chat">Saved by explicit chat request</string>
+    <string name="memory_origin_manual">Manually managed</string>
+    <string name="memory_source_deleted">Source conversation deleted</string>
+    <string name="memory_load_failed">Unable to load memories. Please retry.</string>
+    <string name="memory_operation_failed">Unable to update memories. Existing data was kept.</string>
+    <string name="memory_retry">Retry</string>
     <string name="app_name">EveryTalk</string>
     <string name="ai_reply_message">AI reply</string>
 
@@ -73,7 +107,7 @@
     <string name="storage_data_total">Data total</string>
     <string name="storage_cleanable_badge">Cleanable</string>
     <string name="storage_conversations">Chats and database</string>
-    <string name="storage_conversations_description">Chat history, model settings, and indexes</string>
+    <string name="storage_conversations_description">Chat history, memories, model settings, and indexes</string>
     <string name="storage_attachments">Attachments and images</string>
     <string name="storage_attachments_description">Images, documents, audio, and video in chats</string>
     <string name="storage_skills">Skill files</string>
@@ -86,7 +120,7 @@
     <string name="storage_other_description">Preferences, connection credentials, and runtime files</string>
     <string name="storage_estimate_note">Usage is calculated from files the app can currently read. System-compiled files may cause a small difference.</string>
     <string name="storage_clear_dialog_title">Clean junk files?</string>
-    <string name="storage_clear_dialog_message">About %1$s will be freed. Chats, attachments, Skills, settings, and keys will be kept.</string>
+    <string name="storage_clear_dialog_message">About %1$s will be freed. Chats, memories, attachments, Skills, settings, and keys will be kept.</string>
     <string name="storage_clear_confirm">Clean now</string>
     <string name="storage_clear_success">Freed %1$s</string>
     <string name="storage_clear_failed">Cleaning failed. Try again later.</string>
@@ -1148,6 +1182,8 @@
     <string name="thinking_expand_execution">Expand execution process</string>
     <string name="thinking_collapse_execution">Collapse execution process</string>
     <string name="thinking_execution_failed">Execution failed</string>
+    <string name="thinking_execution_running">Running</string>
+    <string name="thinking_execution_completed">Completed</string>
     <string name="thinking_complete">Complete</string>
     <string name="thinking_processing_duration">Processing · %1$s</string>
     <string name="thinking_writing">Writing</string>
@@ -1671,6 +1707,11 @@
     <string name="agent_intervention_submit_failed">Submission did not complete. Check the current state and try again.</string>
     <string name="agent_intervention_reject_not_accepted">The rejection was not accepted. Try again.</string>
     <string name="agent_intervention_reject_failed">The rejection did not complete. Try again.</string>
+    <string name="agent_answer_question_label">AI question</string>
+    <string name="agent_answer_input_hint">Type your answer</string>
+    <string name="agent_answer_add_attachment">Add attachment</string>
+    <string name="agent_answer_send">Send answer</string>
+    <string name="agent_answer_submit_failed">The answer was not accepted. Try again.</string>
     <string name="agent_capability_cloudflare">Restore Cloudflare authorization</string>
     <string name="agent_capability_resource">Choose Cloudflare resource</string>
     <string name="agent_capability_git">Authorize Git repository access</string>

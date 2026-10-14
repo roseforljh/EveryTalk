@@ -84,7 +84,7 @@ class RoomReplaceTransactionTest {
             """.trimIndent(),
         )
 
-        val updated = listOf(original[0], original[1].copy(text = "新内容"))
+        val updated = listOf(original[0], original[1].copy(id = "message-2-new", text = "新内容"))
         dao.saveSessionWithMessages(
             session.copy(lastModifiedTimestamp = 4L),
             updated.map { it.toEntity(session.id) },

@@ -1,6 +1,8 @@
 package com.android.everytalk.data.database.entities
 
 import androidx.room.Entity
+import androidx.room.ColumnInfo
+import androidx.room.Embedded
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -22,7 +24,7 @@ const val HISTORY_PREVIEW_OUTPUT_TYPE = "history_preview"
 
 @Entity(
     tableName = "chat_sessions",
-    indices = [Index(value = ["isImageGeneration", "lastModifiedTimestamp"])],
+    indices = [Index(value = ["isImageGeneration", "lastModifiedTimestamp"]), Index(value = ["uuid"], unique = true)],
 )
 data class ChatSessionEntity(
     @PrimaryKey
@@ -30,7 +32,12 @@ data class ChatSessionEntity(
     val creationTimestamp: Long,
     val lastModifiedTimestamp: Long,
     val isImageGeneration: Boolean,
-    val title: String? = null // Optional title caching
+    val title: String? = null, // Optional title caching
+    @ColumnInfo(defaultValue = "''") val uuid: String = localSyncUuid("chat_sessions", id),
+    @ColumnInfo(name = "updated_at", defaultValue = "0") val updatedAt: Long = lastModifiedTimestamp,
+    @ColumnInfo(defaultValue = "0") val deleted: Boolean = false,
+    @ColumnInfo(name = "sync_status", defaultValue = "'LOCAL_ONLY'") val syncStatus: String =
+        if (isSyncableTextSession(id, isImageGeneration)) SyncStatus.PENDING else SyncStatus.LOCAL_ONLY,
 )
 
 @Entity(
@@ -43,7 +50,7 @@ data class ChatSessionEntity(
             onDelete = ForeignKey.CASCADE
         )
     ],
-    indices = [Index(value = ["sessionId", "timestamp"])]
+    indices = [Index(value = ["sessionId", "timestamp"]), Index(value = ["uuid"], unique = true)]
 )
 
 data class MessageEntity(
@@ -82,7 +89,23 @@ data class MessageEntity(
      * 保存会话时只查询这个小字段，避免为了判断消息是否变化而读取并解析整行 JSON。
      */
     val storageFingerprint: String,
+    @ColumnInfo(defaultValue = "''") val uuid: String = localSyncUuid("messages", id),
+    @ColumnInfo(name = "updated_at", defaultValue = "0") val updatedAt: Long = timestamp,
+    @ColumnInfo(defaultValue = "0") val deleted: Boolean = false,
+    // 由 DAO 在正式插入时标记 PENDING；流式草稿保持 LOCAL_ONLY，不能提前上传。
+    @ColumnInfo(name = "sync_status", defaultValue = "'LOCAL_ONLY'") val syncStatus: String = SyncStatus.LOCAL_ONLY,
+    /** 独立于当前状态：删除待同步时仍能知道服务器曾接收过此消息。 */
+    @ColumnInfo(name = "ever_synced", defaultValue = "0") val everSynced: Boolean = false,
+    @ColumnInfo(name = "is_incomplete", defaultValue = "0") val isIncomplete: Boolean = false,
 )
+
+/** 本地流式草稿沿用消息字段与转换器，避免维护第二份序列化格式；永不参与同步。 */
+@Entity(
+    tableName = "message_drafts", primaryKeys = ["id"],
+    foreignKeys = [ForeignKey(entity = ChatSessionEntity::class, parentColumns = ["id"], childColumns = ["sessionId"], onDelete = ForeignKey.CASCADE)],
+    indices = [Index(value = ["sessionId", "timestamp"])],
+)
+data class MessageDraftEntity(@Embedded val message: MessageEntity)
 
 /**
  * AI 正在回答时暂存的用户消息。
@@ -111,6 +134,11 @@ data class PendingMessageEntity(
 data class MessageStorageState(
     val id: String,
     val storageFingerprint: String,
+    val uuid: String,
+    @ColumnInfo(name = "updated_at") val updatedAt: Long,
+    val deleted: Boolean,
+    @ColumnInfo(name = "sync_status") val syncStatus: String,
+    @ColumnInfo(name = "ever_synced") val everSynced: Boolean,
 )
 
 /**
@@ -133,6 +161,7 @@ fun LightweightMessageRow.toPreviewMessage(converters: Converters): Message = Me
     timestamp = timestamp,
     isPlaceholderName = isPlaceholderName,
     outputType = HISTORY_PREVIEW_OUTPUT_TYPE,
+    conversationId = sessionId,
 )
 
 /**
@@ -168,6 +197,7 @@ data class RawMessageRow(
     val tokenUsageJson: String?,
     val contextUsageSnapshotJson: String?,
     val contextCompressionStateJson: String?,
+    @ColumnInfo(name = "is_incomplete") val isIncomplete: Boolean,
 )
 
 fun RawMessageRow.toMessage(converters: Converters): Message = Message(
@@ -199,6 +229,8 @@ fun RawMessageRow.toMessage(converters: Converters): Message = Message(
     tokenUsage = converters.toTokenUsage(tokenUsageJson),
     contextUsageSnapshot = converters.toContextUsageSnapshot(contextUsageSnapshotJson),
     contextCompressionState = converters.toContextCompressionState(contextCompressionStateJson),
+    conversationId = sessionId,
+    isIncomplete = isIncomplete,
 )
 
 fun MessageEntity.toMessage(): Message {
@@ -231,6 +263,8 @@ fun MessageEntity.toMessage(): Message {
         tokenUsage = tokenUsage,
         contextUsageSnapshot = contextUsageSnapshot,
         contextCompressionState = contextCompressionState,
+        conversationId = sessionId,
+        isIncomplete = isIncomplete,
     )
 }
 
@@ -266,6 +300,7 @@ fun Message.toEntity(sessionId: String, converters: Converters = Converters()): 
         contextUsageSnapshot = contextUsageSnapshot,
         contextCompressionState = contextCompressionState,
         storageFingerprint = storageFingerprint(converters),
+        isIncomplete = isIncomplete,
     )
 }
 
@@ -327,6 +362,7 @@ private fun Message.storageFingerprint(converters: Converters): String {
     update(converters.fromTokenUsage(tokenUsage))
     update(converters.fromContextUsageSnapshot(contextUsageSnapshot))
     update(converters.fromContextCompressionState(contextCompressionState))
+    update(isIncomplete.toString())
 
     val bytes = digest.digest()
     val hex = "0123456789abcdef"

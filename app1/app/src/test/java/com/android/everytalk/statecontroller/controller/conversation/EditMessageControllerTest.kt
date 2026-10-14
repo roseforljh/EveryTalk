@@ -66,7 +66,7 @@ class EditMessageControllerTest {
         )
         controller.restoreOriginalMessages(editor.value.text, state.selectedMediaItems, null, false)
         advanceUntilIdle()
-        assertEquals(originalMessages, state.messages.toList())
+        assertRestored(originalMessages, state.messages.toList())
     }
 
     @Test
@@ -92,8 +92,8 @@ class EditMessageControllerTest {
             assertFalse(session.belongsTo(currentId, !imageMode))
             controller.restoreOriginalMessages(original.text, emptyList(), null, imageMode)
             advanceUntilIdle()
-            assertEquals(originalMessages, messages.toList())
-            coVerify { history.rewindConversation("u1", originalMessages, imageMode, currentId) }
+            assertRestored(originalMessages, messages.toList())
+            coVerify { history.rewindConversation("u1", match { it.isNotEmpty() }, imageMode, currentId) }
         }
     }
 
@@ -146,7 +146,7 @@ class EditMessageControllerTest {
         coVerify(exactly = 1) { history.rewindConversation(any(), any(), any(), any()) }
     }
     @Test
-    fun `未改动时复原完整对话原ID附件与后续回答并清空输入`() = runTest {
+    fun `未改动时复原完整对话新ID附件与后续回答并清空输入`() = runTest {
         for (imageMode in listOf(false, true)) {
             val original = user("u1", "原文\n").copy(attachments = listOf(SelectedMediaItem.ImageFromBitmap("data", "photo")))
             val originalMessages = listOf(original, ai("a1"), user("u2"), ai("a2"))
@@ -167,11 +167,11 @@ class EditMessageControllerTest {
             controller.restoreOriginalMessages(original.text, original.attachments, null, imageMode)
             advanceUntilIdle()
 
-            assertEquals(originalMessages, messages.toList())
+            assertRestored(originalMessages, messages.toList())
             assertEquals("", state._text.value)
             assertTrue(state.selectedMediaItems.isEmpty())
             assertNull(controller.editSession.value)
-            coVerify(exactly = 1) { history.rewindConversation("u1", originalMessages, imageMode) }
+            coVerify(exactly = 1) { history.rewindConversation("u1", match { it.isNotEmpty() }, imageMode) }
         }
     }
 
@@ -195,7 +195,7 @@ class EditMessageControllerTest {
         assertTrue(state.messages.isEmpty())
         controller.restoreOriginalMessages(original.text, attachments, null, false)
         advanceUntilIdle()
-        assertEquals(listOf(original), state.messages.toList())
+        assertRestored(listOf(original), state.messages.toList())
     }
 
     @Test
@@ -207,7 +207,7 @@ class EditMessageControllerTest {
         val controller = EditMessageController(state, history, this, Mutex(), { _, _ -> }, notices::add)
         controller.requestEditMessage(original)
         advanceUntilIdle()
-        coEvery { history.rewindConversation("u1", listOf(original), false) } throws IllegalStateException("磁盘错误")
+        coEvery { history.rewindConversation("u1", match { it.isNotEmpty() }, false) } throws IllegalStateException("磁盘错误")
         controller.restoreOriginalMessages(original.text, emptyList(), null, false)
         advanceUntilIdle()
         assertNotNull(controller.editSession.value)
@@ -218,14 +218,23 @@ class EditMessageControllerTest {
         state.setCurrentConversationId("another")
         controller.restoreOriginalMessages(original.text, emptyList(), null, false)
         advanceUntilIdle()
-        coVerify(exactly = 1) { history.rewindConversation("u1", listOf(original), false) }
+        coVerify(exactly = 1) { history.rewindConversation("u1", match { it.isNotEmpty() }, false) }
         state.setCurrentConversationId("u1")
-        coEvery { history.rewindConversation("u1", listOf(original), false) } returns Unit
+        coEvery { history.rewindConversation("u1", match { it.isNotEmpty() }, false) } returns Unit
         controller.restoreOriginalMessages(original.text, emptyList(), null, false)
         advanceUntilIdle()
-        assertEquals(listOf(original), state.messages.toList())
+        assertRestored(listOf(original), state.messages.toList())
         assertNull(controller.editSession.value)
     }
+    private fun assertRestored(original: List<Message>, restored: List<Message>) {
+        assertEquals(original.size, restored.size)
+        original.zip(restored).forEach { (old, copy) ->
+            assertNotEquals(old.id, copy.id)
+            assertNotNull(copy.conversationId)
+            assertEquals(old.copy(id = copy.id, conversationId = copy.conversationId), copy)
+        }
+    }
+
     private fun user(id: String, text: String = id) = Message(id = id, text = text, sender = Sender.User)
     private fun ai(id: String) = Message(id = id, text = id, sender = Sender.AI)
 

@@ -90,7 +90,8 @@ class RegenerateControllerTest {
 
         assertEquals("user-1", sentManualId)
         assertEquals("user-1", stateHolder._currentConversationId.value)
-        assertEquals(listOf("user-1"), stateHolder.messages.map { it.id })
+        assertFalse(stateHolder.messages.single().id == "user-1")
+        assertEquals("user-1", stateHolder.messages.single().conversationId)
         assertTrue(userKeyPresentBeforeResend)
         assertFalse(cleanupIds.contains("user-1"))
         assertTrue(cleanupIds.contains("ai-1"))
@@ -126,7 +127,10 @@ class RegenerateControllerTest {
         assertTrue(sentLatch.await(1, TimeUnit.SECONDS))
         advanceUntilIdle()
 
-        assertEquals(listOf("user-2", "ai-2", "user-1", "new-ai-1"), stateHolder.messages.map { it.id })
+        assertEquals(listOf("user-2", "ai-2"), stateHolder.messages.take(2).map { it.id })
+        assertFalse(stateHolder.messages[2].id == "user-1")
+        assertEquals("user-1", stateHolder.messages[2].conversationId)
+        assertEquals("new-ai-1", stateHolder.messages.last().id)
         assertTrue(userKeyPresentBeforeResend)
     }
 
@@ -188,7 +192,8 @@ class RegenerateControllerTest {
 
         assertEquals("image-user-1", sentManualId)
         assertEquals("image-user-1", stateHolder._currentImageGenerationConversationId.value)
-        assertEquals(listOf("image-user-1"), stateHolder.imageGenerationMessages.map { it.id })
+        assertFalse(stateHolder.imageGenerationMessages.single().id == "image-user-1")
+        assertEquals("image-user-1", stateHolder.imageGenerationMessages.single().conversationId)
         assertTrue(userKeyPresentBeforeResend)
     }
 

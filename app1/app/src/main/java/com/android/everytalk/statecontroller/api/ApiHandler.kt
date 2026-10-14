@@ -341,6 +341,7 @@ internal fun finishPreparedMessageExecution(
     messageList[index] = messageList[index].copy(
         executionStatus = status,
         executionFinishedAt = finishedAt,
+        isIncomplete = true,
     )
     return true
 }
@@ -457,6 +458,24 @@ class ApiHandler(
                 resolutionNonce,
                 secret,
             )
+    }
+
+    suspend fun answerUserQuestion(
+        suspensionId: String,
+        expectedVersion: Long,
+        resolutionNonce: String,
+        content: String,
+        contentParts: List<com.android.everytalk.data.DataClass.MessageContentPart> = emptyList(),
+        attachments: List<com.android.everytalk.models.SelectedMediaItem> = emptyList(),
+    ): Boolean = withContext(Dispatchers.IO) {
+        agentRunCoordinator.answerUserQuestion(
+            suspensionId,
+            expectedVersion,
+            resolutionNonce,
+            content,
+            contentParts,
+            attachments,
+        )
     }
 
     fun resolveDurableIntervention(

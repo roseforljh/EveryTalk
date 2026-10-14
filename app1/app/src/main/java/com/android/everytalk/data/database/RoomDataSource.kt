@@ -40,15 +40,24 @@ private val LAST_OPEN_SESSION_IDS = setOf(
     "last_open_image_generation_v1",
 )
 
-class RoomDataSource(context: Context) {
+class RoomDataSource(context: Context, private val database: AppDatabase = AppDatabase.getDatabase(context)) {
     private val applicationContext = context.applicationContext
-    private val database = AppDatabase.getDatabase(context)
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val converters = Converters()
     private val apiConfigDao = database.apiConfigDao()
     private val voiceConfigDao = database.voiceConfigDao()
     private val chatDao = database.chatDao()
     private val settingsDao = database.settingsDao()
+
+    /** 仅由启动加载流程调用，不能在普通打开历史时把仍在运行的草稿提前定稿。 */
+    suspend fun recoverInterruptedDrafts() = database.withTransaction {
+        val runStore = com.android.everytalk.data.agent.AgentRunStore(database.agentDao())
+        chatDao.getAllDrafts().forEach { draft ->
+            // 草稿将封存为未完成消息；同一事务内终止旧续写/审批，不能稍后再改写其正式正文。
+            runStore.cancelActiveRunByVisibleMessage(draft.message.id, "DRAFT_RECOVERED_AS_INCOMPLETE")
+        }
+        chatDao.recoverInterruptedDrafts()
+    }
 
     // Helper to run suspend functions in blocking mode for compatibility if needed,
     // though DataPersistenceManager calls this from IO context via suspend functions usually?
@@ -296,6 +305,7 @@ class RoomDataSource(context: Context) {
                 contentStarted = true,
                 isPlaceholderName = true,
                 outputType = HISTORY_PREVIEW_OUTPUT_TYPE,
+                conversationId = session.id,
             ),
         ) + withoutLegacyTitle
     }
@@ -328,6 +338,7 @@ class RoomDataSource(context: Context) {
             session = session,
             messages = persistedMessages.map { it.toEntity(sessionId, converters) },
             sessionChanged = session != existingSession,
+            draftIds = persistedMessages.filter { it.isStreamingDraft }.mapTo(hashSetOf()) { it.id },
         )
     }
 
@@ -393,6 +404,7 @@ class RoomDataSource(context: Context) {
                     session = session,
                     messages = persistedMessages.map { it.toEntity(stableId, converters) },
                     sessionChanged = session != existingSession,
+                    draftIds = persistedMessages.filter { it.isStreamingDraft }.mapTo(hashSetOf()) { it.id },
                 )
             }
         }
@@ -414,7 +426,7 @@ class RoomDataSource(context: Context) {
     
     suspend fun loadLastOpenChat(): List<Message> {
         return chatDao.getMessagesForSession("last_open_chat_v1").map {
-            it.toMessage().copy(id = it.id.removePrefix("last_open_chat_v1:"))
+            it.toMessage().copy(id = it.id.removePrefix("last_open_chat_v1:"), conversationId = null)
         }
     }
 
@@ -424,7 +436,7 @@ class RoomDataSource(context: Context) {
 
     suspend fun loadLastOpenImageGenerationChat(): List<Message> {
         return chatDao.getMessagesForSession("last_open_image_generation_v1").map {
-            it.toMessage().copy(id = it.id.removePrefix("last_open_image_generation_v1:"))
+            it.toMessage().copy(id = it.id.removePrefix("last_open_image_generation_v1:"), conversationId = null)
         }
     }
 
@@ -434,7 +446,7 @@ class RoomDataSource(context: Context) {
 
     private suspend fun saveLastOpenSession(sessionId: String, messages: List<Message>, isImageGen: Boolean) {
         if (messages.isEmpty()) {
-            chatDao.deleteSession(sessionId)
+            chatDao.clearLastOpenSnapshot(sessionId)
         } else {
             val session = ChatSessionEntity(
                 id = sessionId,
@@ -445,9 +457,10 @@ class RoomDataSource(context: Context) {
             )
             // messages.id 是全表主键。快照使用独立存储 ID，避免 Upsert 把历史消息移入快照会话。
             // 对外读取时去掉该前缀，保持气泡、附件和 Agent 引用的真实消息 ID 不变。
-            chatDao.saveSessionWithMessages(session, messages.map {
-                it.copy(id = "$sessionId:${it.id}").toEntity(sessionId, converters)
-            })
+            chatDao.saveSessionWithMessages(
+                session, messages.map { it.copy(id = "$sessionId:${it.id}").toEntity(sessionId, converters) },
+                draftIds = messages.filter { it.isStreamingDraft }.mapTo(hashSetOf()) { "$sessionId:${it.id}" },
+            )
         }
     }
 

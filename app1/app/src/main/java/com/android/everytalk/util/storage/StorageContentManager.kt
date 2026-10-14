@@ -149,7 +149,8 @@ class StorageContentManager(context: Context) {
             SELECT s.id, COALESCE(s.title, ''), s.lastModifiedTimestamp, s.isImageGeneration,
                    COUNT(m.id), COALESCE(SUM($byteExpression + 96), 0)
             FROM chat_sessions s
-            LEFT JOIN messages m ON m.sessionId = s.id
+            LEFT JOIN (SELECT * FROM messages WHERE deleted = 0 UNION ALL SELECT * FROM message_drafts) m ON m.sessionId = s.id
+            WHERE s.deleted = 0
             GROUP BY s.id, s.title, s.lastModifiedTimestamp, s.isImageGeneration
         """.trimIndent()
 

@@ -7,6 +7,7 @@ import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.network.extractThinkTagContent
 import com.android.everytalk.statecontroller.ViewModelStateHolder
 import com.android.everytalk.util.ConversationNameHelper
+import com.android.everytalk.data.database.entities.toEntity
 import com.android.everytalk.util.image.ImagePersistenceResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -20,7 +21,6 @@ import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.security.MessageDigest
 
 internal fun resolveHistoryExpectedStableConversationId(
     isImageGeneration: Boolean,
@@ -39,51 +39,6 @@ internal fun resolveHistoryExpectedStableConversationId(
     return stableIdFromMessages ?: currentConversationId.takeIf { it.isNotBlank() }
 }
 
-/**
- * 把文本按 UTF-16 字符分段送入摘要，避免 `toByteArray()` 为数 MB 正文再分配一份完整副本。
- * 字段长度先进入摘要，防止相邻字段拼接后产生相同结果。
- */
-private fun MessageDigest.updateFingerprintField(value: String, trimWhitespace: Boolean = false) {
-    var start = 0
-    var end = value.length
-    if (trimWhitespace) {
-        while (start < end && value[start].isWhitespace()) start += 1
-        while (end > start && value[end - 1].isWhitespace()) end -= 1
-    }
-    val length = end - start
-    update((length ushr 24).toByte())
-    update((length ushr 16).toByte())
-    update((length ushr 8).toByte())
-    update(length.toByte())
-    val buffer = ByteArray(8_192)
-    var bufferSize = 0
-    for (index in start until end) {
-        val code = value[index].code
-        buffer[bufferSize++] = (code ushr 8).toByte()
-        buffer[bufferSize++] = code.toByte()
-        if (bufferSize == buffer.size) {
-            update(buffer)
-            bufferSize = 0
-        }
-    }
-    if (bufferSize > 0) update(buffer, 0, bufferSize)
-}
-
-private fun stableTextFingerprint(value: String): String = MessageDigest.getInstance("SHA-256")
-    .apply { updateFingerprintField(value) }
-    .toHexString()
-
-private fun MessageDigest.toHexString(): String {
-    val bytes = digest()
-    val hex = "0123456789abcdef"
-    return CharArray(bytes.size * 2).also { output ->
-        bytes.forEachIndexed { index, byte ->
-            val value = byte.toInt() and 0xff
-            output[index * 2] = hex[value ushr 4]
-            output[index * 2 + 1] = hex[value and 0x0f]
-        }
-    }.concatToString()
-}
 class HistoryManager(
     private val stateHolder: ViewModelStateHolder,
     private val persistenceManager: DataPersistenceManager,
@@ -114,33 +69,13 @@ class HistoryManager(
     private var lastInsertAtMs: Long = 0L
     private var lastPersistedConversationApiConfigIds: Map<String, String>? = null
 
-    // 生成单条消息的稳定指纹（忽略 id/timestamp/动画状态/占位标题）
-    private fun messageFingerprint(msg: Message): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        val senderTag = when (msg.sender) {
-            Sender.User -> "U"
-            Sender.AI -> "A"
-            Sender.System -> if (msg.isPlaceholderName) "S_PLACEHOLDER" else "S"
-            else -> "O"
-        }
-        val hasImages = if (msg.imageUrls.isNullOrEmpty()) 0 else msg.imageUrls.size
-        val attachmentsSet = msg.attachments.mapNotNull {
-            when (it) {
-                is com.android.everytalk.models.SelectedMediaItem.ImageFromUri -> it.uri.toString()
-                is com.android.everytalk.models.SelectedMediaItem.GenericFile -> it.uri.toString()
-                // 音频可能是数 MB Base64。先压成固定摘要，禁止把完整数据复制进判重字符串。
-                is com.android.everytalk.models.SelectedMediaItem.Audio ->
-                    it.filePath ?: "audio:${stableTextFingerprint(it.data)}"
-                is com.android.everytalk.models.SelectedMediaItem.ImageFromBitmap -> it.filePath ?: ""
-            }
-        }.toSet().sorted().joinToString("|")
-        digest.updateFingerprintField(senderTag)
-        digest.updateFingerprintField(msg.text, trimWhitespace = true)
-        digest.updateFingerprintField(msg.reasoning.orEmpty(), trimWhitespace = true)
-        digest.updateFingerprintField("img=$hasImages")
-        digest.updateFingerprintField("att={$attachmentsSet}")
-        return digest.toHexString()
-    }
+    /** 复用落库摘要，身份、token 补写和草稿定稿都应触发保存，不能只比较正文。 */
+    private fun messageFingerprint(msg: Message): String =
+        "${msg.id}:${msg.isStreamingDraft}:" + msg.toEntity("fingerprint").storageFingerprint
+
+    /** 兼容旧临时会话身份迁移：只忽略 ID 和时间，不能据此忽略正式消息的实际保存变化。 */
+    private fun draftPrefixFingerprint(msg: Message): String =
+        msg.copy(id = "", timestamp = 0).toEntity("fingerprint").storageFingerprint
 
     private fun stableConversationId(messages: List<Message>): String? =
         ConversationNameHelper.resolveStableId(messages)
@@ -314,13 +249,19 @@ class HistoryManager(
     )
 
     private fun buildSaveRequest(force: Boolean, isImageGeneration: Boolean): SaveRequest {
+        val streamingId = if (isImageGeneration) stateHolder._currentImageStreamingAiMessageId.value
+            else stateHolder._currentTextStreamingAiMessageId.value
         return SaveRequest(
             force = force,
             isImageGen = isImageGeneration,
-            messagesSnapshot = if (isImageGeneration) {
+            messagesSnapshot = (if (isImageGeneration) {
                 stateHolder.imageGenerationMessages.toList()
             } else {
                 stateHolder.messages.toList()
+            }).map { message ->
+                message.copy(isStreamingDraft = message.sender == Sender.AI && !message.isError &&
+                    message.executionFinishedAt == null &&
+                    (message.id == streamingId || !message.executionStatus.isNullOrBlank()))
             },
             conversationId = if (isImageGeneration) {
                 stateHolder._currentImageGenerationConversationId.value
@@ -388,7 +329,6 @@ class HistoryManager(
         }
         return stripLeadingLegacySystemPromptMessages(messagesToFilter)
             .filter { msg ->
-                if (msg.isError) return@filter false
                 when (msg.sender) {
                     Sender.User -> true
                     // 会话名称属于历史元数据，保存聊天内容时统一从历史记录合并。
@@ -562,7 +502,7 @@ class HistoryManager(
                 val comparableStored = filterMessagesForSaving(stored)
                 messagesToSave.size >= comparableStored.size &&
                     comparableStored.indices.all { index ->
-                        messageFingerprint(comparableStored[index]) == messageFingerprint(messagesToSave[index])
+                        draftPrefixFingerprint(comparableStored[index]) == draftPrefixFingerprint(messagesToSave[index])
                     }
             } ?: false
         } else {
@@ -592,7 +532,11 @@ class HistoryManager(
                 storedConversation = storedConversation,
                 currentMessages = messagesToSave,
             )
-            val contentChanged = !compareMessageLists(existingMessages, messagesToSave)
+            // 页面内容判等会忽略 token 等字段，落库必须比较完整摘要，否则补写和草稿定稿会被跳过。
+            val contentChanged = !compareMessageLists(existingMessages, messagesToSave) ||
+                existingMessages.size != messagesToSave.size || existingMessages.indices.any {
+                messageFingerprint(existingMessages[it]) != messageFingerprint(messagesToSave[it])
+            }
             if (messagesToSave.isNotEmpty() && (isDirty || forceSave && contentChanged)) {
                 if (contentChanged) {
                     mutableHistory[currentLoadedIdx] = updatedConversation

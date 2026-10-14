@@ -12,7 +12,7 @@ import org.junit.Test
 class MessageSenderRegenerationInsertTest {
 
     @Test
-    fun `regenerated user message moves to bottom without duplicating its key`() {
+    fun `regenerated user message moves to bottom with new identity and stable conversation`() {
         val messages = mutableStateListOf(
             Message(id = "user-1", text = "old question", sender = Sender.User),
             Message(id = "user-2", text = "second question", sender = Sender.User),
@@ -27,12 +27,14 @@ class MessageSenderRegenerationInsertTest {
         )
 
         assertEquals(1, writtenIndex)
-        assertEquals(listOf("user-2", "user-1"), messages.map { it.id })
-        assertEquals(regenerated, messages[1])
+        assertEquals("user-2", messages.first().id)
+        assertTrue(messages.last().id != "user-1")
+        assertEquals(regenerated.text, messages.last().text)
+        assertEquals("user-1", messages.last().conversationId)
     }
 
     @Test
-    fun `latest regenerated user message is replaced in place`() {
+    fun `latest regenerated user message also receives new identity`() {
         val messages = mutableListOf(
             Message(id = "user-1", text = "old question", sender = Sender.User),
         )
@@ -46,8 +48,9 @@ class MessageSenderRegenerationInsertTest {
         )
 
         assertEquals(0, writtenIndex)
-        assertEquals(listOf("user-1"), messages.map { it.id })
-        assertEquals(regenerated, messages.single())
+        assertTrue(messages.single().id != "user-1")
+        assertEquals(regenerated.text, messages.single().text)
+        assertEquals("user-1", messages.single().conversationId)
     }
 
     @Test

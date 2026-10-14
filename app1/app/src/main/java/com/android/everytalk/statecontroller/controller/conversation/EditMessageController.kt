@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.util.UUID
 
 /** 回填请求只由对应页面消费一次，重复编辑同一条消息也会重新聚焦输入框。 */
 data class MessageEditDraft(val message: Message, val isImageGeneration: Boolean)
@@ -62,6 +63,9 @@ internal fun messagesBeforeEdit(messages: List<Message>, index: Int): List<Messa
         if (boundary < 0) message else {
             val trace = message.executionTrace.take(boundary)
             message.copy(
+                // 裁剪正文也属于内容变更，必须替换身份，不能改写原正式消息。
+                id = UUID.randomUUID().toString(),
+                conversationId = ConversationNameHelper.resolveStableId(messages),
                 text = trace.filterIsInstance<ExecutionTraceEvent.Content>().joinToString("") { it.text },
                 reasoning = trace.filterIsInstance<ExecutionTraceEvent.Reasoning>().joinToString("") { it.text },
                 executionTrace = trace,
@@ -71,6 +75,30 @@ internal fun messagesBeforeEdit(messages: List<Message>, index: Int): List<Messa
                 contextUsageSnapshot = null,
             )
         }
+    }
+}
+
+/**
+ * 复原快照只给被撤回的消息分配新身份；未受影响的前缀仍使用原身份。
+ * 本地工具边界与上下文引用同步映射，避免新气泡继续引用已删除消息。
+ */
+internal fun messagesForEditRestore(session: MessageEditSession): List<Message> {
+    val retained = session.retainedMessageIds.toSet()
+    val newIds = session.originalMessages.filter { it.id !in retained }.associate { it.id to UUID.randomUUID().toString() }
+    return session.originalMessages.map { message ->
+        val id = newIds[message.id] ?: message.id
+        message.copy(
+            id = id, conversationId = session.conversationId, isStreamingDraft = false,
+            contextUsageSnapshot = message.contextUsageSnapshot?.copy(messageId = id),
+            contextCompressionState = message.contextCompressionState?.copy(
+                summarizedThroughMessageId = newIds[message.contextCompressionState.summarizedThroughMessageId] ?: message.contextCompressionState.summarizedThroughMessageId,
+                openAiResponsesThroughMessageId = newIds[message.contextCompressionState.openAiResponsesThroughMessageId] ?: message.contextCompressionState.openAiResponsesThroughMessageId,
+                anthropicThroughMessageId = newIds[message.contextCompressionState.anthropicThroughMessageId] ?: message.contextCompressionState.anthropicThroughMessageId,
+            ),
+            executionTrace = message.executionTrace.map { event ->
+                if (event is ExecutionTraceEvent.UserMessageBoundary) event.copy(messageId = newIds[event.messageId] ?: event.messageId) else event
+            },
+        )
     }
 }
 
@@ -113,11 +141,13 @@ class EditMessageController(
                     if (editSession.value != session || !session.belongsTo(conversation.value, isImageGeneration) ||
                         messages.map { it.id } != session.retainedMessageIds
                     ) return@withLock
-                    historyManager.rewindConversation(session.conversationId, session.originalHistory, isImageGeneration, session.sourceConversationId)
+                    val restored = messagesForEditRestore(session)
+                    val restoredHistory = ConversationNameHelper.preserveStoredConversationTitle(session.originalHistory, restored)
+                    historyManager.rewindConversation(session.conversationId, restoredHistory, isImageGeneration, session.sourceConversationId)
                     if (!session.belongsTo(conversation.value, isImageGeneration)) return@withLock
                     messages.forEach { clearMessageCache(it.id, isImageGeneration) }
                     messages.clear()
-                    messages.addAll(session.originalMessages)
+                    messages.addAll(restored)
                     stateHolder._text.value = ""
                     stateHolder.selectedMediaItems.clear()
                     _restoredDraft.value = null

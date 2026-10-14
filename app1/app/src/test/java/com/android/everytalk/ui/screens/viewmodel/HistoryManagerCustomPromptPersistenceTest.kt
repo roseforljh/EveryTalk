@@ -36,6 +36,43 @@ class HistoryManagerCustomPromptPersistenceTest {
 
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
+    fun `实际保存队列识别token补写和停止定稿即使页面内容判等相同`() = runTest {
+        val state = ViewModelStateHolder()
+        val scope = TestScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        val persistence = mockk<DataPersistenceManager>(relaxed = true)
+        // 故意模拟页面判等忽略 token，验证落库不依赖页面的宽松比较。
+        val history = HistoryManager(state, persistence, { _, _ -> true }, {}, scope)
+        val user = Message(id = "save-user", text = "问题", sender = Sender.User)
+        val reply = Message(id = "save-reply", text = "部分回答", sender = Sender.AI)
+        state.setCurrentConversationId(user.id)
+        state._loadedHistoryIndex.value = 0
+        state._historicalConversations.value = listOf(listOf(user, reply))
+        state.messages.addAll(listOf(user, reply))
+        state._currentTextStreamingAiMessageId.value = reply.id
+        try {
+            history.saveCurrentChatToHistoryIfNeeded(forceSave = true)
+            advanceUntilIdle()
+            coVerify { persistence.saveHistorySession(user.id, match { it.last().isStreamingDraft }, false) }
+            val usage = com.android.everytalk.data.network.TokenUsage(
+                inputTokens = 10, outputTokens = 20, isFinal = true,
+                source = com.android.everytalk.data.network.TokenUsageSource.OPENAI_CHAT,
+            )
+            state.messages[1] = reply.copy(tokenUsage = usage)
+            history.saveCurrentChatToHistoryIfNeeded(forceSave = true)
+            advanceUntilIdle()
+            coVerify { persistence.saveHistorySession(user.id, match { it.last().tokenUsage == usage && it.last().isStreamingDraft }, false) }
+            state.messages[1] = state.messages[1].copy(isIncomplete = true, executionFinishedAt = 100)
+            history.saveCurrentChatToHistoryIfNeeded(forceSave = true)
+            advanceUntilIdle()
+            coVerify { persistence.saveHistorySession(user.id, match { !it.last().isStreamingDraft && it.last().isIncomplete }, false) }
+        } finally {
+            scope.coroutineContext[Job]?.cancel()
+            advanceUntilIdle()
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
     fun `临时会话ID回退并复原时同步最近打开记录和历史索引`() = runTest {
         for (imageMode in listOf(false, true)) {
             val state = ViewModelStateHolder()
@@ -61,9 +98,11 @@ class HistoryManagerCustomPromptPersistenceTest {
                 coVerify { persistence.rewindHistorySession("u1", emptyList(), imageMode, true) }
                 controller.restoreOriginalMessages("cs", state.selectedMediaItems, null, imageMode)
                 advanceUntilIdle()
-                assertEquals(originalMessages, messages.toList())
+                assertEquals(originalMessages.map { it.text }, messages.map { it.text })
+                assertTrue(messages.none { it.id in originalMessages.map { old -> old.id } })
+                assertEquals("u1", com.android.everytalk.util.ConversationNameHelper.resolveStableId(messages))
                 assertEquals(0, loadedIndex.value)
-                coVerify { persistence.rewindHistorySession("u1", originalMessages, imageMode, true) }
+                coVerify { persistence.rewindHistorySession("u1", match { it.isNotEmpty() }, imageMode, true) }
             } finally {
                 scope.coroutineContext[Job]?.cancel()
                 advanceUntilIdle()

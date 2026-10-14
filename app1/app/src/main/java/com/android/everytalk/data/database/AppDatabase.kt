@@ -8,6 +8,8 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import com.android.everytalk.data.database.daos.MemoryDao
+import com.android.everytalk.data.database.entities.MemoryEntity
 import com.android.everytalk.data.database.daos.ApiConfigDao
 import com.android.everytalk.data.database.daos.AgentDao
 import com.android.everytalk.data.database.daos.ChatDao
@@ -42,6 +44,7 @@ import com.android.everytalk.data.database.entities.ConversationComputerSelectio
 import com.android.everytalk.data.database.entities.ExpandedGroupEntity
 import com.android.everytalk.data.database.entities.McpServerConfigEntity
 import com.android.everytalk.data.database.entities.MessageEntity
+import com.android.everytalk.data.database.entities.MessageDraftEntity
 import com.android.everytalk.data.database.entities.PendingMessageEntity
 import com.android.everytalk.data.database.entities.PinnedItemEntity
 import com.android.everytalk.data.database.entities.ProviderContinuationStateEntity
@@ -60,10 +63,12 @@ import com.android.everytalk.data.database.entities.TemporaryWorkerDeploymentEnt
 
 @Database(
     entities = [
+        MemoryEntity::class,
         ApiConfigEntity::class,
         VoiceBackendConfigEntity::class,
         ChatSessionEntity::class,
         MessageEntity::class,
+        MessageDraftEntity::class,
         PendingMessageEntity::class,
         SystemSettingEntity::class,
         PinnedItemEntity::class,
@@ -102,11 +107,12 @@ import com.android.everytalk.data.database.entities.TemporaryWorkerDeploymentEnt
         AgentStoredAuthorizationEntity::class,
         AgentOAuthStateEntity::class,
     ],
-    version = 41,
+    version = 43,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
+    abstract fun memoryDao(): MemoryDao
     abstract fun apiConfigDao(): ApiConfigDao
     abstract fun voiceConfigDao(): VoiceConfigDao
     abstract fun chatDao(): ChatDao
@@ -117,6 +123,13 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun skillDao(): SkillDao
 
     companion object {
+        /** 仅新增表，不重建或清空已有会话、设置和凭据。 */
+        val MIGRATION_41_42 = object : Migration(41, 42) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS memories (id TEXT NOT NULL PRIMARY KEY, category TEXT NOT NULL, content TEXT NOT NULL, origin TEXT NOT NULL, sourceConversationId TEXT, sourceMessageId TEXT, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL, enabled INTEGER NOT NULL)")
+            }
+        }
+
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
@@ -170,6 +183,7 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_38_39,
                     MIGRATION_39_40,
                     MIGRATION_40_41,
+                    MIGRATION_41_42,
                 )
                 .addCallback(DATABASE_MAINTENANCE_CALLBACK)
                 .build()

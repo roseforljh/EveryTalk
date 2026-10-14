@@ -206,6 +206,16 @@ class ViewModelStateHolderStreamingStateTest {
         assertTrue(stateHolder._isTextApiCalling.value)
     }
 
+    @Test
+    fun `停止或崩溃封存的部分回复不能被晚到Agent账本改写`() {
+        val partial = prepareRestoration().copy(text = "已生成的部分", reasoning = "部分思考", isIncomplete = true, executionFinishedAt = 3)
+        stateHolder.messages[0] = partial
+        assertTrue(stateHolder.reconcileAgentRun(run(AgentRunStatus.CANCELLED), fullTrace(), partial, false))
+        assertEquals(partial.text, stateHolder.messages.single().text)
+        assertEquals(partial.reasoning, stateHolder.messages.single().reasoning)
+        assertTrue(stateHolder.messages.single().isIncomplete)
+    }
+
     private fun prepareRestoration(): Message {
         stateHolder._currentConversationId.value = "session-1"
         val message = Message(id = "assistant-1", text = "完整", sender = Sender.AI)

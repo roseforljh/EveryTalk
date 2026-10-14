@@ -56,6 +56,11 @@ data class ExecutionStep(
     val type: ExecutionStepType,
     val title: String,
     val labels: List<String> = emptyList(),
+    /**
+     * 可展开查看的完整执行目标，例如 Agent 的完整 shell 命令。
+     * labels 只用于时间线中的短预览，旧消息没有该字段时回退到 labels。
+     */
+    val detail: String? = null,
     val completed: Boolean = false,
     val executionId: String? = null,
     /**
@@ -174,6 +179,12 @@ data class Message(
     val tokenUsage: TokenUsage? = null,
     val contextUsageSnapshot: ContextUsageSnapshot? = null,
     val contextCompressionState: ContextCompressionState? = null,
+    /** 本地会话身份不依赖首条消息 ID，编辑或重答首条消息不能创建另一份会话。 */
+    val conversationId: String? = null,
+    /** 保存快照时设置；流式内容只进入草稿表，禁止提前作为正式消息同步。 */
+    val isStreamingDraft: Boolean = false,
+    /** 停止或崩溃恢复的部分回复；保留已生成内容并明确标记未完成。 */
+    val isIncomplete: Boolean = false,
 ) : IMessage {
     // 检查消息是否包含内联图片
     fun hasInlineImages(): Boolean {

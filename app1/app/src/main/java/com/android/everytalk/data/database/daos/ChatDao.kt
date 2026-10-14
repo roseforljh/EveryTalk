@@ -5,6 +5,7 @@ import androidx.room.Insert
 import androidx.room.Query
 import androidx.room.Transaction
 import androidx.room.Upsert
+import com.android.everytalk.BuildConfig
 import com.android.everytalk.data.DataClass.MessageContentPart
 import com.android.everytalk.data.database.entities.ChatSessionEntity
 import com.android.everytalk.data.database.entities.MessageEntity
@@ -15,53 +16,144 @@ import com.android.everytalk.data.database.entities.RawMessageRow
 import com.android.everytalk.data.database.entities.toEntity
 import com.android.everytalk.data.database.entities.toMessage
 import com.android.everytalk.models.SelectedMediaItem
+import com.android.everytalk.data.database.entities.MessageDraftEntity
+import com.android.everytalk.data.database.entities.SyncStatus
+import com.android.everytalk.data.database.entities.isSyncableTextSession
 import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ChatDao {
     @Upsert
-    suspend fun insertSession(session: ChatSessionEntity)
+    suspend fun writeSession(session: ChatSessionEntity)
 
     @Upsert
-    suspend fun upsertMessages(messages: List<MessageEntity>)
+    suspend fun writeMessages(messages: List<MessageEntity>)
 
-    @Query("SELECT id, storageFingerprint FROM messages WHERE sessionId = :sessionId")
+    @Query("SELECT id, storageFingerprint, uuid, updated_at, deleted, sync_status, ever_synced FROM messages WHERE sessionId = :sessionId")
     suspend fun getMessageStorageStates(sessionId: String): List<MessageStorageState>
 
-    @Query("DELETE FROM messages WHERE sessionId = :sessionId AND id IN (:messageIds)")
-    suspend fun deleteMessagesByIds(sessionId: String, messageIds: List<String>)
+    /** 内部读取包含删除记录，防止 Upsert 把旧快照复活。页面只能使用过滤查询。 */
+    @Query("SELECT * FROM chat_sessions WHERE id = :sessionId")
+    suspend fun getStoredSession(sessionId: String): ChatSessionEntity?
+
+    @Query("SELECT * FROM messages WHERE id = :id OR uuid = :uuid LIMIT 1")
+    suspend fun getStoredMessage(id: String, uuid: String): MessageEntity?
+
+    @Upsert
+    suspend fun writeDrafts(drafts: List<MessageDraftEntity>)
+
+    @Query("SELECT * FROM message_drafts WHERE sessionId = :sessionId")
+    suspend fun getDrafts(sessionId: String): List<MessageDraftEntity>
+
+    @Query("SELECT * FROM message_drafts WHERE sessionId = :sessionId AND id = :messageId LIMIT 1")
+    suspend fun getDraft(sessionId: String, messageId: String): MessageDraftEntity?
+
+    @Query("SELECT * FROM message_drafts")
+    suspend fun getAllDrafts(): List<MessageDraftEntity>
+
+    @Query("DELETE FROM message_drafts WHERE sessionId = :sessionId AND id IN (:messageIds)")
+    suspend fun deleteDrafts(sessionId: String, messageIds: List<String>)
+
+    /** 未上传过的消息没有服务器删除义务，直接清理；曾上传的消息留下不可逆删除标记。 */
+    @Query("DELETE FROM messages WHERE sessionId = :sessionId AND id IN (:messageIds) AND ever_synced = 0 AND sync_status != 'SYNCED'")
+    suspend fun deleteNeverSyncedMessages(sessionId: String, messageIds: List<String>)
+
+    @Query("UPDATE messages SET deleted = 1, updated_at = :now, ever_synced = 1, sync_status = 'PENDING' WHERE sessionId = :sessionId AND id IN (:messageIds) AND deleted = 0 AND (ever_synced = 1 OR sync_status = 'SYNCED')")
+    suspend fun markSyncedMessagesDeleted(sessionId: String, messageIds: List<String>, now: Long)
+
+    @Transaction
+    suspend fun deleteMessagesByIds(sessionId: String, messageIds: List<String>) {
+        deleteNeverSyncedMessages(sessionId, messageIds)
+        markSyncedMessagesDeleted(sessionId, messageIds, System.currentTimeMillis())
+        deleteDrafts(sessionId, messageIds)
+    }
+
+    /** 更新会话时保留 UUID 与删除状态。消息身份变化不应重建会话。 */
+    @Transaction
+    suspend fun insertSession(session: ChatSessionEntity) {
+        val stored = getStoredSession(session.id)
+        if (stored?.deleted == true) return
+        val changed = stored == null || stored.title != session.title || stored.lastModifiedTimestamp != session.lastModifiedTimestamp
+        if (changed) writeSession(session.copy(
+            uuid = stored?.uuid ?: session.uuid,
+            updatedAt = System.currentTimeMillis(),
+            syncStatus = if (isSyncableTextSession(session.id, session.isImageGeneration)) SyncStatus.PENDING else SyncStatus.LOCAL_ONLY,
+        ))
+    }
+
+    /**
+     * 普通保存、后台附件补写和草稿定稿共用一个正式消息边界。
+     * 变化记录才读取完整旧行，保留原 UUID、同步状态和“曾上传”信息；未同步字段可以更新。
+     */
+    @Transaction
+    suspend fun upsertMessages(messages: List<MessageEntity>, debug: Boolean = BuildConfig.DEBUG) {
+        messages.forEach { incoming ->
+            val session = getStoredSession(incoming.sessionId) ?: error("消息缺少所属会话")
+            if (session.deleted) return@forEach
+            val stored = getStoredMessage(incoming.id, incoming.uuid)
+            if (stored != null) {
+                // last-open 是设备恢复快照而非正式历史，允许更新但仍不可复活删除记录。
+                val isSnapshot = session.id == "last_open_chat_v1" || session.id == "last_open_image_generation_v1"
+                if (!isSnapshot && !acceptFormalMessageUpdate(stored, incoming, debug)) return@forEach
+                if (isSnapshot && stored.deleted) return@forEach
+                if (stored.storageFingerprint != incoming.storageFingerprint) writeMessages(listOf(incoming.copy(
+                    id = stored.id, uuid = stored.uuid, syncStatus = stored.syncStatus, updatedAt = stored.updatedAt,
+                    everSynced = stored.everSynced || stored.syncStatus == SyncStatus.SYNCED,
+                )))
+            } else {
+                val draft = getDraft(incoming.sessionId, incoming.id)?.message
+                writeMessages(listOf(incoming.copy(
+                    uuid = draft?.uuid ?: incoming.uuid,
+                    updatedAt = System.currentTimeMillis(),
+                    syncStatus = if (isSyncableTextSession(session.id, session.isImageGeneration)) SyncStatus.PENDING else SyncStatus.LOCAL_ONLY,
+                )))
+            }
+            deleteDrafts(incoming.sessionId, listOf(incoming.id))
+        }
+    }
 
     @Transaction
     suspend fun saveSessionWithMessages(
         session: ChatSessionEntity,
         messages: List<MessageEntity>,
         sessionChanged: Boolean = true,
+        draftIds: Set<String> = emptySet(),
+        debug: Boolean = BuildConfig.DEBUG,
     ) {
         // 先读取 ID 和摘要，只写新增或真实变化的消息。长会话追加一条消息时不会重写全部历史。
-        val storedStates = getMessageStorageStates(session.id).associate { it.id to it.storageFingerprint }
+        if (getStoredSession(session.id)?.deleted == true) return
+        val storedStates = getMessageStorageStates(session.id).associateBy { it.id }
         val incomingIds = messages.mapTo(hashSetOf()) { it.id }
-        val changedMessages = messages.filter { storedStates[it.id] != it.storageFingerprint }
-        val removedIds = storedStates.keys.filterNot(incomingIds::contains)
+        val changedMessages = messages.filter {
+            (it.id !in draftIds || storedStates[it.id] != null) && storedStates[it.id]?.storageFingerprint != it.storageFingerprint
+        }
+        val removedIds = storedStates.values.filter { !it.deleted && it.id !in incomingIds }.map { it.id }
 
         // @Transaction 保证会话、变化消息和删除结果一起提交，任何一步失败都会保留旧数据。
-        if (sessionChanged) insertSession(session)
-        if (changedMessages.isNotEmpty()) upsertMessages(changedMessages)
+        if (sessionChanged || getStoredSession(session.id) == null) insertSession(session)
+        if (changedMessages.isNotEmpty()) upsertMessages(changedMessages, debug)
         if (removedIds.isNotEmpty()) deleteMessagesByIds(session.id, removedIds)
+        val existingDrafts = getDrafts(session.id).associateBy { it.message.id }
+        val drafts = messages.filter { it.id in draftIds && storedStates[it.id] == null }.map { message ->
+            MessageDraftEntity(message.copy(uuid = existingDrafts[message.id]?.message?.uuid ?: message.uuid, syncStatus = SyncStatus.LOCAL_ONLY))
+        }
+        if (drafts.isNotEmpty()) writeDrafts(drafts)
+        deleteDrafts(session.id, existingDrafts.keys.filterNot(incomingIds::contains))
     }
     
-    @Query("SELECT * FROM chat_sessions WHERE isImageGeneration = :isImageGen ORDER BY lastModifiedTimestamp DESC")
+    @Query("SELECT * FROM chat_sessions WHERE deleted = 0 AND isImageGeneration = :isImageGen ORDER BY lastModifiedTimestamp DESC")
     suspend fun getAllSessions(isImageGen: Boolean): List<ChatSessionEntity>
 
-    @Query("SELECT * FROM chat_sessions WHERE id = :sessionId LIMIT 1")
+    @Query("SELECT * FROM chat_sessions WHERE deleted = 0 AND id = :sessionId LIMIT 1")
     suspend fun getSession(sessionId: String): ChatSessionEntity?
 
-    @Query("UPDATE chat_sessions SET title = :title WHERE id = :sessionId")
-    suspend fun updateSessionTitle(sessionId: String, title: String)
+    @Query("UPDATE chat_sessions SET title = :title, updated_at = :now, sync_status = CASE WHEN isImageGeneration = 0 AND id NOT IN ('last_open_chat_v1', 'last_open_image_generation_v1') THEN 'PENDING' ELSE 'LOCAL_ONLY' END WHERE id = :sessionId AND deleted = 0")
+    suspend fun updateSessionTitle(sessionId: String, title: String, now: Long = System.currentTimeMillis())
 
-    @Query("SELECT * FROM messages WHERE sessionId = :sessionId ORDER BY timestamp ASC")
+    @Query("SELECT * FROM (SELECT * FROM messages WHERE deleted = 0 UNION ALL SELECT * FROM message_drafts) WHERE sessionId = :sessionId AND sessionId IN (SELECT id FROM chat_sessions WHERE deleted = 0) ORDER BY timestamp ASC")
     suspend fun getMessagesForSession(sessionId: String): List<MessageEntity>
 
-    @Query("SELECT * FROM messages WHERE sessionId = :sessionId AND id = :messageId LIMIT 1")
+    @Query("SELECT * FROM (SELECT * FROM messages WHERE deleted = 0 UNION ALL SELECT * FROM message_drafts) WHERE sessionId = :sessionId AND id = :messageId AND sessionId IN (SELECT id FROM chat_sessions WHERE deleted = 0) LIMIT 1")
     suspend fun getMessage(sessionId: String, messageId: String): MessageEntity?
 
     /** 后台 Agent 下载完成时，只更新原消息的附件，避免依赖当前打开的会话。 */
@@ -69,10 +161,42 @@ interface ChatDao {
     suspend fun appendDownloadedAttachment(sessionId: String, messageId: String, attachment: SelectedMediaItem.GenericFile): Boolean {
         val message = getMessage(sessionId, messageId) ?: return false
         if (message.attachments.none { it.id == attachment.id }) {
-            upsertMessages(listOf(message.toMessage().copy(attachments = message.attachments + attachment).toEntity(sessionId)))
+            val updated = message.toMessage().copy(attachments = message.attachments + attachment).toEntity(sessionId)
+                .copy(uuid = message.uuid)
+            if (getDraft(sessionId, messageId) != null) writeDrafts(listOf(MessageDraftEntity(updated)))
+            else upsertMessages(listOf(updated))
         }
         return true
     }
+
+    /** 启动加载历史前调用一次：有内容的残留草稿定稿为未完成回复，空占位清理，不留孤儿。 */
+    @Transaction
+    suspend fun recoverInterruptedDrafts() {
+        getAllDrafts().forEach { draft ->
+            val message = draft.message
+            val session = getStoredSession(message.sessionId)
+            val hasContent = message.text.isNotBlank() || !message.reasoning.isNullOrBlank() ||
+                message.attachments.isNotEmpty() || !message.imageUrls.isNullOrEmpty()
+            if (session != null && !session.deleted && hasContent && getStoredMessage(message.id, message.uuid) == null) {
+                val recovered = message.toMessage().copy(
+                    isIncomplete = true, executionStatus = "INTERRUPTED", executionFinishedAt = System.currentTimeMillis(),
+                ).toEntity(message.sessionId).copy(uuid = message.uuid)
+                upsertMessages(listOf(recovered))
+            }
+            deleteDrafts(message.sessionId, listOf(message.id))
+        }
+    }
+
+    /** 仅用于文字同步白名单；会话删除只上传会话变更，不能再发送其子消息。 */
+    @Query("SELECT * FROM messages WHERE sync_status = 'PENDING' AND sender IN ('User', 'AI', 'System') AND isPlaceholderName = 0 AND sessionId IN (SELECT id FROM chat_sessions WHERE deleted = 0 AND isImageGeneration = 0 AND id NOT IN ('last_open_chat_v1', 'last_open_image_generation_v1'))")
+    suspend fun getPendingSyncMessages(): List<MessageEntity>
+
+    @Query("SELECT * FROM chat_sessions WHERE sync_status = 'PENDING' AND isImageGeneration = 0 AND id NOT IN ('last_open_chat_v1', 'last_open_image_generation_v1')")
+    suspend fun getPendingSyncSessions(): List<ChatSessionEntity>
+
+    /** 服务器确认后持久化历史事实；只有当前未删除内容才可从 PENDING 变为 SYNCED。 */
+    @Query("UPDATE messages SET ever_synced = 1, sync_status = CASE WHEN deleted = 0 THEN 'SYNCED' ELSE sync_status END WHERE uuid IN (:uuids)")
+    suspend fun markMessagesSynced(uuids: List<String>)
 
     @Query(
         """
@@ -87,10 +211,10 @@ interface ChatDao {
                modelName, providerName,
                tokenUsage AS tokenUsageJson,
                contextUsageSnapshot AS contextUsageSnapshotJson,
-               contextCompressionState AS contextCompressionStateJson
-        FROM messages
+               contextCompressionState AS contextCompressionStateJson, is_incomplete
+        FROM (SELECT * FROM messages WHERE deleted = 0 UNION ALL SELECT * FROM message_drafts)
         WHERE sessionId IN (
-            SELECT id FROM chat_sessions WHERE isImageGeneration = :isImageGen
+            SELECT id FROM chat_sessions WHERE deleted = 0 AND isImageGeneration = :isImageGen
         )
         ORDER BY sessionId ASC, timestamp ASC
         """
@@ -100,9 +224,9 @@ interface ChatDao {
     @Query(
         """
         SELECT id, sessionId, text, sender, timestamp, isPlaceholderName
-        FROM messages
+        FROM (SELECT * FROM messages WHERE deleted = 0 UNION ALL SELECT * FROM message_drafts)
         WHERE sessionId IN (
-            SELECT id FROM chat_sessions WHERE isImageGeneration = :isImageGen
+            SELECT id FROM chat_sessions WHERE deleted = 0 AND isImageGeneration = :isImageGen
         )
         ORDER BY sessionId ASC, timestamp ASC
         """
@@ -195,21 +319,36 @@ interface ChatDao {
     @Query("DELETE FROM pending_messages")
     suspend fun deleteAllPendingMessages()
 
-    @Query("DELETE FROM chat_sessions WHERE isImageGeneration = :isImageGen")
-    suspend fun clearAllSessionRows(isImageGen: Boolean)
+    @Query("UPDATE chat_sessions SET deleted = 1, updated_at = :now, sync_status = CASE WHEN isImageGeneration = 0 AND id NOT IN ('last_open_chat_v1', 'last_open_image_generation_v1') THEN 'PENDING' ELSE 'LOCAL_ONLY' END WHERE isImageGeneration = :isImageGen AND deleted = 0")
+    suspend fun clearAllSessionRows(isImageGen: Boolean, now: Long = System.currentTimeMillis())
+
+    @Query("DELETE FROM message_drafts WHERE sessionId IN (SELECT id FROM chat_sessions WHERE isImageGeneration = :isImageGen)")
+    suspend fun clearDraftsForMode(isImageGen: Boolean)
+
+    /** 已删除会话不再需要未上传的消息；曾同步的消息不逐条打删除标记。 */
+    @Query("DELETE FROM messages WHERE sessionId IN (SELECT id FROM chat_sessions WHERE isImageGeneration = :isImageGen) AND ever_synced = 0 AND sync_status != 'SYNCED'")
+    suspend fun clearNeverSyncedMessagesForMode(isImageGen: Boolean)
 
     @Transaction
     suspend fun clearAllSessions(isImageGen: Boolean) {
         if (!isImageGen) deleteAllPendingMessages()
+        clearDraftsForMode(isImageGen)
+        clearNeverSyncedMessagesForMode(isImageGen)
         clearAllSessionRows(isImageGen)
     }
 
-    @Query("DELETE FROM chat_sessions WHERE id = :sessionId")
-    suspend fun deleteSessionRow(sessionId: String)
+    @Query("UPDATE chat_sessions SET deleted = 1, updated_at = :now, sync_status = CASE WHEN isImageGeneration = 0 AND id NOT IN ('last_open_chat_v1', 'last_open_image_generation_v1') THEN 'PENDING' ELSE 'LOCAL_ONLY' END WHERE id = :sessionId AND deleted = 0")
+    suspend fun deleteSessionRow(sessionId: String, now: Long = System.currentTimeMillis())
 
     @Transaction
     suspend fun deleteSession(sessionId: String) {
         deletePendingMessagesForConversation(sessionId)
+        deleteDrafts(sessionId, getDrafts(sessionId).map { it.message.id })
+        deleteNeverSyncedMessages(sessionId, getMessageStorageStates(sessionId).map { it.id })
         deleteSessionRow(sessionId)
     }
+
+    /** last-open 是设备缓存，清理时不能留下同固定 ID 的墓碑，否则下一次无法保存快照。 */
+    @Query("DELETE FROM chat_sessions WHERE id = :sessionId AND id IN ('last_open_chat_v1', 'last_open_image_generation_v1')")
+    suspend fun clearLastOpenSnapshot(sessionId: String)
 }
