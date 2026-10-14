@@ -297,11 +297,11 @@ class PendingMessageControllerTest {
     }
 
     @Test
-    fun `Flow重复触发时同一Pending只派发一次`() = runTest {
+    fun `Agent仍在运行时即使API流短暂结束也不提前派发Pending`() = runTest {
         val dao = database.chatDao()
         dao.enqueuePendingMessage(pending("one", "一", 1))
         val isRunning = MutableStateFlow(true)
-        val controlState = MutableStateFlow(AgentRunControlState.RUNNING)
+        val controlState = MutableStateFlow<AgentRunControlState?>(AgentRunControlState.RUNNING)
         val firstDispatch = CompletableDeferred<Unit>()
         var dispatchCount = 0
         val controller = controller(
@@ -315,6 +315,11 @@ class PendingMessageControllerTest {
         controller.pendingMessages.first { it.size == 1 }
 
         isRunning.value = false
+        advanceUntilIdle()
+        assertEquals(0, dispatchCount)
+
+        // AgentLoop 完整结束后，控制器才会清掉控制记录，队列此时才可以派发。
+        controlState.value = null
         firstDispatch.await()
         controlState.value = AgentRunControlState.PAUSE_REQUESTED
         controlState.value = AgentRunControlState.RUNNING
@@ -423,7 +428,7 @@ class PendingMessageControllerTest {
         recordSteered: suspend (PendingMessageEntity) -> Unit = {},
         isAbortInProgress: MutableStateFlow<Boolean> = MutableStateFlow(false),
         agentRunControlState: kotlinx.coroutines.flow.StateFlow<AgentRunControlState?> =
-            MutableStateFlow(AgentRunControlState.RUNNING),
+            MutableStateFlow(null),
         dispatch: (PendingMessageEntity, () -> Unit, () -> Unit, () -> Unit) -> Unit,
     ) = PendingMessageController(
         chatDao = database.chatDao(),

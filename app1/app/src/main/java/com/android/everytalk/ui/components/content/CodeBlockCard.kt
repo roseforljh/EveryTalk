@@ -155,7 +155,7 @@ fun CodeBlockCard(
     }
     
     val shouldHighlightCode = remember(code, isStreaming) {
-        HighlightCache.shouldHighlight(code, isStreaming)
+        !isStreaming && HighlightCache.shouldHighlight(code, isStreaming = false)
     }
     val highlightedCodeState by produceState(
         HighlightedCodeState(
@@ -167,6 +167,8 @@ fun CodeBlockCard(
         isDarkTheme,
         isStreaming,
     ) {
+        // produceState 会保留上一轮的值；每次输入变化都先更新原文，避免超过高亮上限后停在旧内容。
+        value = HighlightedCodeState(AnnotatedString(code), !shouldHighlightCode)
         if (shouldHighlightCode) {
             value = HighlightedCodeState(
                 text = withContext(Dispatchers.Default) {
@@ -175,6 +177,11 @@ fun CodeBlockCard(
                 asyncHighlightReady = true,
             )
         }
+    }
+    // 流式原文同步显示，不等待异步高亮；完成后才切换到当前全文的高亮结果。
+    val visibleCode = remember(code, isStreaming, highlightedCodeState.text) {
+        if (isStreaming || highlightedCodeState.text.text != code) AnnotatedString(code)
+        else highlightedCodeState.text
     }
     var initialAsyncResizeSettled by remember(
         code,
@@ -529,7 +536,7 @@ fun CodeBlockCard(
                             .onSizeChanged { contentBoxHeightPx = it.height }
                     ) {
                         Text(
-                            text = highlightedCodeState.text,
+                            text = visibleCode,
                             style = MaterialTheme.typography.bodyMedium.copy(
                                 fontFamily = FontFamily.Monospace,
                                 fontSize = 13.sp,
@@ -549,6 +556,7 @@ fun CodeBlockCard(
                     language = language ?: "",
                     initialPreviewMode = isPreviewMode,
                     sourceBounds = cardBoundsInWindow,
+                    isStreaming = isStreaming,
                     onDismiss = { showFullScreenPreview = false }
                 )
             }

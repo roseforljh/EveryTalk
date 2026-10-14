@@ -26,6 +26,7 @@ import kotlinx.serialization.json.jsonPrimitive
 
 private const val COMPACTION_META_SUMMARY_ROLE = "summary_role"
 private const val COMPACTION_META_RETAINED_IDS = "retained_ids"
+private const val COMPACTION_META_SOURCE_PREFIX_IDS = "source_prefix_ids"
 private const val EXECUTION_CHECKPOINT_MESSAGE_ID = "agent-execution-checkpoint"
 private const val NORMAL_RECENT_RATIO_PERCENT = 20L
 private const val TOOL_HEAVY_RECENT_RATIO_PERCENT = 30L
@@ -48,6 +49,8 @@ data class AgentCompactionPlan(
     val summarizedThroughItemId: String,
     val prefixFingerprint: String,
     val retainedTailIds: List<String>,
+    /** 压缩边界之前的稳定消息 ID，用于边界消息被分支重生成删除后的活动上下文恢复。 */
+    val sourcePrefixIds: List<String> = emptyList(),
     val summaryRole: String,
     val tokensBefore: Long,
     val triggerThreshold: Long = 0L,
@@ -83,12 +86,45 @@ class AgentContextManager(
         request: ChatRequest,
         limits: ModelTokenLimits,
         checkpoint: AgentCompactionEntryEntity? = null,
+        checkpointFallbacks: List<AgentCompactionEntryEntity> = emptyList(),
         executionCheckpoint: ExecutionCheckpoint? = null,
         forceLocalCompaction: Boolean = false,
     ): PreparedAgentContext {
         val canonical = removeOrphanToolResults(request.messages)
-        val acceptedCheckpoint = checkpoint?.takeIf { it.matches(canonical) }
-        val compacted = acceptedCheckpoint?.let { applyCheckpoint(canonical, it) } ?: canonical
+        // 压缩检查点属于会话上下文，不属于某个模型。切换模型或重新生成分支后，
+        // 最新检查点的边界消息可能已被删除；此时必须回退到更早的有效检查点，
+        // 不能因为新模型窗口更大就把完整历史重新送入请求。
+        val fallbackCheckpoints = checkpointFallbacks.filterNot { it.id == checkpoint?.id }
+        val latestDirectCheckpoint = checkpoint?.takeIf { it.matches(canonical) }
+        val latestActiveCheckpoint = checkpoint?.takeIf {
+            latestDirectCheckpoint == null && it.canApplyActiveContext(canonical)
+        }
+        val directCheckpoint = latestDirectCheckpoint
+            ?: if (latestActiveCheckpoint == null) {
+                fallbackCheckpoints.firstOrNull { it.matches(canonical) }
+            } else {
+                null
+            }
+        val activeCheckpoint = latestActiveCheckpoint
+            ?: if (latestDirectCheckpoint == null && directCheckpoint == null) {
+                fallbackCheckpoints.firstOrNull { it.canApplyActiveContext(canonical) }
+            } else {
+                null
+            }
+        val acceptedCheckpoint = directCheckpoint ?: activeCheckpoint
+        val knownCheckpoints = listOfNotNull(checkpoint) + checkpointFallbacks
+        val staleCheckpointRecovery = acceptedCheckpoint == null &&
+            knownCheckpoints.isNotEmpty()
+        val activePrefixLength = if (directCheckpoint == null) {
+            activeCheckpoint?.activeContextCutLength(canonical)
+        } else {
+            null
+        }
+        val compacted = when {
+            directCheckpoint != null -> applyCheckpoint(canonical, directCheckpoint)
+            activeCheckpoint != null -> applyActiveContext(canonical, activeCheckpoint)
+            else -> canonical
+        }
         val effective = injectExecutionCheckpoint(compacted, executionCheckpoint)
         val calibration = request.contextManagement?.inputTokenCalibration ?: 0L
         val estimateBeforeTrim = RequestTokenEstimator.estimate(effective, request.tools)
@@ -116,7 +152,15 @@ class AgentContextManager(
         } else {
             budget.triggerThreshold
         }
-        val compactedThroughIndex = acceptedCheckpoint
+        // 旧版本检查点没有保存活动前缀时，仍按历史检查点曾经的触发规模恢复压缩，
+        // 避免切换到更大窗口模型后因为新阈值变大而重新发送整段旧历史。
+        val recoveryThreshold = knownCheckpoints
+            .mapNotNull { it.tokensBefore.takeIf { tokens -> tokens > 0L } }
+            .minOrNull()
+            ?: genericCompactionThreshold
+        val compactedThroughIndex = activePrefixLength?.let { prefixLength ->
+            canonical.indexAfterNonSystemCount(prefixLength)
+        } ?: acceptedCheckpoint
             ?.let { saved -> canonical.indexOfFirst { it.id == saved.summarizedThroughItemId } }
             ?: -1
         val hasNewCompactionSource = acceptedCheckpoint == null || canonical
@@ -126,11 +170,14 @@ class AgentContextManager(
             (forceLocalCompaction || !hasActiveNativeCompaction) &&
             hasNewCompactionSource &&
             // Pi 只比较当前上下文与压缩线；最大输出不参与触发，否则大输出模型会过早反复压缩。
-            (forceLocalCompaction || activeBeforeTrim > genericCompactionThreshold)
+            (forceLocalCompaction ||
+                activeBeforeTrim > genericCompactionThreshold ||
+                (staleCheckpointRecovery && activeBeforeTrim > recoveryThreshold))
         val plan = if (needsCompaction) {
             planCompaction(
                 canonical = canonical,
                 checkpoint = acceptedCheckpoint,
+                activeSourcePrefixLength = activePrefixLength,
                 tokensBefore = activeBeforeTrim,
                 budget = budget,
             )
@@ -203,6 +250,7 @@ class AgentContextManager(
         mapOf(
             COMPACTION_META_SUMMARY_ROLE to JsonPrimitive(plan.summaryRole),
             COMPACTION_META_RETAINED_IDS to JsonArray(plan.retainedTailIds.map(::JsonPrimitive)),
+            COMPACTION_META_SOURCE_PREFIX_IDS to JsonArray(plan.sourcePrefixIds.map(::JsonPrimitive)),
         )
     ).toString()
 
@@ -347,11 +395,13 @@ class AgentContextManager(
     private fun planCompaction(
         canonical: List<AbstractApiMessage>,
         checkpoint: AgentCompactionEntryEntity?,
+        activeSourcePrefixLength: Int? = null,
         tokensBefore: Long,
         budget: AgentContextBudget,
     ): AgentCompactionPlan? {
         val systemIndexes = canonical.indices.filter { canonical[it].role.equals("system", true) }.toSet()
-        val sourceStart = checkpoint
+        val sourceStart = activeSourcePrefixLength?.let { canonical.indexAfterNonSystemCount(it) + 1 }
+            ?: checkpoint
             ?.summarizedThroughItemId
             ?.let { id -> canonical.indexOfFirst { it.id == id } + 1 }
             ?.coerceAtLeast(0)
@@ -415,6 +465,10 @@ class AgentContextManager(
             prefixFingerprint = prefixFingerprint(canonical, throughIndex),
             retainedTailIds = retainedIndexes.map { canonical[it].id },
             summaryRole = summaryRole,
+            sourcePrefixIds = canonical
+                .take(throughIndex + 1)
+                .filterNot { it.role.equals("system", true) }
+                .map { it.id },
             tokensBefore = tokensBefore,
             triggerThreshold = budget.triggerThreshold,
             recentTargetTokens = budget.recentTarget,
@@ -459,16 +513,99 @@ class AgentContextManager(
         return throughIndex >= 0 && prefixFingerprint(messages, throughIndex) == prefixFingerprint
     }
 
+    /**
+     * 当可见历史发生分支重生成时，原压缩边界可能不再存在。
+     * 只要当前历史仍保留压缩前缀的一部分，并且在共同前缀后有新分支，就沿用摘要，
+     * 再接上当前分支；这样不会因切换到大窗口模型而把压缩前的完整历史重新发回去。
+     */
+    private fun AgentCompactionEntryEntity.canApplyActiveContext(
+        messages: List<AbstractApiMessage>,
+    ): Boolean {
+        val commonPrefixLength = activeContextCutLength(messages)
+        val currentIds = messages.filterNot { it.role.equals("system", true) }.map { it.id }
+        return commonPrefixLength > 0 && currentIds.size > commonPrefixLength
+    }
+
+    /** 返回摘要应替换到当前历史的非 system 消息数量。 */
+    private fun AgentCompactionEntryEntity.activeContextCutLength(
+        messages: List<AbstractApiMessage>,
+    ): Int {
+        val currentIds = messages.filterNot { it.role.equals("system", true) }.map { it.id }
+        compactionSourcePrefixIds()?.takeIf { it.isNotEmpty() }?.let { sourcePrefixIds ->
+            return sourcePrefixIds.zip(currentIds).takeWhile { (sourceId, currentId) ->
+                sourceId == currentId
+            }.count()
+        }
+        // 兼容旧检查点：旧版本只保存了压缩后的 retained_ids，没有保存完整前缀 ID。
+        // 当前历史仍包含 retained tail 时，可以把摘要放回它之前，避免升级后首次切换模型回灌全文。
+        val firstRetainedId = compactionRetainedTailIds().firstOrNull() ?: return 0
+        return currentIds.indexOf(firstRetainedId).takeIf { it > 0 } ?: 0
+    }
+
+    private fun applyActiveContext(
+        messages: List<AbstractApiMessage>,
+        checkpoint: AgentCompactionEntryEntity,
+    ): List<AbstractApiMessage> {
+        val current = messages.filterNot { it.role.equals("system", true) }
+        val commonPrefixLength = checkpoint.activeContextCutLength(messages)
+        if (commonPrefixLength == 0 || current.size <= commonPrefixLength) return messages
+        val summaryRole = checkpoint.compactionSummaryRole()
+        return buildList {
+            addAll(messages.filter { it.role.equals("system", true) })
+            add(
+                SimpleTextApiMessage(
+                    id = "agent-compaction:${checkpoint.id}",
+                    role = summaryRole,
+                    content = if (summaryRole == "user") {
+                        "以下是当前会话较早部分的压缩摘要，请继续完成同一任务：\n\n${checkpoint.summary}"
+                    } else {
+                        "以下是较早会话的压缩摘要，请据此延续对话：\n\n${checkpoint.summary}"
+                    },
+                )
+            )
+            addAll(current.drop(commonPrefixLength))
+        }
+    }
+
+    private fun AgentCompactionEntryEntity.compactionMetadataObject(): JsonObject? =
+        runCatching { json.parseToJsonElement(retainedTailJson) as? JsonObject }.getOrNull()
+
+    private fun AgentCompactionEntryEntity.compactionSourcePrefixIds(): List<String>? =
+        compactionMetadataObject()?.get(COMPACTION_META_SOURCE_PREFIX_IDS)
+            ?.let { element -> (element as? JsonArray)?.mapNotNull { it.jsonPrimitive.contentOrNull } }
+
+    private fun AgentCompactionEntryEntity.compactionRetainedTailIds(): List<String> =
+        compactionMetadataObject()?.get(COMPACTION_META_RETAINED_IDS)
+            ?.let { element -> (element as? JsonArray)?.mapNotNull { it.jsonPrimitive.contentOrNull } }
+            .orEmpty()
+
+    private fun AgentCompactionEntryEntity.compactionSummaryRole(): String =
+        compactionMetadataObject()
+            ?.get(COMPACTION_META_SUMMARY_ROLE)
+            ?.jsonPrimitive
+            ?.contentOrNull
+            ?.takeIf { it == "user" }
+            ?: "system"
+
+    private fun List<AbstractApiMessage>.indexAfterNonSystemCount(count: Int): Int {
+        if (count <= 0) return -1
+        var seen = 0
+        forEachIndexed { index, message ->
+            if (!message.role.equals("system", true)) {
+                seen++
+                if (seen == count) return index
+            }
+        }
+        return -1
+    }
+
     private fun applyCheckpoint(
         messages: List<AbstractApiMessage>,
         checkpoint: AgentCompactionEntryEntity,
     ): List<AbstractApiMessage> {
         val throughIndex = messages.indexOfFirst { it.id == checkpoint.summarizedThroughItemId }
         if (throughIndex < 0) return messages
-        val summaryRole = runCatching {
-            json.parseToJsonElement(checkpoint.retainedTailJson).let { it as? JsonObject }
-                ?.get(COMPACTION_META_SUMMARY_ROLE)?.jsonPrimitive?.contentOrNull
-        }.getOrNull().takeIf { it == "user" } ?: "system"
+        val summaryRole = checkpoint.compactionSummaryRole()
         return buildList {
             addAll(messages.filter { it.role.equals("system", true) })
             add(
@@ -561,6 +698,8 @@ private fun AbstractApiMessage.compactionText(): String = when (this) {
 
 /** 按 ET 现有 Computer 工具信封提取关键字段，未知工具保留首尾避免丢失尾部错误。 */
 internal fun compactAgentToolResultForCompaction(message: AgentToolResultApiMessage): String {
+    // 长期资料在下一次发送重新读取，不能把当前搜索结果固化进会话压缩摘要。
+    if (message.toolName == com.android.everytalk.data.memory.MemoryTool.NAME) return "记忆工具结果已省略；按当前记忆快照重新读取。"
     val raw = message.content.toString()
     val plainText = (message.content as? JsonPrimitive)?.contentOrNull
     val parsed = runCatching { Json.parseToJsonElement(raw) as? JsonObject }.getOrNull()

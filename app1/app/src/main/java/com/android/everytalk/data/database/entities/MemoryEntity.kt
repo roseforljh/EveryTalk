@@ -21,4 +21,7 @@ data class MemoryEntity(
     @ColumnInfo(name = "updated_at", defaultValue = "0") val syncUpdatedAt: Long = updatedAt,
     @ColumnInfo(defaultValue = "0") val deleted: Boolean = false,
     @ColumnInfo(name = "sync_status", defaultValue = "'LOCAL_ONLY'") val syncStatus: String = SyncStatus.PENDING,
-)
+) {
+    @get:androidx.room.Ignore
+    val clientModifiedAt: Long get() = syncUpdatedAt
+}

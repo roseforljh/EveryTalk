@@ -94,7 +94,14 @@ object ImageGenerationDirectClient {
         
         Log.d(TAG, "直连 URL: $url")
         
-        val payload = buildOpenAIImagePayload(request)
+        // 硅基流动虽然沿用 images/generations 路径，尺寸和数量字段并不遵循 OpenAI 协议。
+        // 按实际目标域名或明确的平台标识选择协议，避免把代理上的其他模型也误判为硅基流动。
+        val host = URLBuilder(url).host.lowercase()
+        val isSiliconFlow = host == "siliconflow.cn" || host.endsWith(".siliconflow.cn") ||
+            host == "siliconflow.com" || host.endsWith(".siliconflow.com") ||
+            request.provider?.contains("silicon", ignoreCase = true) == true ||
+            request.provider?.contains("硅基流动") == true
+        val payload = buildOpenAIImagePayload(request, isSiliconFlow)
         
         return client.preparePost(url) {
             contentType(ContentType.Application.Json)
@@ -700,12 +707,13 @@ object ImageGenerationDirectClient {
         }.toString()
     }
     
-    private fun buildOpenAIImagePayload(request: ImageGenRequest): String {
+    private fun buildOpenAIImagePayload(request: ImageGenRequest, isSiliconFlow: Boolean): String {
         return buildJsonObject {
             put("model", request.model)
             put("prompt", request.prompt)
-            request.imageSize?.let { put("size", it) }
-            request.batchSize?.let { put("n", it) }
+            // 所选比例已经由发送层换算成像素尺寸，这里必须使用平台实际识别的字段。
+            request.imageSize?.let { put(if (isSiliconFlow) "image_size" else "size", it) }
+            request.batchSize?.let { put(if (isSiliconFlow) "batch_size" else "n", it) }
             request.numInferenceSteps?.let { put("num_inference_steps", it) }
             request.guidanceScale?.let { put("guidance_scale", it) }
         }.toString()
@@ -742,55 +750,18 @@ object ImageGenerationDirectClient {
     }
 
     private fun mapSeedreamSize(size: String, aspectRatio: String?): String {
-        var s = size.lowercase().trim()
-        
-        // 检查是否为具体像素值，如果像素过小（小于 2K 级别的 3,686,400），强制升级为 2K 档位
-        // 这是为了兼容 Seedream 4.5 等高分辨率模型
-        if (s.contains("x")) {
-            val parts = s.split("x")
-            if (parts.size == 2) {
-                val w = parts[0].toIntOrNull() ?: 0
-                val h = parts[1].toIntOrNull() ?: 0
-                // 3686400 是 2560x1440 的像素数，也是 Seedream 4.5 的推荐最小值
-                if (w * h < 3686400) {
-                    s = "2k"
-                } else {
-                    return s
-                }
-            }
+        val normalized = size.lowercase().trim()
+        val dimensions = normalized.split("x")
+        if (dimensions.size == 2 && aspectRatio.isNullOrBlank()) {
+            val width = dimensions[0].toIntOrNull() ?: 0
+            val height = dimensions[1].toIntOrNull() ?: 0
+            // 未指定新比例时保留有效的自定义尺寸；低于 Seedream 4.5 最小像素数时升级到 2K。
+            if (width > 0 && height > 0 && width.toLong() * height >= 3_686_400L) return normalized
         }
-
-        // 如果不是 4k，默认都视为 2k 处理（包括 1k、hd、或者被强制升级的低像素值）
-        if (s != "4k") {
-            s = "2k"
-        }
-
-        // 根据官方文档适配 Seedream 2K/4K 分辨率
-        return when (s) {
-            "2k" -> when (aspectRatio) {
-                "1:1" -> "2048x2048"
-                "4:3" -> "2304x1728"
-                "3:4" -> "1728x2304"
-                "16:9" -> "2560x1440"
-                "9:16" -> "1440x2560"
-                "3:2" -> "2496x1664"
-                "2:3" -> "1664x2496"
-                "21:9" -> "3024x1296"
-                else -> "2048x2048"
-            }
-            "4k" -> when (aspectRatio) {
-                "1:1" -> "4096x4096"
-                "4:3" -> "4608x3456"
-                "3:4" -> "3456x4608"
-                "16:9" -> "5120x2880"
-                "9:16" -> "2880x5120"
-                "3:2" -> "4992x3328"
-                "2:3" -> "3328x4992"
-                "21:9" -> "6048x2592"
-                else -> "4096x4096"
-            }
-            else -> "2048x2048"
-        }
+        // 明确比例覆盖旧尺寸，推荐表与 UI 共用；自动模式只发送清晰度，由服务端决定比例。
+        val quality = ImageGenCapabilities.getSeedreamQuality(size)
+        return ImageGenCapabilities.getSeedreamSizes(quality, aspectRatio.orEmpty()).firstOrNull()?.label
+            ?: quality.label
     }
 
     internal fun ensureGeneratedImageBase64WithinLimit(
@@ -885,7 +856,8 @@ object ImageGenerationDirectClient {
         val root = json.parseToJsonElement(responseText).jsonObject
         val images = mutableListOf<ImageUrl>()
         
-        root["data"]?.jsonArray?.forEach { item ->
+        // OpenAI 返回 data，硅基流动返回 images；两种协议的图片都走相同的大小校验。
+        (root["data"] ?: root["images"])?.jsonArray?.forEach { item ->
             val itemObj = item.jsonObject
             val responseUrl = itemObj["url"]?.jsonPrimitive?.contentOrNull
             val base64 = itemObj["b64_json"]?.jsonPrimitive?.contentOrNull

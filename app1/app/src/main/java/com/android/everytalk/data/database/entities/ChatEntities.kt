@@ -38,7 +38,11 @@ data class ChatSessionEntity(
     @ColumnInfo(defaultValue = "0") val deleted: Boolean = false,
     @ColumnInfo(name = "sync_status", defaultValue = "'LOCAL_ONLY'") val syncStatus: String =
         if (isSyncableTextSession(id, isImageGeneration)) SyncStatus.PENDING else SyncStatus.LOCAL_ONLY,
-)
+) {
+    /** 同步合同中的毫秒时间取自同一修改字段，避免另存一份后发生分歧。 */
+    @get:androidx.room.Ignore
+    val clientModifiedAt: Long get() = updatedAt
+}
 
 @Entity(
     tableName = "messages",

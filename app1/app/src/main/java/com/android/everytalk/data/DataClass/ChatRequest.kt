@@ -128,6 +128,10 @@ data class ChatRequest(
     @Transient
     val localSkillSnapshot: SkillRequestSnapshot? = null,
 
+    /** 临时记忆资料不参与序列化，也不进入 Agent 的恢复消息和压缩摘要。 */
+    @Transient
+    val localMemorySnapshot: com.android.everytalk.data.memory.MemoryRequestSnapshot? = null,
+
     /** Anthropic 兼容端点的 Pi allowEmptySignature 开关，仅参与本地协议转换。 */
     @Transient
     val localAllowEmptyAnthropicThinkingSignature: Boolean = false,

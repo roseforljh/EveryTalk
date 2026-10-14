@@ -106,8 +106,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.android.everytalk.config.PerformanceConfig
@@ -128,6 +126,7 @@ import com.android.everytalk.data.agent.PendingAgentEnableApproval
 import com.android.everytalk.data.agent.PendingSkillSecretApproval
 import com.android.everytalk.data.agent.PendingMcpEnableApproval
 import com.android.everytalk.data.agent.PendingIntervention
+import com.android.everytalk.data.agent.SuspensionState
 import com.android.everytalk.statecontroller.reauthorizeCloudflareComputer
 import com.android.everytalk.BuildConfig
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -156,7 +155,7 @@ private data class PendingAgentAction(
 fun ChatInputArea(
     text: String,
     onTextChange: (String) -> Unit,
-    onSendMessageRequest: (messageText: String, isKeyboardVisible: Boolean, attachments: List<SelectedMediaItem>, mimeType: String?, contentParts: List<MessageContentPart>) -> Unit,
+    onSendMessageRequest: (messageText: String, isKeyboardVisible: Boolean, attachments: List<SelectedMediaItem>, mimeType: String?, contentParts: List<MessageContentPart>, onMessageDisplayed: () -> Unit, onSendRejected: () -> Unit) -> Unit,
     selectedMediaItems: List<SelectedMediaItem>,
     onAddMediaItem: (SelectedMediaItem) -> Unit,
     onRemoveMediaItemAtIndex: (Int) -> Unit,
@@ -197,7 +196,8 @@ fun ChatInputArea(
     val skillRepository = remember(context) { SkillRepository(context) }
     val installedSkills by skillRepository.observeAll().collectAsState(initial = emptyList())
 
-    var pendingMessageTextForSend by remember { mutableStateOf<String?>(null) }
+    var messageSendInProgress by remember { mutableStateOf(false) }
+    var questionAnswerInProgress by remember { mutableStateOf(false) }
     var showImageSelectionPanel by remember { mutableStateOf(false) }
     var showMoreOptionsPanel by remember { mutableStateOf(false) }
     // 记录由外点关闭触发的时间戳，用于忽略紧随其后的按钮抬起点击，避免"先关后开"
@@ -214,7 +214,28 @@ fun ChatInputArea(
     val computerSelections by viewModel.computerSelections.collectAsState()
     val currentConversationId by viewModel.currentConversationId.collectAsState()
     val pendingInterventions by viewModel.pendingInterventions.collectAsState()
-    val currentIntervention = pendingInterventions.firstOrNull { it.sessionId == currentConversationId }
+    val currentIntervention = pendingInterventions
+        .asSequence()
+        .filter {
+            it.sessionId == currentConversationId && it.state in setOf(
+                SuspensionState.WAITING_USER,
+                SuspensionState.WAITING_USER_REENTRY,
+                SuspensionState.USER_DECISION_REQUIRED,
+            )
+        }
+        .lastOrNull()
+    val currentUserQuestion = currentIntervention?.takeIf { it.capabilityId == "user.question" }
+    var answerAttachments by remember { mutableStateOf<List<SelectedMediaItem>>(emptyList()) }
+    var answerAttachmentPickerActive by remember { mutableStateOf(false) }
+
+    /** 选择器结果根据当前入口分流，回答卡片不会污染普通 Composer 的附件草稿。 */
+    fun addPickedMediaItem(item: SelectedMediaItem) {
+        if (answerAttachmentPickerActive && currentUserQuestion != null) {
+            answerAttachments = answerAttachments + item
+        } else {
+            onAddMediaItem(item)
+        }
+    }
     // 重新授权必须复用同一个 Store：PKCE verifier 只存在于启动 OAuth 的这一份内存状态。
     val cloudflareOAuthStore = viewModel.cloudflareOAuthStore
     val cloudflareOAuthFlow = remember(context, cloudflareOAuthStore) {
@@ -396,7 +417,7 @@ fun ChatInputArea(
                         if (isFileSizeValid) {
                             withContext(Dispatchers.Main) {
                                 if (mimeType.startsWith("video/")) {
-                                    onAddMediaItem(SelectedMediaItem.GenericFile(
+                                    addPickedMediaItem(SelectedMediaItem.GenericFile(
                                         uri = uri,
                                         id = UUID.randomUUID().toString(),
                                         displayName = fileName,
@@ -404,7 +425,7 @@ fun ChatInputArea(
                                         filePath = null
                                     ))
                                 } else {
-                                    onAddMediaItem(SelectedMediaItem.ImageFromUri(uri, UUID.randomUUID().toString(), mimeType))
+                                    addPickedMediaItem(SelectedMediaItem.ImageFromUri(uri, UUID.randomUUID().toString(), mimeType))
                                 }
                             }
                         }
@@ -433,7 +454,7 @@ fun ChatInputArea(
                 try {
                     if (validateUserImageForSelection(context, currentUri, onShowError = onShowSnackbar)) {
                         withContext(Dispatchers.Main.immediate) {
-                            onAddMediaItem(
+                            addPickedMediaItem(
                                 SelectedMediaItem.ImageFromUri(
                                     currentUri,
                                     UUID.randomUUID().toString(),
@@ -501,7 +522,7 @@ fun ChatInputArea(
                             )
                             if (isFileSizeValid) {
                                 withContext(Dispatchers.Main) {
-                                    onAddMediaItem(
+                                    addPickedMediaItem(
                                         SelectedMediaItem.GenericFile(
                                             uri = uri,
                                             id = UUID.randomUUID().toString(),
@@ -666,15 +687,6 @@ fun ChatInputArea(
         }
     }
 
-    LaunchedEffect(Unit) {
-        snapshotFlow { imeInsets.getBottom(density) > 0 }
-            .distinctUntilChanged()
-            .filter { isKeyboardVisible -> !isKeyboardVisible }
-            .collect { _ ->
-                pendingMessageTextForSend = null
-            }
-    }
-
     var chatInputContentHeightPx by remember { mutableIntStateOf(0) }
 
     val onToggleImagePanel = {
@@ -744,7 +756,7 @@ fun ChatInputArea(
         composerMode = composerMode,
         hasDraft = hasContent,
         isRemoteCancellationPending = isRemoteCancellationPending,
-        isConvertingLongText = isConvertingLongText || isRestoringMessage,
+        isConvertingLongText = isConvertingLongText || isRestoringMessage || messageSendInProgress || questionAnswerInProgress,
         isRunControllable = runControlState != null,
         canRestoreMessage = canRestoreMessage,
         hasActiveMessage = controlledMessageId != null,
@@ -783,6 +795,24 @@ fun ChatInputArea(
                         onStored = ::clearSubmittedComposer,
                     )
                 }
+            } else if (currentUserQuestion != null && hasDraft) {
+                // Agent 正在等待用户回答时，普通输入框直接提交回答。
+                // 若继续走 Pending 队列，当前等待中的 Run 会阻止队列派发，表现为消息丢失和页面卡住。
+                val intervention = currentUserQuestion
+                val answerText = displayText
+                val answerAttachments = selectedMediaItems.toList()
+                questionAnswerInProgress = true
+                coroutineScope.launch {
+                    val accepted = runCatching {
+                        viewModel.answerUserQuestion(intervention, answerText, answerAttachments)
+                    }.getOrDefault(false)
+                    questionAnswerInProgress = false
+                    if (accepted) {
+                        clearSubmittedComposer()
+                    } else {
+                        onShowSnackbar(context.getString(R.string.agent_answer_submit_failed))
+                    }
+                }
             } else if (chatRunState != ChatRunState.Idle) {
                 if (selectedApiConfig == null) {
                     onShowSnackbar(context.getString(R.string.chat_input_select_api_configuration))
@@ -802,19 +832,28 @@ fun ChatInputArea(
             } else if (selectedApiConfig != null) {
                 val audioItem = selectedMediaItems.firstOrNull { it is SelectedMediaItem.Audio } as? SelectedMediaItem.Audio
                 val mimeType = audioItem?.mimeType
+                messageSendInProgress = true
                 onSendMessageRequest(
                     displayText,
                     false,
                     selectedMediaItems.toList(),
                     mimeType,
                     contentParts,
+                    {
+                        // 只有消息已经进入可见消息列表后才清空草稿，发送准备阶段失败时保留用户输入。
+                        messageSendInProgress = false
+                        clearSubmittedComposer()
+                    },
+                    {
+                        messageSendInProgress = false
+                    },
                 )
-                clearSubmittedComposer()
             } else {
                 Log.w("SendMessage", "请先选择 API 配置")
                 onShowSnackbar(context.getString(R.string.chat_input_select_api_configuration))
             }
         } catch (e: Exception) {
+            messageSendInProgress = false
             Log.e("SendMessage", "发送消息时发生错误", e)
             onShowSnackbar(context.getString(R.string.chat_input_send_failed))
         }
@@ -869,6 +908,30 @@ fun ChatInputArea(
                 modifier = Modifier
                     .fillMaxWidth()
             ) {
+                currentUserQuestion?.let { intervention ->
+                    AgentAnswerCard(
+                        intervention = intervention,
+                        attachments = answerAttachments,
+                        onOpenAttachmentPicker = {
+                            answerAttachmentPickerActive = true
+                            filePickerLauncher.launch(arrayOf("*/*"))
+                        },
+                        onRemoveAttachmentAtIndex = { index ->
+                            answerAttachments = answerAttachments.toMutableList().also { items ->
+                                if (index in items.indices) items.removeAt(index)
+                            }
+                        },
+                        onSubmit = { content, attachments ->
+                            val accepted = viewModel.answerUserQuestion(intervention, content, attachments)
+                            if (accepted) {
+                                answerAttachments = emptyList()
+                                answerAttachmentPickerActive = false
+                            }
+                            accepted
+                        },
+                    )
+                }
+
                 PendingMessageQueue(
                     messages = pendingMessages,
                     onEdit = { id ->
@@ -1056,6 +1119,7 @@ fun ChatInputArea(
                 BoxWithConstraints(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .heightIn(min = 48.dp)
                         .align(Alignment.CenterHorizontally)
                         .graphicsLayer { clip = false },
                     contentAlignment = Alignment.Center
@@ -1064,7 +1128,10 @@ fun ChatInputArea(
                     val layoutProgress = sep * sep * (3f - 2f * sep)
                     val plusMotionProgress = layoutProgress
                     val textPaddingProgress = layoutProgress * layoutProgress
-                    val expandedInputFieldWidth = (maxWidth * 0.82f).coerceAtMost(maxWidth - 48.dp)
+                    // 展开态左侧按钮会占用约 80dp。旧算法先取屏宽 82% 再叠加这段位移，
+                    // 窄屏时输入框右侧会越过父布局，随后被裁剪成“压扁/消失”。
+                    // 这里先扣除按钮占用的空间，保证输入框和发送按钮始终落在可用宽度内。
+                    val expandedInputFieldWidth = (maxWidth - 80.dp).coerceAtLeast(0.dp)
                     val collapsedInputFieldWidth = expandedInputFieldWidth + 16.dp
                     val inputFieldWidth = collapsedInputFieldWidth + (expandedInputFieldWidth - collapsedInputFieldWidth) * layoutProgress
                     val plusBoxWidth = 64.dp
@@ -1650,7 +1717,7 @@ fun ChatInputArea(
         )
     }
 
-    currentIntervention?.let { intervention ->
+    currentIntervention?.takeUnless { it.capabilityId == "user.question" }?.let { intervention ->
         AgentInterventionDialog(
             intervention = intervention,
             onResolveNone = { pending ->

@@ -10,8 +10,9 @@ object AgentControlToolNames {
     const val REQUEST_SKILL_SECRET = "request_skill_secret"
     const val REQUEST_PROTECTED_SECRET = "request_protected_secret"
     const val REQUEST_CAPABILITY = "request_capability"
+    const val REQUEST_USER_INPUT = "request_user_input"
 
-    val all = setOf(REQUEST_AGENT, REQUEST_MCP, REQUEST_SKILL_SECRET, REQUEST_PROTECTED_SECRET, REQUEST_CAPABILITY)
+    val all = setOf(REQUEST_AGENT, REQUEST_MCP, REQUEST_SKILL_SECRET, REQUEST_PROTECTED_SECRET, REQUEST_CAPABILITY, REQUEST_USER_INPUT)
 }
 
 fun agentRequestToolDefinition(): Map<String, Any> = mapOf(
@@ -111,6 +112,24 @@ fun capabilityRequestToolDefinition(): Map<String, Any> = mapOf(
     ),
 )
 
+/** 请求用户补充文字或附件。请求本身只保存问题，回答通过可信 UI 单独提交。 */
+fun userInputRequestToolDefinition(): Map<String, Any> = mapOf(
+    "type" to "function",
+    "function" to mapOf(
+        "name" to AgentControlToolNames.REQUEST_USER_INPUT,
+        "description" to "当前任务需要用户回答时调用。填写清楚的问题并等待用户在输入卡片中提交文字、图片、文件、视频或音频；不要在普通文本中假装已经收到回答。",
+        "parameters" to mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "question" to mapOf("type" to "string", "description" to "要显示给用户的问题"),
+                "context" to mapOf("type" to "string", "description" to "可选的补充说明"),
+            ),
+            "required" to listOf("question"),
+            "additionalProperties" to false,
+        ),
+    ),
+)
+
 fun agentPauseRequest(
     call: AgentContentBlock.ToolCall,
     allowedSkillIds: Set<String> = emptySet(),
@@ -139,6 +158,15 @@ fun agentPauseRequest(
         require(reason.isNotBlank()) { "reason_safe 不能为空" }
         val context = (call.arguments["user_visible_context"] as? JsonPrimitive)?.contentOrNull?.trim()?.take(500)
         return AgentPauseRequest.Capability(CapabilityRequest(capability, reason.take(500), context))
+    }
+    if (call.name.equals(AgentControlToolNames.REQUEST_USER_INPUT, ignoreCase = true)) {
+        val question = (call.arguments["question"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+        require(question.isNotBlank()) { "用户问题不能为空" }
+        val context = (call.arguments["context"] as? JsonPrimitive)?.contentOrNull?.trim()
+            ?.takeIf(String::isNotBlank)?.take(500)
+        return AgentPauseRequest.Capability(
+            CapabilityRequest("user.question", question.take(500), context),
+        )
     }
     if (call.name.equals(AgentControlToolNames.REQUEST_MCP, ignoreCase = true)) {
         val reason = (call.arguments["reason"] as? JsonPrimitive)

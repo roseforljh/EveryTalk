@@ -1360,8 +1360,11 @@ class AgentRunStore(
     suspend fun sessionTotalTokens(sessionId: String): Long =
         dao.getSessionTokenTotals(sessionId).totalTokens
 
+    suspend fun compactions(sessionId: String): List<AgentCompactionEntryEntity> =
+        dao.getCompactions(sessionId)
+
     suspend fun latestCompaction(sessionId: String): AgentCompactionEntryEntity? =
-        dao.getLatestCompaction(sessionId)
+        compactions(sessionId).firstOrNull()
 
     /** 只读检查队列是否仍有待注入消息，用于区分“确实没有队列”和“队列存在但无法恢复”。 */
     suspend fun hasPendingQueuedMessages(runId: String, sessionId: String): Boolean =
@@ -1909,7 +1912,8 @@ private fun resolvedUnknownToolResult(call: AgentContentBlock.ToolCall): AgentCo
     )
 
 private fun AgentContentBlock.ToolCall.toExecutionStep(completed: Boolean): ExecutionStep {
-    val label = unknownExecutionDetail(this).ifBlank { name }.replace('\r', ' ').replace('\n', ' ').take(120)
+    val detail = unknownExecutionDetail(this).ifBlank { name }
+    val label = detail.replace('\r', ' ').replace('\n', ' ').take(120)
     val type = if (name in setOf("exec", "read_file", "write_file", "terminal", "upload", "download", "open_port")) {
         ExecutionStepType.Agent
     } else {
@@ -1920,6 +1924,7 @@ private fun AgentContentBlock.ToolCall.toExecutionStep(completed: Boolean): Exec
         type = type,
         title = if (type == ExecutionStepType.Agent) "运行 Agent" else "调用工具",
         labels = listOf(label),
+        detail = detail.takeIf { type == ExecutionStepType.Agent && it.isNotBlank() },
         completed = completed,
         reasoningBefore = "",
     )

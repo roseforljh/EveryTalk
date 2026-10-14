@@ -111,6 +111,9 @@ internal class PendingMessageController(
         when {
             controlState == AgentRunControlState.PAUSE_REQUESTED -> ChatRunState.PauseRequested
             controlState == AgentRunControlState.PAUSED -> ChatRunState.Paused
+            // Agent 可能正在规划、执行工具或等待下一轮模型请求，此时 API 流标记可能短暂变为 false。
+            // 只要控制记录还存在，整个 AgentRun 就仍未结束，Composer 必须保持运行态。
+            controlState != null -> ChatRunState.Streaming
             running || dispatching -> ChatRunState.Streaming
             else -> ChatRunState.Idle
         }
@@ -328,7 +331,9 @@ internal class PendingMessageController(
         scope.launch {
             operationMutex.withLock {
                 if (
-                    agentRunControlState.value in setOf(AgentRunControlState.PAUSED, AgentRunControlState.PAUSE_REQUESTED) ||
+                    // _isTextApiCalling 只表示当前网络流，Agent 的规划/工具阶段可能暂时没有网络流。
+                    // 控制记录仍存在就说明同一个 AgentRun 尚未彻底结束，队列必须继续等待。
+                    agentRunControlState.value != null ||
                     isAbortInProgress.value ||
                     isApiCalling.value ||
                     activeDispatchId != null

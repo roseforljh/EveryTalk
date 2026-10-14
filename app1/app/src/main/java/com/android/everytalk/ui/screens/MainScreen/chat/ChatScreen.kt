@@ -41,6 +41,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.compose.foundation.border
 import androidx.compose.ui.draw.shadow
 import androidx.navigation.NavController
@@ -646,7 +647,9 @@ fun ChatScreen(
             // 浮动输入框 - 对齐到底部
             Box(
                 modifier = Modifier
-                    .fillMaxSize(),
+                    .fillMaxSize()
+                    // 输入层始终盖在消息列表上方，消息列表的滚动和吸顶项不能遮住它。
+                    .zIndex(2f),
                 contentAlignment = Alignment.BottomCenter
             ) {
                 ChatInputArea(
@@ -654,7 +657,7 @@ fun ChatScreen(
                 onTextChange = {
                     viewModel.onTextChange(it)
                 },
-                onSendMessageRequest = { messageText, _, attachments, mimeType, contentParts ->
+                onSendMessageRequest = { messageText, _, attachments, mimeType, contentParts, onMessageDisplayed, onSendRejected ->
                     scrollStateManager.lockAutoScroll()
                     viewModel.onSendMessage(
                         messageText = messageText,
@@ -662,6 +665,8 @@ fun ChatScreen(
                         audioBase64 = null,
                         mimeType = mimeType,
                         contentParts = contentParts,
+                        onUserMessageDisplayed = onMessageDisplayed,
+                        onSendRejected = onSendRejected,
                     )
                     keyboardController?.hide()
                 },

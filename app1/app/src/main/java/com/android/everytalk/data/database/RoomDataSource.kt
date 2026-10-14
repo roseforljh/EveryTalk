@@ -9,6 +9,8 @@ import com.android.everytalk.data.database.entities.ChatSessionEntity
 import com.android.everytalk.data.database.entities.ConversationGroupEntity
 import com.android.everytalk.data.database.entities.ExpandedGroupEntity
 import com.android.everytalk.data.database.entities.PinnedItemEntity
+import com.android.everytalk.data.database.entities.SyncSessionReference
+import com.android.everytalk.data.database.entities.syncUserSettingSnapshots
 import com.android.everytalk.data.database.entities.SystemSettingEntity
 import com.android.everytalk.data.database.entities.toApiConfig
 import com.android.everytalk.data.database.entities.toEntity
@@ -484,6 +486,7 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
     private suspend fun savePinnedIds(ids: Set<String>, isImageGen: Boolean) {
         val entities = ids.map { PinnedItemEntity(it, isImageGen) }
         settingsDao.replacePinnedItems(isImageGen, entities)
+        if (!isImageGen) refreshSyncableUserSettings()
     }
 
     // --- Groups ---
@@ -495,6 +498,21 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
     suspend fun saveConversationGroups(groups: Map<String, List<String>>) {
         val entities = groups.map { ConversationGroupEntity(it.key, it.value) }
         settingsDao.replaceConversationGroups(entities)
+        refreshSyncableUserSettings()
+    }
+
+    /** 将现有本地设置投影为可同步记录；生图会话通过会话白名单自然排除。 */
+    private suspend fun refreshSyncableUserSettings() {
+        val sessions = chatDao.getAllSessions(false).map {
+            SyncSessionReference(it.id, it.uuid, it.updatedAt)
+        }
+        val snapshots = syncUserSettingSnapshots(
+            settingsDao.getConversationGroups(),
+            settingsDao.getPinnedIds(false),
+            sessions,
+            System.currentTimeMillis(),
+        )
+        if (snapshots.isNotEmpty()) settingsDao.upsertUserSettings(snapshots)
     }
 
     suspend fun loadExpandedGroupKeys(): Set<String> {

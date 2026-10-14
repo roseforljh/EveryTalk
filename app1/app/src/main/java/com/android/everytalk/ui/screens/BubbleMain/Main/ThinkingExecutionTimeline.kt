@@ -29,6 +29,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -400,6 +403,7 @@ internal fun ThinkingExecutionTimeline(
     var nodeIndex = 0
     var toolNodeIndex = 0
     var reasoningNodeIndex = 0
+    var expandedStepIds by remember { mutableStateOf(emptySet<String>()) }
 
     Column(
         modifier = modifier
@@ -446,7 +450,18 @@ internal fun ThinkingExecutionTimeline(
                         last = nodeIndex == nodeCount - 1,
                         modifier = focusModifier.testTag("reasoning-execution-step-$currentToolIndex"),
                     ) {
-                        ExecutionLabels(step, entry.invocationCount)
+                        ExecutionLabels(
+                            step = step,
+                            invocationCount = entry.invocationCount,
+                            expanded = step.id in expandedStepIds,
+                            onToggleExpanded = {
+                                expandedStepIds = if (step.id in expandedStepIds) {
+                                    expandedStepIds - step.id
+                                } else {
+                                    expandedStepIds + step.id
+                                }
+                            },
+                        )
                         if (itemIndex == sourceItemIndex && webSearchResults.isNotEmpty()) {
                             WebsiteLabels(webSearchResults)
                         }
@@ -664,6 +679,8 @@ internal fun stepIconTint(type: ExecutionStepType): Color = when (type) {
 private fun ExecutionLabels(
     step: ExecutionStep,
     invocationCount: Int,
+    expanded: Boolean,
+    onToggleExpanded: () -> Unit,
 ) {
     if (step.labels.isEmpty()) return
     val uriHandler = LocalUriHandler.current
@@ -682,10 +699,12 @@ private fun ExecutionLabels(
                     ExecutionStepType.Agent -> R.drawable.ic_gpt_terminal
                 },
                 iconTint = stepIconTint(step.type),
-                onClick = if (step.type == ExecutionStepType.Web) {
-                    webLinkClick(uriHandler, label)
-                } else {
-                    null
+                onClick = when (step.type) {
+                    ExecutionStepType.Web -> webLinkClick(uriHandler, label)
+                    ExecutionStepType.Tool,
+                    ExecutionStepType.Agent,
+                    -> onToggleExpanded
+                    else -> null
                 },
                 trailingText = if (
                     step.type in setOf(ExecutionStepType.Tool, ExecutionStepType.Agent) && invocationCount > 1
@@ -697,6 +716,40 @@ private fun ExecutionLabels(
                 modifier = Modifier.testTag("reasoning-execution-label-$index"),
             )
         }
+    }
+    if (expanded && step.type in setOf(ExecutionStepType.Tool, ExecutionStepType.Agent)) {
+        ExecutionStepDetails(step)
+    }
+}
+
+@Composable
+private fun ExecutionStepDetails(step: ExecutionStep) {
+    val detail = step.detail?.trim().takeUnless { it.isNullOrEmpty() }
+        ?: step.labels.joinToString(" ").trim()
+    if (detail.isEmpty()) return
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 2.dp)
+            .testTag("reasoning-execution-detail-${step.id}"),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Text(
+            text = detail,
+            color = MaterialTheme.colorScheme.onSurface,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Text(
+            text = stringResource(
+                if (step.completed) {
+                    R.string.thinking_execution_completed
+                } else {
+                    R.string.thinking_execution_running
+                },
+            ),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.labelSmall,
+        )
     }
 }
 

@@ -9,9 +9,26 @@ import com.android.everytalk.data.database.entities.ConversationGroupEntity
 import com.android.everytalk.data.database.entities.ExpandedGroupEntity
 import com.android.everytalk.data.database.entities.PinnedItemEntity
 import com.android.everytalk.data.database.entities.SystemSettingEntity
+import com.android.everytalk.data.database.entities.UserSettingEntity
 
 @Dao
 interface SettingsDao {
+    @Query("SELECT * FROM user_settings WHERE kind IN ('conversation_groups', 'pinned_items') AND deleted = 0")
+    suspend fun getSyncableUserSettings(): List<UserSettingEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertUserSettings(settings: List<UserSettingEntity>)
+
+    @Query("SELECT * FROM user_settings WHERE sync_status = 'PENDING'")
+    suspend fun getPendingUserSettings(): List<UserSettingEntity>
+
+    @Query("UPDATE user_settings SET sync_status = 'SYNCED' WHERE uuid IN (:uuids) AND deleted = 0")
+    suspend fun markUserSettingsSynced(uuids: List<String>)
+
+    /** 后台去重键不进入页面状态。 */
+    @Query("SELECT * FROM system_settings WHERE `key` IN ('memory_enabled', 'memory_auto_capture_enabled', 'memory_task_version')")
+    fun observeMemorySettings(): kotlinx.coroutines.flow.Flow<List<SystemSettingEntity>>
+
     // System Settings (key-value)
     @Query("SELECT value FROM system_settings WHERE `key` = :key")
     suspend fun getValue(key: String): String?

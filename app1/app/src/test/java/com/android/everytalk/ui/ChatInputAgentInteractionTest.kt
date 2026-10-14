@@ -63,6 +63,19 @@ class ChatInputAgentInteractionTest {
         assertTrue(selectionFlow.contains("onFailure?.invoke()"))
     }
 
+    @Test
+    fun `接力弹窗只读取当前会话最新的等待记录`() {
+        val source = chatInputSource().readText(Charsets.UTF_8)
+        val selection = source.substringAfter("val currentIntervention =")
+            .substringBefore("val currentUserQuestion")
+
+        assertTrue(selection.contains("it.sessionId == currentConversationId"))
+        assertTrue(selection.contains("SuspensionState.WAITING_USER"))
+        assertTrue(selection.contains("SuspensionState.WAITING_USER_REENTRY"))
+        assertTrue(selection.contains("SuspensionState.USER_DECISION_REQUIRED"))
+        assertTrue(selection.contains("lastOrNull()"))
+    }
+
     private fun chatInputSource(): File {
         val relativePath = "ui/screens/MainScreen/chat/text/ui/ChatInputArea.kt"
         val candidates = listOf(

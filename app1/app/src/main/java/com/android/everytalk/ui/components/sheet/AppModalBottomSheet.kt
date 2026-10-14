@@ -38,6 +38,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -48,8 +49,11 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
-internal const val AppModalBottomSheetMaximumHeightFraction = 0.9f
-internal const val AppModalBottomSheetDefaultHeightFraction = 0.55f
+/** 全屏档位，允许抽屉顶边贴近窗口顶部。 */
+internal const val AppModalBottomSheetMaximumHeightFraction = 1.0f
+
+/** 当前档位，保留顶部约 10% 的空间作为可继续上拉的视觉提示。 */
+internal const val AppModalBottomSheetDefaultHeightFraction = 0.9f
 
 // Material 3 默认拖动条高 4dp，并带上下各 22dp 内边距。
 private val AppModalBottomSheetDragHandleSpace = 48.dp
@@ -146,6 +150,7 @@ internal fun AppModalBottomSheet(
     sheetContentModifier: Modifier = Modifier,
     scrollModifier: Modifier = Modifier,
     contentModifier: Modifier = Modifier,
+    topGradient: Boolean = false,
     stateModifier: (SheetValue, Boolean) -> Modifier = { _, _ -> Modifier },
     dragHandleModifier: Modifier = Modifier,
     bottomIndicatorModifier: Modifier = Modifier,
@@ -186,35 +191,30 @@ internal fun AppModalBottomSheet(
         )
         return
     }
-    val openExpanded = initiallyExpanded == true
     var measuredContentHeightPx by remember { mutableIntStateOf(0) }
     var contentViewportHeightPx by remember { mutableIntStateOf(0) }
     var contentMeasured by remember { mutableStateOf(false) }
-    var expansionEnabled by remember { mutableStateOf(openExpanded) }
     var presentationReady by remember { mutableStateOf(false) }
-    var expansionInProgress by remember { mutableStateOf(false) }
-    val initialTarget = if (openExpanded) {
-        SheetValue.Expanded
-    } else {
-        SheetValue.PartiallyExpanded
-    }
+    // 长内容只用于标记内容是否可滚动，不能改变初始档位；全屏由用户上拉进入。
+    var contentOverflows by remember { mutableStateOf(initiallyExpanded == true) }
+    val initialTarget = SheetValue.PartiallyExpanded
     var gestureFromHandle by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(
-        skipPartiallyExpanded = openExpanded,
+        // 始终保留 Hidden、PartiallyExpanded、Expanded 三个锚点。
+        // 长内容也必须先停在中间档，用户继续上拉后才进入 Expanded。
+        skipPartiallyExpanded = false,
         confirmValueChange = { targetValue ->
             when {
                 !presentationReady -> targetValue == initialTarget
-                targetValue == SheetValue.Expanded -> expansionEnabled
+                targetValue == SheetValue.Expanded -> true
                 targetValue == SheetValue.Hidden ||
                     targetValue == SheetValue.PartiallyExpanded ->
-                    !expansionInProgress && (gestureFromHandle || scrollState.value == 0)
+                    gestureFromHandle || scrollState.value == 0
                 else -> true
             }
         },
     )
-    val interactionLocked = !presentationReady ||
-        expansionInProgress ||
-        sheetState.isAnimationRunning
+    val interactionLocked = !presentationReady || sheetState.isAnimationRunning
     val canDismissSheet = !interactionLocked && scrollState.value == 0
     val visibleContentViewportHeightPx =
         (contentViewportHeightPx - partiallyExpandedHiddenHeightPx).coerceAtLeast(0)
@@ -240,27 +240,15 @@ internal fun AppModalBottomSheet(
         measuredContentHeightPx,
         visibleContentViewportHeightPx,
         contentMeasured,
-        expansionEnabled,
     ) {
         if (
             !sheetState.isAnimationRunning &&
             sheetState.currentValue == SheetValue.PartiallyExpanded &&
             visibleContentViewportHeightPx > 0 &&
             contentMeasured &&
-            !expansionEnabled &&
             measuredContentHeightPx > visibleContentViewportHeightPx + overflowTolerancePx
         ) {
-            expansionEnabled = true
-        }
-    }
-    LaunchedEffect(expansionEnabled, openExpanded) {
-        if (expansionEnabled && !openExpanded) {
-            expansionInProgress = true
-            try {
-                sheetState.expand()
-            } finally {
-                expansionInProgress = false
-            }
+            contentOverflows = true
         }
     }
 
@@ -275,7 +263,7 @@ internal fun AppModalBottomSheet(
         },
         sheetState = sheetState,
         sheetGesturesEnabled = !interactionLocked,
-        containerColor = MaterialTheme.colorScheme.surface,
+        containerColor = if (topGradient) Color.Transparent else MaterialTheme.colorScheme.surface,
         contentWindowInsets = { WindowInsets(0, 0, 0, 0) },
         properties = ModalBottomSheetProperties(
             shouldDismissOnBackPress = canDismissSheet,
@@ -307,6 +295,9 @@ internal fun AppModalBottomSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(maximumContentHeight)
+                // 抽屉主体保持完整底色，顶部渐变单独作为正文遮罩叠加，
+                // 这样正文向上滚动时会从底色逐渐过渡到透明并消失。
+                .background(MaterialTheme.colorScheme.surface)
                 .pointerInput(Unit) {
                     awaitEachGesture {
                         // 正文的下一次手势重新恢复滚动限制，不沿用把手的关闭权限。
@@ -321,7 +312,7 @@ internal fun AppModalBottomSheet(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .then(stateModifier(sheetState.currentValue, expansionEnabled)),
+                    .then(stateModifier(sheetState.currentValue, contentOverflows)),
             ) {
                 Box(
                     modifier = Modifier
@@ -346,6 +337,24 @@ internal fun AppModalBottomSheet(
                             content()
                         }
                     }
+                }
+                if (topGradient) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .fillMaxWidth()
+                            .height(72.dp)
+                            .background(
+                                brush = Brush.verticalGradient(
+                                    colors = listOf(
+                                        MaterialTheme.colorScheme.surface,
+                                        Color.Transparent,
+                                    ),
+                                    startY = 0f,
+                                    endY = with(density) { 72.dp.toPx() },
+                                ),
+                            ),
+                    )
                 }
                 Box(
                     modifier = Modifier

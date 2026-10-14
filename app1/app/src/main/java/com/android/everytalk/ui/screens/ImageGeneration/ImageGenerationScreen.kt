@@ -438,6 +438,9 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                     },
                     selectedImageRatio = selectedImageRatio,
                     onImageRatioChanged = { viewModel.stateHolder._selectedImageRatio.value = it },
+                    onResolvedImageSize = { size ->
+                        size?.let { viewModel.updateImageSizeForSelectedConfig(it) }
+                    },
                     currentImageSteps = selectedApiConfig?.numInferenceSteps,
                     onChangeImageSteps = { steps ->
                         viewModel.updateImageNumInferenceStepsForSelectedConfig(steps)
@@ -447,7 +450,7 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                         viewModel.updateImageGenerationParamsForSelectedConfig(steps, guidance)
                     },
                     onGeminiImageSizeChanged = { size ->
-                        viewModel.updateGeminiImageSizeForSelectedConfig(size)
+                        viewModel.updateImageSizeForSelectedConfig(size)
                     },
                     currentGptImageQuality = gptImageQuality,
                     onGptImageQualityChanged = { viewModel.stateHolder._gptImageQuality.value = it },

@@ -23,9 +23,16 @@ fun isSyncableTextSession(id: String, isImageGeneration: Boolean): Boolean =
 
 object UserSettingKind {
     const val CONVERSATION_GROUPS = "conversation_groups"
-    const val PINNED_CONVERSATIONS = "pinned_conversations"
+    const val PINNED_ITEMS = "pinned_items"
     const val PINNED_KEY = "text"
 }
+
+/** 设置投影只读取文字会话的身份和修改时间，不读取正文、附件或 API 配置。 */
+data class SyncSessionReference(
+    val id: String,
+    val uuid: String,
+    @androidx.room.ColumnInfo(name = "updated_at") val updatedAt: Long,
+)
 
 /** 只比较同步白名单；补写 token 用量、附件、搜索结果或工具状态不会改变消息的同步内容。 */
 fun MessageEntity.hasSameSyncContent(other: MessageEntity): Boolean =

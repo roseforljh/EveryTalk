@@ -3,6 +3,7 @@ package com.android.everytalk.util.storage
 import android.app.Application
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.util.Base64
 import androidx.test.core.app.ApplicationProvider
 import com.android.everytalk.util.image.ImageHandlingLimits
@@ -14,6 +15,7 @@ import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -51,6 +53,25 @@ class GeneratedImagePersistenceTest {
         val success = result as ImagePersistenceResult.Success
         assertTrue(File(success.filePath).isFile)
         assertEquals("image/png", success.mimeType)
+    }
+
+    @Test
+    fun `生成的横竖图片保留原始字节和宽高`() = runTest {
+        for ((width, height) in listOf(160 to 90, 90 to 160)) {
+            val source = createPngDataUri(width, height)
+            val original = Base64.decode(source.substringAfter(','), Base64.DEFAULT)
+            val result = service.persistGeneratedImage(source, "message-$width", 0) as ImagePersistenceResult.Success
+            assertEquals(width, result.width)
+            assertEquals(height, result.height)
+            assertArrayEquals(original, File(result.filePath).readBytes())
+            val saved = BitmapFactory.decodeFile(result.filePath)
+            try {
+                assertEquals(width, saved.width)
+                assertEquals(height, saved.height)
+            } finally {
+                saved.recycle()
+            }
+        }
     }
 
     @Test
@@ -98,8 +119,8 @@ class GeneratedImagePersistenceTest {
     private fun attachmentFiles(): Sequence<File> =
         File(context.filesDir, FileManager.CHAT_ATTACHMENTS_DIR).walkTopDown().filter(File::isFile)
 
-    private fun createPngDataUri(): String {
-        val bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+    private fun createPngDataUri(width: Int = 1, height: Int = 1): String {
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         return try {
             val bytes = ByteArrayOutputStream().use { output ->
                 check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output))

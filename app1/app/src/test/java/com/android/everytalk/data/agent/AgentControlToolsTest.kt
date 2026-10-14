@@ -105,6 +105,28 @@ class AgentControlToolsTest {
     }
 
     @Test
+    fun `request_user_input 保存问题和补充说明`() {
+        val request = agentPauseRequest(
+            AgentContentBlock.ToolCall(
+                "call-question",
+                AgentControlToolNames.REQUEST_USER_INPUT,
+                buildJsonObject {
+                    put("question", "请上传设备截图")
+                    put("context", "需要确认当前页面状态")
+                },
+            ),
+        ) as AgentPauseRequest.Capability
+
+        assertEquals("user.question", request.request.requestedCapability)
+        assertEquals("请上传设备截图", request.request.reasonSafe)
+        assertEquals("需要确认当前页面状态", request.request.userVisibleContext)
+        assertEquals(
+            "acknowledgement-adapter",
+            AgentInterventionPolicyRegistry().resolve("user.question")?.audience,
+        )
+    }
+
+    @Test
     fun `request_protected_secret 支持服务器环境变量且不接收 Secret 正文`() {
         val request = agentPauseRequest(
             AgentContentBlock.ToolCall(

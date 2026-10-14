@@ -118,6 +118,7 @@ fun AppInfoScreen(
     onOpenPrivacyPolicy: () -> Unit,
     onOpenAccountManagement: () -> Unit,
     onOpenSubscription: () -> Unit,
+    onOpenMemoryManagement: () -> Unit = {},
     subscriptionLocked: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
@@ -202,6 +203,13 @@ fun AppInfoScreen(
                         title = stringResource(R.string.app_info_data_management_title),
                         description = stringResource(R.string.app_info_data_management_description),
                         onClick = onOpenDataManagement,
+                    )
+                    HorizontalDivider(modifier = Modifier.padding(start = 80.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+                    AppInfoEntry(
+                        iconRes = R.drawable.ic_gpt_sparkle,
+                        title = stringResource(R.string.memory_title),
+                        description = stringResource(R.string.memory_entry_description),
+                        onClick = onOpenMemoryManagement,
                     )
                     HorizontalDivider(
                         modifier = Modifier.padding(start = 80.dp),

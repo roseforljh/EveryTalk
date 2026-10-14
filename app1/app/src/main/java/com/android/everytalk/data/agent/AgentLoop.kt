@@ -54,6 +54,8 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.put
 
 internal const val MAX_AGENT_MODEL_TURNS = 50
 internal const val MAX_AGENT_CONSECUTIVE_TOOL_CALLS = 100
@@ -135,11 +137,19 @@ class AgentLoop(
     /** 对齐 Pi getApiKey：每次真实 Provider 请求前重新解析，不把 Key 固化在长 Run 内。 */
     private val apiKeyProvider: suspend (AgentRunEntity, ChatRequest) -> String = { _, request -> request.apiKey },
     private val lifecycleSink: suspend (AgentLifecycleEvent) -> Unit = {},
+    private val memoryCoordinator: com.android.everytalk.data.memory.MemoryCoordinator? = null,
     private val modelTransport: ModelTurnTransport = ModelTurnTransport { turn ->
         ApiClient.streamModelTurn(turn.request)
     },
 ) {
-    fun run(input: AgentLoopRequest): Flow<AppStreamEvent> = flow {
+    fun run(originalInput: AgentLoopRequest): Flow<AppStreamEvent> = flow {
+        // 统一入口冻结记忆并预留预算，持久化的 messages 仍是原始聊天内容。
+        val input = memoryCoordinator?.prepare(originalInput) ?: originalInput
+        runPrepared(input).collect { emit(it) }
+    }
+
+    /** 请求准备与大循环分开，避免协程生成的方法超过 JVM 64KB 上限。 */
+    private fun runPrepared(input: AgentLoopRequest): Flow<AppStreamEvent> = flow {
         var run: AgentRunEntity? = null
         try {
             run = input.existingRun ?: runStore.createRun(
@@ -152,11 +162,16 @@ class AgentLoop(
             if (input.existingRun == null) {
                 lifecycleSink(AgentLifecycleEvent(AgentLifecyclePhase.AGENT_START, checkNotNull(run).id))
             }
+            memoryCoordinator?.bind(checkNotNull(run).id, input.request.localMemorySnapshot)
             pauseController.bind(checkNotNull(run).id, input.visibleAssistantMessageId)
             var transcript = runStore.expandTranscript(input.sessionId, input.request.messages)
             if (input.existingRun != null) transcript = runStore.appendRunTranscript(checkNotNull(run).id, transcript)
+            transcript = com.android.everytalk.data.memory.MemoryPromptRenderer.forHistory(transcript)
             var providerContinuation: ProviderTurnContinuation? = null
-            var activeCompaction = runStore.latestCompaction(input.sessionId)
+            // 必须保留全部历史检查点：重新生成或切换模型可能删除最新检查点的边界消息，
+            // 但更早的检查点仍然代表同一会话的有效压缩上下文。
+            var compactionHistory = runStore.compactions(input.sessionId)
+            var activeCompaction = compactionHistory.firstOrNull()
             var executionCheckpoint = runStore.executionCheckpoint(checkNotNull(run).id)
             var requestOrdinal = checkNotNull(run).currentRequestOrdinal
             // Pi 的 Provider retry 仍属于同一模型轮。只有最新模型请求确实中断时才复用；
@@ -384,8 +399,12 @@ class AgentLoop(
                         ),
                         limits = input.tokenLimits,
                         checkpoint = activeCompaction,
+                        checkpointFallbacks = compactionHistory,
                         executionCheckpoint = executionCheckpoint,
                     )
+                    activeCompaction = prepared.snapshot.compactionId?.let { id ->
+                        compactionHistory.firstOrNull { it.id == id }
+                    }
                     if (providerContinuation == null) {
                         val restoredContinuation = runStore.loadContinuation(
                             sessionId = input.sessionId,
@@ -405,8 +424,12 @@ class AgentLoop(
                                 ),
                                 limits = input.tokenLimits,
                                 checkpoint = activeCompaction,
+                                checkpointFallbacks = compactionHistory,
                                 executionCheckpoint = executionCheckpoint,
                             )
+                            activeCompaction = prepared.snapshot.compactionId?.let { id ->
+                                compactionHistory.firstOrNull { it.id == id }
+                            }
                         }
                     }
                     while (prepared.compactionPlan != null) {
@@ -455,11 +478,17 @@ class AgentLoop(
                                 ),
                                 limits = input.tokenLimits,
                                 checkpoint = activeCompaction,
+                                checkpointFallbacks = compactionHistory,
                                 executionCheckpoint = executionCheckpoint,
                             )
+                            activeCompaction = prepared.snapshot.compactionId?.let { id ->
+                                compactionHistory.firstOrNull { it.id == id }
+                            }
                             break
                         }
                         activeCompaction = completedCompaction
+                        compactionHistory = listOf(completedCompaction) +
+                            compactionHistory.filterNot { it.id == completedCompaction.id }
                         runStore.appendStatusEvent(
                             runId = checkNotNull(run).id,
                             reason = "compaction_end",
@@ -488,8 +517,12 @@ class AgentLoop(
                             ),
                             limits = input.tokenLimits,
                             checkpoint = activeCompaction,
+                            checkpointFallbacks = compactionHistory,
                             executionCheckpoint = executionCheckpoint,
                         )
+                        activeCompaction = prepared.snapshot.compactionId?.let { id ->
+                            compactionHistory.firstOrNull { it.id == id }
+                        }
                     }
 
                     // Pi 在 prepareNextTurn 之后再轮询一次。压缩期间来的 steering 必须进入眼前这轮模型请求。
@@ -605,6 +638,7 @@ class AgentLoop(
                             request = emergencyRequest,
                             limits = input.tokenLimits,
                             checkpoint = activeCompaction,
+                            checkpointFallbacks = compactionHistory,
                             executionCheckpoint = executionCheckpoint,
                             forceLocalCompaction = true,
                         )
@@ -618,6 +652,8 @@ class AgentLoop(
                                 limits = input.tokenLimits,
                             )
                             activeCompaction = recoveredCompaction
+                            compactionHistory = listOf(recoveredCompaction) +
+                                compactionHistory.filterNot { it.id == recoveredCompaction.id }
                             runStore.appendStatusEvent(
                                 runId = checkNotNull(run).id,
                                 reason = "compaction_end",
@@ -974,21 +1010,23 @@ class AgentLoop(
             )
             emit(AppStreamEvent.Finish("agent_failed"))
         } finally {
+            finishRun(run, input)
+        }
+    }
+
+    /** 状态收尾不可取消；提取只排队，网络不进入这个保护区域。 */
+    private suspend fun finishRun(run: AgentRunEntity?, input: AgentLoopRequest) {
+        try {
             run?.let { activeRun ->
                 withContext(NonCancellable) {
                     val persisted = runStore.getRun(activeRun.id)
-                    if (persisted?.status in setOf(
-                            AgentRunStatus.COMPLETED.name,
-                            AgentRunStatus.FAILED.name,
-                            AgentRunStatus.CANCELLED.name,
-                        )
-                    ) {
+                    if (persisted?.status in setOf(AgentRunStatus.COMPLETED.name, AgentRunStatus.FAILED.name, AgentRunStatus.CANCELLED.name)) {
                         lifecycleSink(AgentLifecycleEvent(AgentLifecyclePhase.AGENT_END, activeRun.id))
+                        persisted?.let { memoryCoordinator?.finished(it, input.request) }
                     }
                 }
             }
-            pauseController.finish(input.visibleAssistantMessageId)
-        }
+        } finally { pauseController.finish(input.visibleAssistantMessageId) }
     }
 
     /**
@@ -1047,7 +1085,9 @@ class AgentLoop(
                     requestId = requestId,
                     runId = runId,
                     ordinal = ordinal,
-                    request = turnRequest,
+                    request = turnRequest.copy(messages = com.android.everytalk.data.memory.MemoryPromptRenderer.inject(
+                        turnRequest.messages, turnRequest.localMemorySnapshot?.prompt.orEmpty(),
+                    )),
                 ),
             )
                 .withFirstMeaningfulEventTimeout()
@@ -1790,7 +1830,15 @@ class AgentLoop(
             ),
         )
         return try {
-            val result = toolRuntime.execute(call, computerContext, maxModelResultTokens, runId) { event ->
+            val result = if (call.name == com.android.everytalk.data.memory.MemoryTool.NAME) {
+                val content = memoryCoordinator?.execute(runId, call.arguments)
+                    ?: kotlinx.serialization.json.buildJsonObject { put("ok", false); put("error", "记忆运行时未初始化") }
+                AgentContentBlock.ToolResult(
+                    toolCallId = call.id, toolName = call.name,
+                    content = content,
+                    isError = (content as? JsonObject)?.get("ok") == kotlinx.serialization.json.JsonPrimitive(false),
+                )
+            } else toolRuntime.execute(call, computerContext, maxModelResultTokens, runId) { event ->
                 if (event is AppStreamEvent.ExecutionStatusUpdate && event.status != null) {
                     lifecycleSink(
                         AgentLifecycleEvent(

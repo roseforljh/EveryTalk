@@ -137,6 +137,11 @@ android {
             abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86_64")
         }
     }
+
+    // MigrationTestHelper 从导出的 Room schema 快照创建旧版本数据库。
+    sourceSets {
+        getByName("androidTest").assets.srcDir("$projectDir/schemas")
+    }
     // Signing configs for release build; values come from local.properties
     signingConfigs {
         create("release") {
@@ -373,6 +378,7 @@ ksp {
         testImplementation(libs.turbine)
         testImplementation(libs.robolectric)
         testImplementation(libs.room.testing)
+        androidTestImplementation(libs.room.testing)
         testImplementation(libs.androidx.ui.test.junit4)
         androidTestImplementation(libs.androidx.junit)
         androidTestImplementation(libs.androidx.espresso.core)

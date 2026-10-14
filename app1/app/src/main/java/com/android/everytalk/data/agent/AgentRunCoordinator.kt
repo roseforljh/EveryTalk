@@ -219,7 +219,9 @@ class AgentRunCoordinator(
                 val suspension = ticket.suspension
                 _pendingInterventions.update { current ->
                     val existing = current.firstOrNull { it.suspensionId == suspension.id }
-                    current.filterNot { it.suspensionId == suspension.id } +
+                    // 一个 Run 在 AgentLoop 暂停后不会继续创建第二条接力；如果恢复/重试竞态留下旧投影，
+                    // 旧记录不能挡住本次最新请求。按 runId 清理旧投影，真正的持久状态仍以 Room 为准。
+                    current.filterNot { it.runId == suspension.runId } +
                         PendingIntervention(
                             suspensionId = suspension.id,
                             runId = suspension.runId,
@@ -242,6 +244,7 @@ class AgentRunCoordinator(
     private val agentToolResultStore by lazy { AgentToolResultStore(appContext) }
     private val skillRepository by lazy { SkillRepository(appContext, database.skillDao()) }
     private val skillRuntimeTools by lazy { SkillRuntimeTools(skillRepository, agentRunStore) }
+    private val memoryCoordinator by lazy { com.android.everytalk.data.memory.MemoryCoordinator(database, scope) }
     private val recoveryToolRuntime by lazy {
         AgentToolRuntime(
             executorProvider = AgentToolExecutorRegistry::current,
@@ -283,6 +286,7 @@ class AgentRunCoordinator(
                     ?: request.apiKey
             },
             lifecycleSink = { event -> _lifecycleEvents.emit(event) },
+            memoryCoordinator = memoryCoordinator,
         )
     }
 
@@ -498,6 +502,33 @@ class AgentRunCoordinator(
         return true
     }
 
+    /**
+     * 提交用户回答并恢复同一个 AgentRun。
+     * 先把回答放入 steering 队列，再确认 user.question，保证恢复时文字和附件都进入下一轮模型上下文。
+     */
+    suspend fun answerUserQuestion(
+        suspensionId: String,
+        expectedVersion: Long,
+        resolutionNonce: String,
+        content: String,
+        contentParts: List<MessageContentPart> = emptyList(),
+        attachments: List<SelectedMediaItem> = emptyList(),
+    ): Boolean {
+        val suspension = interventionStore.get(suspensionId) ?: return false
+        if (suspension.capabilityId != "user.question") return false
+        val sessionId = interventionStore.getRun(suspension.runId)?.sessionId ?: return false
+        if (content.isBlank() && contentParts.isEmpty() && attachments.isEmpty()) return false
+        if (!steer(
+                sessionId = sessionId,
+                steeringId = "answer:$suspensionId:$expectedVersion",
+                content = content,
+                contentParts = contentParts,
+                attachments = attachments,
+            )
+        ) return false
+        return resolveIntervention(suspensionId, expectedVersion, resolutionNonce)
+    }
+
     private suspend fun resumeRunLocked(
         run: AgentRunEntity,
         approvalDecision: AgentApprovalRecord?,
@@ -616,6 +647,11 @@ class AgentRunCoordinator(
                     SuspensionState.USER_DECISION_REQUIRED.name,
                 )
             }
+            // 只保留每个 Run 最近的一条可交互 Suspension，避免旧请求遮住重试后的新请求。
+            .groupBy { it.runId }
+            .values
+            .mapNotNull { suspensions -> suspensions.maxByOrNull { it.updatedAt } }
+            .sortedBy { it.updatedAt }
             .mapNotNull { suspension ->
                 val pendingRun = interventionStore.getRun(suspension.runId) ?: return@mapNotNull null
                 if (pendingRun.runGeneration != suspension.runGeneration || pendingRun.status in setOf(

@@ -118,6 +118,137 @@ class AgentContextManagerTest {
     }
 
     @Test
+    fun `最新检查点边界被重新生成删除时回退到更早检查点`() {
+        val messages = listOf(
+            SimpleTextApiMessage(id = "user-1", role = "user", content = "早期需求"),
+            SimpleTextApiMessage(id = "assistant-1", role = "assistant", content = "早期结论"),
+            SimpleTextApiMessage(id = "latest-user", role = "user", content = "换模型继续优化"),
+        )
+        val older = AgentCompactionEntryEntity(
+            id = "compact-old",
+            sessionId = "session-1",
+            configIdSnapshot = "gpt-config",
+            summary = "早期会话摘要",
+            summarizedThroughItemId = "assistant-1",
+            prefixFingerprint = agentTranscriptFingerprint(
+                listOf(
+                    "user-1|user|null|早期需求",
+                    "assistant-1|assistant|null|早期结论",
+                ),
+            ),
+            retainedTailJson = """{"summary_role":"system"}""",
+            tokensBefore = 10_000,
+            estimatedTokensAfter = 2_000,
+            summaryRequestId = "request-old",
+            status = AgentCompactionStatus.COMPLETED.name,
+            createdAt = 1L,
+        )
+        val newest = older.copy(
+            id = "compact-new",
+            summarizedThroughItemId = "removed-assistant",
+            prefixFingerprint = "stale-after-regeneration",
+            summary = "不应重新放回的旧分支摘要",
+            createdAt = 2L,
+        )
+
+        val prepared = manager.prepare(
+            requestId = "request-gemini",
+            request = request(
+                messages = messages,
+                maxContextTokens = 1_000_000,
+                compactThresholdTokens = 900_000,
+            ),
+            limits = ModelTokenLimits(maxOutputTokens = 512, maxContextTokens = 1_000_000),
+            checkpoint = newest,
+            checkpointFallbacks = listOf(older),
+        )
+
+        assertEquals("compact-old", prepared.snapshot.compactionId)
+        assertTrue(prepared.messages.any { it is SimpleTextApiMessage && it.content.contains("早期会话摘要") })
+        assertFalse(prepared.messages.any { it is SimpleTextApiMessage && it.content.contains("不应重新放回") })
+    }
+
+    @Test
+    fun `压缩边界被分支删除时仍从活动摘要接续而不是恢复完整历史`() {
+        val messages = listOf(
+            SimpleTextApiMessage(id = "user-1", role = "user", content = "早期需求"),
+            SimpleTextApiMessage(id = "assistant-1", role = "assistant", content = "早期结论"),
+            SimpleTextApiMessage(id = "regenerated-user", role = "user", content = "重新优化"),
+        )
+        val checkpoint = AgentCompactionEntryEntity(
+            id = "compact-active",
+            sessionId = "session-1",
+            configIdSnapshot = "gpt-config",
+            summary = "已经压缩的历史状态",
+            summarizedThroughItemId = "deleted-assistant",
+            prefixFingerprint = "stale-after-regeneration",
+            retainedTailJson = """{
+                "summary_role":"system",
+                "source_prefix_ids":["user-1","assistant-1","deleted-assistant"]
+            }""".trimIndent(),
+            tokensBefore = 10_000,
+            estimatedTokensAfter = 2_000,
+            summaryRequestId = "request-old",
+            status = AgentCompactionStatus.COMPLETED.name,
+            createdAt = 1L,
+        )
+
+        val prepared = manager.prepare(
+            requestId = "request-gemini",
+            request = request(
+                messages = messages,
+                maxContextTokens = 1_000_000,
+                compactThresholdTokens = 900_000,
+            ),
+            limits = ModelTokenLimits(maxOutputTokens = 512, maxContextTokens = 1_000_000),
+            checkpoint = checkpoint,
+        )
+
+        assertEquals("compact-active", prepared.snapshot.compactionId)
+        assertEquals(
+            listOf("regenerated-user"),
+            prepared.messages.filterNot { it.role.equals("system", true) }.map { it.id },
+        )
+        assertTrue(prepared.messages.any { it is SimpleTextApiMessage && it.content.contains("已经压缩的历史状态") })
+    }
+
+    @Test
+    fun `旧检查点只有retained_ids时也能恢复活动摘要`() {
+        val messages = listOf(
+            SimpleTextApiMessage(id = "old-user", role = "user", content = "旧需求"),
+            SimpleTextApiMessage(id = "retained-user", role = "user", content = "继续处理"),
+        )
+        val checkpoint = AgentCompactionEntryEntity(
+            id = "legacy-compact",
+            sessionId = "session-1",
+            configIdSnapshot = "gpt-config",
+            summary = "旧版本压缩摘要",
+            summarizedThroughItemId = "deleted-boundary",
+            prefixFingerprint = "stale",
+            retainedTailJson = """{"summary_role":"system","retained_ids":["retained-user"]}""",
+            tokensBefore = 10_000,
+            estimatedTokensAfter = 2_000,
+            summaryRequestId = "request-old",
+            status = AgentCompactionStatus.COMPLETED.name,
+            createdAt = 1L,
+        )
+
+        val prepared = manager.prepare(
+            requestId = "request-gemini",
+            request = request(
+                messages = messages,
+                maxContextTokens = 1_000_000,
+                compactThresholdTokens = 900_000,
+            ),
+            limits = ModelTokenLimits(maxOutputTokens = 512, maxContextTokens = 1_000_000),
+            checkpoint = checkpoint,
+        )
+
+        assertTrue(prepared.messages.any { it is SimpleTextApiMessage && it.content.contains("旧版本压缩摘要") })
+        assertEquals("retained-user", prepared.messages.last().id)
+    }
+
+    @Test
     fun `检查点后的超长工具轮次继续使用user摘要角色`() {
         val user = SimpleTextApiMessage(id = "user-1", role = "user", content = "持续处理")
         val messages = listOf(

@@ -694,6 +694,27 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         secret: CharArray,
     ) = apiHandler.resolveEphemeralIntervention(suspensionId, expectedVersion, resolutionNonce, secret)
 
+    /** 处理回答附件后交给 AgentRun；原始 Uri 不进入 Room 或 Agent 快照。 */
+    suspend fun answerUserQuestion(
+        intervention: com.android.everytalk.data.agent.PendingIntervention,
+        content: String,
+        attachments: List<com.android.everytalk.models.SelectedMediaItem>,
+    ): Boolean {
+        val stableAttachments = messageSender.processAttachments(
+            attachments = attachments,
+            shouldUsePartsApiMessage = false,
+            textToActuallySend = content,
+        ).takeIf { it.success }?.processedAttachmentsForUi ?: return false
+        val nonce = intervention.resolutionNonce ?: return false
+        return apiHandler.answerUserQuestion(
+            suspensionId = intervention.suspensionId,
+            expectedVersion = intervention.rowVersion,
+            resolutionNonce = nonce,
+            content = content,
+            attachments = stableAttachments,
+        )
+    }
+
     fun resolveDurableIntervention(
         suspensionId: String,
         expectedVersion: Long,

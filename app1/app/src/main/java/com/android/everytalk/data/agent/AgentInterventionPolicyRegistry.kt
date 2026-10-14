@@ -28,6 +28,10 @@ class AgentInterventionPolicyRegistry {
     )
 
     private val policies = mapOf(
+        "user.question" to Policy(
+            "user.question", "1", "1", AgentContinuationKind.RESUME_AGENT_LOOP,
+            ResolutionMaterialKind.NONE, "acknowledgement-adapter", emptyList(),
+        ),
         "git.push" to Policy(
             "git.push", "1", "1", AgentContinuationKind.RETRY_TOOL,
             ResolutionMaterialKind.DURABLE_REFERENCE, "git-adapter",

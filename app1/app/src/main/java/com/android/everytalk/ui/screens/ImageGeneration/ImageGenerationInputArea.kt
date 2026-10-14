@@ -128,7 +128,7 @@ fun ImageGenerationInputArea(
     onFocusChange: (isFocused: Boolean) -> Unit,
     selectedImageRatio: ImageRatio = ImageRatio.DEFAULT_SELECTED,
     onImageRatioChanged: (ImageRatio) -> Unit = {},
-    // 在选择比例后，把解析出的最终分辨率（如 "960x1280"）回传给上层；无法解析时传 null
+    // 将 Seedream 选择的清晰度回传给上层保存；像素尺寸由发送层根据比例统一换算。
     onResolvedImageSize: (String?) -> Unit = {},
     // 当前图像推理步数（仅在 z-image 模型下使用）
     currentImageSteps: Int? = null,
@@ -190,24 +190,6 @@ fun ImageGenerationInputArea(
         }
     }
 
-    // 计算最终分辨率字符串（仅对 Kolors/Qwen 生效），其余家族返回 null（由后端/其它逻辑处理）
-    fun resolveFinalImageSizeForFamily(ratio: ImageRatio, family: ModelFamily?): String? {
-        return when (family) {
-            ModelFamily.KOLORS -> {
-                // 若弹窗展开了两个 3:4 分辨率，则 ratio.width/height 已是具体值；否则按映射取第一个推荐值
-                val labelFromRatio = "${ratio.width}x${ratio.height}"
-                val kolorsMapped = ImageGenCapabilities.getKolorsSizesByRatio(ratio.displayName).firstOrNull()?.label
-                // 优先使用更精确的 ratio 宽高；若为默认比例（非精确推荐），回退映射表
-                if (kolorsMapped.isNullOrBlank()) labelFromRatio else kolorsMapped
-            }
-            ModelFamily.QWEN -> {
-                // 按文档比例→推荐分辨率，取第一个（官方推荐集中只有一个匹配）
-                ImageGenCapabilities.getQwenSizesByRatio(ratio.displayName).firstOrNull()?.label
-            }
-            else -> null
-        }
-    }
-
     // 基于当前配置检测模型家族，并派生“可用比例候选”与（Seedream专属）清晰度
     val detectedFamily: ModelFamily? = remember(selectedApiConfig) {
         ImageGenCapabilities.detectFamily(
@@ -239,9 +221,8 @@ fun ImageGenerationInputArea(
         }
     }
 
-    var seedreamQuality by remember(detectedFamily) {
-        mutableStateOf(QualityTier.Q2K)
-    }
+    // 清晰度与已保存配置保持一致，不能只修改弹窗局部状态而让发送时仍使用旧值。
+    val seedreamQuality = ImageGenCapabilities.getSeedreamQuality(selectedApiConfig?.imageSize)
 
     // 步数调整对话框状态
     var showStepsDialog by remember { mutableStateOf(false) }
@@ -824,7 +805,7 @@ fun ImageGenerationInputArea(
         allowedRatioNames = allowedRatioNames,
         detectedFamily = detectedFamily,
         seedreamQuality = seedreamQuality,
-        onSeedreamQualityChange = { seedreamQuality = it },
+        onSeedreamQualityChange = { onResolvedImageSize(it.label) },
         selectedApiConfig = selectedApiConfig,
         onGeminiImageSizeChanged = onGeminiImageSizeChanged,
         context = context,

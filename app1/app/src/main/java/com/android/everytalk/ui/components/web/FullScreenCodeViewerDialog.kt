@@ -111,6 +111,7 @@ fun FullScreenCodeViewerDialog(
     language: String,
     initialPreviewMode: Boolean = false,
     sourceBounds: androidx.compose.ui.geometry.Rect = androidx.compose.ui.geometry.Rect.Zero,
+    isStreaming: Boolean = false,
     onDismiss: () -> Unit
 ) {
     val clipboard = LocalClipboard.current
@@ -414,6 +415,7 @@ fun FullScreenCodeViewerDialog(
                                 isDarkTheme = isDarkTheme,
                                 headerColor = headerColor,
                                 codeTextColor = previewTextColor,
+                                isStreaming = isStreaming,
                                 modifier = Modifier
                                     .fillMaxSize()
                                     .padding(horizontal = 16.dp)

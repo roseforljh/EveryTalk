@@ -416,7 +416,8 @@ import java.util.TimeZone
         }
     }
 
-    internal fun AppViewModel.updateGeminiImageSizeForSelectedConfig(size: String) {
+    /** 保存当前图像模型的清晰度；Gemini 与 Seedream 共用配置字段和持久化入口。 */
+    internal fun AppViewModel.updateImageSizeForSelectedConfig(size: String) {
         viewModelScope.launch(Dispatchers.Main.immediate) {
             val current = stateHolder._selectedImageGenApiConfig.value ?: return@launch
             val updated = current.copy(imageSize = size)

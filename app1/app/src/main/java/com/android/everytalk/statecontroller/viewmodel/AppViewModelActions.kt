@@ -410,14 +410,20 @@ import java.util.UUID
         mimeType: String? = null,
         isImageGeneration: Boolean = false,
         contentParts: List<com.android.everytalk.data.DataClass.MessageContentPart> = emptyList(),
+        onUserMessageDisplayed: (() -> Unit)? = null,
+        onSendRejected: (() -> Unit)? = null,
     ) {
         Log.d("AppViewModel", "onSendMessage: isImage=$isImageGeneration, attachments=${attachments.size}")
-        if (isRestoringMessage.value) return
+        if (isRestoringMessage.value) {
+            onSendRejected?.invoke()
+            return
+        }
         if (!isImageGeneration && stateHolder._isWebSearchEnabled.value) {
             val currentConfig = stateHolder._selectedApiConfig.value
             val supportsNative = com.android.everytalk.data.network.WebSearchSupport.supportsNativeWebSearch(currentConfig)
             if (!supportsNative && !canUseSelectedExternalWebSearchProvider()) {
                 showSnackbar("请先在设置-联网搜索中配置并勾选一个搜索服务商")
+                onSendRejected?.invoke()
                 return
             }
         }
@@ -439,6 +445,8 @@ import java.util.UUID
             systemPrompt = promptToUse,
             isImageGeneration = isImageGeneration,
             contentParts = contentParts,
+            onUserMessageDisplayed = onUserMessageDisplayed,
+            onSendRejected = onSendRejected,
             onUserMessageAccepted = editedSession?.let { session -> { editMessageController.finishEditing(session) } },
         )
     }

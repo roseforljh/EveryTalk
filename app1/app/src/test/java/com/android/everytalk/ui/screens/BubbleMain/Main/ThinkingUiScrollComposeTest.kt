@@ -13,7 +13,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -26,7 +25,6 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.click
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipe
@@ -967,16 +965,12 @@ class ThinkingUiScrollComposeTest {
     }
 
     @Test
-    fun `短思考内容使用固定加高抽屉且内部不可滚动`() {
+    fun `短思考内容默认停在中档且可上拉进入全屏`() {
         composeRule.mainClock.autoAdvance = false
         lateinit var scrollState: ScrollState
-        var windowHeightPx = 1f
-        var pixelsPerDp = 1f
 
         composeRule.setContent {
             scrollState = rememberScrollState()
-            windowHeightPx = LocalWindowInfo.current.containerSize.height.toFloat()
-            pixelsPerDp = LocalDensity.current.density
             MaterialTheme {
                 ReasoningToggleAndContent(
                     currentMessageId = "short-sheet",
@@ -1002,21 +996,13 @@ class ThinkingUiScrollComposeTest {
         composeRule.mainClock.advanceTimeBy(1_000L)
         composeRule.waitForIdle()
 
-        val sheetHeight = composeRule
-            .onNodeWithTag("reasoning-sheet-surface")
-            .fetchSemanticsNode("")
-            .boundsInRoot
-            .height
-        assertEquals(
-            windowHeightPx * reasoningSheetTallHeightFraction(),
-            sheetHeight,
-            2f * pixelsPerDp,
-        )
-        assertTrue("抽屉触发了全屏高度", sheetHeight < windowHeightPx)
+        composeRule.onNodeWithTag(
+            "reasoning-sheet-state-PartiallyExpanded-overflow-false",
+        ).fetchSemanticsNode("")
         composeRule.onNodeWithTag("reasoning-sheet-header").fetchSemanticsNode("")
         composeRule.onNodeWithTag("reasoning-sheet-bottom-indicator").fetchSemanticsNode("")
         assertEquals(0, scrollState.maxValue)
-        val lockedTop = composeRule
+        val partialTop = composeRule
             .onNodeWithTag("reasoning-sheet-content")
             .fetchSemanticsNode("")
             .boundsInRoot
@@ -1029,12 +1015,15 @@ class ThinkingUiScrollComposeTest {
         }
         composeRule.mainClock.advanceTimeBy(1_000L)
         composeRule.waitForIdle()
-        val topAfterLockedSwipe = composeRule
+        val topAfterExpanded = composeRule
             .onNodeWithTag("reasoning-sheet-content")
             .fetchSemanticsNode("")
             .boundsInRoot
             .top
-        assertEquals(lockedTop, topAfterLockedSwipe, 1f)
+        assertTrue("抽屉上拉后未进入全屏", topAfterExpanded < partialTop)
+        composeRule.onNodeWithTag(
+            "reasoning-sheet-state-Expanded-overflow-false",
+        ).fetchSemanticsNode("")
     }
 
     @Test
@@ -1109,12 +1098,10 @@ class ThinkingUiScrollComposeTest {
     }
 
     @Test
-    fun `圆点打开已有长内容时默认展开抽屉`() {
+    fun `圆点打开已有长内容时默认停在中档`() {
         composeRule.mainClock.autoAdvance = false
-        var windowHeightPx = 1f
 
         composeRule.setContent {
-            windowHeightPx = LocalWindowInfo.current.containerSize.height.toFloat()
             MaterialTheme {
                 ReasoningToggleAndContent(
                     currentMessageId = "completed-long-sheet",
@@ -1138,46 +1125,18 @@ class ThinkingUiScrollComposeTest {
         composeRule.waitForIdle()
         composeRule.mainClock.advanceTimeBy(1_000L)
         composeRule.waitForIdle()
-        val expandedStateNodes = composeRule
-            .onAllNodesWithTag("reasoning-sheet-state-Expanded-overflow-true")
+        val partialStateNodes = composeRule
+            .onAllNodesWithTag("reasoning-sheet-state-PartiallyExpanded-overflow-true")
             .fetchSemanticsNodes()
         assertTrue(
-            "长内容未进入展开状态：partialOverflow=" +
-                composeRule.onAllNodesWithTag(
-                    "reasoning-sheet-state-PartiallyExpanded-overflow-true",
-                ).fetchSemanticsNodes().size +
-                ", partialNoOverflow=" +
-                composeRule.onAllNodesWithTag(
-                    "reasoning-sheet-state-PartiallyExpanded-overflow-false",
-                ).fetchSemanticsNodes().size +
-                ", expandedNoOverflow=" +
-                composeRule.onAllNodesWithTag(
-                    "reasoning-sheet-state-Expanded-overflow-false",
-                ).fetchSemanticsNodes().size +
-                ", hiddenOverflow=" +
-                composeRule.onAllNodesWithTag(
-                    "reasoning-sheet-state-Hidden-overflow-true",
-                ).fetchSemanticsNodes().size +
-                ", hiddenNoOverflow=" +
-                composeRule.onAllNodesWithTag(
-                    "reasoning-sheet-state-Hidden-overflow-false",
-                ).fetchSemanticsNodes().size,
-            expandedStateNodes.size == 1,
+            "长内容未停在中档：partialOverflow=${partialStateNodes.size}",
+            partialStateNodes.size == 1,
         )
 
-        val expandedTop = composeRule
-            .onNodeWithTag("reasoning-sheet-content")
-            .fetchSemanticsNode("")
-            .boundsInRoot
-            .top
-        assertTrue(
-            "圆点打开长内容后抽屉未默认展开：top=$expandedTop, window=$windowHeightPx",
-            expandedTop < windowHeightPx * 0.35f,
-        )
     }
 
     @Test
-    fun `执行中打开已有长内容时默认展开抽屉`() {
+    fun `执行中打开已有长内容时默认停在中档`() {
         composeRule.mainClock.autoAdvance = false
 
         composeRule.setContent {
@@ -1209,35 +1168,18 @@ class ThinkingUiScrollComposeTest {
             openingProbeAttempts++
         }
         assertTrue("长执行抽屉没有开始打开", openingSurfaceReady)
-        composeRule.onNodeWithTag("reasoning-sheet-content").performTouchInput {
-            click(center)
-        }
-        var passedThroughPartialHeight = false
-        repeat(30) {
-            composeRule.mainClock.advanceTimeBy(100L)
-            composeRule.waitForIdle()
-            passedThroughPartialHeight = passedThroughPartialHeight ||
-                composeRule.onAllNodesWithTag(
-                    "reasoning-sheet-state-PartiallyExpanded-overflow-true",
-                ).fetchSemanticsNodes().isNotEmpty() ||
-                composeRule.onAllNodesWithTag(
-                    "reasoning-sheet-state-PartiallyExpanded-overflow-false",
-                ).fetchSemanticsNodes().isNotEmpty()
-        }
-
+        composeRule.mainClock.advanceTimeBy(1_000L)
+        composeRule.waitForIdle()
         composeRule.onNodeWithTag(
-            "reasoning-sheet-state-Expanded-overflow-true",
+            "reasoning-sheet-state-PartiallyExpanded-overflow-true",
         ).fetchSemanticsNode("")
-        assertTrue("长执行抽屉曾先停在默认高度", !passedThroughPartialHeight)
     }
 
     @Test
-    fun `圆点打开短内容时保持默认高度且可下拉关闭`() {
+    fun `圆点打开短内容时保持当前高度且可下拉关闭`() {
         composeRule.mainClock.autoAdvance = false
-        var windowHeightPx = 1f
 
         composeRule.setContent {
-            windowHeightPx = LocalWindowInfo.current.containerSize.height.toFloat()
             MaterialTheme {
                 ReasoningToggleAndContent(
                     currentMessageId = "completed-short-sheet",
@@ -1262,20 +1204,9 @@ class ThinkingUiScrollComposeTest {
         composeRule.mainClock.advanceTimeBy(1_000L)
         composeRule.waitForIdle()
 
-        val defaultTop = composeRule
-            .onNodeWithTag("reasoning-sheet-content")
-            .fetchSemanticsNode("")
-            .boundsInRoot
-            .top
-        val timelineHeight = composeRule
-            .onNodeWithTag("reasoning-execution-timeline")
-            .fetchSemanticsNode("")
-            .boundsInRoot
-            .height
-        assertTrue(
-            "短内容错误触发展开：top=$defaultTop, window=$windowHeightPx, timeline=$timelineHeight",
-            defaultTop > windowHeightPx * 0.35f,
-        )
+        composeRule.onNodeWithTag(
+            "reasoning-sheet-state-PartiallyExpanded-overflow-false",
+        ).fetchSemanticsNode("")
 
         composeRule.onNodeWithTag("reasoning-sheet-scroll").performTouchInput {
             val start = center.copy(y = top + 40f)
@@ -1291,7 +1222,7 @@ class ThinkingUiScrollComposeTest {
     }
 
     @Test
-    fun `抽屉内容由短变长并溢出默认高度时自动展开`() {
+    fun `抽屉内容由短变长后保持中档并保留正文滚动`() {
         composeRule.mainClock.autoAdvance = false
         lateinit var scrollState: ScrollState
         lateinit var appendLongReasoning: () -> Unit
@@ -1348,20 +1279,39 @@ class ThinkingUiScrollComposeTest {
             )
             assertEquals(0, scrollState.value)
         }
-        val automaticallyExpandedTop = composeRule
+        val topAfterOverflow = composeRule
             .onNodeWithTag("reasoning-sheet-content")
             .fetchSemanticsNode("")
             .boundsInRoot
             .top
         assertTrue(
-            "内容溢出后未自动展开抽屉：before=${initialSheetBounds.top}, " +
-                "after=$automaticallyExpandedTop",
-            automaticallyExpandedTop < initialSheetBounds.top,
+            "内容溢出后抽屉不应自动进入全屏：before=${initialSheetBounds.top}, " +
+                "after=$topAfterOverflow",
+            kotlin.math.abs(topAfterOverflow - initialSheetBounds.top) <= 1f,
         )
         composeRule.onNodeWithTag(
             "reasoning-sheet-drag-handle-enabled",
             useUnmergedTree = true,
         ).fetchSemanticsNode("")
+
+        composeRule.onNodeWithTag(
+            "reasoning-sheet-drag-handle-enabled",
+            useUnmergedTree = true,
+        ).performTouchInput {
+            val start = center
+            swipe(start, start.copy(y = start.y - 600f), durationMillis = 500L)
+        }
+        composeRule.mainClock.advanceTimeBy(1_000L)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag(
+            "reasoning-sheet-state-Expanded-overflow-true",
+        ).fetchSemanticsNode("")
+        val expandedTop = composeRule
+            .onNodeWithTag("reasoning-sheet-content")
+            .fetchSemanticsNode("")
+            .boundsInRoot
+            .top
+        assertTrue("中档抽屉上拉后未进入全屏", expandedTop < topAfterOverflow)
 
         composeRule.onNodeWithTag("reasoning-sheet-scroll").performTouchInput {
             val start = center
@@ -1373,8 +1323,8 @@ class ThinkingUiScrollComposeTest {
             .fetchSemanticsNode("")
             .boundsInRoot
             .top
-        assertEquals(automaticallyExpandedTop, topAfterContentScroll, 1f)
-        assertTrue("加高抽屉展开后正文未接管滚动", scrollState.value > 0)
+        assertEquals(expandedTop, topAfterContentScroll, 1f)
+        assertTrue("全屏抽屉正文未接管滚动", scrollState.value > 0)
         composeRule.onNodeWithTag(
             "reasoning-sheet-drag-handle-enabled",
             useUnmergedTree = true,
@@ -1391,7 +1341,7 @@ class ThinkingUiScrollComposeTest {
             .fetchSemanticsNode("")
             .boundsInRoot
             .top
-        assertEquals(automaticallyExpandedTop, topWhileContentNotAtBoundary, 1f)
+        assertEquals(expandedTop, topWhileContentNotAtBoundary, 1f)
         assertTrue("正文未到边界时被抽屉抢走下拉手势", scrollState.value > 0)
 
         composeRule.runOnIdle {
@@ -1415,6 +1365,6 @@ class ThinkingUiScrollComposeTest {
             .fetchSemanticsNode("")
             .boundsInRoot
             .top
-        assertTrue("正文位于顶部时再次下拉未收起抽屉", collapsedTop > automaticallyExpandedTop)
+        assertTrue("正文位于顶部时再次下拉未收起抽屉", collapsedTop > expandedTop)
     }
 }

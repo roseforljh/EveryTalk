@@ -25,8 +25,11 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -81,7 +84,6 @@ import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.data.DataClass.hasReviewableExecutionProcess
 import com.android.everytalk.ui.components.sheet.AppModalBottomSheet
-import com.android.everytalk.ui.components.sheet.AppModalBottomSheetMaximumHeightFraction
 import com.android.everytalk.ui.components.markdown.EveryTalkMarkdownFlavourDescriptor
 import com.android.everytalk.ui.components.streaming.PreparedMarkdownDocument
 import com.android.everytalk.ui.components.streaming.StreamBlockParser
@@ -100,8 +102,6 @@ private const val EXECUTION_ARROW_ROTATION_MS = 200
 private const val REASONING_PREVIEW_MAX_LINES = 3
 private const val REASONING_PREVIEW_SOURCE_CHAR_LIMIT = 2_000
 private const val EXECUTION_TOOL_PREVIEW_MAX_ITEMS = 3
-
-internal fun reasoningSheetTallHeightFraction(): Float = AppModalBottomSheetMaximumHeightFraction
 
 internal fun reasoningSheetText(
     displayedReasoningText: String,
@@ -970,6 +970,7 @@ private fun ReasoningBottomSheet(
     initialEventIndex: Int,
     onDismissRequest: () -> Unit,
 ) {
+    val navigationBarBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     var focusTop by remember(initialEventIndex) { mutableStateOf<Int?>(null) }
     LaunchedEffect(focusTop, initialEventIndex) {
         val target = focusTop ?: return@LaunchedEffect
@@ -1000,7 +1001,13 @@ private fun ReasoningBottomSheet(
         scrollState = scrollState,
         sheetContentModifier = Modifier.testTag("reasoning-sheet-content"),
         scrollModifier = Modifier.testTag("reasoning-sheet-scroll"),
-        contentModifier = Modifier.padding(start = 20.dp, top = 8.dp, end = 20.dp),
+        contentModifier = Modifier.padding(
+            start = 20.dp,
+            top = 8.dp,
+            end = 20.dp,
+            bottom = navigationBarBottom + 48.dp,
+        ),
+        topGradient = true,
         stateModifier = { sheetValue, contentOverflows ->
             Modifier.testTag(
                 "reasoning-sheet-state-${sheetValue.name}-overflow-$contentOverflows",

@@ -12,6 +12,7 @@ object Screen {
     const val APP_INFO_SCREEN = "app_info_screen"
     const val SUBSCRIPTION_SCREEN = "subscription_screen"
     const val DATA_MANAGEMENT_SCREEN = "data_management_screen"
+    const val MEMORY_MANAGEMENT_SCREEN = "memory_management_screen"
     const val PRIVACY_POLICY_SCREEN = "privacy_policy_screen"
     const val IMAGE_GENERATION_SCREEN = "image_generation_screen"
     const val IMAGE_GENERATION_SETTINGS_SCREEN = "image_generation_settings_screen"

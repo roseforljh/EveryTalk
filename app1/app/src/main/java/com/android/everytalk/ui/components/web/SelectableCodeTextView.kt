@@ -1,107 +1,25 @@
 package com.android.everytalk.ui.components
-import com.android.everytalk.statecontroller.*
 
-import android.annotation.SuppressLint
-import android.content.ClipData
 import android.graphics.Typeface
-import android.os.Build
-import android.text.SpannableString
 import android.text.Spanned
+import android.text.TextUtils
 import android.text.style.ForegroundColorSpan
 import android.util.TypedValue
-import android.view.MotionEvent
-import android.view.WindowManager
-import android.webkit.ConsoleMessage
-import android.webkit.WebResourceError
-import android.webkit.WebResourceRequest
-import android.webkit.WebSettings
-import android.webkit.WebView
-import android.webkit.WebChromeClient
-import android.webkit.WebViewClient
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
-import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.systemBarsPadding
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.selection.DisableSelection
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.platform.ClipEntry
-import androidx.compose.ui.platform.LocalClipboard
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.platform.LocalWindowInfo
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
-import androidx.compose.ui.window.DialogWindowProvider
-import androidx.compose.ui.zIndex
-import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsControllerCompat
-import com.android.everytalk.R
-import com.android.everytalk.ui.components.syntax.SyntaxHighlightTheme
+import androidx.core.view.doOnLayout
 import com.android.everytalk.ui.components.syntax.HighlightCache
-import com.android.everytalk.ui.components.content.isPreviewSupported
-import com.android.everytalk.ui.theme.chatColors
-import java.util.UUID
+import com.android.everytalk.ui.components.syntax.SyntaxHighlightTheme
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @Composable
@@ -111,6 +29,7 @@ internal fun SelectableCodeTextView(
     isDarkTheme: Boolean,
     headerColor: Color,
     codeTextColor: Color,
+    isStreaming: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val syntaxTheme = if (isDarkTheme) SyntaxHighlightTheme.Dark else SyntaxHighlightTheme.Light
@@ -120,14 +39,22 @@ internal fun SelectableCodeTextView(
         language,
         isDarkTheme,
         codeTextColor,
+        isStreaming,
     ) {
         value = code
-        if (HighlightCache.shouldHighlight(code, isStreaming = false)) {
+        // 流式期间只追加原文，结束后再高亮一次，避免每个 token 都重新解析全文。
+        if (!isStreaming && HighlightCache.shouldHighlight(code, isStreaming = false)) {
             value = withContext(Dispatchers.Default) {
                 HighlightCache.highlight(code, language, isDarkTheme, syntaxTheme)
                     .toSpannableString(codeTextColor)
             }
         }
+    }
+    // 异步结果可能仍属于上一次输入，不能把新文本短暂替换成旧文本。
+    val visibleCode = if (isStreaming || !TextUtils.equals(highlightedCode, code)) {
+        code
+    } else {
+        highlightedCode
     }
     val languageLabel = remember(language) { language.trim().ifBlank { "CODE" }.uppercase() }
     val headerArgb = headerColor.toArgb()
@@ -166,7 +93,8 @@ internal fun SelectableCodeTextView(
                     includeFontPadding = true
                     setTextIsSelectable(true)
                     setHorizontallyScrolling(false)
-                    text = highlightedCode
+                    setText(visibleCode, TextView.BufferType.EDITABLE)
+                    tag = visibleCode
                 }
 
                 content.addView(
@@ -198,11 +126,60 @@ internal fun SelectableCodeTextView(
             val views = scrollView.tag as Pair<TextView, TextView>
             val labelView = views.first
             val codeView = views.second
-            labelView.text = languageLabel
-            labelView.setTextColor(headerArgb)
-            codeView.setTextColor(codeArgb)
-            codeView.text = highlightedCode
+            if (labelView.text != languageLabel) labelView.text = languageLabel
+            if (labelView.currentTextColor != headerArgb) labelView.setTextColor(headerArgb)
+            if (codeView.currentTextColor != codeArgb) codeView.setTextColor(codeArgb)
+
+            // 使用更新前的范围判断用户是否仍在底部；上滑阅读或选择文本时保留当前位置。
+            val content = scrollView.getChildAt(0)
+            val bottomGap = content.height - scrollView.height - scrollView.scrollY
+            val followTail = isStreaming &&
+                bottomGap <= 24f * scrollView.resources.displayMetrics.density &&
+                codeView.selectionStart == codeView.selectionEnd
+            updateCodeText(codeView, visibleCode)
+            if (followTail) {
+                // 等本批追加文本完成布局后再滚动，避免使用上一帧高度漏掉最新一行。
+                scrollView.doOnLayout {
+                    scrollView.scrollTo(0, content.height - scrollView.height)
+                }
+            }
         }
     )
+}
+
+/**
+ * 在原生可编辑缓冲区追加新文本，让 TextView 只重新布局受影响的段落。
+ * 服务端改写或缩短内容时替换原文；最终高亮只更新颜色 span，不重设全文和选区。
+ * 返回值表示文字是否变化，便于验证流式更新没有退化成整块替换。
+ */
+internal fun updateCodeText(codeView: TextView, content: CharSequence): Boolean {
+    val buffer = codeView.editableText
+    val hasPrefix = content.length >= buffer.length &&
+        TextUtils.regionMatches(buffer, 0, content, 0, buffer.length)
+    val changed = !hasPrefix || content.length != buffer.length
+    if (changed) {
+        if (hasPrefix) buffer.append(content, buffer.length, content.length)
+        else buffer.replace(0, buffer.length, content)
+    }
+
+    if (codeView.tag !== content) {
+        // 只移除语法颜色，保留 TextView 自己维护的选择标记和 TextWatcher。
+        if (content is Spanned || codeView.tag is Spanned) {
+            buffer.getSpans(0, buffer.length, ForegroundColorSpan::class.java)
+                .forEach(buffer::removeSpan)
+            if (content is Spanned) {
+                content.getSpans(0, content.length, ForegroundColorSpan::class.java).forEach { span ->
+                    buffer.setSpan(
+                        ForegroundColorSpan(span.foregroundColor),
+                        content.getSpanStart(span),
+                        content.getSpanEnd(span),
+                        content.getSpanFlags(span),
+                    )
+                }
+            }
+        }
+        codeView.tag = content
+    }
+    return changed
 }
 

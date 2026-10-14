@@ -812,6 +812,9 @@ class MainActivity : AppCompatActivity() {
                                                 launchSingleTop = true
                                             }
                                         },
+                                        onOpenMemoryManagement = {
+                                            navController.navigate(Screen.MEMORY_MANAGEMENT_SCREEN) { launchSingleTop = true }
+                                        },
                                         onOpenPrivacyPolicy = {
                                             navController.navigate(Screen.PRIVACY_POLICY_SCREEN) {
                                                 launchSingleTop = true
@@ -840,6 +843,9 @@ class MainActivity : AppCompatActivity() {
                                         featureGate = appViewModel.featureGate,
                                         featureGateCoordinator = appViewModel.featureGateCoordinator,
                                     )
+                                }
+                                composable(route = Screen.MEMORY_MANAGEMENT_SCREEN) {
+                                    com.android.everytalk.ui.screens.appinfo.MemoryManagementScreen(onBack = { navController.popBackStack() })
                                 }
                                 composable(
                                     route = Screen.DATA_MANAGEMENT_SCREEN,

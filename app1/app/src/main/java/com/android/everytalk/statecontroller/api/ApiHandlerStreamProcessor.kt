@@ -204,6 +204,7 @@ internal fun executionStepForToolCall(
             ExecutionStepType.Agent -> "运行 Agent"
         },
         labels = labels,
+        detail = agentTarget.takeIf { type == ExecutionStepType.Agent && it.isNotBlank() },
         reasoningBefore = reasoningBefore,
     )
 }

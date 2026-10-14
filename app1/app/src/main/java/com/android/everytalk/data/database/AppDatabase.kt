@@ -10,6 +10,7 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.android.everytalk.data.database.daos.MemoryDao
 import com.android.everytalk.data.database.entities.MemoryEntity
+import com.android.everytalk.data.database.entities.UserSettingEntity
 import com.android.everytalk.data.database.daos.ApiConfigDao
 import com.android.everytalk.data.database.daos.AgentDao
 import com.android.everytalk.data.database.daos.ChatDao
@@ -71,6 +72,7 @@ import com.android.everytalk.data.database.entities.TemporaryWorkerDeploymentEnt
         MessageDraftEntity::class,
         PendingMessageEntity::class,
         SystemSettingEntity::class,
+        UserSettingEntity::class,
         PinnedItemEntity::class,
         ConversationGroupEntity::class,
         ExpandedGroupEntity::class,
@@ -123,6 +125,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun skillDao(): SkillDao
 
     companion object {
+        /** 42 的结构快照保持不变，所有同步字段仅在此次无损迁移中补齐。 */
+        val MIGRATION_42_43: Migration = SyncMetadataMigration()
         /** 仅新增表，不重建或清空已有会话、设置和凭据。 */
         val MIGRATION_41_42 = object : Migration(41, 42) {
             override fun migrate(db: SupportSQLiteDatabase) {
@@ -184,6 +188,7 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_39_40,
                     MIGRATION_40_41,
                     MIGRATION_41_42,
+                    MIGRATION_42_43,
                 )
                 .addCallback(DATABASE_MAINTENANCE_CALLBACK)
                 .build()

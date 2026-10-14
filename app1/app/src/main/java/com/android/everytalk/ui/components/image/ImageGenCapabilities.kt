@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.components
 import com.android.everytalk.statecontroller.*
+import com.android.everytalk.data.DataClass.ImageRatio
 
 /**
  * 图像生成“模型家族”能力注册表（数据驱动，不依赖具体单一模型名）。
@@ -107,26 +108,21 @@ object ImageGenCapabilities {
         provider: String?,
         apiAddress: String?
     ): ModelFamily {
-        val parts = sequenceOf(modelName, provider, apiAddress)
-            .filterNotNull()
-            .map { it.lowercase() }
-            .toList()
-
-        fun containsAny(vararg keys: String): Boolean {
-            return parts.any { p -> keys.any { k -> p.contains(k) } }
+        // 模型名优先于平台和地址；同一个平台代理可能同时提供不同家族的模型。
+        for (value in listOfNotNull(modelName, provider, apiAddress)) {
+            val name = value.lowercase()
+            val family = when {
+                name.contains("z-image-turbo") || name.contains("z_image_turbo") -> ModelFamily.MODAL_Z_IMAGE
+                name.contains("gemini") || name.contains("google") -> ModelFamily.GEMINI
+                name.contains("doubao") || name.contains("seedream") || name.contains("volces") -> ModelFamily.SEEDREAM
+                name.contains("qwen") -> ModelFamily.QWEN
+                name.contains("kolors") || name.contains("kwai") || name.contains("siliconflow") -> ModelFamily.KOLORS
+                name.contains("gpt-image") || name.contains("gpt_image") || name.contains("chatgpt-image") -> ModelFamily.GPT_IMAGE
+                else -> ModelFamily.UNKNOWN
+            }
+            if (family != ModelFamily.UNKNOWN) return family
         }
-
-        return when {
-            containsAny("z-image-turbo") -> ModelFamily.MODAL_Z_IMAGE
-            // Qwen 图像编辑优先匹配（在通用 Qwen 之前）
-            containsAny("qwen-image-edit", "qwen-edit", "qwen_edit") -> ModelFamily.QWEN
-            containsAny("gemini", "google") -> ModelFamily.GEMINI
-            containsAny("doubao", "seedream", "volces") -> ModelFamily.SEEDREAM
-            containsAny("qwen", "qwen-image", "qwen-vl") -> ModelFamily.QWEN
-            containsAny("kolors", "kwai", "siliconflow") -> ModelFamily.KOLORS
-            containsAny("gpt-image", "gpt_image") -> ModelFamily.GPT_IMAGE
-            else -> ModelFamily.UNKNOWN
-        }
+        return ModelFamily.UNKNOWN
     }
 
     // -------- 家族 → 比例候选 --------
@@ -365,6 +361,17 @@ object ImageGenCapabilities {
         }
     }
 
+    /** 从已保存的清晰度或像素尺寸识别 Seedream 档位，供弹窗显示和请求换算共用。 */
+    fun getSeedreamQuality(size: String?): QualityTier {
+        val normalized = size?.trim()?.lowercase().orEmpty()
+        val dimensions = normalized.split("x")
+        val pixels = if (dimensions.size == 2) {
+            (dimensions[0].toIntOrNull()?.coerceAtLeast(0)?.toLong() ?: 0L) *
+                (dimensions[1].toIntOrNull()?.coerceAtLeast(0)?.toLong() ?: 0L)
+        } else 0L
+        return if (normalized == "4k" || pixels > 2048L * 2048L) QualityTier.Q4K else QualityTier.Q2K
+    }
+
     /**
      * Qwen 家族的分辨率集合（用户提供示例中列出的是各比例对应分辨率的一组集合）。
      * 这里将各分辨率枚举为 size 候选，供需要时（非必须）按比例筛选或直接展示。
@@ -378,25 +385,51 @@ object ImageGenCapabilities {
      * - 1584x1056 (3:2)
      * - 1056x1584 (2:3)
      */
-    private val QWEN_ALL_SIZES: List<SizeOption> = listOf(
-        sz(1328, 1328),
-        sz(1664, 928),
-        sz(928, 1664),
-        sz(1472, 1140),
-        sz(1140, 1472),
-        sz(1584, 1056),
-        sz(1056, 1584)
+    private val QWEN_SIZES_BY_RATIO: Map<String, SizeOption> = mapOf(
+        "1:1" to sz(1328, 1328),
+        "16:9" to sz(1664, 928),
+        "9:16" to sz(928, 1664),
+        "4:3" to sz(1472, 1140),
+        "3:4" to sz(1140, 1472),
+        "3:2" to sz(1584, 1056),
+        "2:3" to sz(1056, 1584)
     )
 
     /**
-     * 返回 Qwen 家族在给定比例下的 size 候选（如果需要按比例精确过滤）。
-     * 默认不强制 UI 使用，交由上层按需。
+     * 按比例名称返回 Qwen 官方推荐的像素尺寸，不要求推荐尺寸与名称在数学上严格等比。
      */
     @JvmStatic
     fun getQwenSizesByRatio(aspectRatio: String): List<SizeOption> {
-        val ratio = aspectRatio.trim()
-        return QWEN_ALL_SIZES.filter { so ->
-            gcdEqualRatio(so.width, so.height, ratio)
+        // 官方推荐尺寸经过像素对齐，不能用数学上的严格等比比较，否则横竖图会查不到。
+        return listOfNotNull(QWEN_SIZES_BY_RATIO[aspectRatio.trim()])
+    }
+
+    /**
+     * 将一次发送时选定的比例换算成请求尺寸。
+     * 精确尺寸模型使用推荐表；自动模式保留各平台语义，图像编辑不发送不支持的尺寸字段。
+     */
+    fun resolveRequestImageSize(
+        family: ModelFamily,
+        modelName: String,
+        ratio: ImageRatio,
+        configuredSize: String?,
+    ): String? {
+        val fallback = configuredSize?.takeIf { it.isNotBlank() && !it.contains("<") } ?: "1024x1024"
+        return when (family) {
+            ModelFamily.KOLORS -> {
+                val sizes = getKolorsSizesByRatio(ratio.displayName)
+                val exact = sizes.firstOrNull { it.width == ratio.width && it.height == ratio.height }
+                (exact ?: sizes.firstOrNull())?.label ?: fallback
+            }
+            ModelFamily.QWEN -> if (modelName.contains("edit", ignoreCase = true)) {
+                null
+            } else {
+                getQwenSizesByRatio(ratio.displayName).firstOrNull()?.label ?: "1328x1328"
+            }
+            ModelFamily.GPT_IMAGE -> if (ratio.isAuto) "auto" else getGptImageSize(ratio.displayName)?.label ?: fallback
+            ModelFamily.UNKNOWN -> if (ratio.isAuto) fallback else "${ratio.width}x${ratio.height}"
+            // Gemini、Seedream 和 Modal 在直连客户端把比例与清晰度一起处理。
+            else -> fallback
         }
     }
 

@@ -331,27 +331,9 @@ class ComputerConnectionService : Service() {
             ACTION_STOP_IF_IDLE -> {
                 serviceScope.launch {
                     recoveryJob?.join()
-                    val activeExecutions = computerDao.getActiveRemoteExecutions()
-                    if (!ComputerConnectionServiceController.hasActiveTokens() &&
-                        ComputerConnectionServiceController.activeAgentRunCount() == 0
-                    ) {
-                        agentDao.cancelStaleVisibleMessageRuns(
-                            AgentTerminalReasons.VISIBLE_MESSAGE_TERMINAL,
-                            System.currentTimeMillis(),
-                        )
-                    }
-                    val activeRuns = agentDao.getActiveRuns()
-                    val activeAgentRunCount = ComputerConnectionServiceController.activeAgentRunCount()
-                    if (!ComputerConnectionServiceController.hasActiveTokens() &&
-                        activeAgentRunCount == 0 &&
-                        activeExecutions.isEmpty() &&
-                        activeRuns.isEmpty()
-                    ) {
-                        updateWakeLock(false)
-                        AgentRecoveryScheduler.cancel(this@ComputerConnectionService)
-                        stopForeground(STOP_FOREGROUND_REMOVE)
-                        stopSelf(startId)
-                    }
+                    // 统一重新读取 Room 和进程内令牌，避免 STOP_IF_IDLE 与后续启动请求之间
+                    // 发生竞态时只检查到旧快照，导致服务留下空闲前台通知。
+                    reconcilePersistedTasks("idle_stop_request")
                 }
                 return START_NOT_STICKY
             }
@@ -366,6 +348,9 @@ class ComputerConnectionService : Service() {
         serviceScope.launch {
             recoveryJob?.join()
             startTaskMonitoring()
+            // 监听器已经存在时，新的 ACTION_START/恢复请求不会重新触发 Flow 初始值。
+            // 启动后主动对账一次，确保任务已结束时能立即移除前台服务通知。
+            reconcilePersistedTasks("service_start")
         }
     }
 
@@ -404,6 +389,16 @@ class ComputerConnectionService : Service() {
     }
 
     private suspend fun reconcilePersistedTasks(source: String) {
+        // 可见消息已经结束时，旧 Run 不能继续阻止前台服务退出。
+        // 只有没有进程内令牌时才执行这项清理，避免误碰真实运行中的 Agent。
+        if (!ComputerConnectionServiceController.hasActiveTokens() &&
+            ComputerConnectionServiceController.activeAgentRunCount() == 0
+        ) {
+            agentDao.cancelStaleVisibleMessageRuns(
+                AgentTerminalReasons.VISIBLE_MESSAGE_TERMINAL,
+                System.currentTimeMillis(),
+            )
+        }
         reconcileTaskSnapshot(
             activeRuns = agentDao.getActiveRuns(),
             activeExecutions = computerDao.getActiveRemoteExecutions(),
