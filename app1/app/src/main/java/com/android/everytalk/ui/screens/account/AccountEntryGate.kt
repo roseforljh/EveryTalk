@@ -14,6 +14,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.res.stringResource
 import com.android.everytalk.R
 import com.android.everytalk.data.account.AccountManager
+import com.android.everytalk.data.auth.AuthRepository
+import com.android.everytalk.data.auth.AuthState
 import com.android.everytalk.ui.screens.appinfo.PrivacyPolicyScreen
 
 /**
@@ -23,6 +25,7 @@ import com.android.everytalk.ui.screens.appinfo.PrivacyPolicyScreen
  */
 @Composable
 internal fun AccountEntryGate(manager: AccountManager, content: @Composable () -> Unit) {
+    // 保留旧调用签名，供独立账号组件测试使用；应用入口使用下面的持久化认证版本。
     val state by manager.state.collectAsState()
     val processingDescription = stringResource(R.string.account_processing)
     var continueWithoutAccount by rememberSaveable { mutableStateOf(false) }
@@ -55,6 +58,44 @@ internal fun AccountEntryGate(manager: AccountManager, content: @Composable () -
             onBack = {},
             onPrivacy = { showPrivacy = true },
             onContinueWithoutAccount = { continueWithoutAccount = true },
+        )
+    }
+}
+
+/**
+ * 应用启动入口：本地模式和账号会话都持久化，只有首次安装且没有旧会话时显示欢迎页。
+ * SessionExpired 仍然进入主界面，用户点击商业功能时再回到账号页重新登录。
+ */
+@Composable
+internal fun AccountEntryGate(
+    manager: AccountManager,
+    authRepository: AuthRepository,
+    content: @Composable () -> Unit,
+) {
+    val startup by authRepository.startup.collectAsState()
+    val authState by authRepository.state.collectAsState()
+    val processingDescription = stringResource(R.string.account_processing)
+    var showPrivacy by rememberSaveable { mutableStateOf(false) }
+
+    when {
+        !startup.initialized -> Surface(Modifier.fillMaxSize(), color = Color.Black) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(
+                    modifier = Modifier.semantics {
+                        contentDescription = processingDescription
+                    },
+                    color = Color.White,
+                    trackColor = Color.Transparent,
+                )
+            }
+        }
+        startup.onboardingCompleted || authState is AuthState.SignedIn || authState is AuthState.SessionExpired -> content()
+        showPrivacy -> PrivacyPolicyScreen(onBack = { showPrivacy = false })
+        else -> AccountScreen(
+            manager = manager,
+            onBack = {},
+            onPrivacy = { showPrivacy = true },
+            onContinueWithoutAccount = { authRepository.chooseLocalOnly() },
         )
     }
 }

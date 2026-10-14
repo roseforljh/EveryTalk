@@ -20,6 +20,8 @@ import com.android.everytalk.data.DataClass.ThinkingConfig
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.safety.AiContentReportRepository
+import com.android.everytalk.data.auth.AccountSwitchProtection
+import com.android.everytalk.data.auth.DataStoreSyncAccountBindingStore
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
 import com.android.everytalk.ui.components.math.MathJaxSvgRenderer
@@ -101,6 +103,10 @@ import com.android.everytalk.data.network.ExternalWebSearchProviderConfig
 import com.android.everytalk.data.network.ExternalWebSearchService
 import com.android.everytalk.data.network.WebSearchSupport
 import com.android.everytalk.data.network.WebFetchToolExecutor
+import com.android.everytalk.data.auth.AuthRepository
+import com.android.everytalk.data.auth.DataStoreAuthModeStore
+import com.android.everytalk.data.auth.FeatureGate
+import com.android.everytalk.data.auth.FeatureGateCoordinator
 import com.android.everytalk.util.storage.readAtMost
 import com.android.everytalk.util.ConversationNameHelper
 import kotlinx.serialization.json.JsonElement
@@ -124,7 +130,38 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val cloudflareOAuthStore: CloudflareSettingsOAuthStore = CloudflareSettingsOAuthStore()
 
     /** EveryTalk 会员身份独立于模型配置、MCP 授权和 Computer 账号。 */
-    internal val accountManager = com.android.everytalk.data.account.AccountManager.create(application, viewModelScope)
+    internal val accountManager = com.android.everytalk.data.account.AccountManager.create(
+        application,
+        viewModelScope,
+        restoreOnCreate = false,
+    )
+    /** 认证状态和本地模式持久化的唯一入口。 */
+    internal val authRepository = AuthRepository(
+        accountManager = accountManager,
+        modeStore = DataStoreAuthModeStore(application),
+        scope = viewModelScope,
+    )
+    /** 所有商业功能共用同一个门禁判断。 */
+    internal val featureGate = FeatureGate(authRepository.state)
+    /** 登录后恢复被拦截的一次性操作。 */
+    internal val featureGateCoordinator = FeatureGateCoordinator(
+        gate = featureGate,
+        authState = authRepository.state,
+        scope = viewModelScope,
+    )
+    /** 上次明确选择同步到哪个账号；没有绑定记录时普通登录不触发换账号保护。 */
+    internal val syncAccountBindingStore = DataStoreSyncAccountBindingStore(application)
+    internal val accountSwitchProtection = AccountSwitchProtection(
+        authState = authRepository.state,
+        bindingStore = syncAccountBindingStore,
+        scope = viewModelScope,
+        clearLocalData = ::clearSyncableLocalData,
+    )
+
+    /** 清理同步范围内的本地文字对话，保留 API Key 与其他本地设置。 */
+    internal fun clearSyncableLocalData() {
+        clearAllConversations()
+    }
 
     internal val json = Json {
         prettyPrint = true

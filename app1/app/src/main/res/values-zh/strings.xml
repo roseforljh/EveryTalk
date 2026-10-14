@@ -31,6 +31,15 @@
     <string name="subscription_cache_body">支持缓存的模型命中缓存时，按对应模型的官方缓存价格计费；未命中部分按正常输入价格计费。</string>
     <string name="subscription_unavailable_title">订阅暂未开放</string>
     <string name="subscription_unavailable_body">%1$s 套餐即将开放，当前可以先查看价格与额度。</string>
+    <string name="feature_locked">需要登录</string>
+    <string name="feature_login_required">该功能需要登录账号</string>
+    <string name="feature_login_required_description">登录后即可继续。你的本地对话和模型 API Key 会继续保留在本机，除非你主动开启云功能。</string>
+    <string name="account_login_action">登录</string>
+    <string name="account_switch_title">检测到同步账号变更</string>
+    <string name="account_switch_description">本地数据曾绑定到其他账号。请选择如何处理，应用不会自动把本地数据上传到新账号。</string>
+    <string name="account_switch_keep_local">仅保留为本地数据</string>
+    <string name="account_switch_upload">上传到当前账号</string>
+    <string name="account_switch_clear_local">清空本地</string>
     <string name="app_info_language_title">语言</string>
     <string name="app_language_dialog_title">应用语言</string>
     <string name="app_language_system">跟随系统</string>

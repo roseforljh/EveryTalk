@@ -57,6 +57,9 @@ import com.android.everytalk.ui.screens.appinfo.PrivacyPolicyScreen
 import com.android.everytalk.ui.screens.appinfo.SubscriptionScreen
 import com.android.everytalk.ui.screens.settings.SettingsScreen
 import com.android.everytalk.ui.components.splash.PixelPenguinSplash
+import com.android.everytalk.ui.components.auth.AccountSwitchProtectionDialog
+import com.android.everytalk.ui.components.auth.FeatureGatePromptHost
+import com.android.everytalk.data.auth.Feature
 import com.android.everytalk.ui.theme.App1Theme
 import com.android.everytalk.util.AgentNotificationManager
 import com.android.everytalk.util.message.MAX_EXTERNAL_TRANSFER_BYTES
@@ -219,6 +222,10 @@ class MainActivity : AppCompatActivity() {
                             application
                         )
                     )
+                    val authState by appViewModel.authRepository.state.collectAsState()
+                    val subscriptionLocked = remember(authState) {
+                        appViewModel.featureGate.isLocked(Feature.MEMBERSHIP)
+                    }
 
                     // 即使浏览器授权期间进程被回收，也把回调结果展示在账户页，而不是停留在聊天首页。
                     LaunchedEffect(openAccountAfterCallback) {
@@ -247,7 +254,10 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
 
-                    com.android.everytalk.ui.screens.account.AccountEntryGate(appViewModel.accountManager) {
+                    com.android.everytalk.ui.screens.account.AccountEntryGate(
+                        manager = appViewModel.accountManager,
+                        authRepository = appViewModel.authRepository,
+                    ) {
                     Scaffold(
                         modifier = Modifier.fillMaxSize(),
                         containerColor = MaterialTheme.colorScheme.background,
@@ -620,8 +630,17 @@ class MainActivity : AppCompatActivity() {
                                 ) {
                                     com.android.everytalk.ui.screens.account.AccountScreen(
                                         manager = appViewModel.accountManager,
-                                        onBack = { navController.popBackStack() },
+                                        onBack = {
+                                            appViewModel.featureGateCoordinator.cancel()
+                                            navController.popBackStack()
+                                        },
                                         onPrivacy = { navController.navigate(Screen.PRIVACY_POLICY_SCREEN) },
+                                        onSignedIn = {
+                                            if (appViewModel.featureGateCoordinator.hasPendingLogin()) {
+                                                navController.popBackStack()
+                                            }
+                                        },
+                                        onLogout = { appViewModel.authRepository.logout() },
                                     )
                                 }
                                 composable(
@@ -798,6 +817,7 @@ class MainActivity : AppCompatActivity() {
                                                 launchSingleTop = true
                                             }
                                         },
+                                        subscriptionLocked = subscriptionLocked,
                                     )
                                 }
                                 composable(
@@ -815,7 +835,11 @@ class MainActivity : AppCompatActivity() {
                                         )
                                     },
                                 ) {
-                                    SubscriptionScreen(onBack = { navController.popBackStack() })
+                                    SubscriptionScreen(
+                                        onBack = { navController.popBackStack() },
+                                        featureGate = appViewModel.featureGate,
+                                        featureGateCoordinator = appViewModel.featureGateCoordinator,
+                                    )
                                 }
                                 composable(
                                     route = Screen.DATA_MANAGEMENT_SCREEN,
@@ -966,6 +990,16 @@ class MainActivity : AppCompatActivity() {
                                    )
                                }
                             }
+                            FeatureGatePromptHost(
+                                prompt = appViewModel.featureGateCoordinator.prompt,
+                                coordinator = appViewModel.featureGateCoordinator,
+                                onOpenLogin = {
+                                    navController.navigate(Screen.ACCOUNT_SCREEN) { launchSingleTop = true }
+                                },
+                            )
+                            AccountSwitchProtectionDialog(
+                                protection = appViewModel.accountSwitchProtection,
+                            )
                             SettingsImportExportHost(
                                 viewModel = appViewModel,
                                 visible = showImportExportDialog,

@@ -15,10 +15,13 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -30,10 +33,19 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.android.everytalk.R
+import com.android.everytalk.data.auth.Feature
+import com.android.everytalk.data.auth.FeatureGate
+import com.android.everytalk.data.auth.FeatureGateCoordinator
+import com.android.everytalk.ui.components.auth.RequireLogin
 
 /** 仅展示套餐；点击订阅给出未开放提示，不修改账号权益或发起支付。 */
 @Composable
-fun SubscriptionScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
+internal fun SubscriptionScreen(
+    onBack: () -> Unit,
+    featureGate: FeatureGate,
+    featureGateCoordinator: FeatureGateCoordinator,
+    modifier: Modifier = Modifier,
+) {
     var showDetails by rememberSaveable { mutableStateOf(false) }
     var requestedPlan by rememberSaveable { mutableStateOf<String?>(null) }
     // 当前套餐暂时使用 UI 默认值；接入订阅接口后替换为服务端返回的套餐名即可。
@@ -74,22 +86,38 @@ fun SubscriptionScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             )
         }
         item(key = "pro") {
-            SubscriptionPlanCard(
-                name = "Pro",
-                price = stringResource(R.string.subscription_pro_price),
-                credit = stringResource(R.string.subscription_pro_credit),
-                isCurrentPlan = currentPlan == "Pro",
-                onSubscribe = { requestedPlan = "Pro" },
-            )
+            RequireLogin(
+                feature = Feature.MEMBERSHIP,
+                gate = featureGate,
+                coordinator = featureGateCoordinator,
+                action = { requestedPlan = "Pro" },
+            ) { onClick, locked ->
+                SubscriptionPlanCard(
+                    name = "Pro",
+                    price = stringResource(R.string.subscription_pro_price),
+                    credit = stringResource(R.string.subscription_pro_credit),
+                    isCurrentPlan = currentPlan == "Pro",
+                    onSubscribe = onClick,
+                    locked = locked,
+                )
+            }
         }
         item(key = "max") {
-            SubscriptionPlanCard(
-                name = "Max",
-                price = stringResource(R.string.subscription_max_price),
-                credit = stringResource(R.string.subscription_max_credit),
-                isCurrentPlan = currentPlan == "Max",
-                onSubscribe = { requestedPlan = "Max" },
-            )
+            RequireLogin(
+                feature = Feature.MEMBERSHIP,
+                gate = featureGate,
+                coordinator = featureGateCoordinator,
+                action = { requestedPlan = "Max" },
+            ) { onClick, locked ->
+                SubscriptionPlanCard(
+                    name = "Max",
+                    price = stringResource(R.string.subscription_max_price),
+                    credit = stringResource(R.string.subscription_max_credit),
+                    isCurrentPlan = currentPlan == "Max",
+                    onSubscribe = onClick,
+                    locked = locked,
+                )
+            }
         }
     }
 
@@ -141,6 +169,7 @@ private fun SubscriptionPlanCard(
     credit: String?,
     isCurrentPlan: Boolean,
     onSubscribe: (() -> Unit)?,
+    locked: Boolean = false,
 ) {
     val colors = MaterialTheme.colorScheme
     Surface(
@@ -154,7 +183,12 @@ private fun SubscriptionPlanCard(
             modifier = Modifier.padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Text(name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                if (locked) {
+                    Icon(Icons.Outlined.Lock, contentDescription = stringResource(R.string.feature_locked))
+                }
+            }
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,

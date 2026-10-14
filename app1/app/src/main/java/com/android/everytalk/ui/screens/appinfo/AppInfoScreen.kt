@@ -29,6 +29,8 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -116,6 +118,7 @@ fun AppInfoScreen(
     onOpenPrivacyPolicy: () -> Unit,
     onOpenAccountManagement: () -> Unit,
     onOpenSubscription: () -> Unit,
+    subscriptionLocked: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     var showAboutDialog by rememberSaveable { mutableStateOf(false) }
@@ -168,6 +171,7 @@ fun AppInfoScreen(
                         title = stringResource(R.string.subscription_title),
                         description = stringResource(R.string.subscription_entry_description),
                         onClick = onOpenSubscription,
+                        locked = subscriptionLocked,
                     )
                     HorizontalDivider(
                         modifier = Modifier.padding(start = 80.dp),
@@ -372,6 +376,7 @@ private fun AppInfoEntry(
     title: String,
     description: String,
     onClick: () -> Unit,
+    locked: Boolean = false,
 ) {
     Row(
         modifier = Modifier
@@ -411,6 +416,15 @@ private fun AppInfoEntry(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        if (locked) {
+            Icon(
+                imageVector = Icons.Outlined.Lock,
+                contentDescription = stringResource(R.string.feature_locked),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+        if (locked) Spacer(Modifier.width(8.dp))
         Icon(
             painter = painterResource(R.drawable.ic_gpt_chevron_right),
             contentDescription = null,

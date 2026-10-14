@@ -70,11 +70,12 @@ internal class AccountManager(
     private val clock: () -> Long = System::currentTimeMillis,
     configurationError: String? = null,
     private val ownedHttp: HttpClient? = null,
+    private val restoreOnCreate: Boolean = true,
 ) {
     private val mutex = Mutex()
     private val mutableState = MutableStateFlow(AccountUiState(
         configured = client != null,
-        initialized = client == null,
+        initialized = client == null || !restoreOnCreate,
         message = configurationError,
     ))
     val state = mutableState.asStateFlow()
@@ -83,7 +84,7 @@ internal class AccountManager(
     private val pendingReference: String get() = "$reference:pending"
 
     init {
-        if (client != null) scope.launch {
+        if (client != null && restoreOnCreate) scope.launch {
             try { perform { restoreSession() } }
             finally { mutableState.update { it.copy(initialized = true) } }
         }
@@ -168,6 +169,20 @@ internal class AccountManager(
 
     fun refreshAccount(): Job = scope.launch { perform { restoreSession() } }
 
+    /**
+     * 由 AuthRepository 按持久化模式决定是否调用。
+     * LocalOnly 模式不会调用此方法，因此启动时不会访问认证服务或刷新 token。
+     */
+    fun restoreStoredSession(): Job = scope.launch {
+        if (client == null) return@launch
+        mutableState.update { it.copy(initialized = false, sessionExpired = false) }
+        try {
+            perform { restoreSession() }
+        } finally {
+            mutableState.update { it.copy(initialized = true) }
+        }
+    }
+
     /** 名称在客户端先校验，再用当前真实会话更新；成功保存后侧栏和账户页同时刷新。 */
     fun updateDisplayName(rawName: String): Job = scope.launch {
         perform {
@@ -216,6 +231,7 @@ internal class AccountManager(
                     secrets.remove(pendingReference)
                     session = null
                     mutableState.update { it.copy(user = null, pendingEmail = null, awaitingOAuth = false,
+                        sessionExpired = false,
                         message = if (revoked) "已退出登录" else "已退出此设备；服务端会话撤销失败，请稍后检查网络") }
                 }
             }
@@ -248,7 +264,7 @@ internal class AccountManager(
             if (error.invalidSession) {
                 secrets.remove(reference)
                 session = null
-                mutableState.update { it.copy(user = null) }
+                mutableState.update { it.copy(user = null, sessionExpired = true) }
             }
             throw error
         }
@@ -259,7 +275,7 @@ internal class AccountManager(
         secrets.remove(pendingReference)
         session = value
         mutableState.update { it.copy(user = value.user, pendingEmail = null, awaitingOAuth = false,
-            message = "登录成功") }
+            sessionExpired = false, message = "登录成功") }
     }
 
     private suspend fun perform(action: suspend () -> Unit): Unit = mutex.withLock {
@@ -285,7 +301,11 @@ internal class AccountManager(
 
     companion object {
         /** 未配置时仍可打开账户页和使用原有功能；绝不使用伪造会话替代真实认证。 */
-        fun create(context: Context, scope: CoroutineScope): AccountManager {
+        fun create(
+            context: Context,
+            scope: CoroutineScope,
+            restoreOnCreate: Boolean = true,
+        ): AccountManager {
             val configured = BuildConfig.SUPABASE_URL.isNotBlank() && BuildConfig.SUPABASE_PUBLISHABLE_KEY.isNotBlank()
             val result = if (configured) runCatching {
                 AccountAuthConfig(BuildConfig.SUPABASE_URL, BuildConfig.SUPABASE_PUBLISHABLE_KEY,
@@ -299,7 +319,7 @@ internal class AccountManager(
                     !configured -> "账户登录服务尚未配置"
                     result?.isFailure == true -> "账户登录配置无效，请联系维护者"
                     else -> null
-                }, ownedHttp = http)
+                }, ownedHttp = http, restoreOnCreate = restoreOnCreate)
         }
     }
 }

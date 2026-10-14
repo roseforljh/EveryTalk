@@ -99,6 +99,8 @@ internal data class AccountUiState(
     val pendingEmail: String? = null,
     val resendAtMillis: Long = 0,
     val awaitingOAuth: Boolean = false,
+    /** 会话凭据已失效；本地功能仍可用，商业入口要求重新登录。 */
+    val sessionExpired: Boolean = false,
     val message: String? = null,
 )
 

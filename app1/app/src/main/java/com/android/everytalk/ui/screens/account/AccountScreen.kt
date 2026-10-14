@@ -54,6 +54,8 @@ internal fun AccountScreen(
     onBack: () -> Unit,
     onPrivacy: () -> Unit,
     onContinueWithoutAccount: (() -> Unit)? = null,
+    onSignedIn: (() -> Unit)? = null,
+    onLogout: (() -> Unit)? = null,
 ) {
     val state by manager.state.collectAsState()
     val context = LocalContext.current
@@ -92,6 +94,9 @@ internal fun AccountScreen(
         state.pendingEmail == null && !state.awaitingOAuth && state.message == null
 
     LaunchedEffect(state.pendingEmail) { code = "" }
+    LaunchedEffect(state.user?.id) {
+        if (state.user != null) onSignedIn?.invoke()
+    }
     LaunchedEffect(state.resendAtMillis) {
         nowMillis = System.currentTimeMillis()
         while (nowMillis < state.resendAtMillis) {
@@ -313,7 +318,16 @@ internal fun AccountScreen(
                         Text(stringResource(R.string.account_refresh))
                     }
                 }
-                // 隐私与游客入口属于同一页内容，不再使用独立 bottomBar 造成视觉断层。
+                if (onContinueWithoutAccount != null) {
+                    OutlinedButton(
+                        onClick = onContinueWithoutAccount,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+                        shape = CircleShape,
+                    ) {
+                        Text(stringResource(R.string.account_continue_without_account))
+                    }
+                }
+                // 隐私入口属于页面内容，不再使用独立 bottomBar 造成视觉断层。
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -322,13 +336,6 @@ internal fun AccountScreen(
                     TextButton(onClick = onPrivacy,
                         colors = ButtonDefaults.textButtonColors(contentColor = colors.onSurfaceVariant)) {
                         Text(stringResource(R.string.account_privacy), style = MaterialTheme.typography.bodySmall)
-                    }
-                    if (onContinueWithoutAccount != null) {
-                        Spacer(Modifier.weight(1f))
-                        TextButton(onClick = onContinueWithoutAccount) {
-                            Text(stringResource(R.string.account_continue_without_account),
-                                style = MaterialTheme.typography.bodySmall, color = colors.onBackground)
-                        }
                     }
                 }
             }
@@ -378,7 +385,7 @@ internal fun AccountScreen(
         onDismissRequest = { showLogout = false },
         title = { Text(stringResource(R.string.account_logout)) },
         text = { Text(stringResource(R.string.account_logout_notice)) },
-        confirmButton = { TextButton(onClick = { showLogout = false; manager.logout() }) {
+        confirmButton = { TextButton(onClick = { showLogout = false; (onLogout ?: { manager.logout() })() }) {
             Text(stringResource(R.string.account_logout))
         } },
         dismissButton = { TextButton(onClick = { showLogout = false }) { Text(stringResource(R.string.account_cancel)) } },

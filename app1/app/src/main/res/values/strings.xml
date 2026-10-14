@@ -31,6 +31,15 @@
     <string name="subscription_cache_body">For models supporting caching, cache hits use the corresponding official cached-input price. Uncached input uses the normal input price.</string>
     <string name="subscription_unavailable_title">Subscriptions coming soon</string>
     <string name="subscription_unavailable_body">The %1$s plan will be available soon. You can preview its price and credits now.</string>
+    <string name="feature_locked">Sign-in required</string>
+    <string name="feature_login_required">This feature requires an account</string>
+    <string name="feature_login_required_description">Sign in to continue. Your local chats and model API keys stay on this device until you explicitly enable a cloud feature.</string>
+    <string name="account_login_action">Sign in</string>
+    <string name="account_switch_title">Sync account changed</string>
+    <string name="account_switch_description">Local data was previously bound to another account. Choose how to handle it. The app will not upload local data to the new account automatically.</string>
+    <string name="account_switch_keep_local">Keep as local data</string>
+    <string name="account_switch_upload">Upload to current account</string>
+    <string name="account_switch_clear_local">Clear local data</string>
     <string name="app_info_language_title">Language</string>
     <string name="app_language_dialog_title">App language</string>
     <string name="app_language_system">System default</string>
