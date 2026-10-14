@@ -1,0 +1,692 @@
+openapi: 3.1.0
+info:
+  title: EveryTalk Cloud Sync API
+  version: 0.2.0
+  description: |
+    First version of the EveryTalk cloud sync server.
+
+    Supabase Auth authenticates the caller. The server stores synchronized
+    data in its own PostgreSQL database. Every synchronized row is isolated by
+    the authenticated user's `sub` claim.
+
+    The request contract deliberately keeps client business fields inside
+    `payload`. Server metadata is returned in fixed outer fields. The server
+    drops API keys, voice keys, MCP headers, images, attachments, search
+    results, large tool output, and pending messages before persistence.
+
+    For sessions, memories, and user settings, `payload.clientModifiedAt`
+    participates in conflict resolution. The server clamps it to the current
+    server time when it is in the future, compares the effective values, and
+    always writes `updated_at` using the server clock.
+servers:
+  - url: http://localhost:3000
+    description: Local development
+tags:
+  - name: health
+  - name: sync
+  - name: chat
+x-required-tests:
+  - Deleting a session clears all its messages' payloads and allocates tombstone sequences in the same transaction.
+  - After session deletion, its message content is unreadable; another user's data remains intact.
+  - Two devices with different ids push the same user_settings kind/key; only one row exists.
+  - Both devices subsequently receive updates under the same canonical id.
+  - Rejected items do not block valid items in the same batch or allocate sequences.
+  - Delete-all preserves last_seq, increments epoch, and pull reports epoch even when empty.
+  - Equal effective clientModifiedAt values are resolved by later server arrival.
+  - Messages pushed after their session was deleted are rejected with session_deleted and never store content.
+  - Session deletion reserves N sequences once and updates all affected messages in bulk.
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Health check
+      operationId: health
+      responses:
+        '200':
+          description: Service is responding.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: ok
+                service: everytalk-server
+                timestamp: '2026-10-14T18:30:00.000Z'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /sync/push:
+    post:
+      tags: [sync]
+      summary: Push client changes
+      operationId: pushSyncChanges
+      security:
+        - supabaseBearer: []
+      description: |
+        Pushes a batch of changes for the authenticated user. The server
+        allocates `server_seq` inside the same PostgreSQL transaction as each
+        accepted write. The client does not provide `user_id`, `created_at`,
+        `updated_at`, or `server_seq`.
+
+        `messages` are append-only. An existing message ID is ignored unless
+        the request only changes `deleted` from false to true.
+
+        When a sessions record is marked deleted=true, the same transaction
+        marks all messages of that user's session deleted=true, clears each
+        message payload to an empty object (tombstone only), and allocates a
+        new server_seq for each affected message. This never touches messages
+        of another user. Messages store session_id in a separate indexed
+        column; the server does not scan JSONB to find the session's messages.
+        No foreign key is created between messages and sessions.
+        The server reserves all N message sequences with one UPDATE of
+        sync_state.last_seq = last_seq + N, then updates the messages in bulk.
+        A later message push for a deleted session returns status: rejected
+        with error.code: session_deleted; its content is never stored.
+
+        For `sessions`, `memories`, and `user_settings`, the server compares
+        `payload.clientModifiedAt` to decide which change takes effect. A
+        value later than the current server time is clamped to the current
+        server time before comparison. The larger effective value wins, while
+        `updated_at` is always written with the server timestamp. If effective
+        values are equal, the change that reaches the server later wins.
+
+        `user_settings` is identified by
+        `(authenticated_user_id, payload.kind, payload.key)`. The client id is
+        never used for deduplication. Push looks up that logical key, updates
+        the existing record while preserving its server id, or creates a new
+        record using the client id when the key does not exist. If the actual
+        server id differs from the client id, the result includes
+        `canonical_id`, which the client must adopt. Pull always returns the
+        server record id.
+
+        Allowed user_settings kinds are conversation_groups and pinned_items.
+        Other kinds return rejected. Renaming a group means deleting the old
+        key and creating a new key.
+
+        A duplicate or unchanged item returns its existing sequence number.
+        Repeating the same sanitized mutable payload and deletion flag does
+        not allocate another sequence, including retries of future timestamps.
+        Individual message deletion also clears its payload to an empty object.
+        New messages require payload.sessionId (UUID). Deleting an existing
+        message may use an empty payload; the stored session_id is retained.
+        A message cannot be moved to another session.
+
+        Credential fields are discarded recursively, including API/voice keys,
+        MCP headers, authorization, access/refresh tokens, and secrets. Images,
+        attachments, search results, parts/contentParts, execution trace/steps,
+        tool output, and pending messages are also discarded. Credential fields
+        on the request or outer change are discarded; server-owned outer fields are ignored.
+        Other unexpected change fields are rejected. Payloads must have valid
+        Unicode, no null characters, and at most 32 nesting levels.
+        User setting keys must be 1-512 UTF-8 bytes. A message's raw payload
+        may be at most 65536 UTF-8 bytes by default, before fields are discarded;
+        exceeding this item limit returns MESSAGE_PAYLOAD_TOO_LARGE.
+
+        Counters and clientModifiedAt use non-negative safe JSON integers
+        (at most 9007199254740991). Exceeding the supported counter range is
+        an operational error; the transaction is rolled back with no writes.
+
+        Each change is validated and processed independently. A malformed or
+        semantically invalid individual change returns `status: rejected`
+        with an error code and message; other changes in the same batch are
+        still processed. Rejected items have an index and no server_seq;
+        entity and id are omitted when the input does not contain valid values. Only an oversized request body, an invalid overall
+        request shape, or a missing/invalid access token rejects the whole
+        request at validation time. Operational rate limiting still returns
+        429; database unavailability still returns 503.
+
+        The default maximum is 500 changes and 1 MiB per request. The effective
+        limits are configured by the server environment.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PushRequest'
+            example:
+              changes:
+                - entity: sessions
+                  id: 2f2d2a7c-8f4c-4c50-b9a2-58e6e2d1a101
+                  deleted: false
+                  payload:
+                    clientModifiedAt: 1792000005000
+                    title: Project planning
+                    isImageGeneration: false
+                    creationTimestamp: 1792000000000
+                    lastModifiedTimestamp: 1792000005000
+                - entity: messages
+                  id: 5a0fcaaf-a1ae-447d-9ae0-5b4c6fc8c202
+                  deleted: false
+                  payload:
+                    sessionId: 2f2d2a7c-8f4c-4c50-b9a2-58e6e2d1a101
+                    text: Help me plan the release.
+                    sender: User
+                    timestamp: 1792000001000
+                    outputType: general
+                - entity: user_settings
+                  id: 9c86c5f1-1c24-4c8b-8e60-7568a7f74404
+                  deleted: false
+                  payload:
+                    clientModifiedAt: 1792000006000
+                    kind: conversation_groups
+                    key: Work
+                    value:
+                      conversationIds:
+                        - 2f2d2a7c-8f4c-4c50-b9a2-58e6e2d1a101
+                - entity: user_settings
+                  id: 6c39a2ab-6543-479c-9b7c-9f9e4e0d2104
+                  deleted: false
+                  payload:
+                    clientModifiedAt: 1792000007000
+                    kind: invalid_kind
+                    key: Example
+                    value: {}
+      responses:
+        '200':
+          description: One result per input position; rejected entries do not prevent valid entries from being stored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PushResponse'
+              example:
+                results:
+                  - index: 0
+                    entity: sessions
+                    id: 2f2d2a7c-8f4c-4c50-b9a2-58e6e2d1a101
+                    status: accepted
+                    server_seq: 41
+                  - index: 1
+                    entity: messages
+                    id: 5a0fcaaf-a1ae-447d-9ae0-5b4c6fc8c202
+                    status: accepted
+                    server_seq: 42
+                  - index: 2
+                    entity: user_settings
+                    id: 9c86c5f1-1c24-4c8b-8e60-7568a7f74404
+                    status: accepted
+                    server_seq: 43
+                    canonical_id: 04fd8fa5-4c91-4c44-888d-8d2f2d6f3303
+                  - index: 3
+                    entity: user_settings
+                    id: 6c39a2ab-6543-479c-9b7c-9f9e4e0d2104
+                    status: rejected
+                    error:
+                      code: INVALID_USER_SETTING_KIND
+                      message: kind must be conversation_groups or pinned_items.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /sync/pull:
+    get:
+      tags: [sync]
+      summary: Pull changes after a sequence number
+      operationId: pullSyncChanges
+      security:
+        - supabaseBearer: []
+      parameters:
+        - name: since
+          in: query
+          required: true
+          description: Return changes with `server_seq` greater than this value.
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+          example: 40
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of changes to return. Defaults to min(500, the configured limit); values above the configured limit are rejected.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 500
+          example: 3
+      responses:
+        '200':
+          description: |
+            Latest record versions ordered by ascending server sequence, including
+            deletion tombstones. Epoch and rows are read from the same database
+            snapshot. Empty pages preserve the requested cursor. A changed epoch
+            means the client must discard its cloud snapshot and reconcile anew.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PullResponse'
+              example:
+                changes:
+                  - entity: sessions
+                    id: 2f2d2a7c-8f4c-4c50-b9a2-58e6e2d1a101
+                    payload:
+                      clientModifiedAt: 1792000005000
+                      title: Project planning
+                      isImageGeneration: false
+                      creationTimestamp: 1792000000000
+                      lastModifiedTimestamp: 1792000005000
+                    created_at: '2026-10-14T18:30:01.000Z'
+                    updated_at: '2026-10-14T18:30:01.000Z'
+                    deleted: false
+                    server_seq: 41
+                  - entity: messages
+                    id: 5a0fcaaf-a1ae-447d-9ae0-5b4c6fc8c202
+                    payload: {}
+                    created_at: '2026-10-14T18:30:02.000Z'
+                    updated_at: '2026-10-14T18:30:02.000Z'
+                    deleted: true
+                    server_seq: 42
+                  - entity: user_settings
+                    id: 04fd8fa5-4c91-4c44-888d-8d2f2d6f3303
+                    payload:
+                      clientModifiedAt: 1792000006000
+                      kind: conversation_groups
+                      key: Work
+                      value:
+                        conversationIds:
+                          - 2f2d2a7c-8f4c-4c50-b9a2-58e6e2d1a101
+                    created_at: '2026-10-14T18:30:03.000Z'
+                    updated_at: '2026-10-14T18:30:03.000Z'
+                    deleted: false
+                    server_seq: 43
+                next_cursor: 43
+                has_more: true
+                epoch: 0
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /sync/all:
+    delete:
+      tags: [sync]
+      summary: Permanently delete all synchronized data for the current user
+      operationId: deleteAllSyncData
+      security:
+        - supabaseBearer: []
+      description: |
+        Deletes only the current user's synchronized rows in one transaction.
+        Keeps sync_state.last_seq unchanged; sequence numbers never reset.
+        Increments sync_state.epoch on every successful delete-all, even if
+        no rows exist. Pull always returns epoch, including an empty result.
+        Clients compare epoch to detect that cloud data was cleared. This
+        operation is irreversible.
+      responses:
+        '204':
+          description: Sync rows deleted, last_seq preserved, and epoch incremented.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /v1/chat:
+    post:
+      tags: [chat]
+      summary: Official model proxy placeholder
+      operationId: chatProxyPlaceholder
+      security:
+        - supabaseBearer: []
+      description: Reserved for server-side model proxying, quota, membership, and billing enforcement.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '501':
+          description: The model proxy is not implemented in the first version.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: NOT_IMPLEMENTED
+                  message: Chat proxy is not implemented.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+components:
+  securitySchemes:
+    supabaseBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Supabase Auth access token. The server uses the JWT `sub` claim as `user_id`.
+
+  schemas:
+    SessionDeletedExample:
+      type: object
+      description: Example of a message pushed after its parent session was deleted.
+      example:
+        index: 0
+        entity: messages
+        id: 5a0fcaaf-a1ae-447d-9ae0-5b4c6fc8c202
+        status: rejected
+        error:
+          code: session_deleted
+          message: The session has been deleted; message content was not stored.
+
+    JsonObject:
+      type: object
+      additionalProperties: true
+
+    SyncEntity:
+      type: string
+      enum: [sessions, messages, memories, user_settings]
+
+    SyncPayload:
+      allOf:
+        - $ref: '#/components/schemas/JsonObject'
+        - type: object
+          properties:
+            clientModifiedAt:
+              type: integer
+              format: int64
+              minimum: 0
+              maximum: 9007199254740991
+              description: |
+                Unix milliseconds; required for sessions, memories, and user_settings. The server
+                compares min(clientModifiedAt, current_server_time).
+          description: |
+            Business payload. For sessions, memories, and user_settings,
+            clientModifiedAt is required and is never allowed to advance past
+            the server clock. Equal effective values are won by the later arrival.
+
+    UserSettingPayload:
+      type: object
+      additionalProperties: true
+      required: [clientModifiedAt, kind, key, value]
+      properties:
+        clientModifiedAt:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 9007199254740991
+        kind:
+          type: string
+          enum: [conversation_groups, pinned_items]
+        key:
+          type: string
+          minLength: 1
+          description: |
+            Must contain 1-512 UTF-8 bytes. For conversation_groups this is the group name. Renaming a group
+            is represented by deleting the old key and creating a new key.
+        value: {}
+      description: |
+        The logical identity is (authenticated user id, kind, key). Other
+        kind values are rejected at item level.
+
+    PushChange:
+      type: object
+      additionalProperties: true
+      required: [entity, id, deleted, payload]
+      properties:
+        entity:
+          $ref: '#/components/schemas/SyncEntity'
+        id:
+          type: string
+          format: uuid
+          description: |
+            Client supplied UUID. For user_settings this is only the proposed
+            id; deduplication uses (authenticated user_id, payload.kind,
+            payload.key).
+        deleted:
+          type: boolean
+        payload:
+          $ref: '#/components/schemas/SyncPayload'
+      allOf:
+        - if:
+            properties:
+              entity:
+                enum: [sessions, memories, user_settings]
+          then:
+            properties:
+              payload:
+                required: [clientModifiedAt]
+        - if:
+            properties:
+              entity:
+                const: user_settings
+          then:
+            properties:
+              payload:
+                $ref: '#/components/schemas/UserSettingPayload'
+      description: |
+        Client supplied change. `user_id`, `created_at`, `updated_at`, and
+        `server_seq` are never accepted from the client. Sensitive credential
+        fields are removed from payload before storage. For user_settings,
+        payload.kind and payload.key are required non-empty strings and form
+        the logical key together with the authenticated user's id. For a new
+        message, payload.sessionId must be a UUID. An existing message delete
+        may omit sessionId; the server retains the indexed session_id column.
+        Extra credential fields on the change are discarded and other
+        unexpected fields are rejected.
+
+    PushRequest:
+      type: object
+      additionalProperties: true
+      required: [changes]
+      properties:
+        changes:
+          type: array
+          minItems: 1
+          maxItems: 500
+          description: Overall shape is validated; each item is independently validated against PushChange.
+          items: {}
+
+    PushResult:
+      description: One result per input item in input order. Rejected items allocate no sequence.
+      type: object
+      additionalProperties: false
+      required: [index, status]
+      properties:
+        index:
+          type: integer
+          minimum: 0
+          description: Zero-based input position; identifies even a malformed item without an id.
+        entity:
+          $ref: '#/components/schemas/SyncEntity'
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [accepted, ignored, unchanged, rejected]
+        server_seq:
+          type: integer
+          format: int64
+          description: Omitted when status is rejected because no server sequence was allocated.
+        canonical_id:
+          type: string
+          format: uuid
+          description: |
+            Optional server record id. Present when the server preserved an
+            existing user_settings id that differs from the client id.
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          description: Present only when status is rejected.
+          properties:
+            code:
+              type: string
+              enum: [INVALID_CHANGE, MESSAGE_PAYLOAD_TOO_LARGE, INVALID_PAYLOAD, INVALID_CLIENT_MODIFIED_AT, INVALID_USER_SETTING_KIND, INVALID_USER_SETTING, INVALID_SESSION_ID, SETTING_ID_CONFLICT, MESSAGE_SESSION_MISMATCH, session_deleted]
+            message:
+              type: string
+              description: Safe validation reason; never echoes chat content or credentials.
+        reason:
+          type: string
+          enum: [duplicate_message, message_is_append_only, already_deleted, no_server_change]
+
+      allOf:
+        - if:
+            properties:
+              status:
+                const: rejected
+          then:
+            required: [error]
+          else:
+            required: [entity, id, server_seq]
+
+    PushResponse:
+      type: object
+      additionalProperties: false
+      required: [results]
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/PushResult'
+
+    SyncRecord:
+      type: object
+      additionalProperties: false
+      required: [entity, id, payload, created_at, updated_at, deleted, server_seq]
+      properties:
+        entity:
+          $ref: '#/components/schemas/SyncEntity'
+        id:
+          type: string
+          format: uuid
+          description: |
+            Server record id. Pull always returns this id. For user_settings
+            it is the canonical id selected by the server, regardless of the
+            id supplied by any device.
+        payload:
+          $ref: '#/components/schemas/SyncPayload'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+          description: Server timestamp assigned when the record version is written.
+        deleted:
+          type: boolean
+        server_seq:
+          type: integer
+          format: int64
+
+    PullResponse:
+      type: object
+      additionalProperties: false
+      required: [changes, next_cursor, has_more, epoch]
+      properties:
+        changes:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncRecord'
+        next_cursor:
+          type: integer
+          format: int64
+        has_more:
+          type: boolean
+        epoch:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Per-user generation, initially zero; increments after each delete-all.
+
+    HealthResponse:
+      type: object
+      additionalProperties: false
+      required: [status, service, timestamp]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        service:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            request_id:
+              type: string
+
+  responses:
+    Unauthorized:
+      description: Missing, invalid, expired, or otherwise unacceptable Supabase access token.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: UNAUTHORIZED
+              message: Authentication required.
+    PayloadTooLarge:
+      description: Entire request body exceeds the configured limit; message payload overflow is a per-item rejection.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: PAYLOAD_TOO_LARGE
+              message: Request body exceeds the configured limit.
+    ValidationError:
+      description: Overall JSON shape, batch count or pull cursor validation failed; individual invalid changes are per-item rejections.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: VALIDATION_ERROR
+              message: since must be a non-negative integer.
+    RateLimited:
+      description: The user exceeded the configured Redis-backed rate limit.
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Seconds before retrying.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: RATE_LIMITED
+              message: Too many synchronization requests.
+    ServiceUnavailable:
+      description: Required PostgreSQL service is unavailable.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: SERVICE_UNAVAILABLE
+              message: Service temporarily unavailable.
