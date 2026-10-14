@@ -125,6 +125,8 @@ android {
         // 账号认证只注入公开配置；Supabase 管理员 Key 和 Google Secret 留在服务端。
         buildConfigField("String", "SUPABASE_URL", "\"${getConfigValue("SUPABASE_URL")}\"")
         buildConfigField("String", "SUPABASE_PUBLISHABLE_KEY", "\"$accountPublicKey\"")
+        // 同步服务地址只来自 local.properties、环境变量或 -PEVERYTALK_SYNC_BASE_URL；客户端不内置地址或密钥。
+        buildConfigField("String", "EVERYTALK_SYNC_BASE_URL", "\"${getConfigValue("EVERYTALK_SYNC_BASE_URL")}\"")
         // 默认协议头，各构建变体可覆盖
         manifestPlaceholders["appOAuthScheme"] = "everytalk"
         buildConfigField("String", "APP_OAUTH_SCHEME", "\"everytalk\"")

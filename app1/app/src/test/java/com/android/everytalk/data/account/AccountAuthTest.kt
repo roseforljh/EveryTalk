@@ -315,7 +315,8 @@ class AccountAuthTest {
         val manager = AccountManager(AccountAuthClient(config, http) { 1_000_000 }, secrets, backgroundScope, { 1_000_000 })
         runCurrent()
         assertTrue(secrets.values.containsKey(config.storageReference))
-        assertNull(manager.state.value.user)
+        // 临时 5xx 不能把已恢复的缓存身份踢出登录；只有刷新被明确拒绝才会过期。
+        assertEquals(user.id, manager.state.value.user?.id)
         assertFalse(manager.state.value.busy)
         unavailable = false
         manager.refreshAccount().join()

@@ -13,17 +13,64 @@ import com.android.everytalk.data.database.entities.UserSettingEntity
 
 @Dao
 interface SettingsDao {
+    /** 只观察同步控制键，不向 UI 暴露模型密钥设置。 */
+    @Query("SELECT * FROM system_settings WHERE `key` LIKE 'sync_%'")
+    fun observeSyncControl(): kotlinx.coroutines.flow.Flow<List<SystemSettingEntity>>
+
+    @Query("SELECT COUNT(*) FROM system_settings WHERE `key` LIKE 'sync_rejected:%'")
+    suspend fun syncRejectedCount(): Int
+
+    @Query("DELETE FROM system_settings WHERE `key` LIKE 'sync_rejected:%'")
+    suspend fun clearSyncRejections()
+
+    @Query("SELECT * FROM user_settings")
+    suspend fun getAllUserSettings(): List<UserSettingEntity>
+
+    @Query("UPDATE user_settings SET sync_status = 'LOCAL_ONLY'")
+    suspend fun keepAllUserSettingsLocal()
+
+    @Query("DELETE FROM user_settings")
+    suspend fun clearUserSettingsForSync()
+
+    /** 保留只属于生图的分组；混合分组仅去掉文字引用。 */
+    @Transaction
+    suspend fun clearTextGroupsForSync() {
+        val images = getImageSessionIds().toSet()
+        val groups = getConversationGroups().mapNotNull { group ->
+            val ids = group.conversationIds.filter(images::contains)
+            if (ids.isEmpty()) null else group.copy(conversationIds = ids)
+        }
+        replaceConversationGroups(groups)
+    }
+
+    @Query("SELECT id FROM chat_sessions WHERE isImageGeneration = 1 AND deleted = 0")
+    suspend fun getImageSessionIds(): List<String>
     @Query("SELECT * FROM user_settings WHERE kind IN ('conversation_groups', 'pinned_items') AND deleted = 0")
     suspend fun getSyncableUserSettings(): List<UserSettingEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertUserSettings(settings: List<UserSettingEntity>)
 
-    @Query("SELECT * FROM user_settings WHERE sync_status = 'PENDING'")
-    suspend fun getPendingUserSettings(): List<UserSettingEntity>
+    @Query("SELECT * FROM user_settings WHERE sync_status = 'PENDING' LIMIT :limit")
+    suspend fun getPendingUserSettings(limit: Int = Int.MAX_VALUE): List<UserSettingEntity>
 
     @Query("UPDATE user_settings SET sync_status = 'SYNCED' WHERE uuid IN (:uuids) AND deleted = 0")
     suspend fun markUserSettingsSynced(uuids: List<String>)
+
+    @Query("SELECT * FROM user_settings WHERE kind = :kind AND `key` = :key LIMIT 1")
+    suspend fun getUserSetting(kind: String, key: String): UserSettingEntity?
+
+    @Query("SELECT * FROM user_settings WHERE uuid = :uuid LIMIT 1")
+    suspend fun getUserSettingByUuid(uuid: String): UserSettingEntity?
+
+    @Query("UPDATE user_settings SET sync_status = 'SYNCED' WHERE uuid = :uuid AND updated_at = :version AND sync_status = 'PENDING'")
+    suspend fun markUserSettingSyncedIfVersion(uuid: String, version: Long): Int
+
+    @Query("UPDATE user_settings SET sync_status = 'LOCAL_ONLY' WHERE uuid = :uuid AND updated_at = :version")
+    suspend fun markUserSettingRejectedIfVersion(uuid: String, version: Long): Int
+
+    @Query("UPDATE user_settings SET sync_status = 'PENDING'")
+    suspend fun markAllUserSettingsPending()
 
     /** 后台去重键不进入页面状态。 */
     @Query("SELECT * FROM system_settings WHERE `key` IN ('memory_enabled', 'memory_auto_capture_enabled', 'memory_task_version')")
@@ -70,6 +117,9 @@ interface SettingsDao {
         clearConversationGroups()
         if (groups.isNotEmpty()) insertConversationGroups(groups)
     }
+
+    @Query("DELETE FROM conversation_groups WHERE groupName = :groupName")
+    suspend fun deleteConversationGroup(groupName: String)
 
     // Expanded Groups
     @Query("SELECT groupKey FROM expanded_groups")

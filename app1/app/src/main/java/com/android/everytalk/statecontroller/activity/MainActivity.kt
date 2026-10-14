@@ -628,6 +628,8 @@ class MainActivity : AppCompatActivity() {
                                     popEnterTransition = { settingsMenuEnterTransition() },
                                     popExitTransition = { settingsMenuExitTransition() },
                                 ) {
+                                    // 进入登录页时记住来源；认证协调器可能先消费动作，不能再读 hasPendingLogin。
+                                    val returnAfterLogin = remember { appViewModel.featureGateCoordinator.hasPendingLogin() }
                                     com.android.everytalk.ui.screens.account.AccountScreen(
                                         manager = appViewModel.accountManager,
                                         onBack = {
@@ -636,11 +638,23 @@ class MainActivity : AppCompatActivity() {
                                         },
                                         onPrivacy = { navController.navigate(Screen.PRIVACY_POLICY_SCREEN) },
                                         onSignedIn = {
-                                            if (appViewModel.featureGateCoordinator.hasPendingLogin()) {
+                                            if (returnAfterLogin) {
                                                 navController.popBackStack()
                                             }
                                         },
                                         onLogout = { appViewModel.authRepository.logout() },
+                                        syncSettings = {
+                                            val auth by appViewModel.authRepository.state.collectAsState()
+                                            com.android.everytalk.ui.screens.settings.CloudSyncSettings(
+                                                controller = appViewModel.syncController,
+                                                locked = appViewModel.featureGate.isLocked(com.android.everytalk.data.auth.Feature.CLOUD_SYNC),
+                                                onEnable = {
+                                                    appViewModel.featureGateCoordinator.requireLogin(com.android.everytalk.data.auth.Feature.CLOUD_SYNC) {
+                                                        appViewModel.syncController.requestEnable()
+                                                    }
+                                                },
+                                            )
+                                        },
                                     )
                                 }
                                 composable(
@@ -1006,6 +1020,12 @@ class MainActivity : AppCompatActivity() {
                             AccountSwitchProtectionDialog(
                                 protection = appViewModel.accountSwitchProtection,
                             )
+                            com.android.everytalk.ui.screens.settings.SyncEpochNotice(appViewModel.syncController) {
+                                appViewModel.featureGateCoordinator.requireLogin(com.android.everytalk.data.auth.Feature.CLOUD_SYNC) {
+                                    appViewModel.syncController.decideEpoch(true)
+                                }
+                            }
+                            com.android.everytalk.ui.screens.settings.SyncUploadConfirmation(appViewModel.syncController)
                             SettingsImportExportHost(
                                 viewModel = appViewModel,
                                 visible = showImportExportDialog,

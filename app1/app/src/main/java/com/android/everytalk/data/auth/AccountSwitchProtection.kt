@@ -7,6 +7,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 /** 换账号时用户必须明确选择的数据处理方式。 */
@@ -26,18 +28,26 @@ internal data class AccountSwitchRequest(
  * 阶段 1 没有同步服务器，UPLOAD_TO_CURRENT 只更新绑定目标；阶段 3 的同步引擎会读取它并执行上传。
  */
 internal class AccountSwitchProtection(
-    authState: StateFlow<AuthState>,
+    private val authState: StateFlow<AuthState>,
     private val bindingStore: SyncAccountBindingStore,
     private val scope: CoroutineScope,
+    private val onChoice: (suspend (AccountSwitchChoice, String) -> Unit)? = null,
     private val clearLocalData: () -> Unit,
 ) {
     private val mutableRequest = MutableStateFlow<AccountSwitchRequest?>(null)
     val request: StateFlow<AccountSwitchRequest?> = mutableRequest.asStateFlow()
 
+    /** 用户再次主动开启同步时可以重新打开三选一，KEEP_LOCAL 不会抹掉上次绑定账号。 */
+    fun requestForCurrentUser(): Job = scope.launch {
+        val user = (authState.value as? AuthState.SignedIn)?.user ?: return@launch
+        val previous = bindingStore.readBoundAccountId() ?: return@launch
+        if (previous != user.id) mutableRequest.value = AccountSwitchRequest(previous, user)
+    }
+
     init {
         scope.launch {
-            authState.collectLatest { state ->
-                val user = (state as? AuthState.SignedIn)?.user ?: return@collectLatest
+            authState.map { (it as? AuthState.SignedIn)?.user }.distinctUntilChanged { old, new -> old?.id == new?.id }.collectLatest { user ->
+                if (user == null) { mutableRequest.value = null; return@collectLatest }
                 val previousAccountId = bindingStore.readBoundAccountId()
                 if (!previousAccountId.isNullOrBlank() && previousAccountId != user.id) {
                     mutableRequest.value = AccountSwitchRequest(previousAccountId, user)
@@ -52,6 +62,11 @@ internal class AccountSwitchProtection(
      */
     fun choose(choice: AccountSwitchChoice): Job = scope.launch {
         val current = mutableRequest.value ?: return@launch
+        if (onChoice != null) {
+            onChoice.invoke(choice, current.currentUser.id)
+            mutableRequest.value = null
+            return@launch
+        }
         when (choice) {
             AccountSwitchChoice.KEEP_LOCAL -> bindingStore.clearBinding()
             AccountSwitchChoice.UPLOAD_TO_CURRENT -> bindingStore.bindTo(current.currentUser.id)

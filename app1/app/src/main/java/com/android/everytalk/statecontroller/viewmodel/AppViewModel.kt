@@ -50,6 +50,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -123,24 +124,17 @@ import java.util.Locale
 import java.util.TimeZone
 
 // Constructor changed: removed dataSource
-@OptIn(ExperimentalCoroutinesApi::class)
+@OptIn(ExperimentalCoroutinesApi::class, kotlinx.coroutines.FlowPreview::class)
 class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     /** 设置、Computer 详情和聊天页共用一份 OAuth 草稿，避免 PKCE verifier 丢失。 */
     val cloudflareOAuthStore: CloudflareSettingsOAuthStore = CloudflareSettingsOAuthStore()
 
     /** EveryTalk 会员身份独立于模型配置、MCP 授权和 Computer 账号。 */
-    internal val accountManager = com.android.everytalk.data.account.AccountManager.create(
-        application,
-        viewModelScope,
-        restoreOnCreate = false,
-    )
+    private val authRuntime = com.android.everytalk.data.auth.AuthRuntime.get(application)
+    internal val accountManager = authRuntime.account
     /** 认证状态和本地模式持久化的唯一入口。 */
-    internal val authRepository = AuthRepository(
-        accountManager = accountManager,
-        modeStore = DataStoreAuthModeStore(application),
-        scope = viewModelScope,
-    )
+    internal val authRepository = authRuntime.auth
     /** 所有商业功能共用同一个门禁判断。 */
     internal val featureGate = FeatureGate(authRepository.state)
     /** 登录后恢复被拦截的一次性操作。 */
@@ -150,12 +144,24 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         scope = viewModelScope,
     )
     /** 上次明确选择同步到哪个账号；没有绑定记录时普通登录不触发换账号保护。 */
-    internal val syncAccountBindingStore = DataStoreSyncAccountBindingStore(application)
-    internal val accountSwitchProtection = AccountSwitchProtection(
+    internal val syncAccountBindingStore = authRuntime.binding
+    internal val syncController: com.android.everytalk.data.sync.SyncController = com.android.everytalk.data.sync.SyncController(
+        application, authRepository.state, syncAccountBindingStore, viewModelScope,
+        onDifferentAccount = { accountSwitchProtection.requestForCurrentUser() },
+        beforeClearLocal = {
+            apiHandler.cancelCurrentApiJob("换账号前清空本地文字对话")
+            stateHolder.textApiJob?.cancelAndJoin()
+            stateHolder.messages.clear()
+            stateHolder._currentConversationId.value = ""
+            stateHolder.isTextConversationDirty.value = false
+        },
+    )
+    internal val accountSwitchProtection: AccountSwitchProtection = AccountSwitchProtection(
         authState = authRepository.state,
         bindingStore = syncAccountBindingStore,
         scope = viewModelScope,
         clearLocalData = ::clearSyncableLocalData,
+        onChoice = syncController::handleAccountSwitch,
     )
 
     /** 清理同步范围内的本地文字对话，保留 API Key 与其他本地设置。 */
@@ -1144,6 +1150,32 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         ) {
                 initialConfigPresent,
                 initialHistoryPresent ->
+            // 初始恢复完毕后才监听同步；重读预览不会收尾当前进程的流式草稿。
+            viewModelScope.launch {
+                com.android.everytalk.data.sync.SyncLocalChanges.revision.debounce(300).collect { revision ->
+                    if (revision == 0L) return@collect
+                    try {
+                        val history = withContext(Dispatchers.IO) { persistenceManager.roomDataSource.loadChatHistoryPreviewResult() }
+                        stateHolder._historicalConversations.value = history.sessions.map { it.messages }
+                        stateHolder.conversationGroups.value = persistenceManager.loadConversationGroups()
+                        stateHolder.pinnedTextConversationIds.value = persistenceManager.loadPinnedIds(false)
+                        val currentId = stateHolder._currentConversationId.value
+                        if (currentId.isNotBlank()) {
+                            val stored = AppDatabase.getDatabase(getApplication()).chatDao().getStoredSession(currentId)
+                            if (stored?.deleted == true) {
+                                startNewChat()
+                            } else if (stored != null && !stateHolder.isTextConversationDirty.value && stateHolder.textApiJob?.isActive != true) {
+                                val messages = persistenceManager.loadHistorySession(currentId)
+                                if (stateHolder._currentConversationId.value == currentId && !stateHolder.isTextConversationDirty.value) {
+                                    stateHolder.messages.clear()
+                                    stateHolder.messages.addAll(messages.orEmpty())
+                                }
+                            }
+                        }
+                    } catch (error: CancellationException) { throw error }
+                    catch (_: Exception) { showSnackbar("同步数据已保存，界面刷新失败，请重新打开对话") }
+                }
+            }
             if (!initialConfigPresent) {
                 viewModelScope.launch {
                     // 如果没有配置，可以显示引导界面
@@ -1358,7 +1390,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
      */
 
    override fun onCleared() {
-       accountManager.close()
+       // AccountManager 是应用级实例，WorkManager 仍可能使用，不能随 ViewModel 一起关闭。
        cloudflareOAuthStore.clear()
        (localBashRuntime as? AutoCloseable)?.close()
         AgentToolExecutorRegistry.clear(mcpToolExecutorOwner)

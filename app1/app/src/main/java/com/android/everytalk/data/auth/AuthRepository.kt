@@ -22,7 +22,9 @@ internal class AuthRepository(
     private val accountManager: AccountManager,
     private val modeStore: AuthModeStore,
     private val scope: CoroutineScope,
+    private val onLogout: suspend () -> Unit = {},
 ) {
+    private var loggingOut = false
     private val mutableState = MutableStateFlow<AuthState>(AuthState.LocalOnly)
     val state: StateFlow<AuthState> = mutableState.asStateFlow()
 
@@ -45,10 +47,17 @@ internal class AuthRepository(
 
     /** 账号页退出后回到本地模式；AccountManager 仍负责清理加密会话。 */
     fun logout(): Job = scope.launch {
-        accountManager.logout().join()
-        modeStore.write(AuthMode.LOCAL_ONLY)
+        loggingOut = true
         mutableState.value = AuthState.LocalOnly
-        mutableStartup.update { it.copy(onboardingCompleted = true) }
+        try {
+            onLogout()
+            modeStore.write(AuthMode.LOCAL_ONLY)
+            accountManager.logout().join()
+        } finally {
+            mutableState.value = AuthState.LocalOnly
+            mutableStartup.update { it.copy(onboardingCompleted = true) }
+            loggingOut = false
+        }
     }
 
     private suspend fun initialize() {
@@ -91,6 +100,7 @@ internal class AuthRepository(
     }
 
     private suspend fun observeAccountState(accountState: AccountUiState) {
+        if (loggingOut) return
         val user = accountState.user
         if (user != null) {
             modeStore.write(AuthMode.SIGNED_IN)

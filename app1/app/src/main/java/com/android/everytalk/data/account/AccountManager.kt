@@ -170,6 +170,23 @@ internal class AccountManager(
     fun refreshAccount(): Job = scope.launch { perform { restoreSession() } }
 
     /**
+     * 同步层唯一的 token 读取出口。页面和同步代码都不能读取 AccountSession 或密钥存储。
+     * forceRefresh 只在服务器返回 401 后使用；网络失败不会被伪装成登录失效。
+     */
+    suspend fun accessTokenForOwnedServer(forceRefresh: Boolean = false): String? {
+        if (client == null) return null
+        return mutex.withLock {
+                val current = session ?: secrets.read(reference)?.let {
+                        accountJson.decodeFromString<AccountSession>(it)
+                    } ?: return@withLock null
+                if (forceRefresh || current.expiresAtMillis <= clock() + 60_000) {
+                    renewStoredSession(current)
+                } else session = current
+                session?.accessToken
+        }
+    }
+
+    /**
      * 由 AuthRepository 按持久化模式决定是否调用。
      * LocalOnly 模式不会调用此方法，因此启动时不会访问认证服务或刷新 token。
      */
@@ -247,27 +264,41 @@ internal class AccountManager(
         mutableState.update { it.copy(awaitingOAuth = awaitingOAuth) }
         var stored = session ?: secrets.read(reference)?.let { accountJson.decodeFromString<AccountSession>(it) }
             ?: return
+        // 启动断网仍保留加密存储中的账号资料；缓存身份只供体验层，服务器继续验证权限。
+        session = stored
+        mutableState.update { it.copy(user = stored.user) }
         try {
             if (stored.expiresAtMillis <= clock() + 60_000) {
-                val renewed = api.refreshSession(stored.refreshToken)
-                if (renewed.user.id != stored.user.id) throw AccountAuthException("刷新会话的账号不匹配，请重新登录", true)
-                // 刷新 Token 会轮换，先持久化新值，避免随后读取资料失败导致下次使用旧 Token。
-                secrets.write(reference, accountJson.encodeToString(renewed))
-                session = renewed
-                stored = renewed
+                stored = renewStoredSession(stored)
             }
-            val user = api.getUser(stored.accessToken)
+            val user = try {
+                api.getUser(stored.accessToken)
+            } catch (error: AccountAuthException) {
+                if (!error.invalidSession) throw error
+                stored = renewStoredSession(stored)
+                api.getUser(stored.accessToken)
+            }
             if (user.id != stored.user.id) throw AccountAuthException("会话的账号不匹配，请重新登录", true)
             session = stored.copy(user = user)
             mutableState.update { it.copy(user = user, message = null) }
-        } catch (error: AccountAuthException) {
-            if (error.invalidSession) {
-                secrets.remove(reference)
-                session = null
-                mutableState.update { it.copy(user = null, sessionExpired = true) }
-            }
-            throw error
+        } catch (error: AccountAuthException) { throw error }
+    }
+
+    /** 只有刷新接口明确拒绝凭据才进入过期状态；断网、超时和 5xx 保留会话。 */
+    private suspend fun renewStoredSession(current: AccountSession): AccountSession = try {
+        val renewed = requireNotNull(client).refreshSession(current.refreshToken)
+        if (renewed.user.id != current.user.id) throw AccountAuthException("刷新会话的账号不匹配，请重新登录", true)
+        secrets.write(reference, accountJson.encodeToString(renewed))
+        session = renewed
+        mutableState.update { it.copy(user = renewed.user, sessionExpired = false) }
+        renewed
+    } catch (error: AccountAuthException) {
+        if (error.invalidSession) {
+            secrets.remove(reference)
+            session = null
+            mutableState.update { it.copy(user = null, sessionExpired = true) }
         }
+        throw error
     }
 
     private suspend fun saveSession(value: AccountSession): Unit {

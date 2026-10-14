@@ -2,8 +2,10 @@ package com.android.everytalk.data.database.daos
 
 import androidx.room.Dao
 import androidx.room.Insert
+import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
+import androidx.room.Update
 import androidx.room.Upsert
 import com.android.everytalk.BuildConfig
 import com.android.everytalk.data.DataClass.MessageContentPart
@@ -23,6 +25,21 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ChatDao {
+    @Query("UPDATE chat_sessions SET sync_status = 'LOCAL_ONLY' WHERE isImageGeneration = 0")
+    suspend fun keepTextSessionsLocal()
+
+    @Query("UPDATE messages SET sync_status = 'LOCAL_ONLY', ever_synced = 0 WHERE sessionId IN (SELECT id FROM chat_sessions WHERE isImageGeneration = 0)")
+    suspend fun keepTextMessagesLocal()
+
+    @Transaction
+    suspend fun keepAllTextLocal() { keepTextSessionsLocal(); keepTextMessagesLocal() }
+
+    @Query("DELETE FROM chat_sessions WHERE isImageGeneration = 0")
+    suspend fun clearTextSyncData()
+
+    /** 请求一旦可能抵达服务器，删除必须留下墓碑；先持久化，防止杀进程丢失删除义务。 */
+    @Query("UPDATE messages SET ever_synced = 1 WHERE uuid IN (:uuids)")
+    suspend fun reserveUploadingMessages(uuids: List<String>)
     @Upsert
     suspend fun writeSession(session: ChatSessionEntity)
 
@@ -36,8 +53,32 @@ interface ChatDao {
     @Query("SELECT * FROM chat_sessions WHERE id = :sessionId")
     suspend fun getStoredSession(sessionId: String): ChatSessionEntity?
 
+    /** 同步按服务器 UUID 查找，不把远端 UUID 当成 UI 的本地会话 ID 使用。 */
+    @Query("SELECT * FROM chat_sessions WHERE uuid = :uuid LIMIT 1")
+    suspend fun getSessionByUuid(uuid: String): ChatSessionEntity?
+
     @Query("SELECT * FROM messages WHERE id = :id OR uuid = :uuid LIMIT 1")
     suspend fun getStoredMessage(id: String, uuid: String): MessageEntity?
+
+    @Query("SELECT * FROM messages WHERE uuid = :uuid LIMIT 1")
+    suspend fun getMessageByUuid(uuid: String): MessageEntity?
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertRemoteSession(session: ChatSessionEntity): Long
+
+    @Update
+    suspend fun updateRemoteSession(session: ChatSessionEntity): Int
+
+    /** messages 是 append-only；UUID 冲突时由 SQLite 直接忽略，绝不覆盖本地正文。 */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertRemoteMessage(message: MessageEntity): Long
+
+    @Query("UPDATE messages SET deleted = 1, sync_status = 'SYNCED', ever_synced = 1 WHERE uuid = :uuid")
+    suspend fun markRemoteMessageDeleted(uuid: String): Int
+
+    /** 远端会话墓碑到达时清理该会话的本地消息；会话本身由同步层单独保留墓碑。 */
+    @Query("DELETE FROM messages WHERE sessionId = :sessionId")
+    suspend fun deleteMessagesForRemoteDeletedSession(sessionId: String)
 
     @Upsert
     suspend fun writeDrafts(drafts: List<MessageDraftEntity>)
@@ -76,7 +117,7 @@ interface ChatDao {
         val changed = stored == null || stored.title != session.title || stored.lastModifiedTimestamp != session.lastModifiedTimestamp
         if (changed) writeSession(session.copy(
             uuid = stored?.uuid ?: session.uuid,
-            updatedAt = System.currentTimeMillis(),
+            updatedAt = maxOf(System.currentTimeMillis(), (stored?.updatedAt ?: 0L) + 1),
             syncStatus = if (isSyncableTextSession(session.id, session.isImageGeneration)) SyncStatus.PENDING else SyncStatus.LOCAL_ONLY,
         ))
     }
@@ -147,7 +188,7 @@ interface ChatDao {
     @Query("SELECT * FROM chat_sessions WHERE deleted = 0 AND id = :sessionId LIMIT 1")
     suspend fun getSession(sessionId: String): ChatSessionEntity?
 
-    @Query("UPDATE chat_sessions SET title = :title, updated_at = :now, sync_status = CASE WHEN isImageGeneration = 0 AND id NOT IN ('last_open_chat_v1', 'last_open_image_generation_v1') THEN 'PENDING' ELSE 'LOCAL_ONLY' END WHERE id = :sessionId AND deleted = 0")
+    @Query("UPDATE chat_sessions SET title = :title, updated_at = MAX(:now, updated_at + 1), sync_status = CASE WHEN isImageGeneration = 0 AND id NOT IN ('last_open_chat_v1', 'last_open_image_generation_v1') THEN 'PENDING' ELSE 'LOCAL_ONLY' END WHERE id = :sessionId AND deleted = 0")
     suspend fun updateSessionTitle(sessionId: String, title: String, now: Long = System.currentTimeMillis())
 
     @Query("SELECT * FROM (SELECT * FROM messages WHERE deleted = 0 UNION ALL SELECT * FROM message_drafts) WHERE sessionId = :sessionId AND sessionId IN (SELECT id FROM chat_sessions WHERE deleted = 0) ORDER BY timestamp ASC")
@@ -188,15 +229,41 @@ interface ChatDao {
     }
 
     /** 仅用于文字同步白名单；会话删除只上传会话变更，不能再发送其子消息。 */
-    @Query("SELECT * FROM messages WHERE sync_status = 'PENDING' AND sender IN ('User', 'AI', 'System') AND isPlaceholderName = 0 AND sessionId IN (SELECT id FROM chat_sessions WHERE deleted = 0 AND isImageGeneration = 0 AND id NOT IN ('last_open_chat_v1', 'last_open_image_generation_v1'))")
-    suspend fun getPendingSyncMessages(): List<MessageEntity>
+    @Query("SELECT * FROM messages WHERE sync_status = 'PENDING' AND sender IN ('User', 'AI', 'System') AND isPlaceholderName = 0 AND sessionId IN (SELECT id FROM chat_sessions WHERE deleted = 0 AND isImageGeneration = 0 AND id NOT IN ('last_open_chat_v1', 'last_open_image_generation_v1')) ORDER BY timestamp, id LIMIT :limit")
+    suspend fun getPendingSyncMessages(limit: Int = Int.MAX_VALUE): List<MessageEntity>
 
-    @Query("SELECT * FROM chat_sessions WHERE sync_status = 'PENDING' AND isImageGeneration = 0 AND id NOT IN ('last_open_chat_v1', 'last_open_image_generation_v1')")
-    suspend fun getPendingSyncSessions(): List<ChatSessionEntity>
+    @Query("SELECT * FROM chat_sessions WHERE sync_status = 'PENDING' AND isImageGeneration = 0 AND id NOT IN ('last_open_chat_v1', 'last_open_image_generation_v1') LIMIT :limit")
+    suspend fun getPendingSyncSessions(limit: Int = Int.MAX_VALUE): List<ChatSessionEntity>
+
+    /** session_deleted 已明确拒绝内容：丢弃待上传行，不再反复推送。 */
+    @Query("DELETE FROM messages WHERE uuid = :uuid")
+    suspend fun discardMessageByUuid(uuid: String)
 
     /** 服务器确认后持久化历史事实；只有当前未删除内容才可从 PENDING 变为 SYNCED。 */
     @Query("UPDATE messages SET ever_synced = 1, sync_status = CASE WHEN deleted = 0 THEN 'SYNCED' ELSE sync_status END WHERE uuid IN (:uuids)")
     suspend fun markMessagesSynced(uuids: List<String>)
+
+    /** 只有上传前后修改版本一致，才能把待同步变更标记为已同步。 */
+    @Query("UPDATE messages SET ever_synced = 1, sync_status = 'SYNCED' WHERE uuid = :uuid AND updated_at = :version AND sync_status = 'PENDING'")
+    suspend fun markMessageSyncedIfVersion(uuid: String, version: Long): Int
+
+    @Query("UPDATE messages SET sync_status = 'LOCAL_ONLY' WHERE uuid = :uuid AND updated_at = :version")
+    suspend fun markMessageRejectedIfVersion(uuid: String, version: Long): Int
+
+    @Query("DELETE FROM messages WHERE uuid = :uuid AND ever_synced = 0")
+    suspend fun deleteNeverSyncedMessageByUuid(uuid: String): Int
+
+    @Query("UPDATE messages SET sync_status = 'PENDING' WHERE sessionId IN (SELECT id FROM chat_sessions WHERE isImageGeneration = 0 AND id NOT LIKE 'last_open_%')")
+    suspend fun markAllTextMessagesPending()
+
+    @Query("UPDATE chat_sessions SET sync_status = 'PENDING' WHERE isImageGeneration = 0 AND id NOT LIKE 'last_open_%'")
+    suspend fun markAllTextSessionsPending()
+
+    @Query("UPDATE chat_sessions SET sync_status = 'SYNCED' WHERE uuid = :uuid AND updated_at = :version AND sync_status = 'PENDING'")
+    suspend fun markSessionSyncedIfVersion(uuid: String, version: Long): Int
+
+    @Query("UPDATE chat_sessions SET sync_status = 'LOCAL_ONLY' WHERE uuid = :uuid AND updated_at = :version")
+    suspend fun markSessionRejectedIfVersion(uuid: String, version: Long): Int
 
     @Query(
         """

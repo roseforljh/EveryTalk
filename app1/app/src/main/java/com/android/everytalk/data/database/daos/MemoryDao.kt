@@ -11,6 +11,11 @@ import kotlinx.coroutines.flow.Flow
 /** DAO 仅操作记忆表；容量和权限由 Repository 在同一事务内校验。 */
 @Dao
 interface MemoryDao {
+    @Query("UPDATE memories SET sync_status = 'LOCAL_ONLY'")
+    suspend fun keepAllLocal()
+
+    @Query("DELETE FROM memories")
+    suspend fun clearSyncData()
     @Query("SELECT * FROM memories WHERE deleted = 0 ORDER BY updatedAt DESC, id ASC")
     fun observeAll(): Flow<List<MemoryEntity>>
 
@@ -33,6 +38,24 @@ interface MemoryDao {
     @Query("UPDATE memories SET deleted = 1, updatedAt = :now, updated_at = :now, sync_status = 'PENDING' WHERE deleted = 0")
     suspend fun clear(now: Long = System.currentTimeMillis())
 
-    @Query("SELECT * FROM memories WHERE sync_status = 'PENDING'")
-    suspend fun getPendingSyncMemories(): List<MemoryEntity>
+    @Query("SELECT * FROM memories WHERE sync_status = 'PENDING' LIMIT :limit")
+    suspend fun getPendingSyncMemories(limit: Int = Int.MAX_VALUE): List<MemoryEntity>
+
+    @Query("SELECT * FROM memories WHERE uuid = :uuid LIMIT 1")
+    suspend fun getByUuid(uuid: String): MemoryEntity?
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertRemote(memory: MemoryEntity): Long
+
+    @Update
+    suspend fun updateRemote(memory: MemoryEntity): Int
+
+    @Query("UPDATE memories SET sync_status = 'SYNCED' WHERE uuid = :uuid AND updated_at = :version AND sync_status = 'PENDING'")
+    suspend fun markSyncedIfVersion(uuid: String, version: Long): Int
+
+    @Query("UPDATE memories SET sync_status = 'LOCAL_ONLY' WHERE uuid = :uuid AND updated_at = :version")
+    suspend fun markRejectedIfVersion(uuid: String, version: Long): Int
+
+    @Query("UPDATE memories SET sync_status = 'PENDING'")
+    suspend fun markAllPending()
 }

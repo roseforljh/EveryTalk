@@ -36,6 +36,9 @@ class EveryTalkApplication : Application() {
         startupScope.launch {
             DynamicIconSwitcher.syncIcon(this@EveryTalkApplication)
         }
+        startupScope.launch {
+            com.android.everytalk.service.SyncScheduler.start(this@EveryTalkApplication)
+        }
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {

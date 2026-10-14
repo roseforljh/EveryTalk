@@ -56,6 +56,7 @@ internal fun AccountScreen(
     onContinueWithoutAccount: (() -> Unit)? = null,
     onSignedIn: (() -> Unit)? = null,
     onLogout: (() -> Unit)? = null,
+    syncSettings: (@Composable () -> Unit)? = null,
 ) {
     val state by manager.state.collectAsState()
     val context = LocalContext.current
@@ -155,7 +156,7 @@ internal fun AccountScreen(
                         shape = CircleShape, colors = actionColors, modifier = Modifier.fillMaxWidth()) {
                         Text(stringResource(R.string.account_save_profile))
                     }
-                    Text(stringResource(R.string.account_local_data_notice), style = MaterialTheme.typography.bodyMedium)
+                    Text("云同步由用户主动开启；登录不会自动上传本地对话或 API Key。", style = MaterialTheme.typography.bodyMedium)
                     OutlinedButton(onClick = { manager.refreshAccount() }, enabled = !state.busy,
                         modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.account_refresh)) }
                     Button(onClick = { showLogout = true }, enabled = !state.busy,
@@ -303,6 +304,7 @@ internal fun AccountScreen(
                         }
                     }
                 }
+                syncSettings?.invoke()
                 if (state.busy) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)

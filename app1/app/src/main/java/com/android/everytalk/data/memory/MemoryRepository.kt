@@ -79,7 +79,7 @@ class MemoryRepository(private val database: AppDatabase) {
         require(old != null || entries.size < MemoryPolicy.MAX_ENTRIES) { "记忆已达到 ${MemoryPolicy.MAX_ENTRIES} 条上限" }
         val characters = entries.sumOf { it.content.memoryCharacters() } - (old?.content?.memoryCharacters() ?: 0)
         require(characters + normalized.memoryCharacters() <= MemoryPolicy.MAX_TOTAL_CHARACTERS) { "记忆总容量已满，请先整理旧内容" }
-        val now = System.currentTimeMillis()
+        val now = maxOf(System.currentTimeMillis(), (old?.clientModifiedAt ?: 0L) + 1)
         val savedId = old?.id ?: UUID.randomUUID().toString()
         val saved = MemoryEntity(
             id = savedId, category = category.name, content = normalized,
@@ -96,7 +96,9 @@ class MemoryRepository(private val database: AppDatabase) {
 
     suspend fun setEntryEnabled(id: String, enabled: Boolean) = database.withTransaction {
         val old = dao.get(id) ?: error("这条记忆已被删除")
-        dao.update(old.copy(enabled = enabled, updatedAt = System.currentTimeMillis()))
+        val now = maxOf(System.currentTimeMillis(), old.clientModifiedAt + 1)
+        dao.update(old.copy(enabled = enabled, updatedAt = now, syncUpdatedAt = now,
+            syncStatus = com.android.everytalk.data.database.entities.SyncStatus.PENDING))
         advanceVersion(settings())
     }
 

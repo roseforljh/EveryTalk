@@ -512,7 +512,19 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
             sessions,
             System.currentTimeMillis(),
         )
-        if (snapshots.isNotEmpty()) settingsDao.upsertUserSettings(snapshots)
+        // 不改变内容的保存不能制造同步回环；同时保留服务器已分配的 canonical UUID。
+        val previous = settingsDao.getAllUserSettings()
+        val keys = snapshots.map { it.kind to it.key }.toSet()
+        val changes = snapshots.mapNotNull { incoming ->
+            val old = previous.find { it.kind == incoming.kind && it.key == incoming.key }
+            if (old != null && !old.deleted && old.value == incoming.value) null else
+                incoming.copy(uuid = old?.uuid ?: incoming.uuid,
+                    updatedAt = maxOf(incoming.updatedAt, (old?.updatedAt ?: 0) + 1))
+        } + previous.filter { !it.deleted && (it.kind to it.key) !in keys }.map {
+            it.copy(deleted = true, updatedAt = maxOf(System.currentTimeMillis(), it.updatedAt + 1),
+                syncStatus = com.android.everytalk.data.database.entities.SyncStatus.PENDING)
+        }
+        if (changes.isNotEmpty()) settingsDao.upsertUserSettings(changes)
     }
 
     suspend fun loadExpandedGroupKeys(): Set<String> {
