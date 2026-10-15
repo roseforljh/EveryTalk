@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -32,6 +33,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import com.android.everytalk.data.agent.AgentInterventionPolicyRegistry
 import com.android.everytalk.data.agent.PendingIntervention
 import com.android.everytalk.data.agent.ResolutionMaterialKind
@@ -60,6 +62,7 @@ internal fun AgentInterventionDialog(
     cloudflareReauthInProgress: Boolean = false,
     onLoadCloudflareResources: suspend (PendingIntervention) -> List<com.android.everytalk.data.computer.ResourceOption>,
     onSelectCloudflareResource: (PendingIntervention, String) -> Unit,
+    onRespondWithText: suspend (PendingIntervention, String) -> Boolean = { _, _ -> false },
     onReject: suspend (PendingIntervention) -> Boolean,
     onConfirmUnknownDelivered: (PendingIntervention) -> Unit,
     onContinueUnknown: (PendingIntervention) -> Unit,
@@ -69,6 +72,7 @@ internal fun AgentInterventionDialog(
     val dialogContent = appDialogContentColor()
     val dialogBorder = appDialogBorderColor()
     var sensitiveInput by remember(intervention.suspensionId, intervention.rowVersion) { mutableStateOf("") }
+    var textReplyInput by remember(intervention.suspensionId, intervention.rowVersion) { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     var submitting by remember(intervention.suspensionId) { mutableStateOf(false) }
     var submissionError by remember(intervention.suspensionId) { mutableStateOf<String?>(null) }
@@ -77,6 +81,10 @@ internal fun AgentInterventionDialog(
     val requiresUserDecision = intervention.state == SuspensionState.USER_DECISION_REQUIRED
     val isCloudflareReauthorization = intervention.capabilityId == "cloudflare.reauthorize"
     val isResourceSelection = intervention.capabilityId == "cloudflare.resource.select"
+    val canReplyWithText = intervention.materialKind in setOf(
+        ResolutionMaterialKind.EPHEMERAL,
+        ResolutionMaterialKind.DURABLE_REFERENCE,
+    )
     var resources by remember(intervention.suspensionId) { mutableStateOf<List<com.android.everytalk.data.computer.ResourceOption>>(emptyList()) }
     var selectedId by remember(intervention.suspensionId) { mutableStateOf<String?>(null) }
     var resourceError by remember(intervention.suspensionId) { mutableStateOf<String?>(null) }
@@ -102,14 +110,28 @@ internal fun AgentInterventionDialog(
 
     AlertDialog(
         onDismissRequest = {},
-        modifier = Modifier.border(1.dp, dialogBorder, AppDialogShape),
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+        ),
+        modifier = Modifier
+            .fillMaxWidth(0.92f)
+            .imePadding()
+            .heightIn(max = 620.dp)
+            .border(1.dp, dialogBorder, AppDialogShape),
         shape = AppDialogShape,
         containerColor = dialogBg,
         titleContentColor = dialogContent,
         textContentColor = dialogContent,
         title = { Text(stringResource(R.string.agent_intervention_title), fontWeight = FontWeight.Bold) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 460.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
                 Text(
                     text = capabilityTitle(intervention.capabilityId),
                     style = MaterialTheme.typography.bodyMedium,
@@ -181,6 +203,51 @@ internal fun AgentInterventionDialog(
                         modifier = Modifier.fillMaxWidth(),
                         visualTransformation = PasswordVisualTransformation(),
                     )
+                }
+                if (canReplyWithText) {
+                    Text(
+                        text = stringResource(R.string.agent_intervention_text_reply_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = appDialogSubtextColor(0.76f),
+                    )
+                    OutlinedTextField(
+                        value = textReplyInput,
+                        onValueChange = { textReplyInput = it },
+                        label = { Text(stringResource(R.string.agent_intervention_text_reply_label)) },
+                        minLines = 2,
+                        maxLines = 4,
+                        enabled = !submitting,
+                        shape = AppDialogTextFieldShape,
+                        colors = appDialogTextFieldColors(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 56.dp),
+                    )
+                    TextButton(
+                        enabled = !submitting && textReplyInput.isNotBlank(),
+                        onClick = {
+                            val reply = textReplyInput.trim()
+                            if (reply.isEmpty()) return@TextButton
+                            textReplyInput = ""
+                            submitting = true
+                            submissionError = null
+                            scope.launch {
+                                try {
+                                    if (!onRespondWithText(intervention, reply)) {
+                                        submissionError = context.getString(R.string.agent_intervention_input_not_accepted)
+                                    }
+                                } catch (error: kotlinx.coroutines.CancellationException) {
+                                    throw error
+                                } catch (_: Exception) {
+                                    submissionError = context.getString(R.string.agent_intervention_submit_failed)
+                                } finally {
+                                    submitting = false
+                                }
+                            }
+                        },
+                    ) {
+                        Text(stringResource(R.string.agent_intervention_text_reply_send), fontWeight = FontWeight.SemiBold)
+                    }
                 }
                 if (!submitting) {
                     val error = submissionError ?: if (intervention.state == SuspensionState.WAITING_USER_REENTRY) {

@@ -147,7 +147,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     internal val syncAccountBindingStore = authRuntime.binding
     internal val syncController: com.android.everytalk.data.sync.SyncController = com.android.everytalk.data.sync.SyncController(
         application, authRepository.state, syncAccountBindingStore, viewModelScope,
-        onDifferentAccount = { accountSwitchProtection.requestForCurrentUser() },
         beforeClearLocal = {
             apiHandler.cancelCurrentApiJob("换账号前清空本地文字对话")
             stateHolder.textApiJob?.cancelAndJoin()
@@ -721,6 +720,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
+    suspend fun respondToInterventionWithText(
+        intervention: com.android.everytalk.data.agent.PendingIntervention,
+        content: String,
+    ): Boolean {
+        val nonce = intervention.resolutionNonce ?: return false
+        return apiHandler.respondToInterventionWithText(
+            suspensionId = intervention.suspensionId,
+            expectedVersion = intervention.rowVersion,
+            resolutionNonce = nonce,
+            content = content,
+        )
+    }
+
     fun resolveDurableIntervention(
         suspensionId: String,
         expectedVersion: Long,
@@ -813,7 +825,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     // SystemPrompt moved to SystemPromptController
 
    // 控制器：系统提示
-   internal val systemPromptController = SystemPromptController(stateHolder, dialogManager, historyManager, viewModelScope)
+   internal val systemPromptController = SystemPromptController(stateHolder, dialogManager, historyManager, persistenceManager, viewModelScope)
    // 委托到 MessageItemsController，减少 AppViewModel 体积
    internal val messageItemsController = MessageItemsController(
        stateHolder = stateHolder,

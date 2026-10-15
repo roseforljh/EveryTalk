@@ -2,6 +2,7 @@ package com.android.everytalk.data.agent
 
 import android.content.Context
 import android.net.Uri
+import androidx.room.withTransaction
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.GenerationConfig
@@ -21,6 +22,8 @@ import com.android.everytalk.data.database.entities.toMessage
 import com.android.everytalk.data.computer.ComputerRequestContext
 import com.android.everytalk.data.computer.ComputerToolRequestHasher
 import com.android.everytalk.data.network.AppStreamEvent
+import com.android.everytalk.data.network.ApiClient
+import com.android.everytalk.data.network.ModelTurnTransport
 import com.android.everytalk.data.network.buildDirectMultimodalRequest
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.service.ComputerConnectionServiceController
@@ -38,6 +41,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -113,6 +117,9 @@ class AgentRunCoordinator(
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
     private val computerSessionStateProvider: suspend (ComputerRequestContext?) -> String? = { null },
     private val pauseController: AgentRunPauseController = AgentRunPauseController(),
+    databaseOverride: AppDatabase? = null,
+    private val modelTransport: ModelTurnTransport = ModelTurnTransport { ApiClient.streamModelTurn(it.request) },
+    private val interventionAdapters: AgentInterventionAdapterRegistry? = null,
 ) {
     companion object {
         @Volatile private var sharedInstance: AgentRunCoordinator? = null
@@ -129,7 +136,7 @@ class AgentRunCoordinator(
         }
     }
     private val appContext = context.applicationContext
-    private val database by lazy { AppDatabase.getDatabase(appContext) }
+    private val database by lazy { databaseOverride ?: AppDatabase.getDatabase(appContext) }
     private val agentDao by lazy { database.agentDao() }
     private val computerDao by lazy { database.computerDao() }
     private val agentRunStore by lazy {
@@ -161,7 +168,7 @@ class AgentRunCoordinator(
         com.android.everytalk.data.computer.ComputerRepository(appContext)
     }
     private val interventionAdapterRegistry by lazy {
-        AgentInterventionAdapterRegistry(
+        interventionAdapters ?: AgentInterventionAdapterRegistry(
             mapOf(
                 "git-adapter" to StoredAuthorizationCapabilityAdapter(
                     "github",
@@ -287,6 +294,7 @@ class AgentRunCoordinator(
             },
             lifecycleSink = { event -> _lifecycleEvents.emit(event) },
             memoryCoordinator = memoryCoordinator,
+            modelTransport = modelTransport,
         )
     }
 
@@ -504,7 +512,8 @@ class AgentRunCoordinator(
 
     /**
      * 提交用户回答并恢复同一个 AgentRun。
-     * 先把回答放入 steering 队列，再确认 user.question，保证恢复时文字和附件都进入下一轮模型上下文。
+     * 回答、用户历史和问题确认在同一事务接收，且只绑定问题所属的 Run。
+     * 应用级协程拥有这次提交，卡片关闭取消 UI 协程时不能中断已经接收的回答。
      */
     suspend fun answerUserQuestion(
         suspensionId: String,
@@ -513,21 +522,108 @@ class AgentRunCoordinator(
         content: String,
         contentParts: List<MessageContentPart> = emptyList(),
         attachments: List<SelectedMediaItem> = emptyList(),
-    ): Boolean {
-        val suspension = interventionStore.get(suspensionId) ?: return false
-        if (suspension.capabilityId != "user.question") return false
-        val sessionId = interventionStore.getRun(suspension.runId)?.sessionId ?: return false
-        if (content.isBlank() && contentParts.isEmpty() && attachments.isEmpty()) return false
-        if (!steer(
-                sessionId = sessionId,
-                steeringId = "answer:$suspensionId:$expectedVersion",
+    ): Boolean = scope.async {
+        if (content.isBlank() && contentParts.isEmpty() && attachments.isEmpty()) return@async false
+        interventionMutex.withLock {
+            val instruction = AgentSteeringInstruction(
+                id = "answer:$suspensionId:$expectedVersion",
                 content = content,
                 contentParts = contentParts,
                 attachments = attachments,
+                createdAt = System.currentTimeMillis(),
             )
-        ) return false
-        return resolveIntervention(suspensionId, expectedVersion, resolutionNonce)
-    }
+            val run = database.withTransaction {
+                val suspension = interventionStore.get(suspensionId) ?: return@withTransaction null
+                val state = SuspensionState.valueOf(suspension.status)
+                if (suspension.capabilityId != "user.question" ||
+                    suspension.resolutionMaterialKind != ResolutionMaterialKind.NONE.name ||
+                    state !in setOf(SuspensionState.WAITING_USER, SuspensionState.WAITING_USER_REENTRY) ||
+                    suspension.rowVersion != expectedVersion ||
+                    !interventionStore.matchesResolutionNonce(suspension, resolutionNonce)
+                ) return@withTransaction null
+                val run = agentDao.getRun(suspension.runId) ?: return@withTransaction null
+                if (run.runGeneration != suspension.runGeneration ||
+                    visibleRunCancellationReasons.containsKey(run.visibleAssistantMessageId)
+                ) return@withTransaction null
+                // 入队会检查 Run 终态；确认失败必须回滚整个事务，不能留下没有被接收的用户消息。
+                if (!agentRunStore.enqueueSteering(run.id, instruction)) return@withTransaction null
+                check(interventionStore.resolve(suspensionId, state, expectedVersion, resolutionNonce))
+                run
+            } ?: return@withLock false
+
+            // 回答已经落库，立即沿用现有消息管线显示气泡，不等待下一轮模型消费队列。
+            // Loop 后续消费同一 ID 时，显示层会幂等处理，不会追加第二个气泡。
+            _events.emit(run.visibleAssistantMessageId to AppStreamEvent.AgentFollowUpAccepted(
+                instruction.id, instruction.content, instruction.contentParts, instruction.attachments,
+            ))
+            interventionBroker.fulfill(suspensionId)
+            scheduleInterventionContinuation(suspensionId)
+            _pendingInterventions.update { items -> items.filterNot { it.suspensionId == suspensionId } }
+            true
+        }
+    }.await()
+
+    /**
+     * 密钥或授权接力也允许用户发送普通说明。
+     * “当前能力未提供”和“用户新消息入队”必须在同一笔事务中完成，避免拒绝后 Run
+     * 先恢复结束，导致这条普通回复无法继续原任务。
+     */
+    suspend fun respondToInterventionWithText(
+        suspensionId: String,
+        expectedVersion: Long,
+        resolutionNonce: String,
+        content: String,
+    ): Boolean = scope.async {
+        val reply = content.trim()
+        if (reply.isEmpty()) return@async false
+        interventionMutex.withLock {
+            val instruction = AgentSteeringInstruction(
+                id = "intervention-text:$suspensionId:$expectedVersion",
+                content = reply,
+                createdAt = System.currentTimeMillis(),
+            )
+            val run = try {
+                database.withTransaction {
+                    val suspension = interventionStore.get(suspensionId)
+                        ?: return@withTransaction null
+                    val state = SuspensionState.valueOf(suspension.status)
+                    if (suspension.resolutionMaterialKind !in setOf(
+                            ResolutionMaterialKind.EPHEMERAL.name,
+                            ResolutionMaterialKind.DURABLE_REFERENCE.name,
+                        ) || state !in setOf(
+                            SuspensionState.WAITING_USER,
+                            SuspensionState.WAITING_USER_REENTRY,
+                        ) || suspension.rowVersion != expectedVersion ||
+                        !interventionStore.matchesResolutionNonce(suspension, resolutionNonce)
+                    ) return@withTransaction null
+                    val run = agentDao.getRun(suspension.runId)
+                        ?: return@withTransaction null
+                    if (run.runGeneration != suspension.runGeneration ||
+                        visibleRunCancellationReasons.containsKey(run.visibleAssistantMessageId)
+                    ) return@withTransaction null
+                    check(agentRunStore.enqueueSteering(run.id, instruction))
+                    // 普通文字不是密钥，当前工具能力必须明确以失败结果结束后再交给模型重规划。
+                    check(interventionBroker.reject(suspensionId, expectedVersion))
+                    run
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: IllegalStateException) {
+                null
+            } ?: return@withLock false
+
+            // 文字已落库，立即显示用户气泡；AgentLoop 后续消费时会按 messageId 幂等。
+            _events.emit(run.visibleAssistantMessageId to AppStreamEvent.AgentFollowUpAccepted(
+                instruction.id,
+                instruction.content,
+                instruction.contentParts,
+                instruction.attachments,
+            ))
+            scheduleInterventionContinuation(suspensionId)
+            _pendingInterventions.update { items -> items.filterNot { it.suspensionId == suspensionId } }
+            true
+        }
+    }.await()
 
     private suspend fun resumeRunLocked(
         run: AgentRunEntity,
@@ -722,6 +818,15 @@ class AgentRunCoordinator(
             val parameters = runCatching {
                 kotlinx.serialization.json.Json.decodeFromString<Map<String, String>>(suspension.parametersJson)
             }.getOrDefault(emptyMap())
+            // 接力可能来自安全输入、普通提问或 capability 工具，结果必须对应原调用名称。
+            // 原 Assistant 已持久化，不能用 request_capability 覆盖 request_protected_secret。
+            val originalToolName = agentRunStore.findToolCall(run.id, suspension.toolCallId, suspension.requestId)?.name
+                ?: parameters["tool_name"]
+                ?: when (suspension.capabilityId) {
+                    "user.question" -> AgentControlToolNames.REQUEST_USER_INPUT
+                    "server.env.secret" -> AgentControlToolNames.REQUEST_PROTECTED_SECRET
+                    else -> AgentControlToolNames.REQUEST_CAPABILITY
+                }
             if (cloudflareReauthorization && !failed) {
                 // 重新授权完成后把新的 generation 写回恢复快照；只要绑定校验失败，
                 // 就不能把“授权已恢复”交给模型，更不能继续执行旧请求。
@@ -748,9 +853,7 @@ class AgentRunCoordinator(
                 requestId = suspension.requestId,
                 result = AgentContentBlock.ToolResult(
                     toolCallId = suspension.toolCallId,
-                    toolName = if (cloudflareReauthorization || resourceSelection) runCatching {
-                        kotlinx.serialization.json.Json.decodeFromString<Map<String, String>>(suspension.parametersJson)["tool_name"]
-                    }.getOrNull() ?: AgentControlToolNames.REQUEST_CAPABILITY else AgentControlToolNames.REQUEST_CAPABILITY,
+                    toolName = originalToolName,
                     content = if (cloudflareReauthorization) kotlinx.serialization.json.buildJsonObject {
                         put("ok", false)
                         put("error_code", if (failed) "REAUTHORIZATION_FAILED" else "AUTHORIZATION_RESTORED")
@@ -770,7 +873,9 @@ class AgentRunCoordinator(
                             put("resource_id", selection.resourceId)
                             put("account_id", selection.accountId)
                         }
-                    } else kotlinx.serialization.json.JsonPrimitive(
+                    } else if (suspension.capabilityId == "user.question" && !failed) kotlinx.serialization.json.JsonPrimitive(
+                        "用户已回答，回答内容见接下来的用户消息。请继续当前任务。",
+                    ) else kotlinx.serialization.json.JsonPrimitive(
                         if (failed) "能力接力未完成：${suspension.failureCode}。请根据当前条件重新规划。"
                         else "所需能力已由本地 Broker 准备完成。授权仅限当前 Run、Tool 和目标。",
                     ),
@@ -792,6 +897,11 @@ class AgentRunCoordinator(
             )
         ) return false
 
+        // Room 的完成事实也要通知当前页面。只标记这个工具结束，后续模型仍属于同一个 Run。
+        _events.emit(run.visibleAssistantMessageId to AppStreamEvent.ExecutionStatusUpdate(
+            status = null,
+            toolCallId = suspension.toolCallId,
+        ))
         val siblingBlocksRun = interventionStore.startupCandidates().any { sibling ->
             sibling.runId == run.id && sibling.id != suspension.id &&
                 sibling.status !in setOf(SuspensionState.RESUMED.name)
@@ -800,17 +910,28 @@ class AgentRunCoordinator(
         return resumeRun(run)
     }
 
-    /** 只消费当前 Suspension 的一次性 resolution nonce；真正 Secret 仍由后续 Adapter 接管。 */
+    /**
+     * 应用级协程接管接收、履行与续写，关闭弹窗或切页只能停止等待结果，不能截断已接收的密钥写入。
+     * 仍通过 nonce、Run generation 和 Broker 校验权限；应用退出时允许取消，绝不包裹不可取消的网络请求。
+     */
     suspend fun resolveIntervention(
         suspensionId: String,
         expectedVersion: Long,
         resolutionNonce: String,
         material: ProtectedResolution = ProtectedResolution.None,
-    ): Boolean = interventionMutex.withLock {
-        val resolved = interventionBroker.resolve(suspensionId, expectedVersion, resolutionNonce, material)
-        // CAS 拒绝也刷新版本和 nonce；不重发 Secret、不重放外部动作。
-        recoverInterventionsLocked()
-        resolved
+    ): Boolean {
+        val submission = scope.async {
+            interventionMutex.withLock {
+                val resolved = interventionBroker.resolve(suspensionId, expectedVersion, resolutionNonce, material)
+                if (resolved) scheduleInterventionContinuation(suspensionId)
+                // CAS 拒绝也刷新版本和 nonce；不重发 Secret、不重放外部动作。
+                recoverInterventionsLocked()
+                resolved
+            }
+        }
+        // 包括作用域已经结束、协程体没有机会运行的情况。UI 取消 await 时，不能提前擦除 Adapter 的副本。
+        submission.invokeOnCompletion { material.clear() }
+        return submission.await()
     }
 
     /** 调用方的可变缓冲区无论提交成功与否都在返回前清零。 */
@@ -887,22 +1008,25 @@ class AgentRunCoordinator(
                 scope.launch { recoverInterventions() }
                 return@withContext false
             }
-            val suspension = interventionStore.get(suspensionId)
-            val run = suspension?.let { agentDao.getRun(it.runId) }
-            if (run != null) {
-                scope.launchInterventionContinuation(activeJobs, run) {
-                    try {
-                        resumeSuspension(suspensionId)
-                    } catch (error: CancellationException) {
-                        throw error
-                    } catch (_: Exception) {
-                        // 决策仍在 Room 中，保留给恢复机制重试；不记录外部异常正文。
-                        AppLogger.warn("AgentRunCoordinator", "Intervention continuation needs recovery: $suspensionId")
-                    }
-                }
-            }
+            scheduleInterventionContinuation(suspensionId)
             _pendingInterventions.update { items -> items.filterNot { it.suspensionId == suspensionId } }
             true
+        }
+    }
+
+    /** 先登记应用级唤醒再关闭卡片；旧 Run 尚在收尾时必须等它退出，避免丢掉这次续写。 */
+    private suspend fun scheduleInterventionContinuation(suspensionId: String) {
+        val suspension = interventionStore.get(suspensionId) ?: return
+        val run = agentDao.getRun(suspension.runId) ?: return
+        scope.launchInterventionContinuation(activeJobs, run) {
+            try {
+                interventionMutex.withLock { resumeSuspension(suspensionId) }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                // 决策仍在 Room 中，保留给恢复机制重试；不记录外部异常正文。
+                AppLogger.warn("AgentRunCoordinator", "Intervention continuation needs recovery: $suspensionId")
+            }
         }
     }
 
@@ -947,7 +1071,14 @@ class AgentRunCoordinator(
                 AgentRunStatus.CANCELLED,
                 terminalReason = reason,
             )
-            activeJobs["run:$runId"]?.cancel(CancellationException(reason))
+            _pendingInterventions.update { items -> items.filterNot { it.runId == runId } }
+            val jobs = listOfNotNull(activeJobs["run:$runId"], activeJobs["message:${run.visibleAssistantMessageId}"]).distinct()
+            jobs.forEach { it.cancel(CancellationException(reason)) }
+            jobs.forEach { it.join() }
+            // 收尾或恢复扫描不能把停止前读到的卡片重新投影回来。
+            interventionMutex.withLock {
+                _pendingInterventions.update { items -> items.filterNot { it.runId == runId } }
+            }
         }
     }
 
@@ -963,8 +1094,10 @@ class AgentRunCoordinator(
                 terminalReason = reason,
             )
         }
+        _pendingInterventions.value = emptyList()
         jobs.forEach { job -> job.cancel(CancellationException(reason)) }
         jobs.forEach { job -> job.join() }
+        interventionMutex.withLock { _pendingInterventions.value = emptyList() }
         visibleRunCancellationReasons.clear()
         recoveringRunIds.clear()
         resumeRetryStates.clear()
@@ -978,12 +1111,18 @@ class AgentRunCoordinator(
         scope.launch {
             // 已存在的 Run 先终止持久状态，随后再等待执行协程清理。
             agentRunStore.cancelActiveRunByVisibleMessage(messageId, reason)?.let { run ->
+                // 持久终态确认后立即关闭问题卡片，不等待执行协程和远端调用收尾。
+                _pendingInterventions.update { items -> items.filterNot { it.runId == run.id } }
                 resumeRetryStates.remove(run.id)
                 activeJobs["run:${run.id}"]?.let { runJob ->
                     runJob.cancel(CancellationException(reason))
                     runJob.join()
                 }
+                messageJob?.join()
                 visibleRunCancellationReasons.remove(messageId, reason)
+                interventionMutex.withLock {
+                    _pendingInterventions.update { items -> items.filterNot { it.runId == run.id } }
+                }
             }
             messageJob?.join()
         }

@@ -1765,6 +1765,9 @@ fun ChatInputArea(
                     catch (error: Exception) { onShowSnackbar(error.message ?: context.getString(R.string.agent_resource_selection_failed)) }
                 }
             },
+            onRespondWithText = { pending, content ->
+                viewModel.respondToInterventionWithText(pending, content)
+            },
             onReject = { pending ->
                 viewModel.rejectIntervention(pending.suspensionId, pending.rowVersion)
             },

@@ -493,10 +493,13 @@ internal fun applyExecutionStatusEventToMessage(
     message: Message,
     event: AppStreamEvent.ExecutionStatusUpdate,
 ): Message {
-    val stepsWithResult = if (!event.toolCallId.isNullOrBlank() && !event.executionId.isNullOrBlank()) {
+    // 本地接力也有稳定的工具调用 ID，但没有远端 Execution ID；空状态同样是该工具的完成事实。
+    val stepsWithResult = if (!event.toolCallId.isNullOrBlank() &&
+        (event.status.isNullOrBlank() || !event.executionId.isNullOrBlank())
+    ) {
         message.executionSteps.map { step ->
             if (step.id == event.toolCallId) {
-                step.copy(completed = true, executionId = event.executionId)
+                step.copy(completed = true, executionId = event.executionId ?: step.executionId)
             } else {
                 step
             }

@@ -478,6 +478,20 @@ class ApiHandler(
         )
     }
 
+    suspend fun respondToInterventionWithText(
+        suspensionId: String,
+        expectedVersion: Long,
+        resolutionNonce: String,
+        content: String,
+    ): Boolean = withContext(Dispatchers.IO) {
+        agentRunCoordinator.respondToInterventionWithText(
+            suspensionId,
+            expectedVersion,
+            resolutionNonce,
+            content,
+        )
+    }
+
     fun resolveDurableIntervention(
         suspensionId: String,
         expectedVersion: Long,

@@ -87,7 +87,9 @@ class AgentSteeringTimelineTest {
                     }
                 })
                 assertEquals(2, requests.size)
-                assertEquals(2, requests.last().messages.count { it.role == "user" })
+                // 运行时检查点也可能以 user role 冻结，直接检查两条真实输入，避免把状态快照算成用户消息。
+                assertEquals(1, requests.last().messages.count { it is SimpleTextApiMessage && it.role == "user" && it.content == "任务" })
+                assertEquals(1, requests.last().messages.count { it is SimpleTextApiMessage && it.role == "user" && it.content == "调整方向" })
                 val completed = store.getRunsForSession("session").single()
                 assertEquals(run.id, completed.id)
                 assertEquals("same-ai", completed.visibleAssistantMessageId)
