@@ -1,5 +1,8 @@
 package com.android.everytalk.ui.components.sheet
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -31,6 +34,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,6 +52,7 @@ import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 
 /** 全屏档位，允许抽屉顶边贴近窗口顶部。 */
 internal const val AppModalBottomSheetMaximumHeightFraction = 1.0f
@@ -55,17 +60,22 @@ internal const val AppModalBottomSheetMaximumHeightFraction = 1.0f
 /** 当前档位，保留顶部约 10% 的空间作为可继续上拉的视觉提示。 */
 internal const val AppModalBottomSheetDefaultHeightFraction = 0.9f
 
+/** 返回操作的最低可见档位；再返回一次才隐藏。 */
+private const val AppModalBottomSheetLowHeightFraction = 0.5f
+private const val AppModalBottomSheetBackAnimationMillis = 280
+
 // Material 3 默认拖动条高 4dp，并带上下各 22dp 内边距。
 private val AppModalBottomSheetDragHandleSpace = 48.dp
 
 private fun appModalBottomSheetMappedTop(
     rawOffset: Float,
     windowHeightPx: Float,
+    partialHeightFraction: Float,
 ): Float {
     if (!rawOffset.isFinite() || windowHeightPx <= 0f) return rawOffset
     val expandedTop = windowHeightPx * (1f - AppModalBottomSheetMaximumHeightFraction)
     val materialPartialTop = windowHeightPx * 0.5f
-    val desiredPartialTop = windowHeightPx * (1f - AppModalBottomSheetDefaultHeightFraction)
+    val desiredPartialTop = windowHeightPx * (1f - partialHeightFraction)
     return if (rawOffset <= materialPartialTop) {
         val progress = ((rawOffset - expandedTop) / (materialPartialTop - expandedTop))
             .coerceIn(0f, 1f)
@@ -150,6 +160,7 @@ internal fun AppModalBottomSheet(
     sheetContentModifier: Modifier = Modifier,
     scrollModifier: Modifier = Modifier,
     contentModifier: Modifier = Modifier,
+    /** 标题保持实体底色，仅在标题下边缘让上滚的正文渐隐。 */
     topGradient: Boolean = false,
     stateModifier: (SheetValue, Boolean) -> Modifier = { _, _ -> Modifier },
     dragHandleModifier: Modifier = Modifier,
@@ -158,6 +169,10 @@ internal fun AppModalBottomSheet(
     content: @Composable () -> Unit,
 ) {
     val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
+    // Material 只提供一个半展开锚点，复用现有位移映射，在 90% 中档和 50% 低档间平滑切换。
+    val partialHeightFraction = remember { Animatable(AppModalBottomSheetDefaultHeightFraction) }
+    var backTransitionRunning by remember { mutableStateOf(false) }
     val windowSize = LocalWindowInfo.current.containerSize
     val windowHeightPx = windowSize.height
     val maximumContentHeight = with(density) {
@@ -173,7 +188,7 @@ internal fun AppModalBottomSheet(
     val partiallyExpandedHiddenHeightPx = (
         windowHeightPx *
             (AppModalBottomSheetMaximumHeightFraction -
-                AppModalBottomSheetDefaultHeightFraction)
+                partialHeightFraction.value)
         ).toInt()
     // 内容盒包含标题/内边距在不同 Compose 测量阶段的舍入差异；保留一小段缓冲，
     // 避免刚好贴近默认高度的短内容被误判为需要全屏展开。
@@ -209,15 +224,22 @@ internal fun AppModalBottomSheet(
                 targetValue == SheetValue.Expanded -> true
                 targetValue == SheetValue.Hidden ||
                     targetValue == SheetValue.PartiallyExpanded ->
-                    gestureFromHandle || scrollState.value == 0
+                    backTransitionRunning || gestureFromHandle || scrollState.value == 0
                 else -> true
             }
         },
     )
-    val interactionLocked = !presentationReady || sheetState.isAnimationRunning
+    val interactionLocked = !presentationReady || sheetState.isAnimationRunning || backTransitionRunning
     val canDismissSheet = !interactionLocked && scrollState.value == 0
     val visibleContentViewportHeightPx =
         (contentViewportHeightPx - partiallyExpandedHiddenHeightPx).coerceAtLeast(0)
+
+    LaunchedEffect(sheetState.currentValue) {
+        // 从低档拖回全屏后，下一次返回仍先落到中档，不能沿用上一次的低档高度。
+        if (sheetState.currentValue == SheetValue.Expanded) {
+            partialHeightFraction.snapTo(AppModalBottomSheetDefaultHeightFraction)
+        }
+    }
 
     LaunchedEffect(
         sheetState.currentValue,
@@ -258,15 +280,17 @@ internal fun AppModalBottomSheet(
             // ponytail: Material 3 未开放自定义半展开锚点，用连续位移映射保留原生手势和关闭逻辑。
             val rawOffset = runCatching { sheetState.requireOffset() }.getOrNull()
             translationY = rawOffset?.let {
-                appModalBottomSheetMappedTop(it, windowHeightPx.toFloat()) - it
+                appModalBottomSheetMappedTop(it, windowHeightPx.toFloat(), partialHeightFraction.value) - it
             } ?: 0f
         },
         sheetState = sheetState,
         sheetGesturesEnabled = !interactionLocked,
-        containerColor = if (topGradient) Color.Transparent else MaterialTheme.colorScheme.surface,
+        // 抽屉本身必须保持实体底色，避免顶部把下面的聊天内容透出来。
+        containerColor = MaterialTheme.colorScheme.surface,
         contentWindowInsets = { WindowInsets(0, 0, 0, 0) },
         properties = ModalBottomSheetProperties(
-            shouldDismissOnBackPress = canDismissSheet,
+            // 返回由抽屉窗口内的 BackHandler 逐档处理，不受正文滚动位置限制。
+            shouldDismissOnBackPress = false,
             shouldDismissOnClickOutside = canDismissSheet,
         ),
         dragHandle = {
@@ -291,12 +315,38 @@ internal fun AppModalBottomSheet(
             }
         },
     ) {
+        BackHandler {
+            // 动画期间消费额外返回，避免一次连滑跨过多档或退出下面的聊天页面。
+            if (!interactionLocked && !backTransitionRunning) {
+                backTransitionRunning = true
+                scope.launch {
+                    try {
+                        when (sheetState.currentValue) {
+                            SheetValue.Expanded -> sheetState.partialExpand()
+                            SheetValue.PartiallyExpanded -> {
+                                if (partialHeightFraction.value > AppModalBottomSheetLowHeightFraction) {
+                                    partialHeightFraction.animateTo(
+                                        AppModalBottomSheetLowHeightFraction,
+                                        animationSpec = tween(AppModalBottomSheetBackAnimationMillis),
+                                    )
+                                } else {
+                                    sheetState.hide()
+                                    if (!sheetState.isVisible) onDismissRequest()
+                                }
+                            }
+                            SheetValue.Hidden -> Unit
+                        }
+                    } finally {
+                        backTransitionRunning = false
+                    }
+                }
+            }
+        }
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(maximumContentHeight)
-                // 抽屉主体保持完整底色，顶部渐变单独作为正文遮罩叠加，
-                // 这样正文向上滚动时会从底色逐渐过渡到透明并消失。
+                // 标题和把手保持实体底色，渐变只叠加在标题下方的正文边缘。
                 .background(MaterialTheme.colorScheme.surface)
                 .pointerInput(Unit) {
                     awaitEachGesture {
@@ -338,12 +388,12 @@ internal fun AppModalBottomSheet(
                         }
                     }
                 }
-                if (topGradient) {
+                if (topGradient && scrollState.value > 0) {
                     Box(
                         modifier = Modifier
                             .align(Alignment.TopCenter)
                             .fillMaxWidth()
-                            .height(72.dp)
+                            .height(24.dp)
                             .background(
                                 brush = Brush.verticalGradient(
                                     colors = listOf(
@@ -351,7 +401,7 @@ internal fun AppModalBottomSheet(
                                         Color.Transparent,
                                     ),
                                     startY = 0f,
-                                    endY = with(density) { 72.dp.toPx() },
+                                    endY = with(density) { 24.dp.toPx() },
                                 ),
                             ),
                     )
@@ -371,6 +421,7 @@ internal fun AppModalBottomSheet(
                                 -(appModalBottomSheetMappedTop(
                                     rawOffset = it,
                                     windowHeightPx = windowHeightPx.toFloat(),
+                                    partialHeightFraction = partialHeightFraction.value,
                                 ) - expandedTop).coerceAtLeast(0f)
                             } ?: 0f
                         }

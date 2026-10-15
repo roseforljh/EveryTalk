@@ -17,6 +17,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
@@ -130,6 +131,7 @@ fun AppTopBar(
     val buttonBg = if (isDark) Color(0xFF303030) else Color.White
     val contentColor = if (isDark) Color.White else Color(0xFF0D0D0D)
     val topButtonSize = iconButtonSize + 2.dp
+    val backgroundColor = MaterialTheme.colorScheme.background
 
     // 模型名称提取与彩虹色映射
     val modelDisplayInfo = remember(selectedConfigName, isDark, otherModelLabel) {
@@ -139,6 +141,17 @@ fun AppTopBar(
     Box(
         modifier = modifier
             .fillMaxWidth()
+            .drawWithCache {
+                // 状态栏和按钮所在区域完全遮住正文，只有最后 12dp 随下边缘渐隐。
+                // 根据实际高度计算，避免字体缩放或系统栏高度变化后，渐变穿过按钮。
+                val fadeStart = (size.height - 12.dp.toPx()).coerceAtLeast(0f)
+                val brush = Brush.verticalGradient(
+                    colors = listOf(backgroundColor, Color.Transparent),
+                    startY = fadeStart,
+                    endY = size.height,
+                )
+                onDrawBehind { drawRect(brush) }
+            }
             .windowInsetsPadding(WindowInsets.statusBars)
             .heightIn(min = 48.dp)
             .padding(12.dp)
