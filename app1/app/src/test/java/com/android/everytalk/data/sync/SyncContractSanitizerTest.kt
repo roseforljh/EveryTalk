@@ -40,4 +40,30 @@ class SyncContractSanitizerTest {
         assertEquals("maxTokens", SyncWireFieldNames.toLocal("outputLimit"))
         assertEquals("maxContextTokens", SyncWireFieldNames.toLocal("contextLimit"))
     }
+
+    @Test fun `非法本地设置ID映射为稳定UUID且敏感地址不上传`() {
+        val first = syncStableSettingKey("mcp_servers", "mcp-cloudflare")
+        assertEquals(first, syncStableSettingKey("mcp_servers", "mcp-cloudflare"))
+        assertTrue(first.matches(Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")))
+        assertEquals("00000000-0000-4000-8000-000000000001", syncStableSettingKey("mcp_servers", "00000000-0000-4000-8000-000000000001"))
+        assertEquals("https://mcp.example/path", syncSafeEndpoint("https://mcp.example/path"))
+        assertEquals(null, syncSafeEndpoint("https://mcp.example/path?exaApiKey=abc"))
+        assertEquals(null, syncSafeEndpoint("https://user:password@mcp.example/path"))
+        assertEquals(null, syncSafeEndpoint("https://mcp.example/path?api%4Bey=local"))
+        assertEquals(null, syncSafeEndpoint("https://mcp.example/path?X-Signature=local"))
+        assertEquals(null, syncSafeEndpoint("https://mcp.example/path?Authorization=local"))
+        assertEquals(null, syncSafeEndpoint("file:///private/device/path"))
+        assertEquals(null, syncSafeEndpoint("https://mcp.example/path?bad%=local"))
+        assertEquals("https://mcp.example/path?tools=search", syncSafeEndpoint("https://mcp.example/path?tools=search"))
+        assertEquals(null, syncSafeEndpoint("https://mcp.example/fc-0123456789abcdef0123456789abcdef/v2/mcp"))
+        assertEquals("https://mcp.example/path", syncSafeEndpoint("https://mcp.example/path#local-only"))
+    }
+
+    @Test fun `配置比较忽略对象顺序和等价数字但保留真实差异`() {
+        val original = syncJson.parseToJsonElement("""{"temperature":0.0,"params":{"contextLimit":128000},"models":["a","b"]}""")
+        val reordered = syncJson.parseToJsonElement("""{"models":["a","b"],"params":{"contextLimit":128000.0},"temperature":0}""")
+        assertTrue(syncSettingValuesEqual(original, reordered))
+        assertFalse(syncSettingValuesEqual(original, syncJson.parseToJsonElement(original.toString().replace("0.0", "0.7"))))
+        assertFalse(syncSettingValuesEqual(original, syncJson.parseToJsonElement(original.toString().replace("[\"a\",\"b\"]", "[\"b\",\"a\"]"))))
+    }
 }

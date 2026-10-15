@@ -26,10 +26,23 @@ internal fun AccountDataActions(
         if (state.rejectedCount > 0) {
             Text("${state.rejectedCount} 条未能同步", color = MaterialTheme.colorScheme.error)
             state.rejectedItems.take(8).forEach { item ->
-                Text("• ${item.entity}/${item.id.take(12)}", style = MaterialTheme.typography.bodySmall,
+                val category = when (item.kind ?: item.entity) {
+                    "mcp_servers" -> "MCP 配置"
+                    "computer_workspaces" -> "远程工作区"
+                    "computers" -> "远程电脑"
+                    "conversation_settings" -> "会话设置"
+                    "api_configs" -> "模型配置"
+                    "voice_configs" -> "语音配置"
+                    "messages" -> "消息"
+                    "sessions" -> "会话"
+                    "memories" -> "长期记忆"
+                    else -> "同步项目"
+                }
+                Text("• $category / ${item.id.take(12)}：${item.code}", style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error)
-                if (item.code == "CONTAINS_SECRET" && item.entity == "user_settings") {
-                    Text("这个提示词含疑似密钥，没有同步", style = MaterialTheme.typography.bodySmall,
+                if (item.code == "CONTAINS_SECRET") {
+                    val hint = if (item.kind == "conversation_settings") "这个提示词含疑似密钥，没有同步" else "该配置含疑似密钥，没有同步；本机配置保留。"
+                    Text(hint, style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error)
                 }
             }

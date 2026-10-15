@@ -20,7 +20,7 @@ internal data class SyncUiState(
     val pausedAfterCloudReset: Boolean = false,
 )
 
-internal data class SyncRejectedItem(val entity: String, val id: String, val code: String)
+internal data class SyncRejectedItem(val entity: String, val id: String, val code: String, val kind: String? = null)
 
 /**
  * 账号数据的自动同步、删除、云端清空后恢复与换账号选择。
@@ -39,7 +39,10 @@ internal class SyncController(
         val values = rows.associate { it.key to it.value }
         val rejected = rows.filter { it.key.startsWith("sync_rejected:") }.mapNotNull { row ->
             val parts = row.key.removePrefix("sync_rejected:").split(':', limit = 2)
-            parts.takeIf { it.size == 2 }?.let { SyncRejectedItem(it[0], it[1], row.value) }
+            parts.takeIf { it.size == 2 }?.let {
+                val kind = if (it[0] == "user_settings") database.settingsDao().getUserSettingByUuid(it[1])?.kind else null
+                SyncRejectedItem(it[0], it[1], row.value.takeIf { code -> code.matches(Regex("[A-Za-z_]{1,64}")) } ?: "UNKNOWN_ERROR", kind)
+            }
         }
         SyncUiState(rejectedCount = rejected.size, rejectedItems = rejected,
             epochDecision = values[SyncStateStore.KEY_EPOCH_DECISION]?.toLongOrNull(),

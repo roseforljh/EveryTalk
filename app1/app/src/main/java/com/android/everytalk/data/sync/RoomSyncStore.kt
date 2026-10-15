@@ -3,6 +3,8 @@ package com.android.everytalk.data.sync
 import androidx.room.withTransaction
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.ModelParameters
+import com.android.everytalk.data.DataClass.ModelParameterProtocol
+import com.android.everytalk.data.DataClass.ReasoningMode
 import com.android.everytalk.data.DataClass.ModalityType
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.database.AppDatabase
@@ -87,6 +89,12 @@ internal class RoomSyncStore(
         val old = database.apiConfigDao().getConfigs(value["imageConfig"]?.jsonPrimitive?.booleanOrNull == true).firstOrNull { it.id == setting.key }
         val modelParameters = value["modelParameters"]?.jsonObject?.let { params ->
             (old?.modelParameters ?: ModelParameters()).copy(
+                apiProtocolOverride = params["protocolOverride"]?.jsonPrimitive?.contentOrNull?.let { name ->
+                    ModelParameterProtocol.entries.firstOrNull { it.name == name }
+                },
+                reasoningMode = params["reasoningMode"]?.jsonPrimitive?.contentOrNull?.let { name ->
+                    ReasoningMode.entries.firstOrNull { it.name == name }
+                } ?: old?.modelParameters?.reasoningMode ?: ReasoningMode.EFFORT,
                 reasoningEffort = params["reasoningEffort"]?.jsonPrimitive?.contentOrNull ?: (old?.modelParameters ?: ModelParameters()).reasoningEffort,
                 thinkingBudget = params["thoughtBudget"]?.jsonPrimitive?.intOrNull ?: (old?.modelParameters ?: ModelParameters()).thinkingBudget,
                 maxContextTokens = params["contextLimit"]?.jsonPrimitive?.intOrNull ?: (old?.modelParameters ?: ModelParameters()).maxContextTokens,
@@ -132,9 +140,11 @@ internal class RoomSyncStore(
     }
 
     private suspend fun restoreMcp(setting: UserSettingEntity, value: JsonObject) {
-        val old = database.mcpConfigDao().getConfigById(setting.key)
+        // 合同要求 mcp_servers 的 key 是 UUID；localId 只用于把配置恢复到本机原有记录。
+        val localId = value["localId"]?.jsonPrimitive?.contentOrNull ?: setting.key
+        val old = database.mcpConfigDao().getConfigById(localId)
         val headers = value["headers"]?.let { decryptedJson(setting, it, "/headers")?.toString() } ?: old?.headers ?: "[]"
-        database.mcpConfigDao().insertConfig(McpServerConfigEntity(setting.key, value["name"]?.jsonPrimitive?.contentOrNull ?: old?.name.orEmpty(), value["endpoint"]?.jsonPrimitive?.contentOrNull ?: old?.url.orEmpty(), value["transport"]?.jsonPrimitive?.contentOrNull ?: old?.transportType.orEmpty(), value["enabled"]?.jsonPrimitive?.booleanOrNull ?: old?.enabled ?: true, headers))
+        database.mcpConfigDao().insertConfig(McpServerConfigEntity(localId, value["name"]?.jsonPrimitive?.contentOrNull ?: old?.name.orEmpty(), value["endpoint"]?.jsonPrimitive?.contentOrNull ?: old?.url.orEmpty(), value["transport"]?.jsonPrimitive?.contentOrNull ?: old?.transportType.orEmpty(), value["enabled"]?.jsonPrimitive?.booleanOrNull ?: old?.enabled ?: true, headers))
     }
 
     private suspend fun restoreSkill(setting: UserSettingEntity, value: JsonObject) {
@@ -146,7 +156,10 @@ internal class RoomSyncStore(
         value[name]?.let { element -> if (element is JsonPrimitive) element.contentOrNull else decryptedJson(setting, element, pointer)?.jsonPrimitive?.contentOrNull }
 
     private suspend fun decryptedJson(setting: UserSettingEntity, value: JsonElement, pointer: String): JsonElement? =
-        if (value is JsonObject && value.containsKey("\$enc") && secrets != null && userId != null) secrets.decryptField(userId, setting.kind, setting.key, pointer, state.readSecretsEpoch().coerceAtLeast(0L), value) else value
+        if (value is JsonObject && value.containsKey("\$enc")) {
+            // 未解锁仅跳过机密字段，不能把信封当明文解析并阻塞普通数据的拉取。
+            if (secrets != null && userId != null) secrets.decryptField(userId, setting.kind, setting.key, pointer, state.readSecretsEpoch().coerceAtLeast(0L), value) else null
+        } else value
 
     override suspend fun pendingBatch(maxItems: Int): List<PendingChangeSnapshot> {
         require(maxItems in 1..500)
@@ -435,9 +448,12 @@ internal class RoomSyncStore(
             return
         }
         val value = if (record.deleted) "{}" else requireNotNull(record.payload["value"]).toString()
-        settings.upsertUserSettings(listOf(UserSettingEntity(
+        val setting = UserSettingEntity(
             kind, key, value, record.id, version, record.deleted, SyncStatus.SYNCED,
-        )))
+        )
+        settings.upsertUserSettings(listOf(setting))
+        // 普通配置必须在拉取时生效，不能等待用户进入已取消的同步密码流程。
+        if (!record.deleted) restoreSetting(setting)
         if (record.deleted && kind == UserSettingKind.CONVERSATION_GROUPS) settings.deleteConversationGroup(key)
     }
 

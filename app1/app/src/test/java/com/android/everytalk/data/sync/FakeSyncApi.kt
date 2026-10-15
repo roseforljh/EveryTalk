@@ -33,12 +33,18 @@ internal class FakeSyncApi : SyncApi {
                     "voice_custom_models", "mcp_servers", "skills", "skill_variables", "computers", "computer_workspaces",
                     "conversation_settings", "memory_switches", "group_members", "pinned_items", "crypto_keys",
                 ) -> "INVALID_USER_SETTING_KIND"
+                change.entity == "user_settings" && change.payload["kind"]?.jsonPrimitive?.content in setOf(
+                    "mcp_servers", "computer_workspaces", "computers", "voice_configs", "conversation_settings", "pinned_items",
+                ) && !Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}").matches(
+                    change.payload["key"]?.jsonPrimitive?.content.orEmpty(),
+                ) -> "INVALID_USER_SETTING"
                 change.entity == "messages" && session?.deleted == true -> "session_deleted"
                 else -> null
             }
             if (rejection != null) return@mapIndexed PushResult(index, change.entity, change.id, "rejected", error = SyncError(rejection, "测试拒绝"))
+            val incomingPayload = if (change.entity == "user_settings") canonicalConfiguration(change.payload) as JsonObject else change.payload
             val payload = if (change.deleted && change.entity == "messages") JsonObject(emptyMap())
-                else if (change.entity == "messages") change.payload else JsonObject(change.payload +
+                else if (change.entity == "messages") change.payload else JsonObject(incomingPayload +
                     ("clientModifiedAt" to JsonPrimitive(minOf(change.payload.getValue("clientModifiedAt").jsonPrimitive.long, now))))
             val status = when {
                 old != null && old.deleted && !change.deleted -> "ignored"
@@ -73,5 +79,13 @@ internal class FakeSyncApi : SyncApi {
 
     override suspend fun deleteAll() {
         clearCloud()
+    }
+
+    /** 与服务端相同：配置对象按属性名排序，数字可能从 0.0 变成 0。 */
+    private fun canonicalConfiguration(value: JsonElement): JsonElement = when (value) {
+        is JsonObject -> JsonObject(value.toSortedMap().mapValues { canonicalConfiguration(it.value) })
+        is JsonArray -> JsonArray(value.map(::canonicalConfiguration))
+        is JsonPrimitive -> if (!value.isString && value.content.toBigDecimalOrNull() != null)
+            syncJson.parseToJsonElement(value.content.toBigDecimal().stripTrailingZeros().toPlainString()) else value
     }
 }

@@ -1,5 +1,6 @@
 package com.android.everytalk.data.sync
 
+import androidx.room.withTransaction
 import com.android.everytalk.data.database.AppDatabase
 import com.android.everytalk.data.database.entities.ApiConfigEntity
 import com.android.everytalk.data.database.entities.ComputerEntity
@@ -9,7 +10,10 @@ import com.android.everytalk.data.database.entities.SyncStatus
 import com.android.everytalk.data.database.entities.UserSettingEntity
 import com.android.everytalk.data.database.entities.localSyncUuid
 import com.android.everytalk.data.network.ExternalWebSearchProviderConfig
+import java.net.URI
+import java.net.URLDecoder
 import java.util.Base64
+import java.util.UUID
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -30,6 +34,7 @@ internal class SyncSettingsProjector(
     private var currentKeyVersion: Long? = null
 
     suspend fun refresh() {
+        migrateLegacySettingKeys()
         currentKeyVersion = settings.getUserSetting("crypto_keys", "default")?.let {
             runCatching { syncJson.decodeFromString<SyncCryptoKeysValue>(it.value).version }.getOrNull()
         }
@@ -39,9 +44,9 @@ internal class SyncSettingsProjector(
         database.voiceConfigDao().getAll().forEach { voice ->
             upsert("voice_configs", voice.id, buildJsonObject {
                 put("name", voice.name); put("provider", voice.provider)
-                put("sttPlatform", voice.sttPlatform); put("sttEndpoint", voice.sttApiUrl); put("sttModel", voice.sttModel)
-                put("chatPlatform", voice.chatPlatform); put("chatEndpoint", voice.chatApiUrl); put("chatModel", voice.chatModel)
-                put("ttsPlatform", voice.ttsPlatform); put("ttsEndpoint", voice.ttsApiUrl); put("ttsModel", voice.ttsModel)
+                put("sttPlatform", voice.sttPlatform); syncEndpoint("sttEndpoint", voice.sttApiUrl); put("sttModel", voice.sttModel)
+                put("chatPlatform", voice.chatPlatform); syncEndpoint("chatEndpoint", voice.chatApiUrl); put("chatModel", voice.chatModel)
+                put("ttsPlatform", voice.ttsPlatform); syncEndpoint("ttsEndpoint", voice.ttsApiUrl); put("ttsModel", voice.ttsModel)
                 put("voiceName", voice.voiceName); put("realtimeStreaming", voice.useRealtimeStreaming); put("createdAt", voice.createdAt)
                 secret("sttApiKey", voice.sttApiKey, "voice_configs", voice.id, "/sttApiKey")
                 secret("chatApiKey", voice.chatApiKey, "voice_configs", voice.id, "/chatApiKey")
@@ -49,16 +54,18 @@ internal class SyncSettingsProjector(
             }, voice.updatedAt)
         }
         database.mcpConfigDao().getAllSnapshot().forEach { server ->
-            upsert("mcp_servers", server.id, buildJsonObject {
-                put("name", server.name); put("endpoint", server.url); put("transport", server.transportType); put("enabled", server.enabled)
-                parseHeaders(server.headers)?.let { secretJson("headers", it, "mcp_servers", server.id, "/headers") }
+            val syncKey = syncStableSettingKey("mcp_servers", server.id)
+            upsert("mcp_servers", syncKey, buildJsonObject {
+                put("localId", server.id); put("name", server.name); syncEndpoint("endpoint", server.url)
+                put("transport", server.transportType); put("enabled", server.enabled)
+                parseHeaders(server.headers)?.let { secretJson("headers", it, "mcp_servers", syncKey, "/headers") }
             })
         }
         database.skillDao().getAll().forEach { upsert("skills", it.skillId, skillValue(it)) }
         customVoiceModels(); voicePlatforms()
         database.computerDao().getAllSnapshot().forEach { upsert("computers", it.id, computerValue(it)) }
         database.computerDao().getAllWorkspacesSnapshot().forEach { workspace ->
-            upsert("computer_workspaces", workspace.id, workspaceValue(workspace, sessions.getStoredSession(workspace.conversationId)?.uuid))
+            upsert("computer_workspaces", syncStableSettingKey("computer_workspaces", workspace.id), workspaceValue(workspace, sessions.getStoredSession(workspace.conversationId)?.uuid))
         }
     }
 
@@ -158,7 +165,7 @@ internal class SyncSettingsProjector(
     }
 
     private fun configValue(config: ApiConfigEntity, image: Boolean = false): JsonObject = buildJsonObject {
-        put("name", config.name); put("address", config.address); put("model", config.model); put("provider", config.provider)
+        put("name", config.name); syncEndpoint("address", config.address); put("model", config.model); put("provider", config.provider)
         put("channel", config.channel); put("imageConfig", image); put("modality", config.modalityType.name); put("temperature", config.temperature)
         config.topP?.let { put("topP", it) }; config.maxTokens?.let { put("outputLimit", it) }; config.defaultUseWebSearch?.let { put("defaultUseWebSearch", it) }
         config.imageSize?.let { put("imageSize", it) }; config.numInferenceSteps?.let { put("inferenceSteps", it) }; config.guidanceScale?.let { put("guidanceScale", it) }
@@ -185,8 +192,8 @@ internal class SyncSettingsProjector(
     }
 
     private fun workspaceValue(workspace: ComputerWorkspaceEntity, conversationUuid: String?): JsonObject = buildJsonObject {
-        put("computerId", workspace.computerId); conversationUuid?.let { put("sessionId", it) }; put("runMode", workspace.runMode); put("remotePath", workspace.hostPath)
-        workspace.containerName?.let { put("containerName", it) }; workspace.containerImage?.let { put("containerImage", it) }; put("createdAt", workspace.createdAt)
+        put("localId", workspace.id); put("computerId", workspace.computerId); conversationUuid?.let { put("sessionId", it) }
+        put("runMode", workspace.runMode); workspace.containerImage?.let { put("containerImage", it) }; put("createdAt", workspace.createdAt)
     }
 
     private suspend fun upsert(
@@ -199,7 +206,8 @@ internal class SyncSettingsProjector(
         val old = settings.getUserSetting(kind, key)
         val merged = preserveEncryptedLeaves(old?.value, value)
         val raw = merged.toString()
-        if (old?.value == raw && !old.deleted) return
+        // 服务端会排序 JSON 属性，并可能把 0.0 写成 0；这些变化不代表用户修改了配置。
+        if (old != null && !old.deleted && syncSettingValuesEqual(syncJson.parseToJsonElement(old.value), merged)) return
         settings.upsertUserSettings(listOf(UserSettingEntity(kind, key, raw, old?.uuid ?: localSyncUuid("user_settings", "$kind:$key"), maxOf(modifiedAt, (old?.updatedAt ?: 0L) + 1), false, syncStatus)))
     }
 
@@ -224,4 +232,88 @@ internal class SyncSettingsProjector(
     }
 
     private fun parseHeaders(raw: String): JsonElement? = runCatching { syncJson.parseToJsonElement(raw) }.getOrNull()
+
+    /**
+     * 地址一旦带用户密码或疑似密钥查询参数，整条地址都不进入同步。
+     * 这样不会把凭据藏在 URL 的 query、userinfo 或未登记参数里。
+     */
+    private fun kotlinx.serialization.json.JsonObjectBuilder.syncEndpoint(name: String, raw: String) {
+        syncSafeEndpoint(raw)?.let { put(name, it) }
+    }
+
+    /**
+     * 旧 MCP/工作区的 key 不是 UUID，服务器从未接纳过这些逻辑记录。
+     * 在同一事务内替换同步投影并重新入队；业务表 ID、连接和本机凭据完全保留。
+     * 不能只清失败提示，否则 markAllLocalDataPending 会再次上传旧的非法 key。
+     */
+    private suspend fun migrateLegacySettingKeys() = database.withTransaction {
+        settings.getAllUserSettings().filter {
+            it.kind in setOf("mcp_servers", "computer_workspaces") && !isCanonicalUuid(it.key)
+        }.forEach { legacy ->
+            val key = syncStableSettingKey(legacy.kind, legacy.key)
+            val current = settings.getUserSetting(legacy.kind, key)
+            val oldValue = runCatching { syncJson.parseToJsonElement(legacy.value).jsonObject }.getOrNull()
+            val value = buildJsonObject {
+                oldValue?.forEach { (name, child) ->
+                    // 改 key 会改变加密 AAD，旧信封不可原样重放；凭据仍由业务表保留。
+                    if (SyncContractSanitizer.isValidEnvelope(child)) return@forEach
+                    if (legacy.kind == "computer_workspaces" && name in setOf("remotePath", "containerName")) return@forEach
+                    if (name == "endpoint") {
+                        (child as? JsonPrimitive)?.content?.let(::syncSafeEndpoint)?.let { put(name, it) }
+                    } else put(name, child)
+                }
+                put("localId", legacy.key)
+            }
+            settings.deleteUserSetting(legacy.kind, legacy.key)
+            if (current == null) settings.upsertUserSettings(listOf(legacy.copy(
+                key = key, value = value.toString(), syncStatus = SyncStatus.PENDING,
+            )))
+            settings.deleteSetting("sync_rejected:user_settings:${legacy.uuid}")
+        }
+    }
+}
+
+/** 合同要求 UUID key；本地旧 ID 可能是 mcp-cloudflare、ws_xxx 等任意字符串。 */
+internal fun syncStableSettingKey(kind: String, localId: String): String =
+    if (isCanonicalUuid(localId)) localId.lowercase() else localSyncUuid(kind, localId)
+
+internal fun isCanonicalUuid(value: String): Boolean =
+    runCatching { UUID.fromString(value).toString() == value.lowercase() }.getOrDefault(false)
+
+/** 合同要求 URL 不带 userinfo，也不能带疑似密钥参数名。 */
+internal fun syncSafeEndpoint(raw: String): String? {
+    if (raw.isBlank()) return null
+    val uri = runCatching { URI(raw) }.getOrNull() ?: return null
+    if (uri.scheme?.lowercase() !in setOf("https", "http") || uri.host.isNullOrBlank() || uri.rawUserInfo != null) return null
+    if (runCatching { SyncContractSanitizer.validate(JsonPrimitive(raw)) }.isFailure) return null
+    // 少数 MCP 服务把凭据放在路径中；已知的密钥前缀同样留在本机。
+    if (Regex("(?i)(?:^|/)(?:fc|sk|tvly)-[A-Za-z0-9_-]{16,}(?:/|$)").containsMatchIn(uri.path.orEmpty())) return null
+    // fragment 从不发给目标 HTTP 服务，也不需要上传到账号。
+    if (uri.rawFragment != null) return syncSafeEndpoint(raw.substringBefore('#'))
+    val sensitiveParts = listOf("token", "key", "secret", "signature", "password", "authorization", "cookie", "headers", "privatekey")
+    val query = uri.rawQuery ?: return raw
+    val hasSensitiveName = query.split('&').any { pair ->
+        val name = pair.substringBefore('=').let { encoded ->
+            runCatching { URLDecoder.decode(encoded, Charsets.UTF_8.name()) }.getOrDefault(encoded)
+        }
+        val normalized = name.filter(Char::isLetterOrDigit).lowercase()
+        sensitiveParts.any(normalized::contains)
+    }
+    return raw.takeUnless { hasSensitiveName }
+}
+
+/** JSON 对象顺序不影响内容，数值的等价表示也不产生新修改；数组顺序和字符串仍严格比较。 */
+internal fun syncSettingValuesEqual(left: JsonElement, right: JsonElement): Boolean = when {
+    left is JsonObject && right is JsonObject -> left.keys == right.keys && left.all { (key, value) ->
+        syncSettingValuesEqual(value, right.getValue(key))
+    }
+    left is JsonArray && right is JsonArray -> left.size == right.size && left.indices.all {
+        syncSettingValuesEqual(left[it], right[it])
+    }
+    left is JsonPrimitive && right is JsonPrimitive && !left.isString && !right.isString -> {
+        val a = left.content.toBigDecimalOrNull()
+        val b = right.content.toBigDecimalOrNull()
+        if (a != null && b != null) a.compareTo(b) == 0 else left == right
+    }
+    else -> left == right
 }

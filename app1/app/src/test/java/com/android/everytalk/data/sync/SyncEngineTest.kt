@@ -326,6 +326,82 @@ class SyncEngineTest {
         assertEquals(0, db.settingsDao().syncRejectedCount())
     }
 
+    @Test fun `旧三条MCP和九条工作区失败修复后全量重传也不再发送非法key`() = runBlocking {
+        val db = device(); val settings = db.settingsDao()
+        val legacyMcp = listOf("mcp-cloudflare", "mcp-github", "mcp-gmail").map { id ->
+            db.mcpConfigDao().insertConfig(McpServerConfigEntity(id, id, "https://mcp.example/mcp", "HTTP"))
+            UserSettingEntity("mcp_servers", id, """{"name":"$id","endpoint":"https://mcp.example/mcp","transport":"HTTP","enabled":true}""", updatedAt = 100, syncStatus = SyncStatus.LOCAL_ONLY)
+        }
+        val legacyWorkspaces = (1..9).map { index ->
+            UserSettingEntity("computer_workspaces", "ws_$index", """{"computerId":"00000000-0000-4000-8000-000000000001","remotePath":"/private/device/path","containerName":"device-container","runMode":"DIRECT"}""", updatedAt = 100, syncStatus = SyncStatus.LOCAL_ONLY)
+        }
+        val legacy = legacyMcp + legacyWorkspaces
+        settings.upsertUserSettings(legacy)
+        legacy.forEach { settings.insertSetting(SystemSettingEntity("sync_rejected:user_settings:${it.uuid}", "INVALID_USER_SETTING")) }
+        val api = FakeSyncApi()
+        // 先证明假服务器真的会拒绝原始 12 条记录，而非无条件接受测试数据。
+        assertTrue(api.push(legacy.map(SyncPayloadMapper::userSetting)).results.all { it.error?.code == "INVALID_USER_SETTING" })
+        assertEquals(SyncRunResult.Completed, run(db, api))
+        assertEquals(0, settings.syncRejectedCount())
+        val fixed = settings.getAllUserSettings()
+        assertEquals(12, fixed.size)
+        assertEquals(legacy.map { it.uuid }.toSet(), fixed.map { it.uuid }.toSet())
+        assertTrue(fixed.all { isCanonicalUuid(it.key) && it.syncStatus == SyncStatus.SYNCED })
+        assertTrue(fixed.none { it.value.contains("/private/device/path") || it.value.contains("device-container") })
+        assertEquals(3, db.mcpConfigDao().getAllSnapshot().size)
+        SyncStateStore(db).markAllLocalDataPending()
+        run(db, api)
+        assertEquals(12, api.rows.size)
+        assertEquals(0, settings.syncRejectedCount())
+        assertTrue(RoomSyncStore(db).pendingBatch().isEmpty())
+        val pushes = api.pushes
+        run(db, api)
+        assertEquals(pushes, api.pushes)
+    }
+
+    @Test fun `工作区真实投影只改同步身份保留本机路径且引用会话UUID`() = runBlocking {
+        val db = device(); val s = seed(db)
+        val computer = com.android.everytalk.data.computer.Computer(
+            id = UUID.randomUUID().toString(), displayName = "电脑", host = "example.org", port = 22, username = "user",
+            authKind = com.android.everytalk.data.computer.ComputerAuthKind.PASSWORD,
+            runMode = com.android.everytalk.data.computer.ComputerRunMode.DIRECT,
+        ).toEntity(syncJson)
+        db.computerDao().upsertComputer(computer)
+        val workspace = ComputerWorkspaceEntity("ws_local", computer.id, s.id, "DIRECT", "/private/work", "local-container", null, "READY", 1, 1)
+        db.computerDao().upsertWorkspace(workspace)
+        val change = RoomSyncStore(db).pendingBatch().single { it.change.payload["kind"]?.jsonPrimitive?.content == "computer_workspaces" }.change
+        assertTrue(isCanonicalUuid(change.payload.getValue("key").jsonPrimitive.content))
+        val value = change.payload.getValue("value").jsonObject
+        assertEquals(s.uuid, value.getValue("sessionId").jsonPrimitive.content)
+        assertFalse(value.containsKey("remotePath")); assertFalse(value.containsKey("containerName"))
+        assertEquals(workspace, db.computerDao().getWorkspaceById(workspace.id))
+    }
+
+    @Test fun `两设备MCP及模型配置拉取即生效且属性排序和等价数字不会回传`() = runBlocking {
+        val a = device(); val b = device(); val api = FakeSyncApi()
+        a.mcpConfigDao().insertConfig(McpServerConfigEntity("mcp-github", "GitHub", "https://mcp.example/mcp", "HTTP"))
+        val modelId = UUID.randomUUID().toString()
+        val config = com.android.everytalk.data.DataClass.ApiConfig(
+            id = modelId, name = "模型", address = "https://model.example/v1", key = "本机密钥", model = "model", provider = "provider",
+            channel = "Gemini", temperature = 0f,
+            modelParameters = com.android.everytalk.data.DataClass.ModelParameters(
+                apiProtocolOverride = com.android.everytalk.data.DataClass.ModelParameterProtocol.GEMINI,
+            ),
+        ).toEntity()
+        a.apiConfigDao().insertConfigs(listOf(config))
+        run(a, api); run(b, api)
+        assertEquals("https://mcp.example/mcp", b.mcpConfigDao().getConfigById("mcp-github")!!.url)
+        assertEquals(1, b.mcpConfigDao().getAllSnapshot().size)
+        val received = b.apiConfigDao().getConfigs(false).single()
+        assertEquals(modelId, received.id); assertEquals("", received.key)
+        assertEquals(config.modelParameters.apiProtocolOverride, received.modelParameters.apiProtocolOverride)
+        val pushes = api.pushes
+        repeat(3) { run(a, api); run(b, api) }
+        assertEquals(pushes, api.pushes)
+        assertTrue(RoomSyncStore(a).pendingBatch().isEmpty()); assertTrue(RoomSyncStore(b).pendingBatch().isEmpty())
+        assertEquals("本机密钥", a.apiConfigDao().getConfigs(false).single().key)
+    }
+
     @Test fun `canonical采用但上传期间新设置仍待同步`() = runBlocking {
         val db = device(); val s = seed(db)
         val setting = UserSettingEntity("conversation_groups", "Work", "[\"${s.uuid}\"]", updatedAt = 100)
