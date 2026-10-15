@@ -1,6 +1,6 @@
 # EveryTalk Privacy Policy / EveryTalk 隐私政策
 
-**Effective date / 生效日期: October 11, 2026 / 2026 年 10 月 11 日**
+**Effective date / 生效日期: October 15, 2026 / 2026 年 10 月 15 日**
 
 EveryTalk is an Android AI client maintained by the EveryTalk project maintainers. This policy explains how EveryTalk handles information when you use chat, image, voice, web search, Model Context Protocol (MCP), and AI content reporting features.
 
@@ -33,6 +33,14 @@ EveryTalk does not provide its own AI model. When you actively use an online fea
 
 These services process information under their own terms and privacy policies. Do not connect EveryTalk to a service you do not trust or submit sensitive information to it.
 
+### 2A. Local mode and automatic account sync
+
+You can choose LocalOnly mode and use the app without an account. In this mode, EveryTalk does not connect to its own server. Your locally entered API keys, chats, roles, prompts, and settings stay on the device. Requests to third party models are sent directly to the endpoints you configure when you use them, and those providers handle the requests under their own policies.
+
+When a sync server is configured, signing in automatically merges local and account sessions, message text, reasoning, long term memories, pinned items, and conversation groups. There is no separate sync switch. Signing out stops account sync and keeps local copies. Signing back into the same account includes changes made in local mode. Switching to another account asks how to handle existing local data before uploading it. Account sync does not upload API keys, voice keys, MCP configuration, images, attachments, tool execution traces, or image generation conversations.
+
+The sync service stores this data on servers in Germany. If you use the app in mainland China, signing in involves cross border transfer of the listed data. You can delete cloud data from account settings at any time. Local data remains on the device and uploads pause. Restarting or signing in again does not re-upload it without your explicit choice. Encrypted server backups may remain for up to 7 days after deletion. The Android client is open source; server side permission, membership, and quota decisions are made by the server.
+
 ### 3. Permissions
 
 - **Internet:** Connects to AI, speech, image, search, MCP, and report services.
@@ -62,7 +70,9 @@ EveryTalk blocks cleartext network traffic for production app connections and st
 
 ### 8. Accounts
 
-EveryTalk offers optional Google and email-code account sign-in through the configured Supabase Auth service. Email sign-in transmits the email address and verification code. Google sign-in requests basic identity information (openid, email, profile), not Gmail or Drive access. Supabase stores the account ID, email, linked login identities, registration and login records, and processes authentication requests under its privacy policy. Account sign-in does not upload chat history or model API keys.
+EveryTalk offers optional Google and email-code account sign-in through the configured Supabase Auth service. Email sign-in transmits the email address and verification code. Google sign-in requests basic identity information (openid, email, profile), not Gmail or Drive access. Supabase stores the account ID, email, linked login identities, registration and login records, and processes authentication requests under its privacy policy. Account sync never uploads model API keys.
+
+Signing in automatically syncs only the fields described in section 2A. You can choose local mode to use the app without account sync.
 
 The app encrypts session credentials using Android Keystore. Signing out clears the local account session and retains local chats and API configurations. Removing local data or uninstalling does not delete the server account. Contact the maintainers through the project page to request account deletion; do not publish verification codes or credentials in public issues. Separate third-party service accounts must be managed with their respective providers.
 
@@ -127,6 +137,14 @@ EveryTalk 本身不提供 AI 模型。当你主动使用联网功能时，应用
 
 这些服务会依据各自的条款和隐私政策处理信息。请勿连接不受信任的服务，也不要向其提交敏感信息。
 
+### 2A. 本地模式与账号自动同步
+
+你可以选择本地模式，不登录账号也能使用应用。本地模式不会连接 EveryTalk 自有服务器。你自己填写的 API 密钥、聊天记录、角色、提示词和设置会保存在设备上。使用第三方模型时，请求会直接发送到你配置的接口，具体由相应服务商按自己的政策处理。
+
+配置同步服务器时，登录后会自动合并本地与账号的会话、消息文字、思考过程、长期记忆、置顶和分组，不需要另外开启同步。退出后停止账号同步并保留本机副本；重新登录同一账号时，会同步游客期间的新数据。换成另一个账号时，会先询问如何处理已有本地数据，再决定是否上传。以下信息不参与账号同步：API 密钥、语音 Key、MCP 配置、图片、附件、工具执行轨迹和生图对话。
+
+同步数据存储在德国的服务器上。中国大陆用户登录后会涉及上述数据的跨境传输。你可以随时在账号设置中一键删除云端数据，本地数据会保留，并暂停本机上传；重启或重新登录不会自动重新上传，需你再次明确选择。服务器的加密备份在删除后最多保留 7 天。客户端代码开源，但具体权限、会员资格和额度由服务器判断。
+
 ### 3. 权限用途
 
 - **网络：** 连接 AI、语音、图像、搜索、MCP 及举报服务。
@@ -156,7 +174,7 @@ EveryTalk 会阻止生产版本应用连接使用明文网络流量，并将数�
 
 ### 8. 账号
 
-EveryTalk 通过配置的 Supabase Auth 服务提供可选的 Google 和邮箱验证码登录。邮箱登录会发送邮箱地址和验证码；Google 登录只申请基本身份信息（openid、email、profile），不申请 Gmail 或网盘访问权限。Supabase 保存账号 ID、邮箱、关联登录身份、注册和登录记录，并依据其隐私政策处理认证请求。登录账号不会上传聊天记录或模型 API 密钥。
+EveryTalk 通过配置的 Supabase Auth 服务提供可选的 Google 和邮箱验证码登录。邮箱登录会发送邮箱地址和验证码；Google 登录只申请基本身份信息（openid、email、profile），不申请 Gmail 或网盘访问权限。Supabase 保存账号 ID、邮箱、关联登录身份、注册和登录记录，并依据其隐私政策处理认证请求。登录后，应用会按第 2A 节自动同步规定范围内的账号数据；选择本地模式则不进行账号同步。
 
 应用通过 Android Keystore 加密保存会话凭据。退出登录会清除本地账号会话，保留聊天记录和 API 配置；删除本地数据或卸载应用不会删除服务端账号。可通过项目页面联系维护者提出账号删除申请，请勿在公开 Issue 中发布验证码或凭据。其他第三方服务账号仍需向相应服务商申请管理或删除。
 

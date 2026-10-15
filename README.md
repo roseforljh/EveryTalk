@@ -42,6 +42,14 @@
 - Features like image generation, voice interaction, and backend proxies depend on whether your upstream models or server endpoints support them.
 - "Supported" in this README means the client contains the integration pipeline, not that every model works with every config by default.
 
+## Local mode and account data
+
+You can use EveryTalk without signing in. In LocalOnly mode, the app does not connect to EveryTalk's own server. Chat history, roles, prompts, settings, and user supplied API keys stay on the device. Requests to OpenAI, Gemini, or another provider are sent directly to the endpoint you configure.
+
+When a sync server is configured, signing in automatically merges local and account sessions, message text, reasoning, long term memories, pinned items, and conversation groups. There is no separate sync switch. Signing out keeps local copies and stops account sync; signing back into the same account includes changes made while using local mode. Switching to a different account still asks how to handle existing local data. API keys, voice keys, MCP configuration, images, attachments, tool execution traces, and image generation conversations are not uploaded. Sync servers are located in Germany, so users in mainland China should understand that signing in involves cross border transfer of the listed data.
+
+You can delete cloud data from the account settings at any time. The device keeps its local data and pauses uploads. Restarting or signing in again does not re-upload it without your explicit choice. Encrypted server backups may remain for up to 7 days after deletion. The client is open source; final permission, membership, and quota decisions are made by the server.
+
 ---
 
 ## 📚 Document Index
@@ -90,6 +98,7 @@
 
 ### 🛡️ Security & Performance
 - **🔒 On-Device Encryption**: Configuration and chat logs are stored locally with AES-256 encryption.
+- **☁️ Account Data**: Local mode has zero upload to EveryTalk. Signing in automatically merges the supported account data; signing out returns to local mode.
 - **🔐 Message Signatures**: Optional HMAC-SHA256 signature protocol verification for backend API calls.
 - **⚡ Performance Tuning**: Smart scroll controls (pauses autoscroll when user scrolls manually) and list view caching.
 
@@ -127,8 +136,11 @@ GOOGLE_API_KEY="AIzaSy..."
 GOOGLE_API_BASE_URL="https://generativelanguage.googleapis.com"
 DEFAULT_OPENAI_API_BASE_URL="https://api.openai.com"
 SILICONFLOW_API_KEY="sk-..."
+EVERYTALK_SYNC_BASE_URL="https://sync.example.com"
 # For more parameters, refer to local.properties.example
 ```
+
+`EVERYTALK_SYNC_BASE_URL` is the address of the EveryTalk sync server. Leave it out or empty to disable cloud sync. It contains an address only; no server secret belongs in the Android client. Release builds receive this value from the GitHub Actions repository variable `EVERYTALK_SYNC_BASE_URL`.
 
 ---
 
@@ -326,7 +338,7 @@ Search results will render in citation cards. Tap cards to open the link directl
 <details>
 <summary><b>Q4: Does the app collect user telemetry?</b></summary>
 
-**A:** **No.** All settings, configurations, keys, and chat histories are saved locally in the SQLite Room Database with AES encryption. Telemetry SDKs are not included.
+**A:** In LocalOnly mode, EveryTalk does not upload data to its own server. The app can still send prompts or selected content to the AI, search, voice, MCP, or other providers that you configure and use. Signing in automatically syncs the supported account data; signing out stops this sync. Telemetry SDKs are not included.
 </details>
 
 <details>
