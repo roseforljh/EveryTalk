@@ -45,13 +45,13 @@ interface SettingsDao {
 
     @Query("SELECT id FROM chat_sessions WHERE isImageGeneration = 1 AND deleted = 0")
     suspend fun getImageSessionIds(): List<String>
-    @Query("SELECT * FROM user_settings WHERE kind IN ('conversation_groups', 'pinned_items') AND deleted = 0")
+    @Query("SELECT * FROM user_settings WHERE deleted = 0")
     suspend fun getSyncableUserSettings(): List<UserSettingEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertUserSettings(settings: List<UserSettingEntity>)
 
-    @Query("SELECT * FROM user_settings WHERE sync_status = 'PENDING' LIMIT :limit")
+    @Query("SELECT * FROM user_settings WHERE sync_status = 'PENDING' AND kind != 'conversation_groups' AND NOT (kind = 'pinned_items' AND `key` = 'text') LIMIT :limit")
     suspend fun getPendingUserSettings(limit: Int = Int.MAX_VALUE): List<UserSettingEntity>
 
     @Query("UPDATE user_settings SET sync_status = 'SYNCED' WHERE uuid IN (:uuids) AND deleted = 0")
@@ -63,11 +63,18 @@ interface SettingsDao {
     @Query("SELECT * FROM user_settings WHERE uuid = :uuid LIMIT 1")
     suspend fun getUserSettingByUuid(uuid: String): UserSettingEntity?
 
+    @Query("DELETE FROM user_settings WHERE kind = :kind AND `key` = :key")
+    suspend fun deleteUserSetting(kind: String, key: String)
+
     @Query("UPDATE user_settings SET sync_status = 'SYNCED' WHERE uuid = :uuid AND updated_at = :version AND sync_status = 'PENDING'")
     suspend fun markUserSettingSyncedIfVersion(uuid: String, version: Long): Int
 
     @Query("UPDATE user_settings SET sync_status = 'LOCAL_ONLY' WHERE uuid = :uuid AND updated_at = :version")
     suspend fun markUserSettingRejectedIfVersion(uuid: String, version: Long): Int
+
+    /** 只恢复同步系统判定为可重试的旧失败设置。 */
+    @Query("UPDATE user_settings SET sync_status = 'PENDING' WHERE uuid = :uuid")
+    suspend fun markUserSettingPendingByUuid(uuid: String): Int
 
     @Query("UPDATE user_settings SET sync_status = 'PENDING'")
     suspend fun markAllUserSettingsPending()
@@ -85,6 +92,9 @@ interface SettingsDao {
 
     @Query("DELETE FROM system_settings WHERE `key` = :key")
     suspend fun deleteSetting(key: String)
+
+    @Query("SELECT * FROM system_settings WHERE `key` LIKE :prefix || '%'")
+    suspend fun getByPrefix(prefix: String): List<SystemSettingEntity>
 
     // Pinned Items
     @Query("SELECT id FROM pinned_items WHERE isImageGeneration = :isImageGen")

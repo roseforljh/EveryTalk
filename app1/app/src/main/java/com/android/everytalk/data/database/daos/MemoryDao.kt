@@ -56,6 +56,10 @@ interface MemoryDao {
     @Query("UPDATE memories SET sync_status = 'LOCAL_ONLY' WHERE uuid = :uuid AND updated_at = :version")
     suspend fun markRejectedIfVersion(uuid: String, version: Long): Int
 
+    /** 只恢复同步系统判定为可重试的旧失败记忆。 */
+    @Query("UPDATE memories SET sync_status = 'PENDING' WHERE uuid = :uuid")
+    suspend fun markPendingByUuid(uuid: String): Int
+
     @Query("UPDATE memories SET sync_status = 'PENDING'")
     suspend fun markAllPending()
 }

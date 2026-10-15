@@ -10,6 +10,8 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface McpConfigDao {
     @Query("SELECT * FROM mcp_server_configs ORDER BY name ASC")
+    suspend fun getAllSnapshot(): List<McpServerConfigEntity>
+    @Query("SELECT * FROM mcp_server_configs ORDER BY name ASC")
     fun getAllConfigs(): Flow<List<McpServerConfigEntity>>
 
     @Query("SELECT * FROM mcp_server_configs WHERE enabled = 1 ORDER BY name ASC")

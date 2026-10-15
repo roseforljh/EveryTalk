@@ -47,10 +47,6 @@ data class UserSettingEntity(
     @ColumnInfo(defaultValue = "0") val deleted: Boolean = false,
     @ColumnInfo(name = "sync_status", defaultValue = "'PENDING'") val syncStatus: String = SyncStatus.PENDING,
 ) {
-    init {
-        require(kind == UserSettingKind.CONVERSATION_GROUPS || kind == UserSettingKind.PINNED_ITEMS)
-    }
-
     @get:androidx.room.Ignore
     val clientModifiedAt: Long get() = updatedAt
 }

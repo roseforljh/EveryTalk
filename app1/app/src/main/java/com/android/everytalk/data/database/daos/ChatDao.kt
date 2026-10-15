@@ -250,6 +250,10 @@ interface ChatDao {
     @Query("UPDATE messages SET sync_status = 'LOCAL_ONLY' WHERE uuid = :uuid AND updated_at = :version")
     suspend fun markMessageRejectedIfVersion(uuid: String, version: Long): Int
 
+    /** 只恢复同步系统判定为可重试的旧失败消息；用户主动保留本地的数据没有失败记录，不会被碰到。 */
+    @Query("UPDATE messages SET sync_status = 'PENDING' WHERE uuid = :uuid")
+    suspend fun markMessagePendingByUuid(uuid: String): Int
+
     @Query("DELETE FROM messages WHERE uuid = :uuid AND ever_synced = 0")
     suspend fun deleteNeverSyncedMessageByUuid(uuid: String): Int
 
@@ -264,6 +268,10 @@ interface ChatDao {
 
     @Query("UPDATE chat_sessions SET sync_status = 'LOCAL_ONLY' WHERE uuid = :uuid AND updated_at = :version")
     suspend fun markSessionRejectedIfVersion(uuid: String, version: Long): Int
+
+    /** 只恢复同步系统判定为可重试的旧失败会话。 */
+    @Query("UPDATE chat_sessions SET sync_status = 'PENDING' WHERE uuid = :uuid")
+    suspend fun markSessionPendingByUuid(uuid: String): Int
 
     @Query(
         """

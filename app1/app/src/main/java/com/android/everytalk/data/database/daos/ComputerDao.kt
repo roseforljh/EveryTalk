@@ -22,6 +22,11 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ComputerDao {
+    @Query("SELECT * FROM computers WHERE status != 'DELETED' ORDER BY createdAt ASC")
+    suspend fun getAllSnapshot(): List<ComputerEntity>
+
+    @Query("SELECT * FROM computer_workspaces ORDER BY createdAt ASC")
+    suspend fun getAllWorkspacesSnapshot(): List<ComputerWorkspaceEntity>
     @Query("SELECT * FROM cloudflare_computer_configs WHERE computerId = :computerId LIMIT 1")
     suspend fun getCloudflareConfig(computerId: String): CloudflareComputerConfigEntity?
 

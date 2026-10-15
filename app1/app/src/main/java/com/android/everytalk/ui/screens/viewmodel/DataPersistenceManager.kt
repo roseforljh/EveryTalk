@@ -632,6 +632,12 @@ class DataPersistenceManager(
             }
         }
     }
+
+    suspend fun saveConversationSettings(conversationId: String, systemPrompt: String, promptEnabled: Boolean) =
+        withContext(Dispatchers.IO) { roomDataSource.saveConversationSettings(conversationId, systemPrompt, promptEnabled) }
+
+    suspend fun loadConversationSettings(): Map<String, Pair<String, Boolean>> =
+        withContext(Dispatchers.IO) { roomDataSource.loadConversationSettings() }
     
     suspend fun saveConversationApiConfigIds(mapping: Map<String, String>) {
         withContext(Dispatchers.IO) {

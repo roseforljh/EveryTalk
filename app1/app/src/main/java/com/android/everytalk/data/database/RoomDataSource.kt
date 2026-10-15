@@ -12,6 +12,7 @@ import com.android.everytalk.data.database.entities.PinnedItemEntity
 import com.android.everytalk.data.database.entities.SyncSessionReference
 import com.android.everytalk.data.database.entities.syncUserSettingSnapshots
 import com.android.everytalk.data.database.entities.SystemSettingEntity
+import com.android.everytalk.data.database.entities.UserSettingEntity
 import com.android.everytalk.data.database.entities.toApiConfig
 import com.android.everytalk.data.database.entities.toEntity
 import com.android.everytalk.data.database.entities.toMessage
@@ -26,6 +27,12 @@ import java.util.UUID
 import kotlinx.serialization.builtins.SetSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.put
 
 data class LoadedHistorySession(
     val sessionId: String,
@@ -180,6 +187,36 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
     suspend fun setSetting(key: String, value: String?) {
         saveSetting(key, value)
     }
+
+    /** 将用户编辑的系统提示词保存为每会话一条同步设置，避免依赖历史 System 消息落盘。 */
+    suspend fun saveConversationSettings(conversationId: String, systemPrompt: String, promptEnabled: Boolean) {
+        val session = chatDao.getSession(conversationId) ?: return
+        val kind = "conversation_settings"
+        val key = session.uuid
+        val old = settingsDao.getUserSetting(kind, key)
+        val value = buildJsonObject {
+            put("systemPrompt", systemPrompt)
+            put("promptEnabled", promptEnabled)
+        }.toString()
+        if (old?.value == value && !old.deleted) return
+        settingsDao.upsertUserSettings(listOf(UserSettingEntity(
+            kind = kind,
+            key = key,
+            value = value,
+            uuid = old?.uuid ?: com.android.everytalk.data.database.entities.localSyncUuid("user_settings", "$kind:$key"),
+            updatedAt = maxOf(System.currentTimeMillis(), (old?.updatedAt ?: 0) + 1),
+            syncStatus = com.android.everytalk.data.database.entities.SyncStatus.PENDING,
+        )))
+    }
+
+    suspend fun loadConversationSettings(): Map<String, Pair<String, Boolean>> =
+        settingsDao.getSyncableUserSettings().filter { it.kind == "conversation_settings" }.mapNotNull { setting ->
+            runCatching {
+                val value = json.parseToJsonElement(setting.value).jsonObject
+                setting.key to (value["systemPrompt"]?.jsonPrimitive?.contentOrNull.orEmpty() to
+                    (value["promptEnabled"]?.jsonPrimitive?.boolean ?: false))
+            }.getOrNull()
+        }.toMap()
 
     // --- Chat History ---
     suspend fun loadChatHistory(): List<List<Message>> {

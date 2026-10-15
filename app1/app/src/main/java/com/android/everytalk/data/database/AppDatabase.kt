@@ -19,6 +19,7 @@ import com.android.everytalk.data.database.daos.McpConfigDao
 import com.android.everytalk.data.database.daos.SettingsDao
 import com.android.everytalk.data.database.daos.SkillDao
 import com.android.everytalk.data.database.daos.VoiceConfigDao
+import com.android.everytalk.data.database.daos.SyncAttachmentDao
 import com.android.everytalk.data.database.entities.ApiConfigEntity
 import com.android.everytalk.data.database.entities.AgentCompactionEntryEntity
 import com.android.everytalk.data.database.entities.AgentContextSnapshotEntity
@@ -61,6 +62,7 @@ import com.android.everytalk.data.database.entities.CloudflareResourceEntity
 import com.android.everytalk.data.database.entities.CloudflareResourceOperationEntity
 import com.android.everytalk.data.database.entities.CloudflareWorkerHealthEntity
 import com.android.everytalk.data.database.entities.TemporaryWorkerDeploymentEntity
+import com.android.everytalk.data.database.entities.SyncAttachmentEntity
 
 @Database(
     entities = [
@@ -108,8 +110,9 @@ import com.android.everytalk.data.database.entities.TemporaryWorkerDeploymentEnt
         AgentExecutionSlotEntity::class,
         AgentStoredAuthorizationEntity::class,
         AgentOAuthStateEntity::class,
+        SyncAttachmentEntity::class,
     ],
-    version = 43,
+    version = 44,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -123,10 +126,34 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun computerDao(): ComputerDao
     abstract fun agentDao(): AgentDao
     abstract fun skillDao(): SkillDao
+    abstract fun syncAttachmentDao(): SyncAttachmentDao
 
     companion object {
         /** 42 的结构快照保持不变，所有同步字段仅在此次无损迁移中补齐。 */
         val MIGRATION_42_43: Migration = SyncMetadataMigration()
+        val MIGRATION_43_44: Migration = object : Migration(43, 44) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS sync_attachments (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        sessionId TEXT NOT NULL,
+                        messageId TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        mime TEXT NOT NULL,
+                        size INTEGER NOT NULL,
+                        sha256 TEXT NOT NULL,
+                        fileId TEXT,
+                        kind TEXT NOT NULL,
+                        position INTEGER NOT NULL DEFAULT 0,
+                        updated_at INTEGER NOT NULL DEFAULT 0,
+                        deleted INTEGER NOT NULL DEFAULT 0,
+                        sync_status TEXT NOT NULL DEFAULT 'PENDING'
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_sync_attachments_sessionId ON sync_attachments(sessionId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_sync_attachments_messageId ON sync_attachments(messageId)")
+            }
+        }
         /** 仅新增表，不重建或清空已有会话、设置和凭据。 */
         val MIGRATION_41_42 = object : Migration(41, 42) {
             override fun migrate(db: SupportSQLiteDatabase) {
@@ -189,6 +216,7 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_40_41,
                     MIGRATION_41_42,
                     MIGRATION_42_43,
+                    MIGRATION_43_44,
                 )
                 .addCallback(DATABASE_MAINTENANCE_CALLBACK)
                 .build()

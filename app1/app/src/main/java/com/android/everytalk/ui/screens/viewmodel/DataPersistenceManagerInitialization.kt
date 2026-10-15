@@ -356,6 +356,15 @@ internal fun DataPersistenceManager.loadInitialDataInternal(
                                     stateHolder.systemPrompts[id] = prompt
                                 }
                             }
+                            // 新版设置优先于历史 System 消息，确保编辑后重启不会恢复旧提示词。
+                            loadConversationSettings().forEach { (sessionUuid, setting) ->
+                                val localId = repairedHistory.firstOrNull { conversation ->
+                                    ConversationNameHelper.resolveStableId(conversation) == sessionUuid
+                                }?.let { ConversationNameHelper.resolveStableId(it) }
+                                val targetId = localId ?: sessionUuid
+                                stateHolder.systemPrompts[targetId] = setting.first
+                                stateHolder.systemPromptEngagedState[targetId] = setting.second
+                            }
                             if (textHistoryLoadedCompletely) {
                                 stateHolder.markTextHistoryReadyForStateCleanup()
                             }

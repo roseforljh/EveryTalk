@@ -3,6 +3,7 @@ package com.android.everytalk.statecontroller.controller.systemprompt
 import com.android.everytalk.statecontroller.ViewModelStateHolder
 import com.android.everytalk.statecontroller.viewmodel.DialogManager
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
+import com.android.everytalk.ui.screens.viewmodel.DataPersistenceManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -19,6 +20,7 @@ class SystemPromptController(
     private val stateHolder: ViewModelStateHolder,
     private val dialogManager: DialogManager,
     private val historyManager: HistoryManager,
+    private val persistenceManager: DataPersistenceManager,
     private val scope: CoroutineScope
 ) {
     private val historyMutex = Mutex()
@@ -68,6 +70,11 @@ class SystemPromptController(
         scope.launch {
             historyMutex.withLock {
                 stateHolder.isTextConversationDirty.value = true
+                persistenceManager.saveConversationSettings(
+                    conversationId,
+                    stateHolder.systemPrompts[conversationId].orEmpty(),
+                    stateHolder.systemPromptEngagedState[conversationId] ?: false,
+                )
                 historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true)
             }
         }
@@ -86,6 +93,13 @@ class SystemPromptController(
         val conversationId = stateHolder._currentConversationId.value
         val current = stateHolder.systemPromptEngagedState[conversationId] ?: false
         stateHolder.systemPromptEngagedState[conversationId] = !current
+        scope.launch {
+            persistenceManager.saveConversationSettings(
+                conversationId,
+                stateHolder.systemPrompts[conversationId].orEmpty(),
+                !current,
+            )
+        }
     }
 
     /**
@@ -94,5 +108,12 @@ class SystemPromptController(
     fun setSystemPromptEngaged(enabled: Boolean) {
         val conversationId = stateHolder._currentConversationId.value
         stateHolder.systemPromptEngagedState[conversationId] = enabled
+        scope.launch {
+            persistenceManager.saveConversationSettings(
+                conversationId,
+                stateHolder.systemPrompts[conversationId].orEmpty(),
+                enabled,
+            )
+        }
     }
 }
