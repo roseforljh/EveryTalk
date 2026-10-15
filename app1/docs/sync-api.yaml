@@ -3,16 +3,18 @@ info:
   title: EveryTalk Cloud Sync API
   version: 0.2.0
   description: |
-    First version of the EveryTalk cloud sync server.
+    REVIEW DRAFT: 0.2.0 extension; not implemented or deployed. The existing
+    runtime has not yet been updated to this contract. Approval is required
+    before runtime, migration, backup, R2, or CI behavior is changed.
 
     Supabase Auth authenticates the caller. The server stores synchronized
     data in its own PostgreSQL database. Every synchronized row is isolated by
     the authenticated user's `sub` claim.
 
     The request contract deliberately keeps client business fields inside
-    `payload`. Server metadata is returned in fixed outer fields. The server
-    drops API keys, voice keys, MCP headers, images, attachments, search
-    results, large tool output, and pending messages before persistence.
+    `payload`. Server metadata is returned in fixed outer fields. This 0.2.0
+    contract defines registered settings, client-encrypted fields, attachment
+    metadata, and authenticated files in a separate private R2 bucket.
 
     For sessions, memories, and user settings, `payload.clientModifiedAt`
     participates in conflict resolution. The server clamps it to the current
@@ -24,7 +26,307 @@ servers:
 tags:
   - name: health
   - name: sync
+  - name: files
   - name: chat
+x-contract-status: review-draft-not-implemented
+x-protocol-versions:
+  required: 0.2.0
+  header: X-EveryTalk-Sync-Version
+  description: |
+    Every sync and file request MUST send X-EveryTalk-Sync-Version: 0.2.0.
+    A missing header or any value other than exactly 0.2.0 returns
+    426 UNSUPPORTED_SYNC_VERSION, after authentication is checked. Existing
+    test data is disposable and is cleared with DELETE /sync/all before
+    enabling this protocol. All response fields, statuses, JWT checks,
+    per-user sequence locking, epoch and Redis fail-open behavior are defined
+    for 0.2.0 only.
+x-setting-registry:
+  description: |
+    All sizes below are default UTF-8 byte limits for the ENTIRE raw payload
+    serialized as compact JSON, before any filtering; count is active logical
+    rows per user/kind. Configuration can override defaults through an external
+    registry file. Unknown kinds are rejected. conversation_settings has a
+    contract hard ceiling of 32768 bytes. Envelope hard ceiling is 8192 bytes.
+    Counts and bytes are checked transactionally under the existing per-user
+    lock. Updates at the row limit and deletes remain possible. Tombstones do
+    not count; repeated rejected items never consume a count or server_seq.
+    Rows are admitted only under the current limit. Lowering a limit does not
+    delete existing rows, but any update must satisfy the new limit. This
+    admission limit applies to every new or updated write.
+    Every kind uses (user_id,kind,key), canonical_id, effective clientModifiedAt
+    LWW and later-arrival ties, except crypto_keys has the immutable creation
+    guard described below. No arbitrary business configuration schema is added.
+    A user_settings tombstone can be revived: when deleted=true exists for the
+    same logical key, a later effective clientModifiedAt with deleted=false
+    writes the full live payload back to that row and preserves its canonical
+    id. An equal or older live write stays deleted. This applies to pinned_items
+    and group_members, including cancel-and-rejoin; it does not apply to
+    sessions, messages or attachments, which remain permanently deleted.
+    Only routing identities, cryptography, declared fileRefs, and limits are
+    interpreted by the server. Device paths and authorization state must be
+    excluded by the client. All non-crypto configuration values are scanned.
+  kinds:
+    api_configs: {max_payload_bytes: 32768, max_active_rows: 200, key: model UUID}
+    selected_models: {max_payload_bytes: 4096, max_active_rows: 8, key: 'text | image | voice | web_search'}
+    web_search_configs: {max_payload_bytes: 16384, max_active_rows: 16, key: provider identifier}
+    voice_configs: {max_payload_bytes: 32768, max_active_rows: 50, key: voice configuration UUID}
+    voice_llm_platforms: {max_payload_bytes: 16384, max_active_rows: 32, key: platform identifier}
+    voice_custom_models: {max_payload_bytes: 16384, max_active_rows: 96, key: 'stt:<platform> | chat:<platform> | tts:<platform>'}
+    mcp_servers: {max_payload_bytes: 32768, max_active_rows: 100, key: MCP configuration UUID}
+    skills: {max_payload_bytes: 65536, max_active_rows: 200, key: stable skill identifier}
+    skill_variables: {max_payload_bytes: 16384, max_active_rows: 2000, key: encoded skill identifier and variable name}
+    computers: {max_payload_bytes: 32768, max_active_rows: 100, key: computer UUID}
+    computer_workspaces: {max_payload_bytes: 16384, max_active_rows: 2000, key: workspace UUID}
+    conversation_settings: {max_payload_bytes: 32768, max_active_rows: 10000, key: conversation UUID}
+    memory_switches: {max_payload_bytes: 2048, max_active_rows: 1, key: default}
+    group_members: {max_payload_bytes: 2048, max_active_rows: 100000, key: 'base64url(UTF8(group name)) + . + lowercase conversation UUID'}
+    pinned_items: {max_payload_bytes: 2048, max_active_rows: 10000, key: lowercase conversation UUID}
+    crypto_keys: {max_payload_bytes: 4096, max_active_rows: 1, key: default}
+  key_rules: |
+    General key: 1-512 UTF-8 bytes. group_members permits 1-1024 UTF-8 bytes
+    so a group name of up to 512 bytes plus UUID still fits after base64url
+    encoding. The encoding is unpadded and reversible; no trimming
+    or case folding of group names. UUID components use lowercase canonical
+    UUIDs. skill_variables uses base64url(UTF8(skillId)) + . +
+    base64url(UTF8(variableName)); reject if over the general key limit.
+    No credentials or device paths belong in kind/key or file reference IDs.
+x-secret-policy:
+  description: |
+    The sync password, KEK and plaintext DEK never leave the client. Generate
+    a random 32-byte DEK locally; derive a 32-byte wrapping key using Argon2id
+    and the recorded salt/parameters. wrappedDek wraps that DEK using
+    AES-256-GCM; normal envelopes use the DEK. Fresh 12-byte nonce per encryption;
+    ct is ciphertext followed by the 16-byte authentication tag. Base64 is
+    canonical padded RFC4648 standard base64, not base64url or permissive decode.
+    Never reuse a nonce with a key. A correct shape is not proof of decryptability;
+    the server has no keys and cannot verify the GCM tag or password.
+    Clients authenticate context with AAD: compact UTF-8 JSON array
+    ["everytalk-sync","0.2.0",userId,kind,key,jsonPointer,keyVersion,secretsEpoch].
+    For wrappedDek use pointer /wrappedDek and the key derived from the password;
+    for fields the pointer is relative to value. Never bind AAD to the proposed
+    row id because canonical_id can change it. New devices unlock locally.
+    Crypto version is a positive generation, not a protocol version. First
+    creation at key=default wins; exact retries are idempotent. Replacing an
+    existing different crypto document, or deleting it through push, returns
+    CRYPTO_KEY_CONFLICT: it must not silently replace another device's DEK by
+    LWW. Password change/rewrap and online key rotation are not supported in
+    0.2.0. Changing the sync password means DELETE /sync/secrets followed by
+    creating a new crypto_keys document and re-encrypting settings on the client.
+    A recreated document must use version=secrets_epoch+1. This also fences
+    uploaded stale local ciphertext after a reset.
+    Envelope-bearing writes and crypto creation require the current
+    X-EveryTalk-Secrets-Epoch; mismatch or missing header is an item-level
+    SECRETS_EPOCH_MISMATCH, while other valid items continue. Envelope keyVersion
+    must match the active crypto document or CRYPTO_KEY_VERSION_MISMATCH.
+    Push processes items in order: create crypto_keys before encrypted settings.
+    A ciphertext-free configuration remains usable without a crypto document.
+  scanning: |
+    Scan raw configuration values recursively before storage filtering.
+    Exempt only protocol-defined kind,key,clientModifiedAt, strict crypto_keys
+    metadata, and a validated envelope treated as an opaque leaf. A credential
+    field such as apiKey is permitted only when its entire value is a valid
+    envelope; do not reject its field name after validating the envelope.
+    An object containing $enc anywhere at its root must exactly match the
+    envelope schema (including no extra fields), otherwise INVALID_ENVELOPE.
+    At every other field, normalize its name to lowercase alphanumerics and
+    reject if it contains any of these exact case-insensitive substrings:
+    key, token, secret, password, authorization, cookie, headers, privatekey.
+    Common affected names include apiKey, voiceApiKey, accessToken,
+    refreshToken, clientToken, maxTokens, maxContextTokens,
+    hostKeyFingerprint, privateKey, headers, authorization, cookie,
+    password and secret. Clients should rename wire fields to outputLimit,
+    contextLimit and serverFingerprint, or encrypt the entire field. There is
+    no implicit allowlist for configuration kinds.
+    The exact value regular expressions are:
+      sk: (?i)\bsk-[A-Za-z0-9][A-Za-z0-9_-]{7,}\b
+      bearer: (?i)\bBearer[ \t]+[A-Za-z0-9._~+/=-]{8,}\b
+      jwt: \beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b
+      pem: -----BEGIN [A-Z0-9][A-Z0-9 ]+-----
+      url_userinfo: (?i)\b[a-z][a-z0-9+.-]*://[^/\s:@]+:[^/\s@]+@
+    A value matching any expression rejects the whole configuration item with
+    error.code=CONTAINS_SECRET and reason=contains_secret. Do not echo the
+    field, value, kind/key or path. `sk-` without at least eight token
+    characters, the word Bearer by itself, risk-averse, task-based,
+    desktop-first and ordinary prose do not match these value expressions.
+    A nonmatching field can still hide a novel secret; clients must encrypt
+    all credentials rather than treating the scanner as a security proof.
+    Messages and memories use the existing discard list, not this configuration
+    scanner. It must preserve the legitimate numeric usage fields
+    tokenUsage, inputTokens, outputTokens, reasoningTokens and cachedInputTokens
+    exactly as supplied; these are usage counts, not credentials. The discard
+    list must still remove API keys, auth tokens, headers, images, attachments,
+    search results and tool output. A secret-looking conversation_settings.systemPrompt
+    rejects only that settings item; other items in the same push continue.
+    For configuration tombstones value may be {}; identity and metadata are
+    still checked. Ordinary configs are whole-value LWW, never field merges.
+  reset: |
+    Under the user lock DELETE /sync/secrets removes crypto material and every
+    validated envelope value from settings, including nested object properties
+    and array elements, preserving other values and their relative array order.
+    Persist an empty crypto tombstone containing only identity/modified metadata
+    and value={}, not salt/wrappedDek/kdfParams. Allocate fresh sequences for
+    every changed row in bulk and increment secrets_epoch even if nothing existed.
+    Do not reset last_seq or epoch. The reset does not delete ordinary files.
+    A previously omitted secret field is now absent, not a readable empty secret.
+    A 0.2.0 client compares secrets_epoch on every pull, clears its cached DEK,
+    encrypted-field cache and pending encrypted writes before any re-upload,
+    then restarts pull at zero for configurations to see resets below its cursor.
+    It keeps nonsecret local data and never auto-recreates keys after a reset.
+    DELETE /sync/all clears crypto as well and increments both epochs.
+  logs_and_backups: |
+    No request/response bodies, envelopes, salt, wrappedDek, crypto material,
+    credentials, filenames or business user data in application/proxy logs,
+    traces, error capture, SQL parameter logging or operational email. Metrics
+    and logs contain only user hash, fixed route, timing, status, safe error type,
+    source location and request_id. Temporary uploads have no body logging.
+    Envelopes are allowed in the encrypted backup artifact: pg_dump is piped
+    directly to age, then stored on the local backup volume and copied to the
+    separate backup R2 bucket. The plaintext dump, age identity, passphrase and
+    decrypted dump never enter logs or traces. Application/proxy logs, SQL
+    parameter logs, error reporting and operational email still exclude request
+    bodies, envelopes, salt, wrappedDek and credentials. Existing production
+    backup scripts are absent from this repo; this is an integration requirement,
+    not a claim that the server is already backed up.
+x-crypto-test-vectors:
+  purpose: Cross-implementation verification for clients and server validators; all values are synthetic.
+  argon2id:
+    password_utf8: correct horse battery staple
+    salt_hex: 00112233445566778899aabbccddeeff
+    memoryKiB: 19456
+    iterations: 2
+    parallelism: 1
+    outputBytes: 32
+    expected_kek_hex: ccd958f3ead5af13ebc914232f7d0627baf8b4e8192ec2ba815443316cbf703d
+  aes256_gcm:
+    dek_hex: 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
+    nonce_hex: 202122232425262728292a2b
+    plaintext_utf8: sk-example-secret
+    aad_json: '["everytalk-sync","0.2.0","00000000-0000-4000-8000-000000000001","api_configs","80000000-0000-4000-8000-000000000099","/apiKey",1,0]'
+    aad_utf8_hex: 5b22657665727974616c6b2d73796e63222c22302e322e30222c2230303030303030302d303030302d343030302d383030302d303030303030303030303031222c226170695f636f6e66696773222c2238303030303030302d303030302d343030302d383030302d303030303030303030303939222c222f6170694b6579222c312c305d
+    expected_ciphertext_then_tag_hex: a1518b1514f9777e76196fbda47b869ca4ecfcf3dbe7ae706f6f9dd10ab53bcc02
+    expected_ct_base64: oVGLFRT5d352GW+9pHuGnKTs/PPb565wb2+d0Qq1O8wC
+  wrapped_dek:
+    kek_source: argon2id.expected_kek_hex
+    dek_hex: 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
+    nonce_hex: 303132333435363738393a3b
+    aad_utf8_hex: ''
+    expected_ciphertext_then_tag_hex: 55acdec63b978ba958a13c0844997065d2761f80d4e5a9c6aa59c3daca768cbdc3092a5c73ad3824c3f2d5d99d89afa7
+    expected_ct_base64: VazexjuXi6lYoTwIRJlwZdJ2H4DU5anGqlnD2sp2jL3DCSpcc604JMPy1dmdia+n
+  rules:
+    - Serialize AAD as the exact UTF-8 bytes of aad_json; no spaces, no trailing newline, and no alternate escaping.
+    - AES-GCM output is ciphertext followed by the 16-byte authentication tag.
+    - Base64 is standard padded RFC4648; compare decoded bytes as well as the textual form.
+
+x-file-policy:
+  transport: |
+    Authenticated server relay for both upload and download, not presigned
+    bearer URLs: each request checks JWT, ownership and revocation; the server
+    counts actual bytes and computes SHA-256 rather than trusting metadata or
+    ETag. A copied presigned URL grants temporary bearer access without another
+    JWT check, which conflicts with strict owner-only download/revocation.
+    R2 is private (no r2.dev/public custom domain), in a NEW bucket separate
+    from backups. Never accept client bucket names or object keys/remote URLs.
+    Use a bucket-scoped Object Read & Write S3 credential, never account admin.
+    An S3-compatible client library may be added only during implementation;
+    server relay costs bandwidth/CPU on this server but is simpler to bound
+    and revoke for files capped at 32 MiB. Download uses attachment disposition,
+    application/octet-stream, Cache-Control: private,no-store and nosniff.
+  defaults:
+    max_file_bytes: 33554432
+    user_quota_bytes: 2000000000
+    upload_ttl_seconds: 86400
+    unreferenced_file_ttl_seconds: 86400
+    max_pending_uploads_per_user: 8
+    upload_requests_per_minute: 10
+    max_concurrent_uploads_per_user: 2
+  lifecycle: |
+    POST /files/uploads reserves actual logical size under the existing user
+    lock and records a random fileId/object key BEFORE any R2 write. Unique
+    (user_id,sha256) deduplication never reveals another user's file. Used plus
+    reserved bytes may not exceed the quota. Same-user duplicates count once;
+    a differing size for an existing digest is HASH_METADATA_MISMATCH.
+    Idempotency-Key is a UUID per logical upload and binds the declared digest,
+    size and MIME; retries with changed metadata return IDEMPOTENCY_CONFLICT.
+    Concurrent same-digest requests reuse the pending reservation/upload id.
+    PUT streams to a bounded private temporary file (0600, external directory),
+    verifies exact size and SHA-256, then puts a single object in R2 and marks
+    it ready transactionally. No client-facing multipart upload or range resume
+    in 0.2.0: a retry restarts at byte zero, at most 32 MiB. A ready duplicate
+    PUT with identical content returns the same file id and never allocates
+    sync sequences. Mismatched retry bytes are rejected, never silently ignored.
+    On disconnect clear temporary data and release an active transfer lease;
+    retain the reservation until retry, cancellation or TTL. Only one writer
+    per upload; a competing PUT returns UPLOAD_IN_PROGRESS. All R2 object keys
+    have durable tracking, so crashes before/after PutObject can be reconciled.
+    Download is allowed only for an owned ready file. Another user's or deleted
+    file returns the same FILE_NOT_FOUND/404. JWT is never forwarded to R2.
+    attachments.fileId (non-null) and skills.value.fileRefs (UUID array) are the
+    ONLY declared references in 0.2.0; validate ownership and ready state before
+    a write. fileRefs is limited to 1024 unique IDs, includes the skill manifest
+    and every component file; the server does not scan manifest blobs for refs.
+    Skill scripts/binaries are separate files; a manifest may itself be a file
+    to keep settings small. Per-file cap still applies to skill binaries.
+    Files not referenced within the configured TTL are garbage-collected;
+    clients must link them in time or re-upload. Thumbnails are independent files
+    with their own sha256/fileId and attachment kind=thumbnail.
+  deletion: |
+    Session, message and attachment deletion clears affected payloads and file
+    references in the SAME sync transaction, with fresh bulk-reserved sequences.
+    Store indexed attachment message_id/session_id separately without requiring
+    arrival-order foreign keys. An attachment may arrive before its message;
+    it supplies sessionId too. Later message binding must agree; otherwise
+    MESSAGE_SESSION_MISMATCH/ATTACHMENT_PARENT_MISMATCH. Deleted message or
+    session rejects any later attachment content. This includes fileId backfill.
+    Session tombstones stay irreversible in 0.2.0; an attempted session revival
+    returns session_deleted to avoid exposing old attachment references.
+    Removing a skills.fileRefs reference also participates in the same refcount
+    update. A file shared by another live attachment or skill of THIS user is
+    retained. Different users never share an R2 object, even for identical hashes.
+    If the reference count becomes zero through deletion, mark the file deleting,
+    deny downloads/relinks immediately and enqueue a durable GC outbox entry in
+    the database transaction. DELETE /sync/all invalidates pending uploads,
+    releases all this user's refs and queues ALL owned R2 objects for deletion.
+    Preserve used/reserved quota until deletion is confirmed, to bound storage
+    even when R2 deletion is failing. A deleting digest cannot be reactivated
+    until the delete finishes; return FILE_DELETION_PENDING on retry.
+    An in-process worker uses durable leases and retry/backoff; no additional
+    systemd/cron schedule. It also expires unused uploads and temp files.
+    Do not hold an open DB transaction across R2 calls. Commit a deleting state
+    under the user lock first; new links are then rejected. Completion checks
+    object generation so delayed cleanup cannot delete a newly uploaded object.
+    R2 and PostgreSQL are not a distributed transaction: 204 means metadata
+    deletion/revocation/outbox committed, NOT proof that R2 is already empty.
+    R2 outages leave retryable cleanup tasks, never untracked permanent objects;
+    physical deletion is eventual after R2 recovers and a worker runs. Monitor
+    backlog/age and retry failures. Failed email alerts cannot mask task errors.
+x-message-additive-merge: |
+  For a live existing message, compare fields recursively after the message
+  discard list: equal existing values are allowed; absent object members
+  may be added. Existing null/false/empty string/empty object/array count as
+  present. Arrays are atomic: append/replace is not additive. Objects can gain
+  absent child keys, but existing types/leaves cannot change. Missing request
+  keys do not delete stored keys. If ANY supplied existing value conflicts,
+  reject the entire item with IMMUTABLE_FIELD; no partial additions. Apply size
+  and nesting limits to BOTH incoming and resulting payload before storage.
+  Additions allocate one new sequence; a retry with no additions is unchanged.
+  sessionId remains immutable. Deletion wins, empties payload and cascades to
+  attachments; deleted messages cannot be resurrected or enriched. Deleting an
+  existing message ignores submitted content and only writes an empty tombstone.
+x-required-tests-0-2:
+  - Missing or non-0.2.0 version headers return 426; every registry kind has exact-byte and one-byte-over tests, count boundaries, updates/deletes at the limit and concurrent admission.
+  - group_members and UUID-keyed pinned_items support delete then later revival, retaining canonical IDs; every unregistered kind is rejected.
+  - Configuration plaintext is rejected before sanitization; contains_secret reason is safe; field-name substring matches, encoded URL credentials, JWT, PEM and nested arrays are covered.
+  - Benign values not matching the exact heuristics pass; maxTokens/keyboardLayout/public PEM are documented conservative matches rather than silently allowlisted.
+  - Envelope format, exact properties, base64 canonical form, nonce/tag lengths, 8192-byte boundary, fake markers, keyVersion and epoch fencing are covered with synthetic data.
+  - Two-device crypto initialization cannot replace the winning DEK wrapper; no password, ciphertext or business data appears in logs or operational output.
+  - Additive merge covers absent/equal/conflicting leaves, nested objects, atomic arrays, present null, resulting size limits, concurrency and deletion irreversibility.
+  - Attachments can precede messages; parent mismatches, deleted parents, ownership and later fileId backfill are enforced.
+  - Files are streamed through authenticated HTTP; wrong user sees 404, invalid JWT sees 401, digest/size mismatch cannot finalize, same-user dedup never crosses users.
+  - Concurrent quota reservations, dedup, 32 MiB/configured limits, cancellation, restart, expiry and idempotent retries leave no untracked objects or double charge.
+  - Delete session/message/attachment/skill reference/all schedules R2 cleanup; shared refs survive, downloads revoke immediately, outage/crash paths retry safely without deleting a new generation.
+  - DELETE secrets clears nested envelopes and crypto, retains ordinary settings, preserves epoch/last_seq, advances sequences/secrets_epoch and blocks stale replay on another device.
+  - DELETE all increments both epochs, cancels pending upload finalization, fences late PUT completion, and preserves monotonic sequence allocation.
+  - Runtime regression uses src/db/client.ts through real HTTP/PostgreSQL; fake R2 transport and temp files need no production bucket or credential; run the same suite in CI.
 x-required-tests:
   - Deleting a session clears all its messages' payloads and allocates tombstone sequences in the same transaction.
   - After session deletion, its message content is unreadable; another user's data remains intact.
@@ -52,6 +354,8 @@ paths:
                 status: ok
                 service: everytalk-server
                 timestamp: '2026-10-14T18:30:00.000Z'
+        '500':
+          $ref: '#/components/responses/InternalError'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
 
@@ -60,6 +364,13 @@ paths:
       tags: [sync]
       summary: Push client changes
       operationId: pushSyncChanges
+      x-0-2-request-example:
+        $ref: '#/components/examples/ExtendedPush'
+      x-0-2-response-example:
+        $ref: '#/components/examples/ExtendedPushResult'
+      parameters:
+        - $ref: '#/components/parameters/SyncVersion'
+        - $ref: '#/components/parameters/SecretsEpoch'
       security:
         - supabaseBearer: []
       description: |
@@ -68,8 +379,10 @@ paths:
         accepted write. The client does not provide `user_id`, `created_at`,
         `updated_at`, or `server_seq`.
 
-        `messages` are append-only. An existing message ID is ignored unless
-        the request only changes `deleted` from false to true.
+        Messages use append-only semantics with additive merge: absent payload
+        fields may be added under x-message-additive-merge. Existing fields
+        cannot change; conflicting writes return rejected/IMMUTABLE_FIELD.
+        deleted is irreversible.
 
         When a sessions record is marked deleted=true, the same transaction
         marks all messages of that user's session deleted=true, clears each
@@ -82,8 +395,12 @@ paths:
         sync_state.last_seq = last_seq + N, then updates the messages in bulk.
         A later message push for a deleted session returns status: rejected
         with error.code: session_deleted; its content is never stored.
+        In 0.2.0 the cascade also tombstones attachments in bulk, clears their
+        payloads/file references and schedules unreferenced files for R2 GC.
+        Indexed attachment session_id/message_id supports out-of-order
+        arrivals without a foreign key or a JSONB scan.
 
-        For `sessions`, `memories`, and `user_settings`, the server compares
+        For sessions, memories, user_settings and 0.2.0 attachments, the server compares
         `payload.clientModifiedAt` to decide which change takes effect. A
         value later than the current server time is clamped to the current
         server time before comparison. The larger effective value wins, while
@@ -98,12 +415,23 @@ paths:
         server id differs from the client id, the result includes
         `canonical_id`, which the client must adopt. Pull always returns the
         server record id.
+        A deleted user_settings row may be revived by a later effective
+        clientModifiedAt and deleted=false; its canonical id remains unchanged.
+        An equal or older revival stays deleted. This supports removing and
+        re-adding a pin or group member. sessions, messages and attachments
+        never revive.
 
-        Allowed user_settings kinds are conversation_groups and pinned_items.
-        Other kinds return rejected. Renaming a group means deleting the old
-        key and creating a new key.
+        user_settings uses only the registered kinds in x-setting-registry.
+        Use group_members for group membership and one UUID-keyed pinned_items
+        row per conversation. An unregistered kind returns
+        rejected/INVALID_USER_SETTING_KIND. Each kind has an item size and
+        active-row limit. Renaming a group means deleting the old group-member
+        keys and creating new keys.
 
         A duplicate or unchanged item returns its existing sequence number.
+        A user_settings revival that has a later effective clientModifiedAt
+        returns accepted and a new sequence; an equal/older revival returns
+        unchanged with the tombstone sequence.
         Repeating the same sanitized mutable payload and deletion flag does
         not allocate another sequence, including retries of future timestamps.
         Individual message deletion also clears its payload to an empty object.
@@ -111,8 +439,21 @@ paths:
         message may use an empty payload; the stored session_id is retained.
         A message cannot be moved to another session.
 
-        Credential fields are discarded recursively, including API/voice keys,
-        MCP headers, authorization, access/refresh tokens, and secrets. Images,
+        Version 0.2.0 configuration values use strict encrypted envelopes and
+        secret scanning BEFORE sanitization, as specified by x-secret-policy.
+        A plaintext secret rejects the whole item with CONTAINS_SECRET and
+        reason=contains_secret; it is not silently dropped. Envelope fields
+        may use credential names when their entire value is a valid envelope.
+        crypto_keys creation is immutable after the first winner (exact retries
+        succeed); reset is explicit. Encrypted writes must match secrets_epoch.
+        Other settings remain whole-value LWW; no per-field configuration merge.
+        Attachments are separate LWW rows whose id is the outer id, with indexed
+        session/message bindings and optional ready owned fileId. Deleting an
+        attachment retains only a tombstone and removes its file reference.
+
+        Credential fields in messages and memories are discarded recursively,
+        including API/voice keys, MCP headers, authorization, access/refresh
+        tokens, and secrets. Images,
         attachments, search results, parts/contentParts, execution trace/steps,
         tool output, and pending messages are also discarded. Credential fields
         on the request or outer change are discarded; server-owned outer fields are ignored.
@@ -124,7 +465,7 @@ paths:
 
         Counters and clientModifiedAt use non-negative safe JSON integers
         (at most 9007199254740991). Exceeding the supported counter range is
-        an operational error; the transaction is rolled back with no writes.
+        an internal error (HTTP 500 with request_id); the transaction is rolled back with no writes.
 
         Each change is validated and processed independently. A malformed or
         semantically invalid individual change returns `status: rejected`
@@ -133,7 +474,11 @@ paths:
         entity and id are omitted when the input does not contain valid values. Only an oversized request body, an invalid overall
         request shape, or a missing/invalid access token rejects the whole
         request at validation time. Operational rate limiting still returns
-        429; database unavailability still returns 503.
+        429; a database connection failure returns 503. Unexpected internal errors
+        return 500 with a server-generated request_id. Error logs contain only
+        safe error types and source locations, never raw error messages, SQL,
+        payloads, credentials, tokens or email addresses.
+        This also excludes encrypted envelopes, filenames and SQL bind values.
 
         The default maximum is 500 changes and 1 MiB per request. The effective
         limits are configured by the server environment.
@@ -168,11 +513,11 @@ paths:
                   deleted: false
                   payload:
                     clientModifiedAt: 1792000006000
-                    kind: conversation_groups
-                    key: Work
+                    kind: group_members
+                    key: V29yaw.2f2d2a7c-8f4c-4c50-b9a2-58e6e2d1a101
                     value:
-                      conversationIds:
-                        - 2f2d2a7c-8f4c-4c50-b9a2-58e6e2d1a101
+                      groupName: Work
+                      conversationId: 2f2d2a7c-8f4c-4c50-b9a2-58e6e2d1a101
                 - entity: user_settings
                   id: 6c39a2ab-6543-479c-9b7c-9f9e4e0d2104
                   deleted: false
@@ -212,7 +557,7 @@ paths:
                     status: rejected
                     error:
                       code: INVALID_USER_SETTING_KIND
-                      message: kind must be conversation_groups or pinned_items.
+                      message: kind is not registered for sync.
         '401':
           $ref: '#/components/responses/Unauthorized'
         '413':
@@ -221,6 +566,8 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '429':
           $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
 
@@ -229,9 +576,11 @@ paths:
       tags: [sync]
       summary: Pull changes after a sequence number
       operationId: pullSyncChanges
+      x-response-example-version: '0.2.0'
       security:
         - supabaseBearer: []
       parameters:
+        - $ref: '#/components/parameters/SyncVersion'
         - name: since
           in: query
           required: true
@@ -258,6 +607,9 @@ paths:
             deletion tombstones. Epoch and rows are read from the same database
             snapshot. Empty pages preserve the requested cursor. A changed epoch
             means the client must discard its cloud snapshot and reconcile anew.
+            The 0.2.0 view includes attachments and all registered settings.
+            secrets_epoch comes from the same snapshot as changes and is always
+            present, including on an empty page.
           content:
             application/json:
               schema:
@@ -287,11 +639,11 @@ paths:
                     id: 04fd8fa5-4c91-4c44-888d-8d2f2d6f3303
                     payload:
                       clientModifiedAt: 1792000006000
-                      kind: conversation_groups
-                      key: Work
+                      kind: group_members
+                      key: V29yaw.2f2d2a7c-8f4c-4c50-b9a2-58e6e2d1a101
                       value:
-                        conversationIds:
-                          - 2f2d2a7c-8f4c-4c50-b9a2-58e6e2d1a101
+                        groupName: Work
+                        conversationId: 2f2d2a7c-8f4c-4c50-b9a2-58e6e2d1a101
                     created_at: '2026-10-14T18:30:03.000Z'
                     updated_at: '2026-10-14T18:30:03.000Z'
                     deleted: false
@@ -299,12 +651,15 @@ paths:
                 next_cursor: 43
                 has_more: true
                 epoch: 0
+                secrets_epoch: 0
         '401':
           $ref: '#/components/responses/Unauthorized'
         '422':
           $ref: '#/components/responses/ValidationError'
         '429':
           $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
 
@@ -313,6 +668,8 @@ paths:
       tags: [sync]
       summary: Permanently delete all synchronized data for the current user
       operationId: deleteAllSyncData
+      parameters:
+        - $ref: '#/components/parameters/SyncVersion'
       security:
         - supabaseBearer: []
       description: |
@@ -322,15 +679,293 @@ paths:
         no rows exist. Pull always returns epoch, including an empty result.
         Clients compare epoch to detect that cloud data was cleared. This
         operation is irreversible.
+        This applies to ALL versions of this user's rows: crypto_keys and
+        attachments are removed too. Increment secrets_epoch as well, invalidate pending
+        uploads and enqueue all owned objects for deletion in the same
+        transaction. Downloads are revoked at commit. 204 confirms this logical
+        deletion and durable GC scheduling, not completed physical R2 deletion.
+        R2 errors are retried through the outbox; never hide them in logs/metrics.
       responses:
         '204':
-          description: Sync rows deleted, last_seq preserved, and epoch incremented.
+          description: All versions of rows deleted, last_seq preserved, both epochs incremented, downloads revoked and durable R2 cleanup scheduled.
         '401':
           $ref: '#/components/responses/Unauthorized'
         '429':
           $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+
+  /sync/secrets:
+    delete:
+      tags: [sync]
+      summary: Remove encrypted configuration fields and reset encryption setup
+      operationId: deleteSyncSecrets
+      parameters:
+        - $ref: '#/components/parameters/SyncVersionRequired'
+      security:
+        - supabaseBearer: []
+      description: |
+        Version 0.2.0 only. Applies x-secret-policy.reset transactionally to
+        the authenticated user. Removes crypto material and ALL envelope leaves,
+        retains nonsecret configuration and file references, increments
+        secrets_epoch on every successful call (even if empty), reserves fresh
+        sequences in bulk and preserves last_seq monotonicity and epoch.
+        Empty crypto tombstone remains sync-visible, without any crypto values.
+        Different user data is never touched. A repeat DELETE is safe but is
+        another reset event; clients observe the latest secrets_epoch via pull.
+      responses:
+        '204':
+          description: Secret material removed and secrets_epoch incremented; call pull to observe the current epoch.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '426':
+          $ref: '#/components/responses/UnsupportedVersion'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /files/uploads:
+    post:
+      tags: [files]
+      summary: Reserve an upload or find an owned duplicate
+      operationId: createFileUpload
+      parameters:
+        - $ref: '#/components/parameters/SyncVersionRequired'
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: {type: string, format: uuid}
+          example: 70000000-0000-4000-8000-000000000001
+      security:
+        - supabaseBearer: []
+      description: |
+        Only same-user sha256 deduplication. Reserve quota once before granting
+        upload admission. Dedup and quota check share the user lock, and no
+        client-provided user_id, bucket, object key or download URL is accepted.
+        All reservations, ready or pending-deletion bytes count toward quota;
+        deleting an object does not refund quota before R2 deletion completes.
+        Return 200 for both a reused reservation and a new reservation; status
+        describes whether bytes must be PUT. Does not allocate server_seq.
+        Defaults are 32 MiB/file and 2,000,000,000 bytes/user (decimal 2 GB),
+        independently configurable. Pending upload count/concurrency and the
+        shared Redis per-user limit apply. Redis outage is fail-open; DB quota,
+        active reservations and transfer leases still apply.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateUploadRequest'}
+            example:
+              size: 6
+              mime: text/plain
+              sha256: '5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03'
+      responses:
+        '200':
+          description: Reservation or same-user ready file. No R2 object keys or signed URLs are exposed.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UploadTicket'}
+              examples:
+                uploadRequired:
+                  value:
+                    status: upload_required
+                    upload_id: 70000000-0000-4000-8000-000000000002
+                    file_id: 70000000-0000-4000-8000-000000000003
+                    upload_path: /files/uploads/70000000-0000-4000-8000-000000000002
+                    expires_at: '2026-10-16T18:30:00.000Z'
+                ownedDuplicate:
+                  value:
+                    status: ready
+                    file_id: 70000000-0000-4000-8000-000000000003
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '409':
+          description: Metadata conflict, in-flight deletion or idempotency-key reuse with different metadata.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorResponse'}
+              example: {error: {code: IDEMPOTENCY_CONFLICT, message: Upload metadata differs from the previous request.}}
+        '413': {$ref: '#/components/responses/FileTooLarge'}
+        '422': {$ref: '#/components/responses/ValidationError'}
+        '426': {$ref: '#/components/responses/UnsupportedVersion'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '503': {$ref: '#/components/responses/FileServiceUnavailable'}
+        '507': {$ref: '#/components/responses/QuotaExceeded'}
+
+  /files/uploads/{uploadId}:
+    parameters:
+      - name: uploadId
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+      - $ref: '#/components/parameters/SyncVersionRequired'
+    put:
+      tags: [files]
+      summary: Upload verified bytes through the authenticated server
+      operationId: putFileUpload
+      security:
+        - supabaseBearer: []
+      description: |
+        PUT the exact declared bytes (for the six-byte text example: hello
+        followed by LF). Content-Length is optional and untrusted; actual bytes
+        are counted while streaming. Verify the declared size and SHA-256 before
+        finalizing in R2. Retrying restarts the body at byte zero. A successful
+        response lost in transit can be recovered by retrying POST with the same
+        Idempotency-Key, or PUT with exactly the same bytes; dedup never charges
+        twice. Expired/cancelled/another user's ticket returns FILE_NOT_FOUND.
+        A concurrent PUT returns UPLOAD_IN_PROGRESS; no uploaded bytes reach sync
+        pull until a client explicitly links file_id from an attachment/skill.
+        R2 offline returns 503/R2_UNAVAILABLE; DB connection outage returns
+        503/SERVICE_UNAVAILABLE; other internal bugs return 500 with request_id.
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: {type: string, format: binary}
+            example: "hello\n"
+      responses:
+        '200':
+          description: Verified file is ready; attach this file_id before the unreferenced-file TTL.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/FileInfo'}
+              example:
+                file_id: 70000000-0000-4000-8000-000000000003
+                size: 6
+                sha256: '5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03'
+                mime: text/plain
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/FileNotFound'}
+        '409':
+          description: Another transfer holds this ticket or cleanup is pending.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorResponse'}
+              example: {error: {code: UPLOAD_IN_PROGRESS, message: An upload is already in progress.}}
+        '413': {$ref: '#/components/responses/FileTooLarge'}
+        '422':
+          description: Actual bytes fail FILE_SIZE_MISMATCH or HASH_MISMATCH; no ready file is published.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorResponse'}
+              example: {error: {code: HASH_MISMATCH, message: File digest does not match the declaration.}}
+        '426': {$ref: '#/components/responses/UnsupportedVersion'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '503': {$ref: '#/components/responses/FileServiceUnavailable'}
+    delete:
+      tags: [files]
+      summary: Cancel an owned pending upload
+      operationId: cancelFileUpload
+      security:
+        - supabaseBearer: []
+      description: |
+        Idempotent for an already-cancelled owned ticket. Cancel the reservation,
+        revoke the transfer lease and queue any tracked partial object for GC.
+        An expired/deleted or another user's ticket returns the same 404.
+        A finalized file cannot be removed through its upload ticket: return
+        409/UPLOAD_ALREADY_FINALIZED, and manage its references through sync.
+        No explicit new cron/systemd unit or real R2 configuration is created.
+      responses:
+        '204': {description: Pending upload cancelled; tracked R2 cleanup is durable.}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/FileNotFound'}
+        '409':
+          description: Upload already finalized and may be shared by live references.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorResponse'}
+              example: {error: {code: UPLOAD_ALREADY_FINALIZED, message: Manage finalized files through their references.}}
+        '426': {$ref: '#/components/responses/UnsupportedVersion'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+
+  /files/{fileId}:
+    get:
+      tags: [files]
+      summary: Download an owned ready file
+      operationId: downloadFile
+      parameters:
+        - $ref: '#/components/parameters/SyncVersionRequired'
+        - name: fileId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      security:
+        - supabaseBearer: []
+      description: |
+        Checks user_id on every request. No redirect or presigned URL. A missing,
+        unready, deleting, deleted or another user's id returns the same 404.
+        A ready unreferenced upload may be read only by its owner during its TTL.
+        R2 object keys never come from request URLs. A download already streaming
+        when a delete commits cannot retract bytes already delivered; future
+        requests are denied. The client writes to its own local path and maps
+        attachment IDs to that path; old devices' paths are never restored.
+        Binary transfer has independent byte limits and bypasses the JSON push
+        body limit, but shares per-user auth/rate controls. Range/resume is not
+        part of 0.2.0. An R2 failure before headers returns 503; after headers it
+        terminates the stream. Clients retry and verify size/SHA-256 themselves.
+      responses:
+        '200':
+          description: Exact verified file bytes, never rendered as active HTML.
+          headers:
+            Content-Disposition:
+              schema: {type: string}
+              example: attachment
+            Cache-Control:
+              schema: {type: string}
+              example: 'private, no-store'
+            X-Content-Type-Options:
+              schema: {type: string}
+              example: nosniff
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+              example: "hello\n"
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/FileNotFound'}
+        '426': {$ref: '#/components/responses/UnsupportedVersion'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '503': {$ref: '#/components/responses/FileServiceUnavailable'}
+
+  /files/quota:
+    get:
+      tags: [files]
+      summary: Read effective file limits and the caller's quota
+      operationId: readFileQuota
+      parameters:
+        - $ref: '#/components/parameters/SyncVersionRequired'
+      security:
+        - supabaseBearer: []
+      description: |
+        Values include ready and pending-deletion bytes (used_bytes), pending
+        reservations (reserved_bytes) and remaining admission capacity. A byte
+        is counted in used OR reserved, never twice; dedup references are free.
+        Limits are runtime configuration, not hardcoded client constants.
+      responses:
+        '200':
+          description: Current user's committed usage and effective file limits.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/FileQuota'}
+              example:
+                max_file_bytes: 33554432
+                quota_bytes: 2000000000
+                used_bytes: 6
+                reserved_bytes: 0
+                available_bytes: 1999999994
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '426': {$ref: '#/components/responses/UnsupportedVersion'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
 
   /v1/chat:
     post:
@@ -348,6 +983,8 @@ paths:
               type: object
               additionalProperties: true
       responses:
+        '500':
+          $ref: '#/components/responses/InternalError'
         '501':
           description: The model proxy is not implemented in the first version.
           content:
@@ -362,6 +999,189 @@ paths:
           $ref: '#/components/responses/Unauthorized'
 
 components:
+  examples:
+    ExtendedPush:
+      summary: 0.2.0 batch; send version header and X-EveryTalk-Secrets-Epoch=0
+      description: |
+        The attached-file example uses a six-byte hello+LF payload. File id and
+        checksum match its examples. Ciphertext is synthetic, canonical base64
+        for format illustration; it does not encode a real account credential.
+        For simplicity secrets_epoch=0 and crypto version=1. A second batch
+        adds absent message fields; it does not replace existing text.
+      value:
+        changes:
+          - entity: user_settings
+            id: 80000000-0000-4000-8000-000000000001
+            deleted: false
+            payload:
+              clientModifiedAt: 1792089000000
+              kind: crypto_keys
+              key: default
+              value:
+                version: 1
+                kdf: argon2id
+                kdfParams: {memoryKiB: 65536, iterations: 3, parallelism: 1, outputBytes: 32}
+                salt: AAECAwQFBgcICQoLDA0ODw==
+                wrappedDek:
+                  '$enc': 1
+                  alg: AES-256-GCM
+                  nonce: AAECAwQFBgcICQoL
+                  ct: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4v
+                  keyVersion: 1
+          - entity: user_settings
+            id: 80000000-0000-4000-8000-000000000002
+            deleted: false
+            payload:
+              clientModifiedAt: 1792089000001
+              kind: api_configs
+              key: 80000000-0000-4000-8000-000000000099
+              value:
+                name: Personal model
+                address: https://models.example.invalid/v1
+                model: example-model
+                outputLimit: 4096
+                apiKey:
+                  '$enc': 1
+                  alg: AES-256-GCM
+                  nonce: DA0ODxAREhMUFRYX
+                  ct: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=
+                  keyVersion: 1
+          - entity: user_settings
+            id: 80000000-0000-4000-8000-000000000008
+            deleted: false
+            payload:
+              clientModifiedAt: 1792089000008
+              kind: selected_models
+              key: web_search
+              value: {providerId: tavily}
+          - entity: user_settings
+            id: 80000000-0000-4000-8000-000000000009
+            deleted: false
+            payload:
+              clientModifiedAt: 1792089000009
+              kind: memory_switches
+              key: default
+              value: {memoryEnabled: true, autoCaptureEnabled: false}
+          - entity: sessions
+            id: 2f2d2a7c-8f4c-4c50-b9a2-58e6e2d1a101
+            deleted: false
+            payload: {clientModifiedAt: 1792089000002, title: File example, isImageGeneration: false}
+          - entity: messages
+            id: 5a0fcaaf-a1ae-447d-9ae0-5b4c6fc8c202
+            deleted: false
+            payload:
+              sessionId: 2f2d2a7c-8f4c-4c50-b9a2-58e6e2d1a101
+              sender: User
+              text: See the attached note.
+          - entity: attachments
+            id: 80000000-0000-4000-8000-000000000003
+            deleted: false
+            payload:
+              clientModifiedAt: 1792089000003
+              sessionId: 2f2d2a7c-8f4c-4c50-b9a2-58e6e2d1a101
+              messageId: 5a0fcaaf-a1ae-447d-9ae0-5b4c6fc8c202
+              name: note.txt
+              mime: text/plain
+              size: 6
+              sha256: '5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03'
+              fileId: 70000000-0000-4000-8000-000000000003
+              kind: file
+          - entity: user_settings
+            id: 80000000-0000-4000-8000-000000000004
+            deleted: false
+            payload:
+              clientModifiedAt: 1792089000004
+              kind: group_members
+              key: V29yaw.2f2d2a7c-8f4c-4c50-b9a2-58e6e2d1a101
+              value: {groupName: Work, conversationId: 2f2d2a7c-8f4c-4c50-b9a2-58e6e2d1a101}
+          - entity: user_settings
+            id: 80000000-0000-4000-8000-000000000005
+            deleted: false
+            payload:
+              clientModifiedAt: 1792089000005
+              kind: pinned_items
+              key: 2f2d2a7c-8f4c-4c50-b9a2-58e6e2d1a101
+              value: {}
+          - entity: user_settings
+            id: 80000000-0000-4000-8000-000000000006
+            deleted: false
+            payload:
+              clientModifiedAt: 1792089000006
+              kind: conversation_settings
+              key: 2f2d2a7c-8f4c-4c50-b9a2-58e6e2d1a101
+              value:
+                modelId: 80000000-0000-4000-8000-000000000099
+                webSearchEnabled: true
+                mcpEnabled: false
+                agentEnabled: false
+                computerId: null
+                systemPrompt: Answer concisely.
+          - entity: user_settings
+            id: 80000000-0000-4000-8000-000000000007
+            deleted: false
+            payload:
+              clientModifiedAt: 1792089000007
+              kind: mcp_servers
+              key: 80000000-0000-4000-8000-000000000098
+              value: {name: Unsafe example, headers: {Authorization: 'Bearer synthetic-example'}}
+    ExtendedPushResult:
+      summary: Corresponding per-item results; cascaded tombstones consume sequences
+      value:
+        results:
+          - {index: 0, entity: user_settings, id: 80000000-0000-4000-8000-000000000001, status: accepted, server_seq: 101}
+          - {index: 1, entity: user_settings, id: 80000000-0000-4000-8000-000000000002, canonical_id: 80000000-0000-4000-8000-000000000022, status: accepted, server_seq: 102}
+          - {index: 2, entity: user_settings, id: 80000000-0000-4000-8000-000000000008, status: accepted, server_seq: 103}
+          - {index: 3, entity: user_settings, id: 80000000-0000-4000-8000-000000000009, status: accepted, server_seq: 104}
+          - {index: 4, entity: sessions, id: 2f2d2a7c-8f4c-4c50-b9a2-58e6e2d1a101, status: accepted, server_seq: 105}
+          - {index: 5, entity: messages, id: 5a0fcaaf-a1ae-447d-9ae0-5b4c6fc8c202, status: accepted, server_seq: 106}
+          - {index: 6, entity: attachments, id: 80000000-0000-4000-8000-000000000003, status: accepted, server_seq: 107}
+          - {index: 7, entity: user_settings, id: 80000000-0000-4000-8000-000000000004, status: accepted, server_seq: 108}
+          - {index: 8, entity: user_settings, id: 80000000-0000-4000-8000-000000000005, status: accepted, server_seq: 109}
+          - {index: 9, entity: user_settings, id: 80000000-0000-4000-8000-000000000006, status: accepted, server_seq: 110}
+          - index: 10
+            entity: user_settings
+            id: 80000000-0000-4000-8000-000000000007
+            status: rejected
+            reason: contains_secret
+            error: {code: CONTAINS_SECRET, message: Configuration contains an unencrypted credential.}
+    AdditiveMessage:
+      summary: Add reasoning without editing existing text
+      value:
+        changes:
+          - entity: messages
+            id: 5a0fcaaf-a1ae-447d-9ae0-5b4c6fc8c202
+            deleted: false
+            payload:
+              sessionId: 2f2d2a7c-8f4c-4c50-b9a2-58e6e2d1a101
+              reasoning: Newly available reasoning.
+    ResetObserved:
+      summary: Other device observes a secrets reset even on an empty page
+      value: {changes: [], next_cursor: 160, has_more: false, epoch: 0, secrets_epoch: 1}
+  parameters:
+    SyncVersion:
+      name: X-EveryTalk-Sync-Version
+      in: header
+      required: true
+      description: Required on every sync endpoint. Missing or any value other than 0.2.0 returns 426 after authentication.
+      schema: {type: string, const: '0.2.0'}
+      example: '0.2.0'
+    SyncVersionRequired:
+      name: X-EveryTalk-Sync-Version
+      in: header
+      required: true
+      description: Required on every sync and file endpoint; missing or any value other than 0.2.0 returns 426. Authentication failures always remain 401.
+      schema: {type: string, const: '0.2.0'}
+      example: '0.2.0'
+    SecretsEpoch:
+      name: X-EveryTalk-Secrets-Epoch
+      in: header
+      required: false
+      description: |
+        Required for crypto creation and any envelope-bearing change. Compare
+        to current per-user secrets_epoch under the sync lock. Missing/mismatch
+        rejects only affected items; plaintext-free items are still processed.
+      schema: {type: integer, minimum: 0, maximum: 9007199254740991}
+      example: 0
   securitySchemes:
     supabaseBearer:
       type: http
@@ -388,7 +1208,8 @@ components:
 
     SyncEntity:
       type: string
-      enum: [sessions, messages, memories, user_settings]
+      enum: [sessions, messages, memories, user_settings, attachments]
+      description: attachments is part of the 0.2.0 view.
 
     SyncPayload:
       allOf:
@@ -401,36 +1222,208 @@ components:
               minimum: 0
               maximum: 9007199254740991
               description: |
-                Unix milliseconds; required for sessions, memories, and user_settings. The server
+                Unix milliseconds; required for sessions, memories, user_settings and attachments. The server
                 compares min(clientModifiedAt, current_server_time).
           description: |
-            Business payload. For sessions, memories, and user_settings,
+            Business payload. For sessions, memories, user_settings and attachments,
             clientModifiedAt is required and is never allowed to advance past
             the server clock. Equal effective values are won by the later arrival.
 
-    UserSettingPayload:
+    RegisteredUserSettingPayload:
       type: object
       additionalProperties: true
       required: [clientModifiedAt, kind, key, value]
       properties:
         clientModifiedAt:
           type: integer
-          format: int64
           minimum: 0
           maximum: 9007199254740991
         kind:
           type: string
-          enum: [conversation_groups, pinned_items]
+          enum: [api_configs, selected_models, web_search_configs, voice_configs, voice_llm_platforms, voice_custom_models, mcp_servers, skills, skill_variables, computers, computer_workspaces, conversation_settings, memory_switches, group_members, pinned_items, crypto_keys]
         key:
           type: string
           minLength: 1
+          description: See x-setting-registry.key_rules; limits are UTF-8 bytes, not characters.
+        value:
+          type: object
+          additionalProperties: true
           description: |
-            Must contain 1-512 UTF-8 bytes. For conversation_groups this is the group name. Renaming a group
-            is represented by deleting the old key and creating a new key.
-        value: {}
+            Business configuration kept opaque except declared crypto, identity
+            and file reference rules. Any property value can be an envelope.
+            Other unknown value fields are allowed only after secret scanning.
       description: |
-        The logical identity is (authenticated user id, kind, key). Other
-        kind values are rejected at item level.
+        Only with header 0.2.0. Entire payload limits and per-kind counts are
+        normative in x-setting-registry, not inferred from JSON Schema lengths.
+        Field names in value are scanned before sanitization; metadata kind/key
+        and validated crypto structures are specifically exempt.
+        For memory_switches/default, value contains exactly the booleans
+        memoryEnabled and autoCaptureEnabled; other fields are rejected.
+        A live deleted=false write with a later clientModifiedAt revives a
+        deleted row; the same or older value does not.
+      allOf:
+        - if:
+            properties: {kind: {const: crypto_keys}}
+          then:
+            properties:
+              key: {const: default}
+              value: {$ref: '#/components/schemas/CryptoKeysValue'}
+        - if:
+            properties: {kind: {const: conversation_settings}}
+          then:
+            properties:
+              key: {type: string, format: uuid}
+        - if:
+            properties: {kind: {const: memory_switches}}
+          then:
+            properties:
+              key: {const: default}
+              value:
+                type: object
+                additionalProperties: false
+                required: [memoryEnabled, autoCaptureEnabled]
+                properties:
+                  memoryEnabled: {type: boolean}
+                  autoCaptureEnabled: {type: boolean}
+        - if:
+            properties: {kind: {const: group_members}}
+          then:
+            properties:
+              key: {type: string, pattern: '^[A-Za-z0-9_-]+\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'}
+              value: {$ref: '#/components/schemas/GroupMemberValue'}
+        - if:
+            properties: {kind: {const: pinned_items}}
+          then:
+            properties:
+              key: {type: string, format: uuid}
+        - if:
+            properties: {kind: {const: skills}}
+          then:
+            properties:
+              value:
+                type: object
+                properties:
+                  fileRefs:
+                    type: array
+                    maxItems: 1024
+                    uniqueItems: true
+                    items: {type: string, format: uuid}
+                    description: Explicit references to every owned ready component file, including manifest if stored as a file.
+
+    ConfigurationTombstonePayload:
+      type: object
+      additionalProperties: false
+      required: [clientModifiedAt, kind, key, value]
+      properties:
+        clientModifiedAt: {type: integer, minimum: 0, maximum: 9007199254740991}
+        kind: {$ref: '#/components/schemas/RegisteredUserSettingPayload/properties/kind'}
+        key: {type: string, minLength: 1}
+        value: {type: object, maxProperties: 0}
+      description: |
+        Only for deleted=true, not a bypass for live config/crypto validation.
+        crypto_keys deletion through push is rejected; reset creates its tombstone.
+        Key identity/UTF-8 limits still apply, and current rows determine any
+        file references to release rather than trusting a submitted empty value.
+
+    EncryptedEnvelope:
+      type: object
+      additionalProperties: false
+      required: ['$enc', alg, nonce, ct, keyVersion]
+      properties:
+        '$enc': {type: integer, const: 1}
+        alg: {type: string, const: AES-256-GCM}
+        nonce:
+          type: string
+          contentEncoding: base64
+          pattern: '^[A-Za-z0-9+/]{16}$'
+          description: Exactly 12 decoded bytes; canonical standard base64.
+        ct:
+          type: string
+          contentEncoding: base64
+          minLength: 24
+          maxLength: 8192
+          pattern: '^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$'
+          description: |
+            At least 16 decoded bytes (GCM tag), ciphertext followed by tag.
+            Runtime additionally checks canonical padding/unused bits, decode
+            length and <=8192 UTF-8 bytes for the ENTIRE compact envelope object.
+        keyVersion: {type: integer, minimum: 1, maximum: 9007199254740991}
+      description: |
+        Strict leaf. Any extra property or invalid marker/base64/size is rejected.
+        The service validates format only, never decrypts or verifies the tag.
+        Synthetic example bytes illustrate shape, not usable encryption material.
+      example:
+        '$enc': 1
+        alg: AES-256-GCM
+        nonce: AAECAwQFBgcICQoL
+        ct: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=
+        keyVersion: 1
+
+    CryptoKeysValue:
+      type: object
+      additionalProperties: false
+      required: [version, kdf, kdfParams, salt, wrappedDek]
+      properties:
+        version: {type: integer, minimum: 1, maximum: 9007199254740991}
+        kdf: {type: string, const: argon2id}
+        kdfParams:
+          type: object
+          additionalProperties: false
+          required: [memoryKiB, iterations, parallelism, outputBytes]
+          properties:
+            memoryKiB: {type: integer, minimum: 8192, maximum: 262144, example: 65536}
+            iterations: {type: integer, minimum: 1, maximum: 10, example: 3}
+            parallelism: {type: integer, minimum: 1, maximum: 4, example: 1}
+            outputBytes: {type: integer, const: 32}
+        salt:
+          type: string
+          contentEncoding: base64
+          pattern: '^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$'
+          description: Canonical base64 decoding to 16-32 bytes; generated on client.
+        wrappedDek:
+          $ref: '#/components/schemas/EncryptedEnvelope'
+      description: |
+        wrappedDek.ct must decode to exactly 48 bytes (32-byte DEK plus GCM tag).
+        wrappedDek.keyVersion must equal version; version must equal current
+        secrets_epoch+1 at creation. KDF parameters are bounded for receiving
+        device safety, not server computation. No plaintext DEK, password or
+        KEK accepted. Recommended new-client parameters are 65536 KiB, 3, 1.
+
+    GroupMemberValue:
+      type: object
+      additionalProperties: true
+      required: [groupName, conversationId]
+      properties:
+        groupName: {type: string, minLength: 1}
+        conversationId: {type: string, format: uuid}
+      description: Key must exactly encode these two fields; both are routing identity, not credential material.
+
+    AttachmentPayload:
+      type: object
+      additionalProperties: true
+      required: [clientModifiedAt, sessionId, messageId, name, mime, size, sha256, fileId, kind]
+      properties:
+        clientModifiedAt: {type: integer, minimum: 0, maximum: 9007199254740991}
+        sessionId: {type: string, format: uuid}
+        messageId: {type: string, format: uuid}
+        name: {type: string, maxLength: 255, description: 'Display name only; no filesystem path, CR/LF or control characters.'}
+        mime: {type: string, maxLength: 127}
+        size: {type: integer, minimum: 1, maximum: 9007199254740991}
+        sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+        fileId: {type: [string, 'null'], format: uuid}
+        kind: {type: string, enum: [image, file, audio, thumbnail]}
+      description: |
+        id is the outer sync UUID; all business fields stay in payload. sessionId
+        is additionally required so the server can cascade when messages arrive
+        later. No arrival-order FK. messageId/sessionId cannot be changed on an
+        existing attachment. Other fields use clamped clientModifiedAt LWW;
+        fileId can be backfilled. Non-null fileId must be owned and ready and
+        match size/sha256. MIME is a client declaration, not trusted active content.
+        fileId=null means bytes are not yet uploaded; metadata can still sync.
+        Raw attachment payload limit defaults to 4096 bytes; size metadata may
+        exceed the effective upload cap with fileId=null, but upload still fails
+        FILE_TOO_LARGE. A thumbnail is a separate attachment referencing the
+        same message. A deleted attachment pulls payload={} and never revives.
 
     PushChange:
       type: object
@@ -454,7 +1447,7 @@ components:
         - if:
             properties:
               entity:
-                enum: [sessions, memories, user_settings]
+                enum: [sessions, memories, user_settings, attachments]
           then:
             properties:
               payload:
@@ -463,14 +1456,35 @@ components:
             properties:
               entity:
                 const: user_settings
+              deleted: {const: false}
           then:
             properties:
               payload:
-                $ref: '#/components/schemas/UserSettingPayload'
+                anyOf:
+                  - $ref: '#/components/schemas/RegisteredUserSettingPayload'
+        - if:
+            properties:
+              entity: {const: user_settings}
+              deleted: {const: true}
+          then:
+            properties:
+              payload:
+                anyOf:
+                  - $ref: '#/components/schemas/ConfigurationTombstonePayload'
+        - if:
+            properties:
+              entity: {const: attachments}
+              deleted: {const: false}
+          then:
+            properties:
+              payload: {$ref: '#/components/schemas/AttachmentPayload'}
       description: |
         Client supplied change. `user_id`, `created_at`, `updated_at`, and
         `server_seq` are never accepted from the client. Sensitive credential
-        fields are removed from payload before storage. For user_settings,
+        Message and memory fields use their defined discard list; 0.2.0 configs
+        enforce x-secret-policy before storage. The applicable payload schema
+        is selected by entity and the 0.2.0 contract.
+        For user_settings,
         payload.kind and payload.key are required non-empty strings and form
         the logical key together with the authenticated user's id. For a new
         message, payload.sessionId must be a UUID. An existing message delete
@@ -526,13 +1540,14 @@ components:
           properties:
             code:
               type: string
-              enum: [INVALID_CHANGE, MESSAGE_PAYLOAD_TOO_LARGE, INVALID_PAYLOAD, INVALID_CLIENT_MODIFIED_AT, INVALID_USER_SETTING_KIND, INVALID_USER_SETTING, INVALID_SESSION_ID, SETTING_ID_CONFLICT, MESSAGE_SESSION_MISMATCH, session_deleted]
+              enum: [INVALID_CHANGE, MESSAGE_PAYLOAD_TOO_LARGE, INVALID_PAYLOAD, INVALID_CLIENT_MODIFIED_AT, INVALID_USER_SETTING_KIND, INVALID_USER_SETTING, INVALID_SESSION_ID, SETTING_ID_CONFLICT, MESSAGE_SESSION_MISMATCH, session_deleted, SETTING_PAYLOAD_TOO_LARGE, SETTING_COUNT_EXCEEDED, CONTAINS_SECRET, INVALID_ENVELOPE, INVALID_CRYPTO_KEYS, CRYPTO_KEY_CONFLICT, CRYPTO_KEY_VERSION_MISMATCH, SECRETS_EPOCH_MISMATCH, IMMUTABLE_FIELD, INVALID_ATTACHMENT, ATTACHMENT_PAYLOAD_TOO_LARGE, ATTACHMENT_PARENT_MISMATCH, message_deleted, FILE_NOT_FOUND, FILE_NOT_READY, FILE_METADATA_MISMATCH, FILE_DELETION_PENDING]
             message:
               type: string
               description: Safe validation reason; never echoes chat content or credentials.
         reason:
           type: string
-          enum: [duplicate_message, message_is_append_only, already_deleted, no_server_change]
+          enum: [duplicate_message, message_is_append_only, already_deleted, no_server_change, contains_secret]
+          description: contains_secret accompanies rejected/CONTAINS_SECRET; no sensitive value or matching field name is returned.
 
       allOf:
         - if:
@@ -586,7 +1601,7 @@ components:
     PullResponse:
       type: object
       additionalProperties: false
-      required: [changes, next_cursor, has_more, epoch]
+      required: [changes, next_cursor, has_more, epoch, secrets_epoch]
       properties:
         changes:
           type: array
@@ -602,6 +1617,65 @@ components:
           format: int64
           minimum: 0
           description: Per-user generation, initially zero; increments after each delete-all.
+        secrets_epoch:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 9007199254740991
+          description: |
+            Additive field, always present for negotiated 0.2.0 (including empty
+            pages). Increments on DELETE secrets and DELETE all. Does not replace
+            epoch or next_cursor.
+
+    CreateUploadRequest:
+      type: object
+      additionalProperties: false
+      required: [size, sha256, mime]
+      properties:
+        size:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+          description: Declared bytes; server applies configured max_file_bytes, not the JSON integer maximum.
+        sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+        mime: {type: string, minLength: 1, maxLength: 127}
+
+    UploadTicket:
+      type: object
+      additionalProperties: false
+      required: [status, file_id]
+      properties:
+        status: {type: string, enum: [upload_required, ready]}
+        file_id: {type: string, format: uuid}
+        upload_id: {type: string, format: uuid}
+        upload_path: {type: string, description: Relative path on this authenticated server, never a presigned R2 URL.}
+        expires_at: {type: string, format: date-time}
+      allOf:
+        - if:
+            properties: {status: {const: upload_required}}
+          then:
+            required: [upload_id, upload_path, expires_at]
+
+    FileInfo:
+      type: object
+      additionalProperties: false
+      required: [file_id, size, sha256, mime]
+      properties:
+        file_id: {type: string, format: uuid}
+        size: {type: integer, minimum: 1, maximum: 9007199254740991}
+        sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+        mime: {type: string}
+
+    FileQuota:
+      type: object
+      additionalProperties: false
+      required: [max_file_bytes, quota_bytes, used_bytes, reserved_bytes, available_bytes]
+      properties:
+        max_file_bytes: {type: integer, minimum: 1, maximum: 9007199254740991}
+        quota_bytes: {type: integer, minimum: 1, maximum: 9007199254740991}
+        used_bytes: {type: integer, minimum: 0, maximum: 9007199254740991}
+        reserved_bytes: {type: integer, minimum: 0, maximum: 9007199254740991}
+        available_bytes: {type: integer, minimum: 0, maximum: 9007199254740991}
 
     HealthResponse:
       type: object
@@ -616,6 +1690,15 @@ components:
         timestamp:
           type: string
           format: date-time
+
+    InternalErrorResponse:
+      allOf:
+        - $ref: '#/components/schemas/ErrorResponse'
+        - type: object
+          properties:
+            error:
+              type: object
+              required: [request_id]
 
     ErrorResponse:
       type: object
@@ -633,8 +1716,39 @@ components:
               type: string
             request_id:
               type: string
+              format: uuid
 
   responses:
+    UnsupportedVersion:
+      description: Explicit version unsupported, or this new endpoint requires 0.2.0.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+          example: {error: {code: UNSUPPORTED_SYNC_VERSION, message: This endpoint requires sync protocol 0.2.0.}}
+    FileTooLarge:
+      description: Declared or streamed bytes exceed configured FILE_MAX_BYTES; no ready object is published.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+          example: {error: {code: FILE_TOO_LARGE, message: File exceeds the configured per-file limit.}}
+    QuotaExceeded:
+      description: Used plus reserved bytes plus this new digest exceed FILE_USER_QUOTA_BYTES; no reservation is created.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+          example: {error: {code: QUOTA_EXCEEDED, message: User file quota exceeded.}}
+    FileNotFound:
+      description: Missing, unready, revoked, expired or owned by a different user; indistinguishable 404.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+          example: {error: {code: FILE_NOT_FOUND, message: File or upload not found.}}
+    FileServiceUnavailable:
+      description: Database connectivity failure or R2 network/provider unavailability; invalid server credentials/configuration are internal errors (500).
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
+          example: {error: {code: R2_UNAVAILABLE, message: File storage temporarily unavailable.}}
     Unauthorized:
       description: Missing, invalid, expired, or otherwise unacceptable Supabase access token.
       content:
@@ -680,8 +1794,19 @@ components:
             error:
               code: RATE_LIMITED
               message: Too many synchronization requests.
+    InternalError:
+      description: Unexpected internal error; includes a server-generated request_id for matching sanitized server logs. No internal details are exposed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/InternalErrorResponse'
+          example:
+            error:
+              code: INTERNAL_ERROR
+              message: Internal server error.
+              request_id: 'c575bce5-08de-4700-b162-5630b278aeb9'
     ServiceUnavailable:
-      description: Required PostgreSQL service is unavailable.
+      description: Required database connection is refused, lost, timed out, or the database is shutting down/starting up. Programming errors and SQL/configuration errors return 500. Redis connection failures bypass rate limiting with a warning instead of failing synchronization.
       content:
         application/json:
           schema:
