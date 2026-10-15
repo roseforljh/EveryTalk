@@ -20,10 +20,12 @@ class SyncContractTest {
         strings.forEach { scalar(block, it)?.let { value -> put(it, value) } }
         numbers.forEach { scalar(block, it)?.let { value -> put(it, value.toLong()) } }
         scalar(block, "isImageGeneration")?.let { put("isImageGeneration", it.toBooleanStrict()) }
-        if (block.contains("conversationIds:")) {
-            val id = Regex("conversationIds:\\s+ - ([0-9a-f-]+)").find(block)?.groupValues?.get(1)
-                ?: Regex("conversationIds:\\s+- ([0-9a-f-]+)").find(block)!!.groupValues[1]
-            put("value", buildJsonObject { put("conversationIds", JsonArray(listOf(JsonPrimitive(id)))) })
+        if (block.contains("conversationId:")) {
+            val id = scalar(block, "conversationId") ?: return@buildJsonObject
+            put("value", buildJsonObject {
+                put("groupName", scalar(block, "groupName") ?: "Work")
+                put("conversationId", id)
+            })
         }
     }
     private fun blocks(example: String, marker: String): List<String> {

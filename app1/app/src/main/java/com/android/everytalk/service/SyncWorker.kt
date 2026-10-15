@@ -12,10 +12,13 @@ import com.android.everytalk.util.AppLogger
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.collectLatest
 
 /**
  * Worker 使用与 UI 相同的认证实例。LocalOnly/SessionExpired 不刷新、不上传，
- * 账号绑定、用户开关与限流截止时间在每次请求前复查。
+ * 账号绑定、云端清空暂停与限流截止时间在每次请求前复查。
  */
 class SyncWorker(context: Context, parameters: WorkerParameters) : CoroutineWorker(context, parameters) {
     override suspend fun doWork(): Result {
@@ -31,13 +34,21 @@ class SyncWorker(context: Context, parameters: WorkerParameters) : CoroutineWork
         if (!syncServerConfigured(BuildConfig.EVERYTALK_SYNC_BASE_URL) || !permitted()) return Result.success()
         // 不占用 Worker 睡眠；截止时间跨重启持久化，WorkManager 指数退避后仍不得提前请求。
         if (state.retryAt() > System.currentTimeMillis()) return Result.retry()
+        val secrets = SyncSecretManager(applicationContext)
         val api = KtorSyncApi(BuildConfig.EVERYTALK_SYNC_BASE_URL, runtime.account,
             isLocalOnly = { runtime.auth.state.value !is AuthState.SignedIn },
             canRequest = { permitted() })
         return try {
-            when (SyncEngine(api, RoomSyncStore(db), state, ::permitted).runOnce()) {
+            when (SyncEngine(
+                api = api,
+                store = RoomSyncStore(db, secrets, user.id),
+                state = state,
+                canSync = ::permitted,
+                onSecretsEpochChanged = { secrets.clearCachedDek() },
+            ).runOnce()) {
                 SyncRunResult.MoreWork -> Result.retry()
-                else -> { state.clearRetry(); Result.success() }
+                SyncRunResult.Completed -> { state.markSyncCompleted(); state.clearRetry(); Result.success() }
+                else -> Result.success()
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -73,14 +84,25 @@ object SyncScheduler {
         val app = context.applicationContext
         if (observer != null) return
         val db = AppDatabase.getDatabase(app)
-        observer = object : InvalidationTracker.Observer("chat_sessions", "messages", "memories", "user_settings") {
+        observer = object : InvalidationTracker.Observer(
+            "chat_sessions", "messages", "memories", "user_settings", "api_configs", "voice_backend_configs",
+            "mcp_server_configs", "computers", "computer_workspaces", "system_settings", "skill_installations",
+        ) {
             override fun onInvalidated(tables: Set<String>) { request(app, dataChanged = true) }
         }.also { db.invalidationTracker.addObserver(it) }
         scope.launch {
             val runtime = AuthRuntime.get(app)
             runtime.auth.startup.first { it.initialized }
-            runtime.auth.state.collect { auth ->
-                if (auth is AuthState.SignedIn) request(app) else cancel(app)
+            runtime.auth.state.map { (it as? AuthState.SignedIn)?.user?.id }.distinctUntilChanged().collectLatest { accountId ->
+                if (accountId == null) {
+                    cancel(app)
+                } else if (syncServerConfigured(BuildConfig.EVERYTALK_SYNC_BASE_URL)) {
+                    // 在防抖任务之外准备历史数据，防止 Room 变更回调取消正在准备的事务。
+                    val ready = SyncStateStore(db).prepareAutomaticAccount(accountId, runtime.binding) {
+                        (runtime.auth.state.value as? AuthState.SignedIn)?.user?.id == accountId
+                    }
+                    if (ready) request(app)
+                }
             }
         }
     }

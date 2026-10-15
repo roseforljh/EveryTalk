@@ -6,72 +6,75 @@ import com.android.everytalk.data.auth.*
 import com.android.everytalk.data.database.AppDatabase
 import com.android.everytalk.service.SyncScheduler
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withLock
 
 internal data class SyncUiState(
-    val enabled: Boolean = false,
     val configured: Boolean = syncServerConfigured(BuildConfig.EVERYTALK_SYNC_BASE_URL),
     val rejectedCount: Int = 0,
+    val rejectedItems: List<SyncRejectedItem> = emptyList(),
     val epochDecision: Long? = null,
+    val lastSyncAt: Long? = null,
+    val pausedAfterCloudReset: Boolean = false,
 )
 
+internal data class SyncRejectedItem(val entity: String, val id: String, val code: String)
+
 /**
- * 用户主动开启/关闭、首次上传与换账号选择的唯一入口。
- * 先取消工作再取得同步锁；从未绑定或绑定不同账号时，Worker 永远不能自动上传。
+ * 账号数据的自动同步、删除、云端清空后恢复与换账号选择。
+ * 普通登录的自动绑定由 SyncScheduler 统一处理，不依赖页面是否打开。
  */
 internal class SyncController(
     private val context: Context,
     private val auth: StateFlow<AuthState>,
     private val binding: SyncAccountBindingStore,
     private val scope: CoroutineScope,
-    private val onDifferentAccount: () -> Unit = {},
     private val beforeClearLocal: suspend () -> Unit = {},
     private val database: AppDatabase = AppDatabase.getDatabase(context),
 ) {
     private val store = SyncStateStore(database)
     val state: StateFlow<SyncUiState> = database.settingsDao().observeSyncControl().map { rows ->
         val values = rows.associate { it.key to it.value }
-        SyncUiState(enabled = values[SyncStateStore.KEY_ENABLED] == "true",
-            rejectedCount = rows.count { it.key.startsWith("sync_rejected:") },
-            epochDecision = values[SyncStateStore.KEY_EPOCH_DECISION]?.toLongOrNull())
+        val rejected = rows.filter { it.key.startsWith("sync_rejected:") }.mapNotNull { row ->
+            val parts = row.key.removePrefix("sync_rejected:").split(':', limit = 2)
+            parts.takeIf { it.size == 2 }?.let { SyncRejectedItem(it[0], it[1], row.value) }
+        }
+        SyncUiState(rejectedCount = rejected.size, rejectedItems = rejected,
+            epochDecision = values[SyncStateStore.KEY_EPOCH_DECISION]?.toLongOrNull(),
+            lastSyncAt = values[SyncStateStore.KEY_LAST_SYNC_AT]?.toLongOrNull(),
+            pausedAfterCloudReset = values[SyncStateStore.KEY_RESET_PAUSED] == "true")
     }.stateIn(scope, SharingStarted.Eagerly, SyncUiState())
-    private val mutableUploadPrompt = MutableStateFlow(false)
-    val uploadPrompt = mutableUploadPrompt.asStateFlow()
-    private var promptAccount: String? = null
+    private val mutableMessage = MutableStateFlow<String?>(null)
+    val message: StateFlow<String?> = mutableMessage.asStateFlow()
 
-    /** UI 已通过 FeatureGate 认证；这里再限制账号绑定，不替代公共登录门禁。 */
-    fun requestEnable() = scope.launch {
+    /** 删除云端同步数据；服务器只删除云端，本地 Room 数据保持不变。 */
+    fun deleteCloudData() = scope.launch {
+        val user = (auth.value as? AuthState.SignedIn)?.user ?: return@launch
         if (!state.value.configured) return@launch
-        val user = (auth.value as? AuthState.SignedIn)?.user ?: return@launch
-        val previous = binding.readBoundAccountId()
-        if (previous != null && previous != user.id) {
-            onDifferentAccount()
-            return@launch
-        }
-        promptAccount = user.id
-        mutableUploadPrompt.value = true
-    }
-
-    fun dismissUploadPrompt() { mutableUploadPrompt.value = false; promptAccount = null }
-
-    /** 不上传旧对话：保留为 LOCAL_ONLY；随后新建/修改的文字数据才进入 PENDING。 */
-    fun confirmEnable(upload: Boolean) = scope.launch {
-        val user = (auth.value as? AuthState.SignedIn)?.user ?: return@launch
-        if (promptAccount != user.id) return@launch
-        dismissUploadPrompt()
+        val runtime = AuthRuntime.get(context)
+        val api = KtorSyncApi(
+            BuildConfig.EVERYTALK_SYNC_BASE_URL,
+            runtime.account,
+            isLocalOnly = { runtime.auth.state.value !is AuthState.SignedIn },
+            canRequest = { (auth.value as? AuthState.SignedIn)?.user?.id == user.id },
+        )
         SyncScheduler.cancel(context)
-        SyncRuntimeLock.mutex.withLock {
-            store.prepareAccount(user.id, upload)
-            binding.bindTo(user.id)
+        try {
+            SyncRuntimeLock.mutex.withLock {
+                if ((auth.value as? AuthState.SignedIn)?.user?.id != user.id) return@launch
+                store.pauseAfterCloudReset()
+                api.deleteAll()
+            }
+            mutableMessage.value = "云端数据已删除，本地数据保留。"
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            mutableMessage.value = "未能确认云端是否删除，已暂停上传；请重试删除或选择重新上传本机数据。"
+        } finally {
+            api.close()
         }
-        SyncScheduler.request(context)
-    }
-
-    fun disable() = scope.launch {
-        SyncScheduler.cancel(context)
-        store.setEnabled(false)
     }
 
     fun decideEpoch(upload: Boolean) = scope.launch {
@@ -79,8 +82,10 @@ internal class SyncController(
         if (upload && (accountId == null || binding.readBoundAccountId() != accountId)) return@launch
         SyncScheduler.cancel(context)
         SyncRuntimeLock.mutex.withLock {
-            if (store.epochDecision() == null) return@withLock
-            if (upload) store.markAllLocalDataPending() else store.rejectEpochUpload()
+            // 等待正在运行的同步结束期间，用户可能退出或切换账号。
+            if (upload && (auth.value as? AuthState.SignedIn)?.user?.id != accountId) return@launch
+            if (store.epochDecision() == null && !store.isPausedAfterCloudReset()) return@withLock
+            if (upload) store.resumeAfterCloudReset() else store.rejectEpochUpload()
         }
         if (upload) SyncScheduler.request(context)
     }
@@ -90,8 +95,9 @@ internal class SyncController(
         if ((auth.value as? AuthState.SignedIn)?.user?.id != accountId) return
         SyncScheduler.cancel(context)
         SyncRuntimeLock.mutex.withLock {
+            if ((auth.value as? AuthState.SignedIn)?.user?.id != accountId) return
             when (choice) {
-                AccountSwitchChoice.KEEP_LOCAL -> store.setEnabled(false)
+                AccountSwitchChoice.KEEP_LOCAL -> Unit
                 AccountSwitchChoice.UPLOAD_TO_CURRENT -> {
                     store.prepareAccount(accountId, upload = true)
                     binding.bindTo(accountId)

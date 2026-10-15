@@ -56,7 +56,7 @@ internal fun AccountScreen(
     onContinueWithoutAccount: (() -> Unit)? = null,
     onSignedIn: (() -> Unit)? = null,
     onLogout: (() -> Unit)? = null,
-    syncSettings: (@Composable () -> Unit)? = null,
+    accountDataActions: (@Composable () -> Unit)? = null,
 ) {
     val state by manager.state.collectAsState()
     val context = LocalContext.current
@@ -156,7 +156,7 @@ internal fun AccountScreen(
                         shape = CircleShape, colors = actionColors, modifier = Modifier.fillMaxWidth()) {
                         Text(stringResource(R.string.account_save_profile))
                     }
-                    Text("云同步由用户主动开启；登录不会自动上传本地对话或 API Key。", style = MaterialTheme.typography.bodyMedium)
+                    Text("登录后自动同步账号数据；退出登录后仅保留本地数据，API Key 等本地机密不会自动上传。", style = MaterialTheme.typography.bodyMedium)
                     OutlinedButton(onClick = { manager.refreshAccount() }, enabled = !state.busy,
                         modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.account_refresh)) }
                     Button(onClick = { showLogout = true }, enabled = !state.busy,
@@ -242,6 +242,9 @@ internal fun AccountScreen(
                         modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
                         style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant,
                         textAlign = TextAlign.Center)
+                    // 登录前直接说明账号模式的数据合并范围；游客模式仍只在本机保存。
+                    Text(stringResource(R.string.account_local_data_notice),
+                        style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
                     Row(Modifier.fillMaxWidth().padding(top = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -304,7 +307,7 @@ internal fun AccountScreen(
                         }
                     }
                 }
-                syncSettings?.invoke()
+                accountDataActions?.invoke()
                 if (state.busy) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)

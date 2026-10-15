@@ -15,9 +15,6 @@ internal class AuthRuntime private constructor(context: Context) {
     val account = AccountManager.create(context, scope, restoreOnCreate = false)
     val auth = AuthRepository(account, DataStoreAuthModeStore(context), scope, onLogout = {
         com.android.everytalk.service.SyncScheduler.cancel(context)
-        com.android.everytalk.data.sync.SyncStateStore(
-            com.android.everytalk.data.database.AppDatabase.getDatabase(context),
-        ).setEnabled(false)
     })
     val binding = DataStoreSyncAccountBindingStore(context)
 

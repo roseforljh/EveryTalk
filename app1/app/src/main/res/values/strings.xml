@@ -200,7 +200,7 @@
     <string name="privacy_policy_title">Privacy policy</string>
     <string name="privacy_policy_heading">EveryTalk Privacy Policy</string>
     <string name="privacy_effective_date">Effective date: %1$s</string>
-    <string name="privacy_effective_date_value">October 9, 2026</string>
+    <string name="privacy_effective_date_value">October 15, 2026</string>
     <string name="privacy_intro">EveryTalk is an AI client. This policy explains how the app handles information when you use accounts, chat, image, voice, web search, and MCP features.</string>
     <string name="privacy_section_1_title">1. Information stored locally</string>
     <string name="privacy_section_1_body">Chat history, model service settings, API keys, groups, pinned status, and other app settings are stored locally on your device. EveryTalk disables Android system backups, so this data is not transferred through system backup.</string>
@@ -1528,9 +1528,9 @@
     <string name="account_logout_notice">Sign out on this device? Your local chats and API configurations will be kept.</string>
     <string name="account_cancel">Cancel</string>
     <string name="account_privacy">Privacy policy</string>
-    <string name="account_local_data_notice">Your account does not upload or sync local chats or model API keys.</string>
+    <string name="account_local_data_notice">Signing in automatically merges local text chats, reasoning, memories, pinned items and groups with your account. Data is stored in Germany; users in mainland China will transfer this data across borders. API keys, voice keys, MCP settings, images, attachments, tool traces and image generation chats stay local. Continue without an account to keep data on this device.</string>
     <string name="privacy_account_title">EveryTalk accounts</string>
-    <string name="privacy_account_body">Optional account sign-in is provided by Supabase Auth. Email sign-in sends your email address and verification code to the configured authentication service. Google and GitHub sign-in request basic identity information only, not Gmail, Drive or repository access. Supabase stores account identifiers, email, display name, linked login identities, registration and login records. Custom avatars are uploaded to Supabase Storage and displayed through public image URLs. Chats and API configurations are not uploaded with them. The app stores session credentials using Android Keystore encryption. Signing out removes local account credentials but keeps chats and API configurations. Uninstalling does not delete the server account. Contact the maintainers through the project page to request account deletion; do not post verification codes or credentials publicly.</string>
+    <string name="privacy_account_body">Account sign-in is optional and provided by Supabase Auth. Email sign-in sends your email address and verification code to the authentication service. Google and GitHub sign-in request basic identity information only, not Gmail, Drive or repository access. Supabase stores account identifiers, email, display name, linked identities and sign-in records. Custom avatars are uploaded to Supabase Storage and displayed through public URLs.\n\nWhen the sync server is configured, signing in automatically merges local text sessions, messages, reasoning, long term memories, pinned items and groups with your account. Local mode does not connect to EveryTalk servers. API keys, voice keys, MCP configuration, images, attachments, tool traces and image generation chats are excluded from account sync. Synced data is stored in Germany; users in mainland China transfer this data across borders. You can delete cloud data from the account page while keeping local copies. Encrypted server backups may remain for up to 7 days. Server permissions and quotas are decided by the server.\n\nSession credentials are encrypted using Android Keystore. Signing out stops account sync and removes local account credentials while keeping local chats and API configurations. Uninstalling does not delete the account. Contact the maintainers through the project page to request account deletion; do not post verification codes or credentials publicly.</string>
 
     <!-- 界面文案统一从资源读取，英文为默认语言，中文按应用设置切换。 -->
     <string name="skill_download">Download</string>
@@ -1698,6 +1698,9 @@
     <string name="agent_intervention_reenter">The previous input was not delivered and has been cleared. Enter it again to continue.</string>
     <string name="agent_intervention_secret_notice">Credentials are encrypted with Android Keystore. The model can only use the limited capability for this action.</string>
     <string name="agent_intervention_input_notice">Your input is passed only to the trusted local adapter. It is not sent to the model or saved in chat history.</string>
+    <string name="agent_intervention_text_reply_hint">You can also explain what you want in a normal message. The requested capability will be skipped and the Agent will continue from your reply.</string>
+    <string name="agent_intervention_text_reply_label">Normal reply to Agent</string>
+    <string name="agent_intervention_text_reply_send">Send normal reply</string>
     <string name="agent_intervention_confirm_completed">Confirm completed</string>
     <string name="agent_intervention_submitting">Submitting your input</string>
     <string name="agent_intervention_reauthorizing">Reauthorizing Cloudflare</string>

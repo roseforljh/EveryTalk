@@ -22,6 +22,7 @@ internal class SyncEngine(
     private val store: SyncStore,
     private val state: SyncStateStore,
     private val canSync: suspend () -> Boolean = { true },
+    private val onSecretsEpochChanged: suspend () -> Unit = {},
 ) {
     suspend fun runOnce(): SyncRunResult = SyncRuntimeLock.mutex.withLock {
         if (!canSync() || !state.isEnabled() || state.epochDecision() != null) return@withLock SyncRunResult.Disabled
@@ -42,11 +43,24 @@ internal class SyncEngine(
 
     private suspend fun pullAll(): SyncRunResult? {
         var cursor = state.readCursor()
+        var restartedForSecretsEpoch = false
         do {
             if (!canSync() || !state.isEnabled()) return SyncRunResult.Disabled
             val page = api.pull(cursor.cursor, 500)
             if (!canSync()) return SyncRunResult.Disabled
             require(page.epoch >= 0 && page.nextCursor >= 0)
+            val knownSecretsEpoch = state.readSecretsEpoch()
+            if (knownSecretsEpoch >= 0 && page.secretsEpoch != knownSecretsEpoch) {
+                if (restartedForSecretsEpoch) {
+                    return SyncRunResult.Disabled
+                }
+                // 密文缓存和配置快照必须从零重新核对；普通会话数据仍按原 UUID 幂等处理。
+                state.resetSecretsEpoch(page.secretsEpoch)
+                onSecretsEpochChanged()
+                restartedForSecretsEpoch = true
+                cursor = state.readCursor()
+                continue
+            }
             if (cursor.epoch >= 0 && page.epoch != cursor.epoch) {
                 state.requireEpochDecision(page.epoch)
                 return SyncRunResult.PausedForEpoch(page.epoch)
@@ -56,6 +70,7 @@ internal class SyncEngine(
             require(page.changes.map { it.serverSeq }.distinct().size == page.changes.size)
             require(!page.hasMore || page.nextCursor > cursor.cursor) { "服务器返回无进展的分页" }
             store.applyPullPage(page)
+            if (knownSecretsEpoch < 0) state.recordSecretsEpoch(page.secretsEpoch)
             cursor = SyncCursorState(page.nextCursor, page.epoch)
         } while (page.hasMore)
         return null

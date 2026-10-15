@@ -1,51 +1,68 @@
 package com.android.everytalk.ui.screens.settings
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.android.everytalk.data.sync.SyncController
+import java.text.DateFormat
+import java.util.Date
 
-/** 复用设置的 Material 3 卡片与确认框；登录判断由调用方统一使用 FeatureGate。 */
+/** 登录即同步，不再提供独立面板或开关；只保留账号的数据管理操作。 */
 @Composable
-internal fun CloudSyncSettings(
+internal fun AccountDataActions(
     controller: SyncController,
-    locked: Boolean,
-    onEnable: () -> Unit,
+    onDeleteCloudData: () -> Unit,
+    onResumeUpload: () -> Unit,
 ) {
     val state by controller.state.collectAsState()
-    OutlinedCard(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("云同步", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                if (locked) Icon(Icons.Outlined.Lock, contentDescription = "需要登录")
-                Switch(checked = state.enabled, enabled = state.configured,
-                    onCheckedChange = { if (it) onEnable() else controller.disable() })
+    val message by controller.message.collectAsState()
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+    var showResumeConfirm by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (!state.configured) Text("当前版本未配置账号数据服务，本机数据仍可使用。", style = MaterialTheme.typography.bodySmall)
+        if (state.rejectedCount > 0) {
+            Text("${state.rejectedCount} 条未能同步", color = MaterialTheme.colorScheme.error)
+            state.rejectedItems.take(8).forEach { item ->
+                Text("• ${item.entity}/${item.id.take(12)}", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error)
+                if (item.code == "CONTAINS_SECRET" && item.entity == "user_settings") {
+                    Text("这个提示词含疑似密钥，没有同步", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error)
+                }
             }
-            Text(if (state.configured) "开启后上传文字对话、思考过程、长期记忆、置顶和分组。图片、附件及 API Key 不上传。"
-                else "云同步服务尚未配置", style = MaterialTheme.typography.bodySmall)
-            if (state.rejectedCount > 0) Text("${state.rejectedCount} 条未能同步", color = MaterialTheme.colorScheme.error)
         }
+        Text(
+            state.lastSyncAt?.let { "上次同步：${DateFormat.getDateTimeInstance().format(Date(it))}" }
+                ?: "上次同步：从未成功同步",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        TextButton(onClick = { showDeleteConfirm = true }, enabled = state.configured) {
+            Text("删除云端数据")
+        }
+        if (state.pausedAfterCloudReset) {
+            Text("云端清空后已暂停上传，本机数据保留。", style = MaterialTheme.typography.bodySmall)
+            TextButton(onClick = { showResumeConfirm = true }, enabled = state.configured) { Text("重新上传本机数据") }
+        }
+        message?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
     }
-}
-
-/** 独立于账号页面挂载；登录返回原设置页面时仍可继续首次上传确认。 */
-@Composable
-internal fun SyncUploadConfirmation(controller: SyncController) {
-    val prompt by controller.uploadPrompt.collectAsState()
-    if (prompt) AlertDialog(
-        onDismissRequest = controller::dismissUploadPrompt,
-        title = { Text("开启云同步") },
-        text = { Text("是否把本地对话上传到账号？选择“不上传”会保留已有数据为本地数据，仅同步后续变更。") },
-        confirmButton = { TextButton(onClick = { controller.confirmEnable(true) }) { Text("上传") } },
-        dismissButton = {
-            TextButton(onClick = { controller.confirmEnable(false) }) { Text("不上传") }
-            TextButton(onClick = controller::dismissUploadPrompt) { Text("暂不") }
+    if (showDeleteConfirm) AlertDialog(
+        onDismissRequest = { showDeleteConfirm = false },
+        title = { Text("删除云端数据？") },
+        text = { Text("这会删除当前账号的云端数据，并暂停本机上传；本机聊天和设置会保留。服务器加密备份删除后最多保留 7 天。") },
+        confirmButton = {
+            TextButton(onClick = { showDeleteConfirm = false; onDeleteCloudData() }) { Text("确认删除") }
         },
+        dismissButton = { TextButton(onClick = { showDeleteConfirm = false }) { Text("取消") } },
+    )
+    if (showResumeConfirm) AlertDialog(
+        onDismissRequest = { showResumeConfirm = false },
+        title = { Text("重新上传本机数据？") },
+        text = { Text("本机的文字对话、思考过程、长期记忆、置顶和分组将重新合并到当前账号。") },
+        confirmButton = { TextButton(onClick = { showResumeConfirm = false; onResumeUpload() }) { Text("上传") } },
+        dismissButton = { TextButton(onClick = { showResumeConfirm = false }) { Text("取消") } },
     )
 }
 

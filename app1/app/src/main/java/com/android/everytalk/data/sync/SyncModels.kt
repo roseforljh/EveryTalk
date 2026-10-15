@@ -10,6 +10,7 @@ internal enum class SyncEntity(val wireName: String) {
     MESSAGES("messages"),
     MEMORIES("memories"),
     USER_SETTINGS("user_settings"),
+    ATTACHMENTS("attachments"),
 }
 
 /** push 的单条变更；所有业务字段都严格放在 payload 内。 */
@@ -62,6 +63,7 @@ internal data class PullResponse(
     @SerialName("next_cursor") val nextCursor: Long,
     @SerialName("has_more") val hasMore: Boolean,
     val epoch: Long,
+    @SerialName("secrets_epoch") val secretsEpoch: Long = 0L,
 )
 
 /** push/pull 的网络错误，保留状态码和 Retry-After 供 Worker 决定是否重试。 */

@@ -7,6 +7,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.data.auth.SyncAccountBindingStore
 import com.android.everytalk.data.database.AppDatabase
 import com.android.everytalk.data.database.entities.*
 import kotlinx.coroutines.runBlocking
@@ -23,6 +24,11 @@ import java.util.UUID
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [34], application = Application::class)
 class SyncEngineTest {
+    private class Binding(var accountId: String? = null) : SyncAccountBindingStore {
+        override suspend fun readBoundAccountId(): String? = accountId
+        override suspend fun bindTo(accountId: String) { this.accountId = accountId }
+        override suspend fun clearBinding() { accountId = null }
+    }
     private val databases = mutableListOf<AppDatabase>()
     private fun device(): AppDatabase = Room.inMemoryDatabaseBuilder(
         ApplicationProvider.getApplicationContext<Context>(), AppDatabase::class.java,
@@ -38,7 +44,6 @@ class SyncEngineTest {
         db.chatDao().writeMessages((0 until count).map { message("$id-$it", session) })
         return session
     }
-    private suspend fun enable(db: AppDatabase) = SyncStateStore(db).setEnabled(true)
     private suspend fun run(db: AppDatabase, api: SyncApi, allowed: Boolean = true) =
         SyncEngine(api, RoomSyncStore(db), SyncStateStore(db), { allowed }).runOnce()
     private fun page(vararg changes: PushChange, since: Long = 0) = PullResponse(changes.mapIndexed { index, change ->
@@ -48,7 +53,8 @@ class SyncEngineTest {
     @Test fun `两设备保留各自历史且拉取不产生回传`() = runBlocking {
         val a = device(); val b = device(); val api = FakeSyncApi()
         seed(a, "a"); seed(b, "b")
-        enable(a); enable(b)
+        assertTrue(SyncStateStore(a).prepareAutomaticAccount("same-account", Binding()))
+        assertTrue(SyncStateStore(b).prepareAutomaticAccount("same-account", Binding()))
         assertEquals(SyncRunResult.Completed, run(a, api))
         assertEquals(SyncRunResult.Completed, run(b, api))
         run(a, api)
@@ -62,7 +68,7 @@ class SyncEngineTest {
     }
 
     @Test fun `500条分批断网后新引擎续传不重复正文不跳序号`() = runBlocking {
-        val db = device(); seed(db, count = 1001); enable(db)
+        val db = device(); seed(db, count = 1001)
         val api = FakeSyncApi().apply { failPushNumber = 2 }
         assertTrue(runCatching { run(db, api) }.isFailure)
         val cursor = SyncStateStore(db).readCursor().cursor
@@ -85,7 +91,7 @@ class SyncEngineTest {
         assertEquals("新标题", db.chatDao().getStoredSession(s.id)!!.title)
         assertEquals(SyncStatus.PENDING, db.chatDao().getStoredSession(s.id)!!.syncStatus)
         assertEquals(1, store.pendingBatch().size)
-        enable(db); run(db, api)
+        run(db, api)
         assertEquals("新标题", api.rows.getValue("sessions" to s.uuid).payload["title"]!!.jsonPrimitive.content)
     }
 
@@ -145,7 +151,7 @@ class SyncEngineTest {
     }
 
     @Test fun `epoch变更先暂停绝不push同意才重新上传否则关闭保留本地`() = runBlocking {
-        val db = device(); seed(db); enable(db); val api = FakeSyncApi(); run(db, api)
+        val db = device(); seed(db); val api = FakeSyncApi(); run(db, api)
         api.clearCloud()
         db.chatDao().updateSessionTitle("local", "本地新标题")
         val pushes = api.pushes
@@ -162,13 +168,105 @@ class SyncEngineTest {
         assertEquals(1, db.chatDao().getMessagesForSession("local").size)
     }
 
-    @Test fun `默认关闭本地模式不请求不确认不清业务数据`() = runBlocking {
+    @Test fun `本地模式不请求不确认不清业务数据`() = runBlocking {
         val db = device(); seed(db); val api = FakeSyncApi()
-        assertEquals(SyncRunResult.Disabled, run(db, api))
-        enable(db)
+        // AuthState.LocalOnly 由 Worker 通过 canSync=false 传入；数据库不再保存“同步开关”。
         assertEquals(SyncRunResult.Disabled, run(db, api, allowed = false))
         assertEquals(0, api.pulls + api.pushes)
         assertEquals(2, RoomSyncStore(db).pendingBatch().size)
+    }
+
+    @Test fun `游客转账号自动接管旧本地历史无需开启开关`() = runBlocking {
+        val db = device(); seed(db); val state = SyncStateStore(db); val binding = Binding()
+        db.chatDao().keepAllTextLocal()
+        assertTrue(RoomSyncStore(db).pendingBatch().isEmpty())
+        assertTrue(state.prepareAutomaticAccount("account-a", binding))
+        assertEquals("account-a", binding.accountId)
+        assertTrue(state.isEnabled())
+        assertEquals(2, RoomSyncStore(db).pendingBatch().size)
+        val api = FakeSyncApi(); run(db, api)
+        assertEquals(2, api.rows.size)
+        assertTrue(RoomSyncStore(db).pendingBatch().isEmpty())
+    }
+
+    @Test fun `重启和资料刷新保留游标且不重复上传拒绝记录`() = runBlocking {
+        val db = device(); val session = seed(db); val binding = Binding()
+        val state = SyncStateStore(db)
+        state.prepareAutomaticAccount("a", binding)
+        val api = FakeSyncApi(); run(db, api)
+        val cursor = state.readCursor()
+        db.chatDao().markSessionRejectedIfVersion(session.uuid, session.updatedAt)
+        db.settingsDao().insertSetting(SystemSettingEntity("sync_rejected:sessions:${session.uuid}", "INVALID_PAYLOAD"))
+        assertTrue(SyncStateStore(db).prepareAutomaticAccount("a", binding))
+        assertEquals(cursor, state.readCursor())
+        assertEquals(1, db.settingsDao().syncRejectedCount())
+        assertTrue(RoomSyncStore(db).pendingBatch().isEmpty())
+        val pushes = api.pushes; run(db, api)
+        assertEquals(pushes, api.pushes)
+    }
+
+    @Test fun `退出后游客不发请求重新登录同账号同步游客期间新数据`() = runBlocking {
+        val db = device(); seed(db); val state = SyncStateStore(db); val binding = Binding()
+        state.prepareAutomaticAccount("a", binding)
+        val api = FakeSyncApi(); run(db, api)
+        seed(db, "guest-new")
+        val requests = api.pushes + api.pulls
+        assertEquals(SyncRunResult.Disabled, run(db, api, allowed = false))
+        assertEquals(requests, api.pushes + api.pulls)
+        assertEquals(2, db.chatDao().getAllSessions(false).size)
+        assertTrue(SyncStateStore(db).prepareAutomaticAccount("a", binding))
+        assertEquals(2, RoomSyncStore(db).pendingBatch().size)
+        run(db, api)
+        assertEquals(4, api.rows.size)
+    }
+
+    @Test fun `登录另一个账号等待三选一不能自动改绑定或上传`() = runBlocking {
+        val db = device(); seed(db); val state = SyncStateStore(db); val binding = Binding()
+        state.prepareAutomaticAccount("a", binding)
+        assertFalse(state.prepareAutomaticAccount("b", binding))
+        assertEquals("a", binding.accountId)
+        assertEquals("a", db.settingsDao().getValue(SyncStateStore.KEY_ACCOUNT))
+        // 明确选择“上传到当前账号”后，后续重启不再重复询问或重置队列。
+        state.prepareAccount("b", upload = true); binding.bindTo("b")
+        assertTrue(state.prepareAutomaticAccount("b", binding))
+        assertEquals("b", binding.accountId)
+    }
+
+    @Test fun `登录准备途中已退出不改绑定或启用同步`() = runBlocking {
+        val db = device(); seed(db); val state = SyncStateStore(db); val binding = Binding()
+        assertFalse(state.prepareAutomaticAccount("a", binding) { false })
+        assertNull(binding.accountId)
+        assertNull(db.settingsDao().getValue(SyncStateStore.KEY_ACCOUNT))
+    }
+
+    @Test fun `删除云端或epoch拒绝上传后重启登录不能重新上传`() = runBlocking {
+        val db = device(); seed(db); val state = SyncStateStore(db); val binding = Binding()
+        state.prepareAutomaticAccount("a", binding)
+        val api = FakeSyncApi(); run(db, api)
+        state.pauseAfterCloudReset(); api.deleteAll()
+        assertFalse(SyncStateStore(db).prepareAutomaticAccount("a", binding))
+        assertEquals(SyncRunResult.Disabled, run(db, api))
+        assertTrue(api.rows.isEmpty())
+        assertEquals(1, db.chatDao().getMessagesForSession("local").size)
+        state.requireEpochDecision(api.epoch); state.rejectEpochUpload()
+        assertNull(state.epochDecision())
+        assertFalse(SyncStateStore(db).prepareAutomaticAccount("a", binding))
+        // 只有再次明确选择上传，才重新协商 epoch 并上传本地副本。
+        state.resumeAfterCloudReset()
+        assertFalse(state.isPausedAfterCloudReset())
+        assertEquals(SyncRunResult.Completed, run(db, api))
+        assertEquals(2, api.rows.size)
+    }
+
+    @Test fun `升级旧版未开启同步的账号自动接管一次历史`() = runBlocking {
+        val db = device(); seed(db); val state = SyncStateStore(db); val binding = Binding("a")
+        db.chatDao().keepAllTextLocal()
+        db.settingsDao().insertSetting(SystemSettingEntity(SyncStateStore.KEY_ACCOUNT, "a"))
+        assertTrue(state.prepareAutomaticAccount("a", binding))
+        val api = FakeSyncApi(); run(db, api)
+        assertTrue(SyncStateStore(db).prepareAutomaticAccount("a", binding))
+        assertTrue(RoomSyncStore(db).pendingBatch().isEmpty())
+        assertEquals(2, api.rows.size)
     }
 
     @Test fun `首次开启不上传旧历史换账号重置快照旧记录仍本地`() = runBlocking {
@@ -208,6 +306,26 @@ class SyncEngineTest {
         assertEquals(SyncStatus.LOCAL_ONLY, db.chatDao().getStoredMessage("large", "")!!.syncStatus)
     }
 
+    @Test fun `旧版思考过程超限失败在修复后重新入队且保留本地完整内容`() = runBlocking {
+        val db = device(); val s = seed(db); val state = SyncStateStore(db); val binding = Binding("same-account")
+        db.settingsDao().insertSetting(SystemSettingEntity(SyncStateStore.KEY_ACCOUNT, "same-account"))
+        db.settingsDao().insertSetting(SystemSettingEntity(SyncStateStore.KEY_AUTOMATIC_ACCOUNT, "same-account"))
+        val large = message("large-reasoning", s, "正文").copy(
+            reasoning = "思考".repeat(40000), syncStatus = SyncStatus.PENDING,
+        )
+        db.chatDao().writeMessages(listOf(large))
+        db.chatDao().markMessageRejectedIfVersion(large.uuid, large.updatedAt)
+        db.settingsDao().insertSetting(SystemSettingEntity(
+            "sync_rejected:messages:${large.uuid}", "MESSAGE_PAYLOAD_TOO_LARGE",
+        ))
+        state.prepareAutomaticAccount("same-account", binding)
+        val change = RoomSyncStore(db).pendingBatch().first { it.change.id == large.uuid }.change
+        assertTrue(change.payload.toString().toByteArray().size <= 65536)
+        assertEquals("正文", db.chatDao().getStoredMessage("large-reasoning", "")!!.text)
+        assertEquals("思考".repeat(40000), db.chatDao().getStoredMessage("large-reasoning", "")!!.reasoning)
+        assertEquals(0, db.settingsDao().syncRejectedCount())
+    }
+
     @Test fun `canonical采用但上传期间新设置仍待同步`() = runBlocking {
         val db = device(); val s = seed(db)
         val setting = UserSettingEntity("conversation_groups", "Work", "[\"${s.uuid}\"]", updatedAt = 100)
@@ -237,11 +355,16 @@ class SyncEngineTest {
         val memory = MemoryEntity("memory", "OTHER", "旧记忆", "MANUAL", s.id, "local-0", 10, 100)
         a.memoryDao().insert(memory)
         val setting = UserSettingEntity("conversation_groups", "Work", "[\"${s.uuid}\"]", updatedAt = 100)
-        a.settingsDao().upsertUserSettings(listOf(setting)); enable(a); run(a, api)
+        a.settingsDao().upsertUserSettings(listOf(setting)); run(a, api)
         b.settingsDao().upsertUserSettings(listOf(setting.copy(uuid = UUID.randomUUID().toString(), value = "[]", updatedAt = 101)))
-        enable(b); run(b, api); run(a, api)
-        assertEquals(setting.uuid, b.settingsDao().getUserSetting("conversation_groups", "Work")!!.uuid)
-        assertEquals("[]", a.settingsDao().getUserSetting("conversation_groups", "Work")!!.value)
+        run(b, api); run(a, api)
+        val receivedGroup = b.settingsDao().getUserSetting("conversation_groups", "Work")
+        requireNotNull(receivedGroup) { "rows=" + b.settingsDao().getAllUserSettings() }
+        val serverCanonical = api.rows.values.first { it.entity == "user_settings" && it.payload["kind"]?.jsonPrimitive?.content == "group_members" }.id
+        assertEquals(serverCanonical, receivedGroup.uuid)
+        val localGroup = a.settingsDao().getUserSetting("conversation_groups", "Work")
+        requireNotNull(localGroup) { "a-rows=" + a.settingsDao().getAllUserSettings() }
+        assertEquals(setting.value, localGroup.value)
         val remoteMemory = b.memoryDao().getByUuid(memory.uuid)!!
         b.memoryDao().update(remoteMemory.copy(content = "新记忆", updatedAt = 102, syncUpdatedAt = 102, syncStatus = SyncStatus.PENDING))
         run(b, api); run(a, api)
@@ -276,7 +399,7 @@ class SyncEngineTest {
     }
 
     @Test fun `单运行锁并发引擎不会重复push`() = runBlocking {
-        val db = device(); seed(db); enable(db); val api = FakeSyncApi()
+        val db = device(); seed(db); val api = FakeSyncApi()
         kotlinx.coroutines.coroutineScope {
             val a = async { run(db, api) }
             val b = async { run(db, api) }

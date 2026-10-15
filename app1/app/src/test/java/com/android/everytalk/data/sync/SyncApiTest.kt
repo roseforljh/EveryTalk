@@ -8,6 +8,8 @@ import io.ktor.http.*
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.*
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.junit.Assert.*
 import org.junit.Test
 import java.io.IOException
@@ -41,6 +43,7 @@ class SyncApiTest {
             if (request.url.encodedPath == "/auth/v1/token") { refreshCalls++; respond(refresh, HttpStatusCode.OK) }
             else {
                 assertEquals("/sync/pull", request.url.encodedPath)
+                assertEquals(SYNC_VERSION, request.headers["X-EveryTalk-Sync-Version"])
                 assertEquals("0", request.url.parameters["since"])
                 syncCalls++
                 assertEquals(if (syncCalls == 1) "Bearer old-access" else "Bearer new-access", request.headers["Authorization"])
@@ -107,5 +110,30 @@ class SyncApiTest {
     @Test fun `消息墓碑保留合同required的空payload`() {
         val json = syncJson.encodeToString(PushRequest.serializer(), PushRequest(listOf(PushChange("messages", "uuid", true))))
         assertTrue(json.contains("\"payload\":{}"))
+    }
+
+    @Test fun `只有密文或crypto_keys请求携带密钥代次`() = runTest {
+        val http = http { request ->
+            assertEquals(SYNC_VERSION, request.headers["X-EveryTalk-Sync-Version"])
+            if (request.url.encodedPath == "/sync/secrets") {
+                assertNull(request.headers["X-EveryTalk-Secrets-Epoch"]); respond("", HttpStatusCode.NoContent)
+            } else {
+                val body = request.body.toByteArray().toString(Charsets.UTF_8)
+                if (body.contains("memory_switches")) assertNull(request.headers["X-EveryTalk-Secrets-Epoch"])
+                else assertEquals("7", request.headers["X-EveryTalk-Secrets-Epoch"])
+                respond("{\"results\":[]}", HttpStatusCode.OK)
+            }
+        }
+        val manager = account(http)
+        val api = KtorSyncApi("https://sync.example", manager, { false }, httpClient = http,
+            readSecretsEpoch = { 7L })
+        api.push(listOf(PushChange("user_settings", "00000000-0000-4000-8000-000000000001", false,
+            buildJsonObject { put("kind", "memory_switches") })))
+        api.push(listOf(PushChange("user_settings", "00000000-0000-4000-8000-000000000002", false,
+            buildJsonObject { put("kind", "crypto_keys"); put("value", buildJsonObject {
+                put("wrappedDek", buildJsonObject { put("\$enc", 1); put("alg", "AES-256-GCM"); put("nonce", "AAAAAAAAAAAAAAAA"); put("ct", "AAAAAAAAAAAAAAAAAAAAAAAA"); put("keyVersion", 1) })
+            }) })))
+        api.deleteSecrets()
+        http.close()
     }
 }

@@ -643,16 +643,11 @@ class MainActivity : AppCompatActivity() {
                                             }
                                         },
                                         onLogout = { appViewModel.authRepository.logout() },
-                                        syncSettings = {
-                                            val auth by appViewModel.authRepository.state.collectAsState()
-                                            com.android.everytalk.ui.screens.settings.CloudSyncSettings(
+                                        accountDataActions = {
+                                            com.android.everytalk.ui.screens.settings.AccountDataActions(
                                                 controller = appViewModel.syncController,
-                                                locked = appViewModel.featureGate.isLocked(com.android.everytalk.data.auth.Feature.CLOUD_SYNC),
-                                                onEnable = {
-                                                    appViewModel.featureGateCoordinator.requireLogin(com.android.everytalk.data.auth.Feature.CLOUD_SYNC) {
-                                                        appViewModel.syncController.requestEnable()
-                                                    }
-                                                },
+                                                onDeleteCloudData = { appViewModel.syncController.deleteCloudData() },
+                                                onResumeUpload = { appViewModel.syncController.decideEpoch(true) },
                                             )
                                         },
                                     )
@@ -1021,11 +1016,10 @@ class MainActivity : AppCompatActivity() {
                                 protection = appViewModel.accountSwitchProtection,
                             )
                             com.android.everytalk.ui.screens.settings.SyncEpochNotice(appViewModel.syncController) {
-                                appViewModel.featureGateCoordinator.requireLogin(com.android.everytalk.data.auth.Feature.CLOUD_SYNC) {
-                                    appViewModel.syncController.decideEpoch(true)
-                                }
+                                // 用户已经处于账号页对应的登录态；云端清空后的重新上传是数据恢复操作，
+                                // 不再经过商业功能门禁，也不弹出“开启云同步”之类的入口。
+                                appViewModel.syncController.decideEpoch(true)
                             }
-                            com.android.everytalk.ui.screens.settings.SyncUploadConfirmation(appViewModel.syncController)
                             SettingsImportExportHost(
                                 viewModel = appViewModel,
                                 visible = showImportExportDialog,
@@ -1134,6 +1128,8 @@ class MainActivity : AppCompatActivity() {
    
    override fun onStart() {
        super.onStart()
+       // 回到前台时也拉取其他设备的数据，不必等待后台的 15 分钟周期任务。
+       com.android.everytalk.service.SyncScheduler.request(applicationContext)
        // 先立即禁止新的事件通知，再在后台清理通知栏。
        // 系统通知查询属于跨进程调用，放在主线程会让回前台动画和整个聊天页面一起卡住。
        AgentNotificationManager.markAppForeground()

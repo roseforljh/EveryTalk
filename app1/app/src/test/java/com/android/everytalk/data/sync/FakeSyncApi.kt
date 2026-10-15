@@ -28,7 +28,11 @@ internal class FakeSyncApi : SyncApi {
             val old = rows[change.entity to id]
             val session = change.payload["sessionId"]?.jsonPrimitive?.content?.let { rows["sessions" to it] }
             val rejection = when {
-                change.entity == "user_settings" && change.payload["kind"]?.jsonPrimitive?.content !in setOf("conversation_groups", "pinned_items") -> "INVALID_USER_SETTING_KIND"
+                change.entity == "user_settings" && change.payload["kind"]?.jsonPrimitive?.content !in setOf(
+                    "api_configs", "selected_models", "web_search_configs", "voice_configs", "voice_llm_platforms",
+                    "voice_custom_models", "mcp_servers", "skills", "skill_variables", "computers", "computer_workspaces",
+                    "conversation_settings", "memory_switches", "group_members", "pinned_items", "crypto_keys",
+                ) -> "INVALID_USER_SETTING_KIND"
                 change.entity == "messages" && session?.deleted == true -> "session_deleted"
                 else -> null
             }
@@ -65,5 +69,9 @@ internal class FakeSyncApi : SyncApi {
         val remaining = rows.values.filter { it.serverSeq > since }.sortedBy { it.serverSeq }
         val page = remaining.take(minOf(limit, pageSize))
         return PullResponse(page, page.lastOrNull()?.serverSeq ?: since, remaining.size > page.size, epoch)
+    }
+
+    override suspend fun deleteAll() {
+        clearCloud()
     }
 }

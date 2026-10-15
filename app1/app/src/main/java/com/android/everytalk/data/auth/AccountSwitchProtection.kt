@@ -25,7 +25,7 @@ internal data class AccountSwitchRequest(
 
 /**
  * 只在“已有同步绑定账号”且新登录账号不同的时候暂停流程。
- * 阶段 1 没有同步服务器，UPLOAD_TO_CURRENT 只更新绑定目标；阶段 3 的同步引擎会读取它并执行上传。
+ * 只有用户明确选择“上传到当前账号”或“清空本地”后，自动同步才会接管当前账号。
  */
 internal class AccountSwitchProtection(
     private val authState: StateFlow<AuthState>,

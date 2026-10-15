@@ -199,7 +199,7 @@
     <string name="privacy_policy_title">隐私政策</string>
     <string name="privacy_policy_heading">EveryTalk 隐私政策</string>
     <string name="privacy_effective_date">生效日期：%1$s</string>
-    <string name="privacy_effective_date_value">2026年10月9日</string>
+    <string name="privacy_effective_date_value">2026年10月15日</string>
     <string name="privacy_intro">EveryTalk 是一款 AI 客户端。本政策说明应用在你使用账号、聊天、图像、语音、联网搜索和 MCP 功能时如何处理信息。</string>
     <string name="privacy_section_1_title">1. 本地保存的信息</string>
     <string name="privacy_section_1_body">聊天记录、模型服务配置、API 密钥、分组、置顶状态及其他应用设置会保存在你的设备本地。EveryTalk 已关闭 Android 系统备份，不会通过系统备份迁移这些数据。</string>
@@ -1502,9 +1502,9 @@
     <string name="account_logout_notice">退出此设备的登录？本地聊天记录和 API 配置会保留。</string>
     <string name="account_cancel">取消</string>
     <string name="account_privacy">隐私政策</string>
-    <string name="account_local_data_notice">登录账号不会上传或同步本地聊天记录、模型 API 密钥。</string>
+    <string name="account_local_data_notice">登录后，本地文字对话、思考过程、长期记忆、置顶和分组会自动合并到账号。数据存储在德国，国内用户涉及数据跨境传输。API Key、语音 Key、MCP 配置、图片、附件、工具执行轨迹和生图对话不参与账号同步。不登录则只在本机保存数据。</string>
     <string name="privacy_account_title">EveryTalk 账号</string>
-    <string name="privacy_account_body">账号登录为可选功能，由 Supabase Auth 提供。邮箱登录会向配置的认证服务发送邮箱地址和验证码；Google 和 GitHub 登录仅申请基本身份及邮箱信息，不申请 Gmail、网盘或代码仓库权限。Supabase 保存账号标识、邮箱、名称、关联登录身份及注册和登录记录。自行选择的头像会上传到 Supabase 头像存储，使用公开图片地址展示，聊天和 API 配置不会随之上传。应用通过 Android Keystore 加密保存会话凭据。退出登录会删除本地账号凭据，保留聊天记录和 API 配置；卸载应用不会删除服务端账号。可通过项目页面联系维护者提出账号删除申请，请勿公开发布验证码或凭据。</string>
+    <string name="privacy_account_body">账号登录为可选功能，由 Supabase Auth 提供。邮箱登录会向认证服务发送邮箱地址和验证码；Google 和 GitHub 登录仅申请基本身份及邮箱信息，不申请 Gmail、网盘或代码仓库权限。Supabase 保存账号标识、邮箱、名称、关联身份及登录记录。自行选择的头像会上传到 Supabase 头像存储，使用公开图片地址展示。\n\n配置账号数据服务时，登录后会自动合并本地和账号的文字会话、消息、思考过程、长期记忆、置顶和分组。本地模式不会连接 EveryTalk 自有服务器。API Key、语音 Key、MCP 配置、图片、附件、工具执行轨迹和生图对话不参与账号同步。同步数据保存在德国，国内用户涉及数据跨境传输。你可以在账号页删除云端数据，本机副本保留；服务器加密备份在删除后最多保留 7 天。权限和额度由服务器判断。\n\n应用通过 Android Keystore 加密保存会话凭据。退出登录会停止账号同步并删除本地账号凭据，保留聊天记录和 API 配置；卸载应用不会删除服务端账号。可通过项目页面联系维护者提出账号删除申请，请勿公开发布验证码或凭据。</string>
 
     <!-- 界面文案统一从资源读取，英文为默认语言，中文按应用设置切换。 -->
     <string name="skill_download">下载</string>
@@ -1671,6 +1671,9 @@
     <string name="agent_intervention_reenter">上次输入未送达，旧内容已清除，请重新输入后继续。</string>
     <string name="agent_intervention_secret_notice">凭据会由 Android Keystore 加密保存，模型只能使用当前操作的受限能力。</string>
     <string name="agent_intervention_input_notice">内容只交给本地可信 Adapter，不会发送给模型或写入聊天记录。</string>
+    <string name="agent_intervention_text_reply_hint">也可以直接输入普通消息。当前能力会被跳过，Agent 会根据你的回复继续任务。</string>
+    <string name="agent_intervention_text_reply_label">给 Agent 的普通回复</string>
+    <string name="agent_intervention_text_reply_send">发送普通回复</string>
     <string name="agent_intervention_confirm_completed">确认已完成</string>
     <string name="agent_intervention_submitting">正在提交接力内容</string>
     <string name="agent_intervention_reauthorizing">正在完成 Cloudflare 重新授权</string>
