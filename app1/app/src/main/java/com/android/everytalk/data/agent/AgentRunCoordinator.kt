@@ -951,6 +951,88 @@ class AgentRunCoordinator(
         secret.fill('\u0000')
     }
 
+    /**
+     * 迁移旧版本遗留的服务器 Secret 审批。
+     *
+     * 旧版本把 SERVER_ENV 当成 SkillSecret 保存，提交后不会进入服务器环境变量适配器。
+     * 这里把旧审批转换成统一 Broker 接力，再沿用现有的安全写入和恢复流程。
+     * Secret 只在内存中短暂存在，既不写入审批记录，也不进入模型消息。
+     */
+    suspend fun resolveLegacyProtectedSecret(
+        runId: String,
+        approvalRequestId: String,
+        secret: CharArray,
+    ): Boolean {
+        val submission = scope.async {
+            interventionMutex.withLock {
+                val pending = agentRunStore.pendingApproval(runId)
+                    ?.takeIf { it.approvalRequestId == approvalRequestId }
+                    ?: return@withLock false
+                val request = pending.agentRequest as? AgentPauseRequest.ProtectedSecret
+                    ?: return@withLock false
+                if (request.scope != SecretScope.SERVER_ENV) return@withLock false
+
+                val run = agentDao.getRun(runId) ?: return@withLock false
+                val workspace = when {
+                    request.targetId == null -> computerDao
+                        .getWorkspacesForConversation(run.sessionId)
+                        .singleOrNull()
+                    else -> computerDao.getWorkspaceById(request.targetId)
+                        ?: computerDao.getWorkspace(request.targetId, run.sessionId)
+                } ?: return@withLock false
+
+                // 先把旧审批标记为已处理，再由 Broker 接管同一 Tool 槽位，
+                // 避免旧审批和新 Suspension 并行恢复同一个 AgentRun。
+                agentRunStore.decideApproval(
+                    runId,
+                    approvalRequestId,
+                    AgentApprovalDecision.APPROVED,
+                ) ?: return@withLock false
+                val currentRun = agentDao.getRun(runId) ?: return@withLock false
+                val capabilityRequest = CapabilityRequest(
+                    requestedCapability = "server.env.secret",
+                    reasonSafe = request.reason,
+                    userVisibleContext = "目标服务器的受保护环境变量",
+                    parameters = mapOf(
+                        "scope" to request.scope.name,
+                        "name" to request.name,
+                        "path" to request.path.orEmpty(),
+                        "target_id" to (request.targetId ?: workspace.id),
+                    ),
+                )
+                val requestHash = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest("${pending.toolCall.name}|${pending.toolCall.arguments}".toByteArray(Charsets.UTF_8))
+                    .joinToString("") { "%02x".format(it) }
+                val ticket = interventionBroker.suspend(
+                    run = currentRun,
+                    capabilityRequest = capabilityRequest,
+                    turnId = pending.requestId,
+                    requestId = pending.requestId,
+                    toolCallId = pending.toolCall.id,
+                    executionSlot = pending.toolCall.id,
+                    requestHash = requestHash,
+                    requestSource = "MODEL_HINT",
+                    targetBindingRef = "computer:${workspace.computerId}:workspace:${workspace.id}",
+                    bindingGeneration = 0,
+                    executionGeneration = 0,
+                )
+                val nonce = ticket.resolutionNonce ?: return@withLock false
+                val resolved = interventionBroker.resolve(
+                    suspensionId = ticket.suspension.id,
+                    expectedVersion = ticket.suspension.rowVersion,
+                    nonce = nonce,
+                    material = ProtectedResolution.Ephemeral(secret),
+                )
+                if (resolved) scheduleInterventionContinuation(ticket.suspension.id)
+                recoverInterventionsLocked()
+                resolved
+            }
+        }
+        // UI 协程被关闭时，应用级提交仍需完成；提交结束后再清零调用方缓冲区。
+        submission.invokeOnCompletion { secret.fill('\u0000') }
+        return submission.await()
+    }
+
     suspend fun resolveDurableIntervention(
         suspensionId: String,
         expectedVersion: Long,

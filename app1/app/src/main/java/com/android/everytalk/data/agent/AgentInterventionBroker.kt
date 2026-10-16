@@ -149,6 +149,12 @@ class AgentInterventionBroker(
                 }
             }
         }
+        // 只记录 capability 和稳定错误码，不记录 Secret、环境变量值或远端输出，
+        // 让 Release 包也能区分“已提交但远端拒绝”和“结果未知”。
+        android.util.Log.i(
+            "AgentIntervention",
+            "delivery capability=${claimed.capabilityId} fact=${result.fact} failure=${result.failureCode ?: "none"}",
+        )
         recordFulfillmentResult(claimed, policy, result.fact, result.failureCode)
         if (result.fact != AdapterDeliveryFact.UNKNOWN) releaseResourceLease(claimed, policy)
         return result.fact

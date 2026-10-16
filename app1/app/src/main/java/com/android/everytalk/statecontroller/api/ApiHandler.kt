@@ -891,6 +891,29 @@ class ApiHandler(
                 respondToAgentApproval(runId, approvalRequestId, AgentApprovalDecision.REJECTED)
                 return@launch
             }
+            if (current.scope == com.android.everytalk.data.agent.SecretScope.SERVER_ENV) {
+                try {
+                    val accepted = agentRunCoordinator.resolveLegacyProtectedSecret(
+                        runId = runId,
+                        approvalRequestId = approvalRequestId,
+                        secret = value,
+                    )
+                    if (!accepted) {
+                        withContext(Dispatchers.Main.immediate) {
+                            stateHolder.showSnackbar("受保护输入已失效，请重新发起任务")
+                        }
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    value.fill('\u0000')
+                    logger.error("迁移旧版服务器 Secret 接力失败", error)
+                    withContext(Dispatchers.Main.immediate) {
+                        stateHolder.showSnackbar("服务器 Secret 提交失败，请重新发起任务")
+                    }
+                }
+                return@launch
+            }
             try {
                 if (remember && current.scope == com.android.everytalk.data.agent.SecretScope.SKILL) {
                     skillSecretStore.save(current.skillId, current.name, value)
