@@ -3,9 +3,9 @@ info:
   title: EveryTalk Cloud Sync API
   version: 0.2.0
   description: |
-    REVIEW DRAFT: 0.2.0 extension; not implemented or deployed. The existing
-    runtime has not yet been updated to this contract. Approval is required
-    before runtime, migration, backup, R2, or CI behavior is changed.
+    Local implementation of 0.2.0 with account-managed recovery and files.
+    This contract does not confirm production deployment. Enable the recovery
+    master key, private file storage and database migrations before clients use them.
 
     Supabase Auth authenticates the caller. The server stores synchronized
     data in its own PostgreSQL database. Every synchronized row is isolated by
@@ -28,7 +28,56 @@ tags:
   - name: sync
   - name: files
   - name: chat
-x-contract-status: review-draft-not-implemented
+x-contract-status: implemented-locally-not-deployed
+x-account-recovery:
+  description: |
+    Account-managed recovery replaces the password UI for new clients. After
+    JWT verification POST /sync/account-key returns a random 32-byte DEK over
+    HTTPS with Cache-Control private,no-store. The server CAN decrypt these
+    credentials. This is not user-only or end-to-end encryption. Database keys
+    are wrapped with AES-256-GCM under the deployment-only 32-byte
+    SYNC_MASTER_KEY_BASE64; it must be backed up separately and never sent to Android.
+    AAD for the stored configuration key is compact UTF-8 JSON
+    ["everytalk-account-key",userId,secretsEpoch]. Stored bytes are nonce(12)
+    followed by ciphertext(32) and tag(16), canonical padded standard base64.
+    The same user lock serializes account key creation, reset and sync writes.
+    The response version is secrets_epoch+1. Existing envelope format and field
+    AAD remain exactly as x-secret-policy, including JSON Pointer paths.
+    Old crypto_keys remains supported: only an original device that can supply
+    a DEK authenticating existing envelopes can enroll it. Otherwise return
+    409 LEGACY_KEY_REQUIRED; never replace an old key with a random one.
+    POST /sync/history-key returns an independent stable history DEK, version=1,
+    secrets_epoch=0. It is wrapped with purpose everytalk-account-history and
+    epoch 0. DELETE /sync/secrets rotates only the configuration key; it does
+    not invalidate archived chat. DELETE /sync/all removes both keys.
+    Clients store recovered configuration keys with their own Android Keystore;
+    history keys are retained only during a worker run. Tokens, DEKs and bodies
+    must never appear in logs, proxy caches, diagnostics or error responses.
+  history_files: |
+    Full messages keep the same UUID. Oversized or structured tool history is
+    serialized as SyncHistoryArchive, gzip compressed, then AES-256-GCM
+    encrypted under the history DEK. Bytes are nonce(12) || ciphertext || tag(16).
+    AAD is compact UTF-8 JSON ["everytalk-history",userId,sessionUuid,messageUuid,"0"].
+    Encrypted file chunks use ordinary attachments with payload.role=message_archive,
+    resourceDigest=SHA256 of the original UTF-8 archive JSON, chunkIndex (zero-based),
+    chunkCount and keyVersion=1. Every chunk has its own size/sha256/fileId.
+    resourceVersion identifies a single set of ciphertext and chunk boundaries;
+    never combine chunks across versions. Retire obsolete sets with tombstones
+    after queuing a complete replacement. Attachment tombstones must still be
+    pushed with the required AttachmentPayload fields; pull returns payload={}.
+    The normal messages row is a stable index if its full payload exceeds 64 KiB;
+    no truncated body is uploaded. Tools restore as terminal SYNC_HISTORY_ONLY
+    history, never as executable pending work. Full tool result files use role=tool_result,
+    resultPath under agent_tool_results/, and nonce || ciphertext || tag under
+    AAD ["everytalk-tool-result",userId,sessionUuid,messageUuid,resultPath,"0"].
+    Media use role=media, mediaId, chunkIndex, chunkCount, originalSize and
+    originalDigest. Tool results also carry originalSize and originalDigest for
+    their encrypted bytes. Assemble all chunks, verify total size/hash and GCM
+    authentication before publishing; keep local originals on any failure.
+    Skill value.manifestRef is a SyncFileInfo pointing to a JSON manifest. Each
+    entry has path,size,sha256,text,chunks (SyncFileInfo array). Empty files have
+    zero chunks and the empty SHA256. All component/chunk/manifest IDs MUST also
+    appear in value.fileRefs. Existing ownership and quota rules apply.
 x-protocol-versions:
   required: 0.2.0
   header: X-EveryTalk-Sync-Version
@@ -36,8 +85,9 @@ x-protocol-versions:
     Every sync and file request MUST send X-EveryTalk-Sync-Version: 0.2.0.
     A missing header or any value other than exactly 0.2.0 returns
     426 UNSUPPORTED_SYNC_VERSION, after authentication is checked. Existing
-    test data is disposable and is cleared with DELETE /sync/all before
-    enabling this protocol. All response fields, statuses, JWT checks,
+    disposable test data may be cleared with DELETE /sync/all. Upgrading real
+    users MUST preserve existing data and MUST NOT invoke that endpoint.
+    All response fields, statuses, JWT checks,
     per-user sequence locking, epoch and Redis fail-open behavior are defined
     for 0.2.0 only.
 x-setting-registry:
@@ -92,19 +142,22 @@ x-setting-registry:
     No credentials or device paths belong in kind/key or file reference IDs.
 x-secret-policy:
   description: |
-    The sync password, KEK and plaintext DEK never leave the client. Generate
+    The following password flow is legacy compatibility only. New clients use
+    x-account-recovery, whose authenticated endpoints do return plaintext DEKs
+    over HTTPS to their owner. In the legacy flow, generate
     a random 32-byte DEK locally; derive a 32-byte wrapping key using Argon2id
     and the recorded salt/parameters. wrappedDek wraps that DEK using
     AES-256-GCM; normal envelopes use the DEK. Fresh 12-byte nonce per encryption;
     ct is ciphertext followed by the 16-byte authentication tag. Base64 is
     canonical padded RFC4648 standard base64, not base64url or permissive decode.
     Never reuse a nonce with a key. A correct shape is not proof of decryptability;
-    the server has no keys and cannot verify the GCM tag or password.
+    the ordinary push validator checks the envelope shape, not its GCM tag.
     Clients authenticate context with AAD: compact UTF-8 JSON array
     ["everytalk-sync","0.2.0",userId,kind,key,jsonPointer,keyVersion,secretsEpoch].
     For wrappedDek use pointer /wrappedDek and the key derived from the password;
     for fields the pointer is relative to value. Never bind AAD to the proposed
-    row id because canonical_id can change it. New devices unlock locally.
+    row id because canonical_id can change it. Only legacy password-mode devices
+    unlock locally; account-managed devices recover the DEK after authentication.
     Crypto version is a positive generation, not a protocol version. First
     creation at key=default wins; exact retries are idempotent. Replacing an
     existing different crypto document, or deleting it through push, returns
@@ -171,7 +224,8 @@ x-secret-policy:
     A 0.2.0 client compares secrets_epoch on every pull, clears its cached DEK,
     encrypted-field cache and pending encrypted writes before any re-upload,
     then restarts pull at zero for configurations to see resets below its cursor.
-    It keeps nonsecret local data and never auto-recreates keys after a reset.
+    It keeps local data. Account-managed clients recover a new configuration
+    key and re-encrypt the retained local credentials; no password UI is required.
     DELETE /sync/all clears crypto as well and increments both epochs.
   logs_and_backups: |
     No request/response bodies, envelopes, salt, wrappedDek, crypto material,
@@ -338,6 +392,56 @@ x-required-tests:
   - Messages pushed after their session was deleted are rejected with session_deleted and never store content.
   - Session deletion reserves N sequences once and updates all affected messages in bulk.
 paths:
+  /sync/account-key:
+    post:
+      tags: [sync]
+      summary: Recover or create the authenticated account configuration key
+      operationId: recoverAccountKey
+      parameters:
+        - $ref: '#/components/parameters/SyncVersionRequired'
+      security:
+        - supabaseBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [secrets_epoch]
+              properties:
+                secrets_epoch: {type: integer, minimum: 0}
+                existing_dek: {type: string, description: 'Optional original-device DEK for legacy enrollment; canonical padded base64 of 32 bytes.'}
+      responses:
+        '200':
+          description: Account-managed key. Never cache or log the response body.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AccountRecoveryKey'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '409': {description: 'SECRETS_EPOCH_MISMATCH, LEGACY_KEY_REQUIRED or INVALID_ACCOUNT_KEY; pull again before retrying.'}
+        '426': {$ref: '#/components/responses/UnsupportedVersion'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '503': {description: 'ACCOUNT_KEY_NOT_CONFIGURED or a transient dependency error; no random temporary master key is generated.'}
+  /sync/history-key:
+    post:
+      tags: [sync]
+      summary: Recover a stable account history key independently of configuration resets
+      operationId: recoverHistoryKey
+      parameters:
+        - $ref: '#/components/parameters/SyncVersionRequired'
+      security:
+        - supabaseBearer: []
+      responses:
+        '200':
+          description: Independent history DEK with version 1 and secrets_epoch 0. Never cache the HTTP response.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AccountRecoveryKey'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '426': {$ref: '#/components/responses/UnsupportedVersion'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '503': {description: ACCOUNT_KEY_NOT_CONFIGURED or a transient dependency error.}
   /health:
     get:
       tags: [health]
@@ -1190,6 +1294,14 @@ components:
       description: Supabase Auth access token. The server uses the JWT `sub` claim as `user_id`.
 
   schemas:
+    AccountRecoveryKey:
+      type: object
+      additionalProperties: false
+      required: [version, secrets_epoch, dek]
+      properties:
+        version: {type: integer, minimum: 1}
+        secrets_epoch: {type: integer, minimum: 0}
+        dek: {type: string, description: Canonical padded standard base64 of 32 bytes.}
     SessionDeletedExample:
       type: object
       description: Example of a message pushed after its parent session was deleted.
