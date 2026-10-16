@@ -757,13 +757,17 @@ internal fun MessageSender.sendMessageInternal(
                 } else {
                     null
                 }
-                val calibrationSnapshot = historyUiMessages.asReversed().firstOrNull { message ->
-                    message.sender == UiSender.AI &&
-                        message.modelName.equals(currentConfig.model, ignoreCase = true) &&
-                        message.providerName.equals(currentConfig.provider, ignoreCase = true) &&
-                        message.contextUsageSnapshot?.configId == currentConfig.id &&
-                        message.contextUsageSnapshot.measuredInputTokens != null
-                }?.contextUsageSnapshot
+                // 文本会在 AgentLoop 按同一真实请求的 Room 快照校准；旧气泡可能把展开前估算
+                // 与展开后实测配在一起。这里不能再用它裁附件或估预算，图片链路仍沿用原逻辑。
+                val calibrationSnapshot = if (isImageGeneration) {
+                    historyUiMessages.asReversed().firstOrNull { message ->
+                        message.sender == UiSender.AI &&
+                            message.modelName.equals(currentConfig.model, ignoreCase = true) &&
+                            message.providerName.equals(currentConfig.provider, ignoreCase = true) &&
+                            message.contextUsageSnapshot?.configId == currentConfig.id &&
+                            message.contextUsageSnapshot.measuredInputTokens != null
+                    }?.contextUsageSnapshot
+                } else null
                 val inputTokenCalibration = calibrationSnapshot?.let { snapshot ->
                     checkNotNull(snapshot.measuredInputTokens)
                         .minus(snapshot.uncalibratedEstimatedInputTokens)

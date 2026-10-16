@@ -249,6 +249,131 @@ class AgentContextManagerTest {
     }
 
     @Test
+    fun `大窗口模型恢复截短历史时仍按保留边界替换全部已压缩原文`() {
+        val checkpoint = AgentCompactionEntryEntity(
+            id = "compact-truncated",
+            sessionId = "session-1",
+            configIdSnapshot = "model-a-config",
+            summary = "模型A已经压缩的结论",
+            summarizedThroughItemId = "missing-boundary",
+            prefixFingerprint = "original-full-history",
+            retainedTailJson = """{"summary_role":"system","source_prefix_ids":["missing-first","old-user","missing-boundary"],"retained_ids":["retained-user","retained-assistant"]}""",
+            tokensBefore = 180_000,
+            estimatedTokensAfter = 100_000,
+            summaryRequestId = "summary-a",
+            status = AgentCompactionStatus.COMPLETED.name,
+            createdAt = 1L,
+        )
+        val history = listOf(
+            SimpleTextApiMessage(id = "old-user", role = "user", content = "不应回灌的旧原文".repeat(200)),
+            SimpleTextApiMessage(id = "retained-user", role = "user", content = "近期任务"),
+            SimpleTextApiMessage(id = "retained-assistant", role = "assistant", content = "近期结论"),
+            SimpleTextApiMessage(id = "new-user", role = "user", content = "切换模型继续"),
+        )
+        // 同时覆盖历史从保留边界开始的情况：替换数量为零也必须插入摘要。
+        for (messages in listOf(history, history.drop(1))) {
+            val prepared = manager.prepare(
+                requestId = "request-model-b",
+                request = request(messages, maxContextTokens = 1_000_000, compactThresholdTokens = 900_000)
+                    .copy(model = "model-b"),
+                limits = ModelTokenLimits(maxOutputTokens = 512, maxContextTokens = 1_000_000),
+                checkpoint = checkpoint,
+            )
+
+            assertEquals(checkpoint.id, prepared.snapshot.compactionId)
+            assertNull(prepared.compactionPlan)
+            assertEquals(
+                listOf("agent-compaction:${checkpoint.id}", "retained-user", "retained-assistant", "new-user"),
+                prepared.messages.map { it.id },
+            )
+        }
+
+        // 最新记录不可用时，次新的活动摘要仍应优先于更老但全文指纹匹配的摘要。
+        val older = checkpoint.copy(
+            id = "older-direct",
+            summarizedThroughItemId = history.first().id,
+            prefixFingerprint = agentTranscriptFingerprint(
+                listOf("old-user|user|null|${history.first().content}"),
+            ),
+            retainedTailJson = """{"summary_role":"system"}""",
+        )
+        val recovered = manager.prepare(
+            requestId = "request-fallback",
+            request = request(history, maxContextTokens = 1_000_000, compactThresholdTokens = 900_000),
+            limits = ModelTokenLimits(maxOutputTokens = 512, maxContextTokens = 1_000_000),
+            checkpoint = checkpoint.copy(id = "failed-checkpoint", status = "FAILED"),
+            checkpointFallbacks = listOf(checkpoint, older),
+        )
+        assertEquals(checkpoint.id, recovered.snapshot.compactionId)
+        assertFalse(recovered.messages.any { it.id == "old-user" })
+    }
+
+    @Test
+    fun `只有后续保留消息存在时不能跳过缺失边界之间的新分支`() {
+        val checkpoint = AgentCompactionEntryEntity(
+            id = "compact-branch",
+            sessionId = "session-1",
+            configIdSnapshot = "config-1",
+            summary = "旧摘要",
+            summarizedThroughItemId = "missing-boundary",
+            prefixFingerprint = "stale",
+            retainedTailJson = """{"summary_role":"system","source_prefix_ids":["old-user","missing-boundary"],"retained_ids":["missing-first-retained","retained-assistant"]}""",
+            tokensBefore = 180_000,
+            estimatedTokensAfter = 100_000,
+            summaryRequestId = "summary-a",
+            status = AgentCompactionStatus.COMPLETED.name,
+            createdAt = 1L,
+        )
+        val messages = listOf(
+            SimpleTextApiMessage(id = "old-user", role = "user", content = "旧需求"),
+            SimpleTextApiMessage(id = "new-branch", role = "user", content = "必须保留的新指令"),
+            SimpleTextApiMessage(id = "retained-assistant", role = "assistant", content = "保留回答"),
+        )
+        val prepared = manager.prepare(
+            requestId = "branch",
+            request = request(messages, maxContextTokens = 1_000_000, compactThresholdTokens = 900_000),
+            limits = ModelTokenLimits(maxOutputTokens = 512, maxContextTokens = 1_000_000),
+            checkpoint = checkpoint,
+        )
+
+        assertEquals(listOf("agent-compaction:${checkpoint.id}", "new-branch", "retained-assistant"), prepared.messages.map { it.id })
+    }
+
+    @Test
+    fun `压缩前缀插入排队指令且首条保留消息缺失时不回灌其他已摘要消息`() {
+        val checkpoint = AgentCompactionEntryEntity(
+            id = "compact-interleaved", sessionId = "session-1", configIdSnapshot = "config-a",
+            summary = "已覆盖全部旧原文的摘要", summarizedThroughItemId = "missing-boundary",
+            prefixFingerprint = "stale",
+            retainedTailJson = """{"summary_role":"system","source_prefix_ids":["old-1","old-2","old-3","missing-boundary"],"retained_ids":["missing-first-retained","recent-user"]}""",
+            tokensBefore = 180_000, estimatedTokensAfter = 80_000,
+            summaryRequestId = "summary-a", status = AgentCompactionStatus.COMPLETED.name, createdAt = 1L,
+        )
+        val messages = listOf(
+            SimpleTextApiMessage(id = "old-1", role = "user", content = "旧".repeat(30_000)),
+            SimpleTextApiMessage(id = "queued", role = "user", content = "排队补充的新要求必须保留"),
+            SimpleTextApiMessage(id = "old-2", role = "assistant", content = "文".repeat(30_000)),
+            SimpleTextApiMessage(id = "old-3", role = "user", content = "本".repeat(30_000)),
+            SimpleTextApiMessage(id = "recent-user", role = "user", content = "近期需求"),
+            SimpleTextApiMessage(id = "latest-user", role = "user", content = "看看有无最新代码需要拉"),
+        )
+        val request = request(messages, maxContextTokens = 1_000_000, compactThresholdTokens = 900_000)
+        val limits = ModelTokenLimits(maxOutputTokens = 512, maxContextTokens = 1_000_000)
+        val prepared = manager.prepare("model-b", request, limits, checkpoint)
+        assertEquals(
+            listOf("agent-compaction:${checkpoint.id}", "queued", "recent-user", "latest-user"),
+            prepared.messages.map { it.id },
+        )
+        assertTrue(prepared.snapshot.activeContextTokens < 1_000)
+
+        // 再次压缩也只总结新增内容，不能把前缀中断后散落的旧原文再次放入摘要请求。
+        val plan = checkNotNull(manager.prepare("recompact", request, limits, checkpoint, forceLocalCompaction = true).compactionPlan)
+        assertEquals(checkpoint.summary, plan.previousSummary)
+        assertTrue(plan.messagesToSummarize.none { it.id.startsWith("old-") })
+        assertTrue(plan.messagesToSummarize.any { it.id == "queued" })
+    }
+
+    @Test
     fun `检查点后的超长工具轮次继续使用user摘要角色`() {
         val user = SimpleTextApiMessage(id = "user-1", role = "user", content = "持续处理")
         val messages = listOf(

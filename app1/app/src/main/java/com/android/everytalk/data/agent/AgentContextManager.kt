@@ -95,24 +95,13 @@ class AgentContextManager(
         // 最新检查点的边界消息可能已被删除；此时必须回退到更早的有效检查点，
         // 不能因为新模型窗口更大就把完整历史重新送入请求。
         val fallbackCheckpoints = checkpointFallbacks.filterNot { it.id == checkpoint?.id }
-        val latestDirectCheckpoint = checkpoint?.takeIf { it.matches(canonical) }
-        val latestActiveCheckpoint = checkpoint?.takeIf {
-            latestDirectCheckpoint == null && it.canApplyActiveContext(canonical)
+        val knownCheckpoints = listOfNotNull(checkpoint) + fallbackCheckpoints
+        // 按新到旧逐条判断两种恢复方式，不能让更老的全文指纹匹配抢在新摘要的边界恢复之前。
+        val acceptedCheckpoint = knownCheckpoints.firstOrNull {
+            it.matches(canonical) || it.canApplyActiveContext(canonical)
         }
-        val directCheckpoint = latestDirectCheckpoint
-            ?: if (latestActiveCheckpoint == null) {
-                fallbackCheckpoints.firstOrNull { it.matches(canonical) }
-            } else {
-                null
-            }
-        val activeCheckpoint = latestActiveCheckpoint
-            ?: if (latestDirectCheckpoint == null && directCheckpoint == null) {
-                fallbackCheckpoints.firstOrNull { it.canApplyActiveContext(canonical) }
-            } else {
-                null
-            }
-        val acceptedCheckpoint = directCheckpoint ?: activeCheckpoint
-        val knownCheckpoints = listOfNotNull(checkpoint) + checkpointFallbacks
+        val directCheckpoint = acceptedCheckpoint?.takeIf { it.matches(canonical) }
+        val activeCheckpoint = acceptedCheckpoint?.takeIf { directCheckpoint == null }
         val staleCheckpointRecovery = acceptedCheckpoint == null &&
             knownCheckpoints.isNotEmpty()
         val activePrefixLength = if (directCheckpoint == null) {
@@ -406,7 +395,12 @@ class AgentContextManager(
             ?.let { id -> canonical.indexOfFirst { it.id == id } + 1 }
             ?.coerceAtLeast(0)
             ?: 0
-        val candidateIndexes = canonical.indices.filter { it >= sourceStart && it !in systemIndexes }
+        // 活动历史中可能夹有后来插入的排队指令。它们必须进入新摘要，但旁边已被旧摘要
+        // 覆盖的消息不能重新总结；sourceStart 仅表示连续前缀，不能代表全部覆盖范围。
+        val coveredIds = if (activeSourcePrefixLength != null) checkpoint?.compactionSourcePrefixIds()?.toHashSet() else null
+        val candidateIndexes = canonical.indices.filter {
+            it >= sourceStart && it !in systemIndexes && canonical[it].id !in coveredIds.orEmpty()
+        }
         if (candidateIndexes.isEmpty()) return null
         val groups = atomicGroups(canonical, candidateIndexes)
         if (groups.size <= 1) return null
@@ -465,10 +459,11 @@ class AgentContextManager(
             prefixFingerprint = prefixFingerprint(canonical, throughIndex),
             retainedTailIds = retainedIndexes.map { canonical[it].id },
             summaryRole = summaryRole,
-            sourcePrefixIds = canonical
+            // 新摘要包含 previousSummary，因此覆盖范围也必须累计，不能因本次历史缺少前段而丢掉旧 ID。
+            sourcePrefixIds = (checkpoint?.compactionSourcePrefixIds().orEmpty() + canonical
                 .take(throughIndex + 1)
                 .filterNot { it.role.equals("system", true) }
-                .map { it.id },
+                .map { it.id }).distinct(),
             tokensBefore = tokensBefore,
             triggerThreshold = budget.triggerThreshold,
             recentTargetTokens = budget.recentTarget,
@@ -514,32 +509,39 @@ class AgentContextManager(
     }
 
     /**
-     * 当可见历史发生分支重生成时，原压缩边界可能不再存在。
-     * 只要当前历史仍保留压缩前缀的一部分，并且在共同前缀后有新分支，就沿用摘要，
-     * 再接上当前分支；这样不会因切换到大窗口模型而把压缩前的完整历史重新发回去。
+     * 分支重生成、排队消息插入或历史截短后，仍按检查点已覆盖的消息 ID 沿用摘要。
+     * 当前历史必须还有未覆盖内容，避免在回退到摘要边界之前时引入后续摘要。
      */
     private fun AgentCompactionEntryEntity.canApplyActiveContext(
         messages: List<AbstractApiMessage>,
     ): Boolean {
-        val commonPrefixLength = activeContextCutLength(messages)
+        val commonPrefixLength = activeContextCutLength(messages) ?: return false
         val currentIds = messages.filterNot { it.role.equals("system", true) }.map { it.id }
-        return commonPrefixLength > 0 && currentIds.size > commonPrefixLength
+        return currentIds.size > commonPrefixLength
     }
 
-    /** 返回摘要应替换到当前历史的非 system 消息数量。 */
+    /** 返回连续已覆盖前缀的非 system 消息数；零也可恢复，null 才表示没有共同历史。 */
     private fun AgentCompactionEntryEntity.activeContextCutLength(
         messages: List<AbstractApiMessage>,
-    ): Int {
+    ): Int? {
+        if (status != AgentCompactionStatus.COMPLETED.name || summary.isBlank()) return null
         val currentIds = messages.filterNot { it.role.equals("system", true) }.map { it.id }
-        compactionSourcePrefixIds()?.takeIf { it.isNotEmpty() }?.let { sourcePrefixIds ->
-            return sourcePrefixIds.zip(currentIds).takeWhile { (sourceId, currentId) ->
-                sourceId == currentId
-            }.count()
+        val sourcePrefixIds = compactionSourcePrefixIds()?.takeIf { it.isNotEmpty() }
+        sourcePrefixIds?.let { sourceIds ->
+            val coveredIds = sourceIds.toHashSet()
+            val retainedIds = compactionRetainedTailIds().toHashSet()
+            // 不要求历史从第一条起连续相同：排队消息、分支删除和运行恢复都会打断顺序。
+            // 这里仅定位连续覆盖前缀；applyActiveContext 会逐条排除所有已覆盖 ID，
+            // 从而保留穿插的新指令，也不回灌后面仍属于旧摘要的原文。
+            if (currentIds.none { it in coveredIds || it in retainedIds }) return null
+            return currentIds.takeWhile { it in coveredIds }.size
         }
-        // 兼容旧检查点：旧版本只保存了压缩后的 retained_ids，没有保存完整前缀 ID。
-        // 当前历史仍包含 retained tail 时，可以把摘要放回它之前，避免升级后首次切换模型回灌全文。
-        val firstRetainedId = compactionRetainedTailIds().firstOrNull() ?: return 0
-        return currentIds.indexOf(firstRetainedId).takeIf { it > 0 } ?: 0
+        val firstRetainedIndex = compactionRetainedTailIds().firstOrNull()?.let(currentIds::indexOf)
+        // 旧版没有保存覆盖 ID，只能回退到其首条保留消息这个稳定边界。
+        if (firstRetainedIndex != null && firstRetainedIndex >= 0) {
+            return firstRetainedIndex
+        }
+        return null
     }
 
     private fun applyActiveContext(
@@ -547,8 +549,8 @@ class AgentContextManager(
         checkpoint: AgentCompactionEntryEntity,
     ): List<AbstractApiMessage> {
         val current = messages.filterNot { it.role.equals("system", true) }
-        val commonPrefixLength = checkpoint.activeContextCutLength(messages)
-        if (commonPrefixLength == 0 || current.size <= commonPrefixLength) return messages
+        val commonPrefixLength = checkpoint.activeContextCutLength(messages) ?: return messages
+        if (current.size <= commonPrefixLength) return messages
         val summaryRole = checkpoint.compactionSummaryRole()
         return buildList {
             addAll(messages.filter { it.role.equals("system", true) })
@@ -563,7 +565,8 @@ class AgentContextManager(
                     },
                 )
             )
-            addAll(current.drop(commonPrefixLength))
+            val coveredIds = checkpoint.compactionSourcePrefixIds()?.takeIf { it.isNotEmpty() }?.toHashSet()
+            addAll(if (coveredIds != null) current.filterNot { it.id in coveredIds } else current.drop(commonPrefixLength))
         }
     }
 

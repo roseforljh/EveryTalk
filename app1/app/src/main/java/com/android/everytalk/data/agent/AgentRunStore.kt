@@ -27,6 +27,7 @@ import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.MessageContentPart
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.ModelParameterProtocol
+import com.android.everytalk.data.DataClass.ModelTokenLimits
 import com.android.everytalk.data.DataClass.ProviderTurnContinuation
 import com.android.everytalk.data.DataClass.modelParameterProtocol
 import com.android.everytalk.data.DataClass.toApiText
@@ -1206,6 +1207,31 @@ class AgentRunStore(
             return null
         }
         return continuation
+    }
+
+    /**
+     * 文本请求的校准以 Room 请求账本为准，不能信任旧气泡上的估算。
+     * 旧版停止或失败时，气泡可能保留展开 Agent 历史之前的估算，却收到展开后的实测，
+     * 相减会产生几十万 token 的虚假偏差，使历史在相邻请求之间被大量裁掉又重新加入。
+     * 没有同配置、同模型、同端点的实测时归零，也让已存入历史的错误校准自然失效。
+     */
+    suspend fun calibrateRequest(
+        sessionId: String,
+        request: ChatRequest,
+        limits: ModelTokenLimits,
+    ): ChatRequest {
+        val management = request.contextManagement ?: return request
+        val calibration = dao.getLatestInputTokenCalibration(
+            sessionId = sessionId,
+            configId = management.configId,
+            provider = request.provider,
+            endpoint = request.apiAddress,
+            model = request.model,
+        ) ?: 0L
+        val window = limits.maxContextTokens.toLong().coerceAtLeast(1L)
+        return request.copy(contextManagement = management.copy(
+            inputTokenCalibration = calibration.coerceIn(-window, window),
+        ))
     }
 
     suspend fun usageSummary(runId: String): AgentUsageSummary {

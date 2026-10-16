@@ -11,10 +11,14 @@ import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.DataClass.PartsApiMessage
 import com.android.everytalk.data.DataClass.ApiContentPart
 import com.android.everytalk.data.database.AppDatabase
+import com.android.everytalk.data.database.entities.AgentContextSnapshotEntity
 import com.android.everytalk.data.database.entities.ChatSessionEntity
 import com.android.everytalk.data.database.entities.PendingMessageEntity
 import com.android.everytalk.data.network.AppStreamEvent
 import com.android.everytalk.data.network.ModelTurnTransport
+import com.android.everytalk.data.network.TokenUsage
+import com.android.everytalk.data.network.TokenUsageSource
+import com.android.everytalk.statecontroller.RequestTokenEstimator
 import com.android.everytalk.models.SelectedMediaItem
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flow
@@ -22,6 +26,10 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -642,6 +650,258 @@ class AgentContextCompressionRecoveryTest {
 
         assertTrue("压缩没有执行：$outcome", outcome is ManualCompactionOutcome.Compacted)
         assertTrue("摘要输出预算过小：$summaryOutputTokens", summaryOutputTokens >= 1_024)
+    }
+
+    @Test
+    fun `二十万窗口压缩落库后切换百万窗口及切回均继承活动摘要`() = runBlocking {
+        val sessionId = "switch-model-compaction"
+        seedSession(sessionId)
+        val history = listOf(
+            SimpleTextApiMessage(id = "old-user", role = "user", content = "旧".repeat(50_000)),
+            SimpleTextApiMessage(id = "old-assistant", role = "assistant", content = "史".repeat(45_000)),
+            SimpleTextApiMessage(id = "recent-user", role = "user", content = "近".repeat(95_000)),
+        )
+        val base = loopRequest(sessionId).copy(
+            request = loopRequest(sessionId).request.copy(
+                messages = history,
+                model = "model-a",
+                contextManagement = RequestContextManagement(
+                    configId = "config-a",
+                    maxContextTokens = 200_000,
+                    reservedOutputTokens = 512,
+                    compactThresholdTokens = 180_000,
+                    autoCompressionEnabled = true,
+                ),
+            ),
+            tokenLimits = ModelTokenLimits(maxOutputTokens = 512, maxContextTokens = 200_000),
+        )
+        var calls = 0
+        val sent = mutableListOf<ChatRequest>()
+        val transport = ModelTurnTransport { turn ->
+            calls++
+            sent += turn.request
+            flowOf(
+                AppStreamEvent.Content(if (calls == 1) "旧历史的有效摘要" else "完成"),
+                AppStreamEvent.Finish("stop"),
+            )
+        }
+        AgentLoop(runStore = store, modelTransport = transport).run(base).toList()
+        val checkpoint = checkNotNull(store.latestCompaction(sessionId))
+        assertTrue(checkpoint.estimatedTokensAfter in 95_000..110_000)
+
+        // 重建 Store 和 Loop，确保读的是 Room 检查点，而不是上轮内存里的压缩结果。
+        // 依次验证完整历史换模型、前段缺失换模型，以及关闭自动压缩后切回小窗口。
+        val variants = listOf(
+            Triple("model-b", 1_000_000, history),
+            Triple("model-c", 1_000_000, history.drop(1)),
+            Triple("model-a", 200_000, history),
+        )
+        variants.forEachIndexed { index, (model, window, messages) ->
+            val next = base.copy(
+                visibleAssistantMessageId = "switched-assistant-$index",
+                userMessageId = "switched-user-$index",
+                request = base.request.copy(
+                    model = model,
+                    messages = messages + SimpleTextApiMessage(
+                        id = "switched-user-$index", role = "user", content = "切换后继续",
+                    ),
+                    contextManagement = checkNotNull(base.request.contextManagement).copy(
+                        configId = "config-$model",
+                        maxContextTokens = window,
+                        compactThresholdTokens = window * 9L / 10,
+                        autoCompressionEnabled = index != 2,
+                    ),
+                ),
+                tokenLimits = base.tokenLimits.copy(maxContextTokens = window),
+            )
+            val restoredStore = AgentRunStore(database.agentDao())
+            val events = AgentLoop(runStore = restoredStore, modelTransport = transport).run(next).toList()
+
+            assertTrue(events.any { it is AppStreamEvent.Content && it.text == "完成" })
+            val actual = sent.last()
+            assertEquals(model, actual.model)
+            assertTrue(actual.messages.any { it.id == "agent-compaction:${checkpoint.id}" })
+            assertTrue(actual.messages.none { it.id == "old-user" || it.id == "old-assistant" })
+            assertTrue(actual.messages.any { it.id == "recent-user" })
+            assertEquals("switched-user-$index", actual.messages.last().id)
+            assertEquals(1, restoredStore.compactions(sessionId).size)
+        }
+        assertEquals(5, calls) // 一次摘要、模型 A 的主请求，以及三次切换后的主请求。
+
+        // 再从缺少前段的历史压缩一次，然后恢复完整历史。
+        // 新摘要必须继承旧摘要覆盖的 ID，否则又会退回第一次摘要并回灌 recent-user。
+        val retained = SimpleTextApiMessage(id = "after-second-compaction", role = "user", content = "继续完成任务")
+        val outcome = AgentLoop(runStore = store, modelTransport = transport).compactNow(
+            sessionId,
+            base.request.copy(messages = history.drop(1) + retained),
+            base.tokenLimits,
+        )
+        assertTrue(outcome is ManualCompactionOutcome.Compacted)
+        val latest = checkNotNull(store.latestCompaction(sessionId))
+        assertTrue(latest.id != checkpoint.id)
+        val restored = base.copy(
+            visibleAssistantMessageId = "assistant-after-second-compaction",
+            request = base.request.copy(
+                model = "model-d",
+                messages = history + retained,
+                contextManagement = checkNotNull(base.request.contextManagement).copy(
+                    configId = "config-d", maxContextTokens = 1_000_000, compactThresholdTokens = 900_000,
+                ),
+            ),
+            tokenLimits = base.tokenLimits.copy(maxContextTokens = 1_000_000),
+        )
+        AgentLoop(runStore = AgentRunStore(database.agentDao()), modelTransport = transport)
+            .run(restored).toList()
+        assertTrue(sent.last().messages.any { it.id == "agent-compaction:${latest.id}" })
+        assertTrue(sent.last().messages.none { it.id in history.map(SimpleTextApiMessage::id) })
+        assertEquals(retained.id, sent.last().messages.last().id)
+        assertEquals(7, calls)
+    }
+
+    @Test
+    fun `压缩后中途停止仍发布真实请求快照且继续时不回灌全文`() = runBlocking {
+        val sessionId = "stop-after-compaction"
+        seedSession(sessionId)
+        val base = loopRequest(sessionId, compactThresholdTokens = 500)
+        val partialReceived = CompletableDeferred<Unit>()
+        val events = mutableListOf<AppStreamEvent>()
+        val sent = mutableListOf<ChatRequest>()
+        var calls = 0
+        val loop = AgentLoop(
+            runStore = store,
+            modelTransport = ModelTurnTransport { turn ->
+                sent += turn.request
+                calls++
+                if (calls == 1) {
+                    flowOf(AppStreamEvent.Content("保留旧需求与结论的摘要"), AppStreamEvent.Finish("stop"))
+                } else flow {
+                    emit(AppStreamEvent.Content("尚未完成的回答"))
+                    awaitCancellation()
+                }
+            },
+        )
+        val running = launch {
+            loop.run(base).collect { event ->
+                events += event
+                if (event is AppStreamEvent.Content && event.text == "尚未完成的回答") {
+                    partialReceived.complete(Unit)
+                }
+            }
+        }
+        try {
+            withTimeout(10_000) { partialReceived.await() }
+        } finally {
+            running.cancelAndJoin()
+        }
+
+        val run = store.getRunsForSession(sessionId).single()
+        val actualSnapshot = checkNotNull(store.usageSummary(run.id).activeContext)
+        val published = events.filterIsInstance<AppStreamEvent.AgentUsage>().lastOrNull()
+        assertNotNull("打断前必须发布压缩后的快照，不能等 Finish 才更新界面", published)
+        val usage = checkNotNull(published)
+        assertEquals(actualSnapshot.activeContextTokens, usage.activeContext?.estimatedInputTokens)
+        assertEquals(actualSnapshot.activeContextTokens, usage.activeRequest.inputTokens)
+        assertEquals(com.android.everytalk.data.network.TokenUsageSource.ESTIMATED, usage.activeRequest.source)
+        assertEquals(false, usage.activeRequest.isFinal)
+        assertEquals(AgentRunStatus.CANCELLED.name, run.status)
+        assertTrue(sent.last().messages.any { it.id.startsWith("agent-compaction:") })
+        assertTrue(sent.last().messages.none { it.id == "old-user" || it.id == "old-assistant" })
+
+        // 停止不会撤销已成功落库的摘要；再次请求仍应继承同一份压缩上下文。
+        val continuedRequests = mutableListOf<ChatRequest>()
+        AgentLoop(
+            runStore = AgentRunStore(database.agentDao()),
+            modelTransport = ModelTurnTransport { turn ->
+                continuedRequests += turn.request
+                flowOf(AppStreamEvent.Content("继续完成"), AppStreamEvent.Finish("stop"))
+            },
+        ).run(base.copy(visibleAssistantMessageId = "continued-assistant")).toList()
+        assertEquals(1, continuedRequests.size)
+        assertTrue(continuedRequests.single().messages.none { it.id == "old-user" || it.id == "old-assistant" })
+        assertEquals(1, store.compactions(sessionId).size)
+    }
+
+    @Test
+    fun `中断旧消息的虚假校准不能裁掉历史或跨模型污染请求`() = runBlocking {
+        val sessionId = "cancelled-usage-calibration"
+        seedSession(sessionId)
+        val base = loopRequest(sessionId).let { input ->
+            input.copy(
+                tokenLimits = ModelTokenLimits(maxOutputTokens = 32_768, maxContextTokens = 1_048_576),
+                request = input.request.copy(
+                    messages = listOf(
+                        SimpleTextApiMessage(id = "retained-user", role = "user", content = "旧".repeat(300_000)),
+                        SimpleTextApiMessage(id = "retained-assistant", role = "assistant", content = "文".repeat(300_000)),
+                        SimpleTextApiMessage(id = "current-user", role = "user", content = "看看有无最新代码需要拉"),
+                    ),
+                    contextManagement = checkNotNull(input.request.contextManagement).copy(
+                        maxContextTokens = 1_048_576,
+                        reservedOutputTokens = 32_768,
+                        autoCompressionEnabled = false,
+                        // 真机旧版把初始 UI 估算与展开历史后的实测相减，得到这个虚假正偏差。
+                        inputTokenCalibration = 624_012,
+                    ),
+                ),
+            )
+        }
+        val cancelledRun = store.createRun(
+            sessionId, "previous-user", "cancelled-assistant", "config-1", base.request,
+        )
+        // 复现手机账本：请求已完成，随后在工具阶段停止；真实偏差为 861986 - 964168。
+        val snapshot = AgentContextManager().prepare("measured-request", base.request, base.tokenLimits).snapshot.copy(
+            systemPromptTokens = 30_427, conversationTextTokens = 826_400, mediaTokens = 28_672,
+            toolSchemaTokens = 41_905, protocolOverheadTokens = 36_764,
+            estimatedPromptTokens = 964_168, activeContextTokens = 1_012_262, calibrationTokens = 48_094,
+        )
+        val fact = store.createRequest(
+            run = cancelledRun, ordinal = 1, purpose = AgentRequestPurpose.AGENT_TURN, modelTurnOrdinal = 1,
+            provider = base.request.provider, endpoint = base.request.apiAddress, model = base.request.model,
+            transcriptFingerprint = snapshot.transcriptFingerprint, snapshot = snapshot,
+        )
+        store.saveUsage(fact.id, TokenUsage(
+            inputTokens = 861_986, outputTokens = 2_918, isFinal = true,
+            source = TokenUsageSource.OPENAI_CHAT,
+        ))
+        store.updateRequest(fact, AgentRequestStatus.COMPLETED)
+        store.updateRunStatus(cancelledRun, AgentRunStatus.CANCELLED)
+
+        val sent = mutableListOf<ChatRequest>()
+        suspend fun send(input: AgentLoopRequest): AgentContextSnapshotEntity {
+            AgentLoop(
+                runStore = AgentRunStore(database.agentDao()),
+                modelTransport = ModelTurnTransport { turn ->
+                    sent += turn.request
+                    val estimate = RequestTokenEstimator.estimate(turn.request.messages, turn.request.tools).totalInputTokens
+                    flowOf(
+                        AppStreamEvent.Content("已经是最新"),
+                        AppStreamEvent.Usage(TokenUsage(
+                            inputTokens = estimate - 102_182, outputTokens = 242, isFinal = true,
+                            source = TokenUsageSource.OPENAI_CHAT,
+                        )),
+                        AppStreamEvent.Finish("stop"),
+                    )
+                },
+            ).run(input).toList()
+            val run = checkNotNull(store.getRunByVisibleMessage(input.visibleAssistantMessageId))
+            return checkNotNull(store.usageSummary(run.id).activeContext)
+        }
+
+        val first = send(base)
+        assertEquals(-102_182L, first.calibrationTokens)
+        assertTrue(sent.last().messages.any { it.id == "retained-user" })
+        val next = send(base.copy(visibleAssistantMessageId = "next-assistant"))
+        assertEquals(first.activeContextTokens, next.activeContextTokens)
+        assertEquals(sent[0].messages.map { it.id }, sent[1].messages.map { it.id })
+
+        // 模型、端点或配置改变后没有匹配的账本，必须从零校准，不能复用旧气泡的偏差。
+        listOf(
+            base.request.copy(model = "another-model"),
+            base.request.copy(apiAddress = "https://another.test"),
+            base.request.copy(contextManagement = base.request.contextManagement?.copy(configId = "another-config")),
+        ).forEachIndexed { index, request ->
+            val changed = send(base.copy(request = request, visibleAssistantMessageId = "changed-$index"))
+            assertEquals(0L, changed.calibrationTokens)
+        }
     }
 
     private fun manualCompactionRequest(messages: List<SimpleTextApiMessage>): ChatRequest = ChatRequest(

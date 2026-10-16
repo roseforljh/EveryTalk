@@ -991,6 +991,32 @@ interface AgentDao {
     @Query("SELECT * FROM agent_context_snapshots WHERE requestId = :requestId LIMIT 1")
     suspend fun getContextSnapshot(requestId: String): AgentContextSnapshotEntity?
 
+    /**
+     * 只用同一真实请求的发送快照与最终实测校准。Run 可以随后被用户取消，
+     * 但该请求本身必须已完成；估算用量、摘要请求和其他模型配置不能混入。
+     */
+    @Query("""
+        SELECT usage.promptTokens - snapshot.estimatedPromptTokens
+        FROM agent_requests AS request
+        JOIN agent_runs AS run ON run.id = request.runId
+        JOIN agent_request_usage AS usage ON usage.requestId = request.id
+        JOIN agent_context_snapshots AS snapshot ON snapshot.requestId = request.id
+        WHERE run.sessionId = :sessionId AND run.configIdSnapshot IS :configId
+          AND request.provider = :provider AND request.endpoint IS :endpoint AND request.model = :model
+          AND request.purpose = 'AGENT_TURN' AND request.status = 'COMPLETED'
+          AND usage.quality = 'MEASURED' AND usage.source != 'ESTIMATED'
+          AND usage.promptTokens >= 0 AND snapshot.estimatedPromptTokens > 0
+        ORDER BY request.finishedAt DESC, run.createdAt DESC, request.ordinal DESC
+        LIMIT 1
+    """)
+    suspend fun getLatestInputTokenCalibration(
+        sessionId: String,
+        configId: String?,
+        provider: String,
+        endpoint: String?,
+        model: String,
+    ): Long?
+
     @Query("SELECT * FROM agent_compactions WHERE sessionId = :sessionId AND status = 'COMPLETED' ORDER BY createdAt DESC")
     suspend fun getCompactions(sessionId: String): List<AgentCompactionEntryEntity>
 

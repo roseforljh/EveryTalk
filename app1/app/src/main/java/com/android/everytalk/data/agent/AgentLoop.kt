@@ -144,7 +144,10 @@ class AgentLoop(
 ) {
     fun run(originalInput: AgentLoopRequest): Flow<AppStreamEvent> = flow {
         // 统一入口冻结记忆并预留预算，持久化的 messages 仍是原始聊天内容。
-        val input = memoryCoordinator?.prepare(originalInput) ?: originalInput
+        val calibratedInput = originalInput.copy(
+            request = runStore.calibrateRequest(originalInput.sessionId, originalInput.request, originalInput.tokenLimits),
+        )
+        val input = memoryCoordinator?.prepare(calibratedInput) ?: calibratedInput
         runPrepared(input).collect { emit(it) }
     }
 
@@ -564,6 +567,15 @@ class AgentLoop(
                     snapshot = prepared.snapshot,
                     retryOfRequest = retryOfRequest,
                 )
+                // MessageSender 的初始估算还没有应用 Room 摘要。每轮请求准备完成就刷新界面，
+                // 否则用户在正文或工具执行中停止时收不到最终 AgentUsage，会一直显示压缩前的全文。
+                // 这里只发布估算，不写入服务端用量账本；后续 Usage 和结束事件仍可覆盖为实测。
+                emit(usageEvent(input, checkNotNull(run).id, TokenUsage(
+                    inputTokens = prepared.snapshot.activeContextTokens,
+                    isFinal = false,
+                    source = TokenUsageSource.ESTIMATED,
+                    requestOrdinal = ordinal,
+                )))
                 // 上下文准备或压缩期间到达的 Pause，在真正发起网络请求前生效。
                 pauseController.awaitIfPaused(checkNotNull(run).id)
                 val startedAt = System.currentTimeMillis()
@@ -823,31 +835,7 @@ class AgentLoop(
                         return@flow
                     }
                     run = completedRun
-                    val summary = runStore.usageSummary(checkNotNull(run).id)
-                    emit(
-                        AppStreamEvent.AgentUsage(
-                            activeRequest = finalUsage,
-                            activeContext = summary.activeContext?.let { snapshot ->
-                                ContextUsageSnapshot(
-                                    messageId = input.visibleAssistantMessageId,
-                                    configId = input.request.contextManagement?.configId,
-                                    systemPromptTokens = snapshot.systemPromptTokens,
-                                    conversationTextTokens = snapshot.conversationTextTokens,
-                                    mediaTokens = snapshot.mediaTokens,
-                                    toolSchemaTokens = snapshot.toolSchemaTokens,
-                                    protocolOverheadTokens = snapshot.protocolOverheadTokens,
-                                    reservedOutputTokens = snapshot.reservedOutputTokens,
-                                    contextWindowTokens = snapshot.contextWindowTokens,
-                                    inputCalibrationTokens = snapshot.calibrationTokens,
-                                )
-                            },
-                            runInputTokens = summary.runInputTokens,
-                            runOutputTokens = summary.runOutputTokens,
-                            runTotalTokens = summary.runTotalTokens,
-                            requestCount = summary.requestCount,
-                            conversationTotalTokens = runStore.sessionTotalTokens(input.sessionId),
-                        )
-                    )
+                    emit(usageEvent(input, checkNotNull(run).id, finalUsage))
                     emit(AppStreamEvent.Finish(finishReason ?: "stop"))
                     return@flow
                 }
@@ -919,31 +907,7 @@ class AgentLoop(
                         return@flow
                     }
                     run = completedRun
-                    val summary = runStore.usageSummary(checkNotNull(run).id)
-                    emit(
-                        AppStreamEvent.AgentUsage(
-                            activeRequest = finalUsage,
-                            activeContext = summary.activeContext?.let { snapshot ->
-                                ContextUsageSnapshot(
-                                    messageId = input.visibleAssistantMessageId,
-                                    configId = input.request.contextManagement?.configId,
-                                    systemPromptTokens = snapshot.systemPromptTokens,
-                                    conversationTextTokens = snapshot.conversationTextTokens,
-                                    mediaTokens = snapshot.mediaTokens,
-                                    toolSchemaTokens = snapshot.toolSchemaTokens,
-                                    protocolOverheadTokens = snapshot.protocolOverheadTokens,
-                                    reservedOutputTokens = snapshot.reservedOutputTokens,
-                                    contextWindowTokens = snapshot.contextWindowTokens,
-                                    inputCalibrationTokens = snapshot.calibrationTokens,
-                                )
-                            },
-                            runInputTokens = summary.runInputTokens,
-                            runOutputTokens = summary.runOutputTokens,
-                            runTotalTokens = summary.runTotalTokens,
-                            requestCount = summary.requestCount,
-                            conversationTotalTokens = runStore.sessionTotalTokens(input.sessionId),
-                        ),
-                    )
+                    emit(usageEvent(input, checkNotNull(run).id, finalUsage))
                     emit(AppStreamEvent.Finish("stop"))
                     return@flow
                 }
@@ -1012,6 +976,37 @@ class AgentLoop(
         } finally {
             finishRun(run, input)
         }
+    }
+
+    /** 开始和结束共用同一份 Room 快照转换，当前上下文与整轮累计消耗始终分开。 */
+    private suspend fun usageEvent(
+        input: AgentLoopRequest,
+        runId: String,
+        usage: TokenUsage,
+    ): AppStreamEvent.AgentUsage {
+        val summary = runStore.usageSummary(runId)
+        return AppStreamEvent.AgentUsage(
+            activeRequest = usage,
+            activeContext = summary.activeContext?.let { snapshot ->
+                ContextUsageSnapshot(
+                    messageId = input.visibleAssistantMessageId,
+                    configId = input.request.contextManagement?.configId,
+                    systemPromptTokens = snapshot.systemPromptTokens,
+                    conversationTextTokens = snapshot.conversationTextTokens,
+                    mediaTokens = snapshot.mediaTokens,
+                    toolSchemaTokens = snapshot.toolSchemaTokens,
+                    protocolOverheadTokens = snapshot.protocolOverheadTokens,
+                    reservedOutputTokens = snapshot.reservedOutputTokens,
+                    contextWindowTokens = snapshot.contextWindowTokens,
+                    inputCalibrationTokens = snapshot.calibrationTokens,
+                )
+            },
+            runInputTokens = summary.runInputTokens,
+            runOutputTokens = summary.runOutputTokens,
+            runTotalTokens = summary.runTotalTokens,
+            requestCount = summary.requestCount,
+            conversationTotalTokens = runStore.sessionTotalTokens(input.sessionId),
+        )
     }
 
     /** 状态收尾不可取消；提取只排队，网络不进入这个保护区域。 */
@@ -1927,7 +1922,7 @@ class AgentLoop(
         limits: ModelTokenLimits,
     ): ManualCompactionOutcome {
         val transcript = runStore.expandTranscript(sessionId, baseRequest.messages)
-        val compactionRequest = baseRequest.copy(messages = transcript)
+        val compactionRequest = runStore.calibrateRequest(sessionId, baseRequest, limits).copy(messages = transcript)
         val run = runStore.createRun(
             sessionId = sessionId,
             userMessageId = "agent-manual-compaction",
