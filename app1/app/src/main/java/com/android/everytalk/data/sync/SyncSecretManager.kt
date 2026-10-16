@@ -12,12 +12,9 @@ import javax.crypto.spec.SecretKeySpec
 import kotlinx.serialization.json.Json
 
 /**
- * 管理同步密码、DEK 和本机缓存。
- *
- * 同步密码只在调用栈中短暂存在；服务器只收到 Argon2id 包裹后的 DEK 和字段密文。
- * 本机选择记住后，DEK 由 Android Keystore 的设备密钥再次包裹，应用数据库和偏好设置中
- * 都不会出现明文 DEK。密码重置由上层先调用 DELETE /sync/secrets，再清除云端密钥记录；
- * 本机缓存可以保留，避免用户在同一设备上丢失已经解锁的配置。
+ * 管理账号自动恢复的 DEK 和本机 Keystore 缓存。
+ * 服务器鉴权后能恢复并解密同步内容；本机缓存用设备密钥再次包裹。
+ * create/unlock 保留对旧密码版数据和合同向量的兼容，当前产品不要求输入同步密码。
  */
 internal class SyncSecretManager(private val context: Context) {
     private val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
@@ -25,6 +22,18 @@ internal class SyncSecretManager(private val context: Context) {
 
     fun hasCachedDek(userId: String, keyVersion: Long, secretsEpoch: Long): Boolean =
         readCachedDek(userId, keyVersion, secretsEpoch) != null
+
+    /** 新设备通过已鉴权服务器取得账号 DEK，落盘前仍由本机 Keystore 再次包裹。 */
+    fun acceptAccountKey(userId: String, value: AccountSyncKey) {
+        require(value.version == value.secretsEpoch + 1)
+        val bytes = SyncCrypto.decodeCanonicalBase64(value.dek)
+        try { require(bytes.size == 32); cacheDek(userId, bytes, value.version, value.secretsEpoch) }
+        finally { bytes.fill(0) }
+    }
+
+    fun cachedKeyVersion(userId: String, epoch: Long): Long? = preferences.getString(KEY_METADATA, null)
+        ?.split('|')?.takeIf { it.size == 3 && it[0] == userId && it[2].toLongOrNull() == epoch }
+        ?.get(1)?.toLongOrNull()
 
     fun create(
         userId: String,
@@ -131,11 +140,13 @@ internal class SyncSecretManager(private val context: Context) {
 
     private fun cacheDek(userId: String, dek: ByteArray, keyVersion: Long, secretsEpoch: Long) {
         val metadata = "$userId|$keyVersion|$secretsEpoch"
-        val nonce = SyncCrypto.randomBytes(12)
-        val ciphertext = Cipher.getInstance("AES/GCM/NoPadding").apply {
-            init(Cipher.ENCRYPT_MODE, deviceKey(), GCMParameterSpec(128, nonce))
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {
+            // Keystore 随机加密要求由系统生成 IV，不能给初始化传外部 IV。
+            init(Cipher.ENCRYPT_MODE, deviceKey())
             updateAAD(metadata.toByteArray(Charsets.UTF_8))
-        }.doFinal(dek)
+        }
+        val ciphertext = cipher.doFinal(dek)
+        val nonce = cipher.iv
         preferences.edit()
             .putString(KEY_METADATA, metadata)
             .putString(KEY_NONCE, encodeUrlBase64(nonce))

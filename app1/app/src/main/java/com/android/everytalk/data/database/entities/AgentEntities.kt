@@ -21,6 +21,7 @@ import androidx.room.PrimaryKey
         Index(value = ["status", "updatedAt"]),
     ],
 )
+@kotlinx.serialization.Serializable
 data class AgentRunEntity(
     @PrimaryKey val id: String,
     val sessionId: String,
@@ -79,6 +80,7 @@ data class AgentRunSnapshotChunkEntity(
         Index("toolCallId"),
     ],
 )
+@kotlinx.serialization.Serializable
 data class AgentEntryEntity(
     @PrimaryKey val id: String,
     val runId: String,

@@ -8,6 +8,7 @@ import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.database.entities.HISTORY_PREVIEW_OUTPUT_TYPE
+import com.android.everytalk.data.database.entities.toEntity
 import io.mockk.every
 import io.mockk.mockkObject
 import io.mockk.unmockkObject
@@ -26,6 +27,69 @@ import java.util.concurrent.Executor
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [34], application = android.app.Application::class)
 class RoomDataSourceBatchHistoryTest {
+
+    @Test
+    fun `旧账本引用与同步UUID在消息到达前后都指向同一条消息`() = runBlocking {
+        val oldId = "user:original-question"
+        val uuid = com.android.everytalk.data.database.entities.localSyncUuid("messages", oldId)
+        val cloudId = "cloud:$uuid"
+        val dao = database.chatDao()
+        assertEquals(cloudId, dao.resolveLocalMessageReference(oldId))
+        assertEquals(cloudId, dao.resolveLocalMessageReference(uuid))
+        assertEquals(cloudId, dao.resolveLocalMessageReference(cloudId))
+        val session = com.android.everytalk.data.database.entities.ChatSessionEntity("cloud:session", 1, 1, false)
+        dao.writeSession(session)
+        dao.writeMessages(listOf(Message(id = cloudId, text = "恢复的问题", sender = Sender.User)
+            .toEntity(session.id).copy(uuid = uuid)))
+        assertEquals(cloudId, dao.resolveLocalMessageReference(oldId))
+        assertEquals(cloudId, dao.resolveLocalMessageReference(uuid))
+        assertEquals(uuid, dao.resolveMessageSyncUuid(cloudId))
+    }
+
+    @Test
+    fun `最近页面保留真实云端会话身份且旧快照能自动恢复`() = runBlocking {
+        val id = "cloud:session-uuid"
+        val first = Message(id = "cloud:message-uuid", text = "原始消息", sender = Sender.User, conversationId = id)
+        dataSource.saveLoadedHistorySession(id, listOf(first), false)
+        for (image in listOf(false, true)) {
+            val snapshotId = if (image) "last_open_image_generation_v1" else "last_open_chat_v1"
+            if (image) dataSource.saveLastOpenImageGenerationChat(listOf(first)) else dataSource.saveLastOpenChat(listOf(first))
+            val restored = if (image) dataSource.loadLastOpenImageGenerationChat() else dataSource.loadLastOpenChat()
+            assertEquals(id, restored.single().conversationId)
+            assertEquals(first.id, restored.single().id)
+            database.settingsDao().deleteSetting("${snapshotId}_origin") // 模拟旧版快照。
+            val legacy = if (image) dataSource.loadLastOpenImageGenerationChat() else dataSource.loadLastOpenChat()
+            assertEquals(id, legacy.single().conversationId)
+        }
+        val stored = database.chatDao().getStoredSession(id)!!
+        database.chatDao().writeSession(stored.copy(deleted = true))
+        assertTrue(dataSource.loadLastOpenChat().isEmpty())
+    }
+
+    @Test
+    fun `最近页面首条草稿尚无历史原件时仍保留会话身份`() = runBlocking {
+        val message = Message(id = "new-question", text = "停止后保留", sender = Sender.User,
+            conversationId = "local-session", isStreamingDraft = true)
+        dataSource.saveLastOpenChat(listOf(message))
+        val restored = dataSource.loadLastOpenChat().single()
+        assertEquals(message.text, restored.text)
+        assertEquals("local-session", restored.conversationId)
+        dataSource.saveLastOpenChat(emptyList())
+        assertEquals(null, database.settingsDao().getValue("last_open_chat_v1_origin"))
+    }
+
+    @Test
+    fun `资源补传按最近消息优先且时间相同时分页顺序固定`() = runBlocking {
+        val messages = listOf(1L, 3L, 3L, 2L).mapIndexed { i, time ->
+            Message(id = "priority-$i", text = "正文", sender = Sender.User, timestamp = time, conversationId = "priority")
+        }
+        dataSource.saveLoadedHistorySession("priority", messages, false)
+        val expected = database.chatDao().getMessagesForSession("priority").sortedWith(
+            compareByDescending<com.android.everytalk.data.database.entities.MessageEntity> { it.timestamp }.thenBy { it.uuid })
+        val first = database.chatDao().getResourceSyncMessages(2, 0)
+        val second = database.chatDao().getResourceSyncMessages(2, 2)
+        assertEquals(expected.map { it.uuid }, (first + second).map { it.uuid })
+    }
 
     @Test
     fun `回退首条消息同时清空历史和最近记录并保留附件文件`() = runBlocking {
@@ -185,7 +249,7 @@ class RoomDataSourceBatchHistoryTest {
     }
 
     @Test
-    fun `轻量历史快照回滚时保留旧正文并删除新增会话`() = runBlocking {
+    fun `旧历史快照保存时保留旧正文且不能删除新到达会话`() = runBlocking {
         val original = Message(
             id = "rollback-original",
             text = "旧正文",
@@ -202,7 +266,7 @@ class RoomDataSourceBatchHistoryTest {
         dataSource.saveChatHistory(lightweightBackup)
 
         assertEquals("旧思考", dataSource.loadHistorySession("rollback-original")!!.single().reasoning)
-        assertEquals(null, dataSource.loadHistorySession("rollback-imported"))
+        assertEquals("导入正文", dataSource.loadHistorySession("rollback-imported")!!.single().text)
     }
 
     @Test
@@ -223,13 +287,30 @@ class RoomDataSourceBatchHistoryTest {
         assertTrue(renameWrites.single().uppercase().contains("CHAT_SESSIONS"))
         assertTrue(renameWrites.single().uppercase().contains("TITLE"))
 
-        dataSource.saveChatHistory(listOf(listOf(original.copy(text = "修改后的问题"))))
+        // 编辑后的正式消息必须使用新身份，会话身份单独保持，不能改写旧 UUID 的正文。
+        dataSource.saveLoadedHistorySession("renamed-session", listOf(original.copy(id = "edited-question", text = "修改后的问题")), false)
 
         val loaded = dataSource.loadHistorySession("renamed-session")!!
         assertEquals("新标题", loaded.first().text)
         assertTrue(loaded.first().isPlaceholderName)
         assertEquals("修改后的问题", loaded.last().text)
         assertEquals(1, database.chatDao().getMessagesForSession("renamed-session").size)
+    }
+
+    @Test
+    fun `旧批量快照不能删除同会话新同步的消息`() = runBlocking {
+        val first = Message(id = "stale-session", text = "原问题", sender = Sender.User, timestamp = 1)
+        dataSource.saveChatHistory(listOf(listOf(first)))
+        val session = database.chatDao().getStoredSession(first.id)!!
+        val remote = Message(id = "remote-answer", text = "另一台设备的新回答", sender = Sender.AI, timestamp = 2)
+        dataSource.saveLoadedHistorySession(session.id, listOf(first, remote), false)
+
+        dataSource.saveChatHistory(listOf(listOf(first)))
+
+        assertEquals(listOf(first.text, remote.text), database.chatDao().getMessagesForSession(session.id).map { it.text })
+        // 用户明确删除仍生效，不能把快照保护变成无法删除。
+        dataSource.saveLoadedHistorySession(session.id, listOf(first), false)
+        assertEquals(listOf(first.text), database.chatDao().getMessagesForSession(session.id).map { it.text })
     }
 
     private fun conversation(index: Int): List<Message> = listOf(

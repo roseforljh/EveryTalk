@@ -144,7 +144,11 @@ fun SttSettingsDialog(
         }
     }
     
-    val platforms = listOf("Google", "OpenAI", "SiliconFlow", "Aliyun")
+    val syncedPlatforms by produceState(initialValue = emptyList<String>(), selectedPlatform) {
+        value = viewModel.persistenceManager.loadVoicePlatforms()
+    }
+    val platforms = (listOf("Google", "OpenAI", "SiliconFlow", "Aliyun") +
+        syncedPlatforms + effectiveConfig.sttPlatform).filter(String::isNotBlank).distinct()
     
     // 自定义模型管理 (存储在 SharedPreferences 中，仅作为 UI 辅助)
     val uiPrefs = remember { context.getSharedPreferences("voice_ui_prefs", android.content.Context.MODE_PRIVATE) }
@@ -156,6 +160,13 @@ fun SttSettingsDialog(
             if (savedCustomModelsStr.isNotEmpty()) savedCustomModelsStr.split(",").filter { it.isNotEmpty() }
             else emptyList()
         )
+    }
+    LaunchedEffect(selectedPlatform) {
+        val models = viewModel.persistenceManager.loadVoiceCustomModels("stt", selectedPlatform)
+        if (models.isNotEmpty()) {
+            customModels = models
+            uiPrefs.edit { putString(customModelsKey, models.joinToString(",")) }
+        }
     }
     // 确保当前选中的模型也在列表中（即使不在 SharedPreferences 中）
     val allModels = remember(customModels, model) {
@@ -329,6 +340,7 @@ fun SttSettingsDialog(
                             val newList = customModels + newModel.trim()
                             customModels = newList
                             uiPrefs.edit { putString(customModelsKey, newList.joinToString(",")) }
+                            coroutineScope.launch { viewModel.persistenceManager.saveVoiceCustomModels("stt", selectedPlatform, newList) }
                             model = newModel.trim()
                         }
                     },
@@ -336,6 +348,7 @@ fun SttSettingsDialog(
                         val newList = customModels - modelToRemove
                         customModels = newList
                         uiPrefs.edit { putString(customModelsKey, newList.joinToString(",")) }
+                        coroutineScope.launch { viewModel.persistenceManager.saveVoiceCustomModels("stt", selectedPlatform, newList) }
                         if (model == modelToRemove) {
                             model = ""
                         }

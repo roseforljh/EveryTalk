@@ -25,6 +25,12 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ChatDao {
+    /** 分页补传既有消息资源，避免一次加载所有历史正文。排除首页缓存副本和生图会话。 */
+    @Query("SELECT * FROM messages WHERE deleted=0 AND sessionId IN (SELECT id FROM chat_sessions WHERE deleted=0 AND isImageGeneration=0 AND id NOT IN ('last_open_chat_v1','last_open_image_generation_v1')) ORDER BY timestamp DESC, uuid LIMIT :limit OFFSET :offset")
+    suspend fun getResourceSyncMessages(limit: Int, offset: Int): List<MessageEntity>
+    /** 旧版本提示词仅在 System 消息中，升级时只读取这一列，不解析附件和工具轨迹。 */
+    @Query("SELECT text FROM messages WHERE sessionId = :sessionId AND sender = 'System' AND isPlaceholderName = 0 AND deleted = 0 ORDER BY timestamp DESC LIMIT 1")
+    suspend fun getLegacySystemPrompt(sessionId: String): String?
     @Query("UPDATE chat_sessions SET sync_status = 'LOCAL_ONLY' WHERE isImageGeneration = 0")
     suspend fun keepTextSessionsLocal()
 
@@ -62,6 +68,18 @@ interface ChatDao {
 
     @Query("SELECT * FROM messages WHERE uuid = :uuid LIMIT 1")
     suspend fun getMessageByUuid(uuid: String): MessageEntity?
+
+    /** 跨设备引用只认同步 UUID；兼容旧归档里的原设备 ID，不重复散列已经是 UUID 的引用。 */
+    suspend fun resolveMessageSyncUuid(reference: String): String =
+        getStoredMessage(reference, reference)?.uuid
+            ?: reference.removePrefix("cloud:").takeIf { runCatching { java.util.UUID.fromString(it).toString() == it }.getOrDefault(false) }
+            ?: com.android.everytalk.data.database.entities.localSyncUuid("messages", reference)
+
+    /** 引用先到、消息后到时仍返回最终的本机 ID；真正到达后无需重排或创建替身消息。 */
+    suspend fun resolveLocalMessageReference(reference: String): String {
+        val uuid = resolveMessageSyncUuid(reference)
+        return getMessageByUuid(uuid)?.id ?: "cloud:$uuid"
+    }
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertRemoteSession(session: ChatSessionEntity): Long
@@ -160,6 +178,7 @@ interface ChatDao {
         sessionChanged: Boolean = true,
         draftIds: Set<String> = emptySet(),
         debug: Boolean = BuildConfig.DEBUG,
+        removeMissingMessages: Boolean = true,
     ) {
         // 先读取 ID 和摘要，只写新增或真实变化的消息。长会话追加一条消息时不会重写全部历史。
         if (getStoredSession(session.id)?.deleted == true) return
@@ -168,7 +187,8 @@ interface ChatDao {
         val changedMessages = messages.filter {
             (it.id !in draftIds || storedStates[it.id] != null) && storedStates[it.id]?.storageFingerprint != it.storageFingerprint
         }
-        val removedIds = storedStates.values.filter { !it.deleted && it.id !in incomingIds }.map { it.id }
+        // 批量 UI 快照可能早于同步拉取，不凭缺席推断删除；编辑与重答等完整保存仍清理替换消息。
+        val removedIds = if (removeMissingMessages) storedStates.values.filter { !it.deleted && it.id !in incomingIds }.map { it.id } else emptyList()
 
         // @Transaction 保证会话、变化消息和删除结果一起提交，任何一步失败都会保留旧数据。
         if (sessionChanged || getStoredSession(session.id) == null) insertSession(session)
@@ -179,7 +199,10 @@ interface ChatDao {
             MessageDraftEntity(message.copy(uuid = existingDrafts[message.id]?.message?.uuid ?: message.uuid, syncStatus = SyncStatus.LOCAL_ONLY))
         }
         if (drafts.isNotEmpty()) writeDrafts(drafts)
-        deleteDrafts(session.id, existingDrafts.keys.filterNot(incomingIds::contains))
+        if (removeMissingMessages) {
+            val removedDrafts = existingDrafts.keys.filterNot(incomingIds::contains)
+            if (removedDrafts.isNotEmpty()) deleteDrafts(session.id, removedDrafts)
+        }
     }
     
     @Query("SELECT * FROM chat_sessions WHERE deleted = 0 AND isImageGeneration = :isImageGen ORDER BY lastModifiedTimestamp DESC")
@@ -191,7 +214,9 @@ interface ChatDao {
     @Query("UPDATE chat_sessions SET title = :title, updated_at = MAX(:now, updated_at + 1), sync_status = CASE WHEN isImageGeneration = 0 AND id NOT IN ('last_open_chat_v1', 'last_open_image_generation_v1') THEN 'PENDING' ELSE 'LOCAL_ONLY' END WHERE id = :sessionId AND deleted = 0")
     suspend fun updateSessionTitle(sessionId: String, title: String, now: Long = System.currentTimeMillis())
 
-    @Query("SELECT * FROM (SELECT * FROM messages WHERE deleted = 0 UNION ALL SELECT * FROM message_drafts) WHERE sessionId = :sessionId AND sessionId IN (SELECT id FROM chat_sessions WHERE deleted = 0) ORDER BY timestamp ASC")
+    // 旧数据的问题与回复可能共用同一毫秒。相同时间先问题后回复，再按同步 UUID 排序，
+    // 不能依赖插入顺序或本机 ID，否则另一台手机会把回复排到问题之前。
+    @Query("SELECT * FROM (SELECT * FROM messages WHERE deleted = 0 UNION ALL SELECT * FROM message_drafts) WHERE sessionId = :sessionId AND sessionId IN (SELECT id FROM chat_sessions WHERE deleted = 0) ORDER BY timestamp ASC, CASE sender WHEN 'System' THEN 0 WHEN 'User' THEN 1 WHEN 'AI' THEN 2 ELSE 3 END, uuid ASC")
     suspend fun getMessagesForSession(sessionId: String): List<MessageEntity>
 
     @Query("SELECT * FROM (SELECT * FROM messages WHERE deleted = 0 UNION ALL SELECT * FROM message_drafts) WHERE sessionId = :sessionId AND id = :messageId AND sessionId IN (SELECT id FROM chat_sessions WHERE deleted = 0) LIMIT 1")
@@ -229,7 +254,7 @@ interface ChatDao {
     }
 
     /** 仅用于文字同步白名单；会话删除只上传会话变更，不能再发送其子消息。 */
-    @Query("SELECT * FROM messages WHERE sync_status = 'PENDING' AND sender IN ('User', 'AI', 'System') AND isPlaceholderName = 0 AND sessionId IN (SELECT id FROM chat_sessions WHERE deleted = 0 AND isImageGeneration = 0 AND id NOT IN ('last_open_chat_v1', 'last_open_image_generation_v1')) ORDER BY timestamp, id LIMIT :limit")
+    @Query("SELECT * FROM messages WHERE sync_status = 'PENDING' AND sender IN ('User', 'AI', 'System', 'Tool') AND isPlaceholderName = 0 AND sessionId IN (SELECT id FROM chat_sessions WHERE deleted = 0 AND isImageGeneration = 0 AND id NOT IN ('last_open_chat_v1', 'last_open_image_generation_v1')) ORDER BY timestamp ASC, CASE sender WHEN 'System' THEN 0 WHEN 'User' THEN 1 WHEN 'AI' THEN 2 ELSE 3 END, uuid ASC LIMIT :limit")
     suspend fun getPendingSyncMessages(limit: Int = Int.MAX_VALUE): List<MessageEntity>
 
     @Query("SELECT * FROM chat_sessions WHERE sync_status = 'PENDING' AND isImageGeneration = 0 AND id NOT IN ('last_open_chat_v1', 'last_open_image_generation_v1') LIMIT :limit")
@@ -291,7 +316,7 @@ interface ChatDao {
         WHERE sessionId IN (
             SELECT id FROM chat_sessions WHERE deleted = 0 AND isImageGeneration = :isImageGen
         )
-        ORDER BY sessionId ASC, timestamp ASC
+        ORDER BY sessionId ASC, timestamp ASC, CASE sender WHEN 'System' THEN 0 WHEN 'User' THEN 1 WHEN 'AI' THEN 2 ELSE 3 END, uuid ASC
         """
     )
     suspend fun getRawMessagesForMode(isImageGen: Boolean): List<RawMessageRow>
@@ -303,7 +328,7 @@ interface ChatDao {
         WHERE sessionId IN (
             SELECT id FROM chat_sessions WHERE deleted = 0 AND isImageGeneration = :isImageGen
         )
-        ORDER BY sessionId ASC, timestamp ASC
+        ORDER BY sessionId ASC, timestamp ASC, CASE sender WHEN 'System' THEN 0 WHEN 'User' THEN 1 WHEN 'AI' THEN 2 ELSE 3 END, uuid ASC
         """
     )
     suspend fun getLightweightMessagesForMode(isImageGen: Boolean): List<LightweightMessageRow>

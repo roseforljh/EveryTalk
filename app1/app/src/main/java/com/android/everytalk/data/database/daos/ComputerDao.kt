@@ -244,6 +244,10 @@ interface ComputerDao {
     @Query("SELECT * FROM conversation_computer_selections")
     fun observeSelections(): Flow<List<ConversationComputerSelectionEntity>>
 
+    /** 同步投影需要一次性读取当前会话到服务器绑定的快照。 */
+    @Query("SELECT * FROM conversation_computer_selections")
+    suspend fun getAllSelectionsSnapshot(): List<ConversationComputerSelectionEntity>
+
     @Upsert
     suspend fun upsertSelection(selection: ConversationComputerSelectionEntity)
 

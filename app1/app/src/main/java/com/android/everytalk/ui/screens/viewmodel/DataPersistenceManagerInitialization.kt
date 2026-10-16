@@ -97,17 +97,14 @@ internal fun DataPersistenceManager.loadInitialDataInternal(
                 var selectedConfigFromDataSource: ApiConfig? = null
                 if (selectedConfigId != null) {
                     selectedConfigFromDataSource = loadedConfigs.find { it.id == selectedConfigId }
-                    if (selectedConfigFromDataSource == null && loadedConfigs.isNotEmpty()) {
-                        Log.w(TAG, "loadInitialData: 持久化的选中配置ID '$selectedConfigId' 在当前配置列表中未找到。将清除持久化的选中ID。")
-                        roomDataSource.saveSelectedConfigId(null)
-                    }
+                    // 同步分页可能先到选中 ID、后到模型配置；暂缺时保留引用，不能反写默认选择。
                 }
 
                 var finalSelectedConfig = selectedConfigFromDataSource
                 if (finalSelectedConfig == null && loadedConfigs.isNotEmpty()) {
                     finalSelectedConfig = loadedConfigs.first()
                     Log.i(TAG, "loadInitialData: 无有效选中配置或之前未选中，默认选择第一个: ${safeApiConfigSummary(finalSelectedConfig)}。将保存此选择。")
-                    roomDataSource.saveSelectedConfigId(finalSelectedConfig.id)
+                    if (selectedConfigId == null) roomDataSource.saveSelectedConfigId(finalSelectedConfig.id)
                 }
 
                 // 立即更新API配置到UI，让用户可以开始使用
@@ -225,7 +222,7 @@ internal fun DataPersistenceManager.loadInitialDataInternal(
                 }
                 if (selectedImageGenConfig == null && loadedImageGenConfigs.isNotEmpty()) {
                     selectedImageGenConfig = loadedImageGenConfigs.first()
-                    roomDataSource.saveSelectedImageGenConfigId(selectedImageGenConfig.id)
+                    if (retainedSelectedImageGenConfigId == null) roomDataSource.saveSelectedImageGenConfigId(selectedImageGenConfig.id)
                 } else if (retainedSelectedImageGenConfigId != selectedImageGenConfigId) {
                     roomDataSource.saveSelectedImageGenConfigId(retainedSelectedImageGenConfigId)
                 }
@@ -258,7 +255,7 @@ internal fun DataPersistenceManager.loadInitialDataInternal(
                 }
                 if (selectedVoiceConfig == null && loadedVoiceConfigs.isNotEmpty()) {
                     selectedVoiceConfig = loadedVoiceConfigs.first()
-                    roomDataSource.saveSelectedVoiceConfigId(selectedVoiceConfig.id)
+                    if (selectedVoiceConfigId == null) roomDataSource.saveSelectedVoiceConfigId(selectedVoiceConfig.id)
                 }
                 
                 withContext(Dispatchers.Main.immediate) {
@@ -302,8 +299,10 @@ internal fun DataPersistenceManager.loadInitialDataInternal(
                         try {
                             val mapping = roomDataSource.loadConversationApiConfigIds()
                             val migratedMapping = migrateApiConfigIds(mapping, imageConfigIdMigrations)
+                            val toggleStates = loadConversationFunctionToggleStates()
                             withContext(Dispatchers.Main.immediate) {
                                 stateHolder.conversationApiConfigIds.value = migratedMapping
+                                stateHolder.conversationFunctionToggleStates.value = toggleStates
                             }
                             if (migratedMapping != mapping) {
                                 roomDataSource.saveConversationApiConfigIds(migratedMapping)
@@ -358,7 +357,7 @@ internal fun DataPersistenceManager.loadInitialDataInternal(
                             }
                             // 新版设置优先于历史 System 消息，确保编辑后重启不会恢复旧提示词。
                             loadConversationSettings().forEach { (sessionUuid, setting) ->
-                                val localId = repairedHistory.firstOrNull { conversation ->
+                                val localId = roomDataSource.conversationIdForUuid(sessionUuid) ?: repairedHistory.firstOrNull { conversation ->
                                     ConversationNameHelper.resolveStableId(conversation) == sessionUuid
                                 }?.let { ConversationNameHelper.resolveStableId(it) }
                                 val targetId = localId ?: sessionUuid
@@ -531,6 +530,14 @@ internal fun DataPersistenceManager.loadInitialDataInternal(
                     Log.i(TAG, "loadInitialData: Skipped loading last open chats.")
                 }
                 historyLoadingJob.join()
+                // 最近页身份与逐会话设置并行加载；两者齐备后再套用，避免重启显示全局模型和空标签。
+                withContext(Dispatchers.Main.immediate) {
+                    stateHolder.conversationApiConfigIds.value[stateHolder._currentConversationId.value]?.let { modelId ->
+                        stateHolder._selectedApiConfig.value = stateHolder._apiConfigs.value.find { it.id == modelId }
+                    }
+                    if (stateHolder.messages.isNotEmpty()) stateHolder.applyCurrentConversationFunctionToggleState()
+                    else if (stateHolder.imageGenerationMessages.isNotEmpty()) stateHolder.applyCurrentImageConversationFunctionToggleState()
+                }
                 notifyLoadingComplete(initialConfigPresent, initialHistoryPresent)
 
             } catch (e: CancellationException) {

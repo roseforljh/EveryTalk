@@ -142,7 +142,11 @@ fun VoiceSettingsDialog(
         }
     }
 
-    val platforms = listOf("Gemini", "OpenAI", "Minimax", "SiliconFlow", "Aliyun")
+    val syncedPlatforms by produceState(initialValue = emptyList<String>(), selectedPlatform) {
+        value = viewModel.persistenceManager.loadVoicePlatforms()
+    }
+    val platforms = (listOf("Gemini", "OpenAI", "Minimax", "SiliconFlow", "Aliyun") +
+        syncedPlatforms + effectiveConfig.ttsPlatform).filter(String::isNotBlank).distinct()
     
     // 自定义模型管理 (存储在 SharedPreferences 中，仅作为 UI 辅助，不影响核心功能)
     // 使用独立的 preferences 文件避免与旧的 voice_settings 混淆
@@ -155,6 +159,13 @@ fun VoiceSettingsDialog(
             if (savedCustomModelsStr.isNotEmpty()) savedCustomModelsStr.split(",").filter { it.isNotEmpty() }
             else emptyList()
         )
+    }
+    LaunchedEffect(selectedPlatform) {
+        val models = viewModel.persistenceManager.loadVoiceCustomModels("tts", selectedPlatform)
+        if (models.isNotEmpty()) {
+            customModels = models
+            uiPrefs.edit { putString(customModelsKey, models.joinToString(",")) }
+        }
     }
     // 确保当前选中的模型也在列表中（即使不在 SharedPreferences 中）
     val allModels = remember(customModels, chatModel) {
@@ -335,6 +346,7 @@ fun VoiceSettingsDialog(
                             val newList = customModels + newModel.trim()
                             customModels = newList
                             uiPrefs.edit { putString(customModelsKey, newList.joinToString(",")) }
+                            coroutineScope.launch { viewModel.persistenceManager.saveVoiceCustomModels("tts", selectedPlatform, newList) }
                             chatModel = newModel.trim()
                         }
                     },
@@ -342,6 +354,7 @@ fun VoiceSettingsDialog(
                         val newList = customModels - modelToRemove
                         customModels = newList
                         uiPrefs.edit { putString(customModelsKey, newList.joinToString(",")) }
+                        coroutineScope.launch { viewModel.persistenceManager.saveVoiceCustomModels("tts", selectedPlatform, newList) }
                         if (chatModel == modelToRemove) {
                             chatModel = ""
                         }

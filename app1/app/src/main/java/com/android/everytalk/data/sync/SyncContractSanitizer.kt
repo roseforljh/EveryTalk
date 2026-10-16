@@ -32,9 +32,11 @@ internal object SyncContractSanitizer {
     fun isValidEnvelope(value: JsonElement): Boolean {
         if (value !is JsonObject || value.keys != setOf("\$enc", "alg", "nonce", "ct", "keyVersion")) return false
         return runCatching {
-            syncJson.decodeFromJsonElement(SyncEncryptedEnvelope.serializer(), value)
-            SyncCrypto.decodeCanonicalBase64(value.getValue("nonce").jsonPrimitive.content).size == 12
-            SyncCrypto.decodeCanonicalBase64(value.getValue("ct").jsonPrimitive.content).size >= 16
+            val envelope = syncJson.decodeFromJsonElement(SyncEncryptedEnvelope.serializer(), value)
+            envelope.marker == 1 && envelope.alg == "AES-256-GCM" && envelope.keyVersion > 0 &&
+                value.toString().toByteArray(Charsets.UTF_8).size <= 8192 &&
+                SyncCrypto.decodeCanonicalBase64(envelope.nonce).size == 12 &&
+                SyncCrypto.decodeCanonicalBase64(envelope.ct).size >= 16
         }.getOrDefault(false)
     }
 
@@ -43,7 +45,8 @@ internal object SyncContractSanitizer {
             is JsonObject -> {
                 if (value.containsKey("\$enc")) require(isValidEnvelope(value)) { "INVALID_ENVELOPE" }
                 else value.forEach { (name, child) ->
-                    require(!isForbiddenFieldName(name)) { "FORBIDDEN_FIELD_NAME" }
+                    // 合同允许凭据字段名，但整个值必须是严格的密文信封。
+                    require(!isForbiddenFieldName(name) || isValidEnvelope(child)) { "FORBIDDEN_FIELD_NAME" }
                     walk(child, "$path/${escape(name)}")
                 }
             }

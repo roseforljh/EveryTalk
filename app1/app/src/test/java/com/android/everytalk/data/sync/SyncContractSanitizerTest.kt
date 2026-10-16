@@ -41,6 +41,20 @@ class SyncContractSanitizerTest {
         assertEquals("maxContextTokens", SyncWireFieldNames.toLocal("contextLimit"))
     }
 
+    @Test fun `敏感字段只允许完整合法信封且不能用伪造信封绕过扫描`() {
+        val envelope = syncJson.encodeToJsonElement(SyncEncryptedEnvelope.serializer(),
+            SyncCrypto.encrypt(ByteArray(32), "value".toByteArray(), "aad".toByteArray(), 1, ByteArray(12)))
+        SyncContractSanitizer.validate(buildJsonObject { put("apiKey", envelope) })
+        assertTrue(runCatching { SyncContractSanitizer.validate(buildJsonObject { put("apiKey", "plain") }) }.isFailure)
+        val invalid = kotlinx.serialization.json.JsonObject(envelope.let { it as kotlinx.serialization.json.JsonObject } +
+            ("nonce" to kotlinx.serialization.json.JsonPrimitive("bad")))
+        assertFalse(SyncContractSanitizer.isValidEnvelope(invalid))
+        assertTrue(runCatching { SyncContractSanitizer.validate(buildJsonObject { put("headers", invalid) }) }.isFailure)
+        assertEquals("owner/repo", syncSafeSkillRepository("owner/repo"))
+        assertEquals(null, syncSafeSkillRepository("/data/private/skill"))
+        assertEquals(null, syncSafeSkillRepository("owner/.."))
+    }
+
     @Test fun `非法本地设置ID映射为稳定UUID且敏感地址不上传`() {
         val first = syncStableSettingKey("mcp_servers", "mcp-cloudflare")
         assertEquals(first, syncStableSettingKey("mcp_servers", "mcp-cloudflare"))

@@ -5,6 +5,8 @@ import com.android.everytalk.data.database.entities.MemoryEntity
 import com.android.everytalk.data.database.entities.MessageEntity
 import com.android.everytalk.data.database.entities.UserSettingEntity
 import com.android.everytalk.data.database.entities.SyncAttachmentEntity
+import com.android.everytalk.data.DataClass.ExecutionTraceEvent
+import com.android.everytalk.data.DataClass.MessageContentPart
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -54,6 +56,47 @@ internal object SyncPayloadMapper {
             message.providerName?.let { put("providerName", it) }
             message.reasoning?.let { put("reasoning", it) }
             if (!message.isIncomplete) {
+                // 已发送的 Skill 标签是正文结构；只传稳定引用，不传草稿、设备路径或技能文件。
+                if (message.contentParts.any { it is MessageContentPart.SkillReference }) {
+                    put("bodySegments", JsonArray(message.contentParts.map { part -> buildJsonObject {
+                        when (part) {
+                            is MessageContentPart.Text -> { put("type", "text"); put("text", part.text) }
+                            is MessageContentPart.SkillReference -> {
+                                put("type", "skill"); put("skillId", part.reference.skillId)
+                                put("displayName", part.reference.displayName); put("sourceType", part.reference.sourceType.name)
+                                put("contentHash", part.reference.contentHash)
+                            }
+                        }
+                    } }))
+                }
+                // 工具调用前后的白话和思考也是用户可见文字。只传文字片段，不传命令、参数、工具结果。
+                var contentOffset = 0
+                var reasoningOffset = 0
+                val segments = message.executionTrace.mapNotNull { event ->
+                    val type = when (event) {
+                        is ExecutionTraceEvent.Content -> "content"
+                        is ExecutionTraceEvent.Reasoning -> "reasoning"
+                        else -> return@mapNotNull null
+                    }
+                    val text = when (event) {
+                        is ExecutionTraceEvent.Content -> event.text
+                        is ExecutionTraceEvent.Reasoning -> event.text
+                        else -> return@mapNotNull null
+                    }
+                    // 显示片段常常再次包含整段思考，重复发送会白白撞上服务端 64 KiB 上限。
+                    // 只在原文中逐字找到时使用 UTF-16 位置引用；独有的工具前后文字仍完整发送。
+                    val source = if (type == "reasoning") message.reasoning.orEmpty() else message.text
+                    val searchFrom = if (type == "reasoning") reasoningOffset else contentOffset
+                    val start = if (text.isNotEmpty()) source.indexOf(text, searchFrom) else -1
+                    buildJsonObject {
+                        put("type", type)
+                        if (start >= 0) {
+                            put("startUtf16", start); put("lengthUtf16", text.length)
+                            if (type == "reasoning") reasoningOffset = start + text.length else contentOffset = start + text.length
+                        } else put("text", text)
+                    }
+                }
+                if (segments.isNotEmpty()) put("displaySegments", JsonArray(segments))
                 message.tokenUsage?.let { usage ->
                     put("tokenUsage", buildJsonObject {
                         usage.inputTokens?.let { put("inputTokens", it) }
@@ -119,7 +162,8 @@ internal object SyncPayloadMapper {
         entity = SyncEntity.ATTACHMENTS.wireName,
         id = attachment.id,
         deleted = attachment.deleted,
-        payload = if (attachment.deleted) JsonObject(emptyMap()) else buildJsonObject {
+        // 附件墓碑也必须携带父级和修改时刻，服务器据此校验归属并淘汰旧版本。
+        payload = buildJsonObject {
             put("clientModifiedAt", attachment.updatedAt)
             put("sessionId", attachment.sessionId)
             put("messageId", attachment.messageId)

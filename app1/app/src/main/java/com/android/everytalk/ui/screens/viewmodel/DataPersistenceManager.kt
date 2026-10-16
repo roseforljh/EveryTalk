@@ -528,6 +528,71 @@ class DataPersistenceManager(
         }
     }
 
+    /**
+     * 拉取成功后只读刷新运行中的设置；不调用启动初始化，避免生成默认配置或反写旧缓存。
+     * IO 读取期间如用户改了列表，保留用户的新状态，下一次同步通知再刷新。
+     */
+    suspend fun refreshSyncedConfigurations(isInImageMode: () -> Boolean) {
+        val textBefore = stateHolder._apiConfigs.value
+        val imageBefore = stateHolder._imageGenApiConfigs.value
+        val voiceBefore = stateHolder._voiceBackendConfigs.value
+        val modelsBefore = stateHolder.conversationApiConfigIds.value
+        val togglesBefore = stateHolder.conversationFunctionToggleStates.value
+        val promptsBefore = stateHolder.systemPrompts.toMap()
+        val engagedBefore = stateHolder.systemPromptEngagedState.toMap()
+        withContext(Dispatchers.IO) {
+            val text = roomDataSource.loadApiConfigs()
+            val images = roomDataSource.loadImageGenApiConfigs()
+            val voice = roomDataSource.loadVoiceBackendConfigs()
+            val selectedText = roomDataSource.loadSelectedConfigId()
+            val selectedImage = roomDataSource.loadSelectedImageGenConfigId()
+            val selectedVoice = roomDataSource.loadSelectedVoiceConfigId()
+            val models = roomDataSource.loadConversationApiConfigIds()
+            val toggles = loadConversationFunctionToggleStates()
+            val conversationSettings = roomDataSource.loadConversationSettings().mapNotNull { (uuid, value) ->
+                roomDataSource.conversationIdForUuid(uuid)?.let { it to value }
+            }
+            withContext(Dispatchers.Main.immediate) {
+                if (stateHolder._apiConfigs.value == textBefore) {
+                    stateHolder._apiConfigs.value = text
+                    // 同步通知也可能在对话打开期间到达；当前会话的模型优先于全局默认模型。
+                    if (stateHolder.conversationApiConfigIds.value == modelsBefore) {
+                        val activeModelId = models[stateHolder._currentConversationId.value] ?: selectedText
+                        // 所引用模型尚未到达时保留绑定但不显示另一份旧模型，下一页配置到达后再应用。
+                        stateHolder._selectedApiConfig.value = text.find { it.id == activeModelId }
+                    }
+                }
+                if (stateHolder._imageGenApiConfigs.value == imageBefore) {
+                    stateHolder._imageGenApiConfigs.value = images
+                    stateHolder._selectedImageGenApiConfig.value = images.find { it.id == selectedImage }
+                        ?: stateHolder._selectedImageGenApiConfig.value?.takeIf { current -> selectedImage != null && images.any { it.id == current.id } }
+                }
+                if (stateHolder._voiceBackendConfigs.value == voiceBefore) {
+                    stateHolder._voiceBackendConfigs.value = voice
+                    stateHolder._selectedVoiceConfig.value = voice.find { it.id == selectedVoice }
+                        ?: stateHolder._selectedVoiceConfig.value?.takeIf { current -> selectedVoice != null && voice.any { it.id == current.id } }
+                }
+                // IO 读取期间用户可能刚改了标签或模型，旧读取结果不能覆盖这次操作。
+                if (stateHolder.conversationApiConfigIds.value == modelsBefore) {
+                    stateHolder.conversationApiConfigIds.value = models
+                }
+                if (stateHolder.conversationFunctionToggleStates.value == togglesBefore) {
+                    stateHolder.conversationFunctionToggleStates.value = toggles
+                    // 回到主线程后再读取当前模式，避免 IO 期间切换页面把文字标签应用到生图页。
+                    if (isInImageMode()) stateHolder.applyCurrentImageConversationFunctionToggleState()
+                    else stateHolder.applyCurrentConversationFunctionToggleState()
+                }
+                conversationSettings.forEach { (conversationId, value) ->
+                    if (stateHolder.systemPrompts[conversationId] == promptsBefore[conversationId] &&
+                        stateHolder.systemPromptEngagedState[conversationId] == engagedBefore[conversationId]) {
+                        stateHolder.systemPrompts[conversationId] = value.first
+                        stateHolder.systemPromptEngagedState[conversationId] = value.second
+                    }
+                }
+            }
+        }
+    }
+
     suspend fun saveChatHistory(historyToSave: List<List<Message>>, isImageGeneration: Boolean = false) {
         withContext(Dispatchers.IO) {
             Log.d(TAG, "saveChatHistory: 保存 ${historyToSave.size} 条对话到 Room...")
@@ -638,7 +703,16 @@ class DataPersistenceManager(
 
     suspend fun loadConversationSettings(): Map<String, Pair<String, Boolean>> =
         withContext(Dispatchers.IO) { roomDataSource.loadConversationSettings() }
-    
+
+    suspend fun loadVoiceCustomModels(kind: String, platform: String): List<String> =
+        withContext(Dispatchers.IO) { roomDataSource.loadVoiceCustomModels(kind, platform) }
+
+    suspend fun saveVoiceCustomModels(kind: String, platform: String, models: List<String>) =
+        withContext(Dispatchers.IO) { roomDataSource.saveVoiceCustomModels(kind, platform, models) }
+
+    suspend fun loadVoicePlatforms(): List<String> =
+        withContext(Dispatchers.IO) { roomDataSource.loadVoicePlatforms() }
+
     suspend fun saveConversationApiConfigIds(mapping: Map<String, String>) {
         withContext(Dispatchers.IO) {
             try {

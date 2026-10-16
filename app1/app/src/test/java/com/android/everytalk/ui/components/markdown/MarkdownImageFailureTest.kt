@@ -30,6 +30,14 @@ class MarkdownImageFailureTest {
     }
 
     @Test
+    fun `缺失的本机图片显示未同步而不是加载失败`() {
+        org.junit.Assert.assertTrue(isMissingLocalMarkdownImage("/data/user/0/another-device/missing-image.png"))
+        org.junit.Assert.assertFalse(isMissingLocalMarkdownImage("https://images.example/image.png"))
+        composeRule.setContent { MaterialTheme { MarkdownImageFailure(missingLocalFile = true) } }
+        composeRule.onNodeWithText("图片未同步到此设备").assertIsDisplayed()
+    }
+
+    @Test
     fun `图片加载动画在前端可见`() {
         composeRule.setContent {
             MaterialTheme {

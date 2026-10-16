@@ -16,6 +16,7 @@ import com.android.everytalk.data.database.entities.UserSettingEntity
 import com.android.everytalk.data.database.entities.toApiConfig
 import com.android.everytalk.data.database.entities.toEntity
 import com.android.everytalk.data.database.entities.toMessage
+import com.android.everytalk.data.database.entities.localSyncUuid
 import com.android.everytalk.data.database.entities.toPreviewMessage
 import com.android.everytalk.data.database.entities.HISTORY_PREVIEW_OUTPUT_TYPE
 import com.android.everytalk.data.database.entities.toVoiceBackendConfig
@@ -78,30 +79,36 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
         return apiConfigDao.getConfigs(isImageGen = false).map { it.toApiConfig() }
     }
 
-    suspend fun saveApiConfigs(configs: List<ApiConfig>) {
+    suspend fun saveApiConfigs(configs: List<ApiConfig>) = database.withTransaction {
+        val removed = apiConfigDao.getConfigs(false).map { it.id }.toSet() - configs.map { it.id }.toSet()
         apiConfigDao.replaceConfigs(
             isImageGen = false,
             configs = configs.map { it.toEntity(isImageGenConfig = false) },
         )
+        recordRemovedSettings("api_configs", removed)
+        captureSyncSettings()
     }
 
     suspend fun loadImageGenApiConfigs(): List<ApiConfig> {
         return apiConfigDao.getConfigs(isImageGen = true).map { it.toApiConfig() }
     }
 
-    suspend fun saveImageGenApiConfigs(configs: List<ApiConfig>) {
+    suspend fun saveImageGenApiConfigs(configs: List<ApiConfig>) = database.withTransaction {
+        val removed = apiConfigDao.getConfigs(true).map { it.id }.toSet() - configs.map { it.id }.toSet()
         apiConfigDao.replaceConfigs(
             isImageGen = true,
             configs = configs.map { it.toEntity(isImageGenConfig = true) },
         )
+        recordRemovedSettings("api_configs", removed)
+        captureSyncSettings()
     }
     
     suspend fun clearApiConfigs() {
-        apiConfigDao.clearConfigs(isImageGen = false)
+        saveApiConfigs(emptyList())
     }
 
     suspend fun clearImageGenApiConfigs() {
-        apiConfigDao.clearConfigs(isImageGen = true)
+        saveImageGenApiConfigs(emptyList())
     }
 
     // --- Voice Backend Configs ---
@@ -109,12 +116,15 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
         return voiceConfigDao.getAll().map { it.toVoiceBackendConfig() }
     }
 
-    suspend fun saveVoiceBackendConfigs(configs: List<VoiceBackendConfig>) {
+    suspend fun saveVoiceBackendConfigs(configs: List<VoiceBackendConfig>) = database.withTransaction {
+        val removed = voiceConfigDao.getAll().map { it.id }.toSet() - configs.map { it.id }.toSet()
         voiceConfigDao.replaceAll(configs.map { it.toEntity() })
+        recordRemovedSettings("voice_configs", removed)
+        captureSyncSettings()
     }
 
     suspend fun clearVoiceBackendConfigs() {
-        voiceConfigDao.clearAll()
+        saveVoiceBackendConfigs(emptyList())
     }
 
     // --- Settings / Key-Value ---
@@ -171,11 +181,25 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
         saveSetting("selected_external_web_search_provider_id", providerId)
     }
 
-    private suspend fun saveSetting(key: String, value: String?) {
+    private suspend fun saveSetting(key: String, value: String?) = database.withTransaction {
         if (value == null) {
             settingsDao.deleteSetting(key)
         } else {
             settingsDao.insertSetting(SystemSettingEntity(key, value))
+        }
+        if (key in setOf("selected_api_config_id", "selected_image_gen_config_id", "selected_voice_config_id",
+                "selected_external_web_search_provider_id", "external_web_search_configs", "memory_enabled",
+                "memory_auto_capture_enabled", "conversation_api_config_ids", "conversation_function_toggle_states") ||
+            key.startsWith("custom_models_") || key.startsWith("voice_llm_platform:")) captureSyncSettings()
+    }
+
+    /** 在用户实际保存时封存逐条内容和修改时间，离线期间也记录；这里不发网络请求。 */
+    private suspend fun captureSyncSettings() = com.android.everytalk.data.sync.captureSyncSettings(applicationContext, database)
+
+    /** 删除只写对应逻辑记录的墓碑，不能把整张设置表当作本次保存的范围。 */
+    private suspend fun recordRemovedSettings(kind: String, keys: Set<String>) {
+        keys.forEach { key ->
+            com.android.everytalk.data.sync.SyncSettingsProjector(database).markDeleted(kind, key)
         }
     }
 
@@ -189,16 +213,17 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
     }
 
     /** 将用户编辑的系统提示词保存为每会话一条同步设置，避免依赖历史 System 消息落盘。 */
-    suspend fun saveConversationSettings(conversationId: String, systemPrompt: String, promptEnabled: Boolean) {
-        val session = chatDao.getSession(conversationId) ?: return
+    suspend fun saveConversationSettings(conversationId: String, systemPrompt: String, promptEnabled: Boolean) = database.withTransaction {
+        val session = chatDao.getSession(conversationId) ?: return@withTransaction
         val kind = "conversation_settings"
         val key = session.uuid
         val old = settingsDao.getUserSetting(kind, key)
         val value = buildJsonObject {
+            old?.value?.let { json.parseToJsonElement(it).jsonObject }?.forEach { (name, element) -> put(name, element) }
             put("systemPrompt", systemPrompt)
             put("promptEnabled", promptEnabled)
         }.toString()
-        if (old?.value == value && !old.deleted) return
+        if (old?.value == value && !old.deleted) return@withTransaction
         settingsDao.upsertUserSettings(listOf(UserSettingEntity(
             kind = kind,
             key = key,
@@ -217,6 +242,22 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
                     (value["promptEnabled"]?.jsonPrimitive?.boolean ?: false))
             }.getOrNull()
         }.toMap()
+
+    suspend fun conversationIdForUuid(uuid: String): String? = chatDao.getSessionByUuid(uuid)?.id
+
+    /** 语音自定义模型使用同步白名单中的逐平台记录，不再只依赖设备本地 SharedPreferences。 */
+    suspend fun loadVoiceCustomModels(kind: String, platform: String): List<String> =
+        settingsDao.getValue("custom_models_${kind}_${platform}")
+            ?.split(',')?.map(String::trim)?.filter(String::isNotBlank)?.distinct().orEmpty()
+
+    suspend fun saveVoiceCustomModels(kind: String, platform: String, models: List<String>) {
+        saveSetting("custom_models_${kind}_${platform}", models.distinct().joinToString(","))
+    }
+
+    suspend fun loadVoicePlatforms(): List<String> =
+        settingsDao.getByPrefix("voice_llm_platform:")
+            .map { it.key.removePrefix("voice_llm_platform:") }
+            .filter(String::isNotBlank).distinct()
 
     // --- Chat History ---
     suspend fun loadChatHistory(): List<List<Message>> {
@@ -410,7 +451,6 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
         isImageGeneration: Boolean,
         protectedSessionIds: Set<String>,
     ) {
-        val newSessionIds = mutableSetOf<String>()
         val effectiveProtectedSessionIds = protectedSessionIds
         val existingSessions = chatDao.getAllSessions(isImageGeneration)
         val existingSessionsById = existingSessions.associateBy(ChatSessionEntity::id)
@@ -418,7 +458,6 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
         history.forEach { messages ->
             if (messages.isNotEmpty()) {
                 val stableId = ConversationNameHelper.resolveStableId(messages) ?: UUID.randomUUID().toString()
-                newSessionIds.add(stableId)
                 if (stableId in effectiveProtectedSessionIds) return@forEach
                 // 启动预览只含轻量字段，任何批量持久化都必须跳过，防止覆盖完整消息。
                 if (messages.all { it.outputType == HISTORY_PREVIEW_OUTPUT_TYPE }) {
@@ -444,17 +483,12 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
                     messages = persistedMessages.map { it.toEntity(stableId, converters) },
                     sessionChanged = session != existingSession,
                     draftIds = persistedMessages.filter { it.isStreamingDraft }.mapTo(hashSetOf()) { it.id },
+                    removeMissingMessages = false,
                 )
             }
         }
-        existingSessions.forEach { existing ->
-            if (existing.id !in newSessionIds &&
-                existing.id !in effectiveProtectedSessionIds &&
-                existing.id !in LAST_OPEN_SESSION_IDS
-            ) {
-                chatDao.deleteSession(existing.id)
-            }
-        }
+        // 历史列表是 UI 快照，可能还没看到刚从另一台设备拉下来的会话。
+        // 缺席不代表用户删除；删除必须走 deleteHistorySession/clearChatHistory 的明确入口。
     }
 
     // --- Last Open Chat ---
@@ -464,9 +498,7 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
     // BUT, the message IDs must be preserved. If we change session ID, message IDs are fine.
     
     suspend fun loadLastOpenChat(): List<Message> {
-        return chatDao.getMessagesForSession("last_open_chat_v1").map {
-            it.toMessage().copy(id = it.id.removePrefix("last_open_chat_v1:"), conversationId = null)
-        }
+        return loadLastOpenSession("last_open_chat_v1")
     }
 
     suspend fun saveLastOpenChat(messages: List<Message>) {
@@ -474,18 +506,43 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
     }
 
     suspend fun loadLastOpenImageGenerationChat(): List<Message> {
-        return chatDao.getMessagesForSession("last_open_image_generation_v1").map {
-            it.toMessage().copy(id = it.id.removePrefix("last_open_image_generation_v1:"), conversationId = null)
-        }
+        return loadLastOpenSession("last_open_image_generation_v1")
     }
 
     suspend fun saveLastOpenImageGenerationChat(messages: List<Message>) {
         saveLastOpenSession("last_open_image_generation_v1", messages, isImageGen = true)
     }
 
-    private suspend fun saveLastOpenSession(sessionId: String, messages: List<Message>, isImageGen: Boolean) {
+    /**
+     * 快照的外键指向缓存会话，不能用作真实会话 ID。新快照单独保存本机身份；
+     * 旧快照从仍在历史库中的原消息找回身份，避免把云端首条消息当成另一条会话。
+     * 只恢复身份而不替换正文，保留尚未写入历史的本机草稿。
+     */
+    private suspend fun loadLastOpenSession(sessionId: String): List<Message> = database.withTransaction {
+        val messages = chatDao.getMessagesForSession(sessionId).map {
+            it.toMessage().copy(id = it.id.removePrefix("$sessionId:"), conversationId = null)
+        }
+        if (messages.isEmpty()) return@withTransaction emptyList()
+        var origin = settingsDao.getValue("${sessionId}_origin")
+        if (origin == null) {
+            for (message in messages) {
+                val original = chatDao.getStoredMessage(message.id, localSyncUuid("messages", message.id))
+                if (original != null && original.sessionId != sessionId) {
+                    origin = original.sessionId
+                    break
+                }
+            }
+        }
+        // 已删除会话不能通过首页缓存复活；未归档的新聊天则继续保留。
+        if (origin != null && chatDao.getStoredSession(origin)?.deleted == true) return@withTransaction emptyList()
+        val stableId = origin ?: ConversationNameHelper.resolveStableId(messages)
+        messages.map { it.copy(conversationId = stableId) }
+    }
+
+    private suspend fun saveLastOpenSession(sessionId: String, messages: List<Message>, isImageGen: Boolean) = database.withTransaction {
         if (messages.isEmpty()) {
             chatDao.clearLastOpenSnapshot(sessionId)
+            settingsDao.deleteSetting("${sessionId}_origin")
         } else {
             val session = ChatSessionEntity(
                 id = sessionId,
@@ -500,6 +557,9 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
                 session, messages.map { it.copy(id = "$sessionId:${it.id}").toEntity(sessionId, converters) },
                 draftIds = messages.filter { it.isStreamingDraft }.mapTo(hashSetOf()) { "$sessionId:${it.id}" },
             )
+            ConversationNameHelper.resolveStableId(messages)?.let { origin ->
+                settingsDao.insertSetting(SystemSettingEntity("${sessionId}_origin", origin))
+            }
         }
     }
 
@@ -520,10 +580,10 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
         savePinnedIds(ids, isImageGen = true)
     }
 
-    private suspend fun savePinnedIds(ids: Set<String>, isImageGen: Boolean) {
+    private suspend fun savePinnedIds(ids: Set<String>, isImageGen: Boolean) = database.withTransaction {
         val entities = ids.map { PinnedItemEntity(it, isImageGen) }
         settingsDao.replacePinnedItems(isImageGen, entities)
-        if (!isImageGen) refreshSyncableUserSettings()
+        if (!isImageGen) refreshSyncableUserSettings("pinned_items")
     }
 
     // --- Groups ---
@@ -532,32 +592,42 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
         return groups.associate { it.groupName to it.conversationIds }
     }
 
-    suspend fun saveConversationGroups(groups: Map<String, List<String>>) {
+    suspend fun saveConversationGroups(groups: Map<String, List<String>>) = database.withTransaction {
         val entities = groups.map { ConversationGroupEntity(it.key, it.value) }
         settingsDao.replaceConversationGroups(entities)
-        refreshSyncableUserSettings()
+        refreshSyncableUserSettings("group_members")
     }
 
     /** 将现有本地设置投影为可同步记录；生图会话通过会话白名单自然排除。 */
-    private suspend fun refreshSyncableUserSettings() {
-        val sessions = chatDao.getAllSessions(false).map {
-            SyncSessionReference(it.id, it.uuid, it.updatedAt)
+    private suspend fun refreshSyncableUserSettings(kind: String) {
+        val sessions = chatDao.getAllSessions(false).filterNot { it.id in LAST_OPEN_SESSION_IDS }.associateBy { it.id }
+        val knownUuids = sessions.values.mapTo(hashSetOf()) { it.uuid }
+        val snapshots = buildList {
+            if (kind == "group_members") settingsDao.getConversationGroups().forEach { group ->
+                group.conversationIds.forEach { id -> sessions[id]?.let { session ->
+                    val encoded = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(group.groupName.toByteArray(Charsets.UTF_8))
+                    add(UserSettingEntity(kind, "$encoded.${session.uuid}", buildJsonObject {
+                        put("groupName", group.groupName); put("conversationId", session.uuid)
+                    }.toString()))
+                } }
+            }
+            if (kind == "pinned_items") settingsDao.getPinnedIds(false).forEach { id -> sessions[id]?.let {
+                add(UserSettingEntity(kind, it.uuid, "{}"))
+            } }
         }
-        val snapshots = syncUserSettingSnapshots(
-            settingsDao.getConversationGroups(),
-            settingsDao.getPinnedIds(false),
-            sessions,
-            System.currentTimeMillis(),
-        )
         // 不改变内容的保存不能制造同步回环；同时保留服务器已分配的 canonical UUID。
-        val previous = settingsDao.getAllUserSettings()
+        // 只能比较这次修改的类别；此前把模型、MCP 等所有配置误标为删除，导致换机丢设置。
+        val previous = settingsDao.getAllUserSettings().filter { it.kind == kind }
         val keys = snapshots.map { it.kind to it.key }.toSet()
         val changes = snapshots.mapNotNull { incoming ->
             val old = previous.find { it.kind == incoming.kind && it.key == incoming.key }
             if (old != null && !old.deleted && old.value == incoming.value) null else
                 incoming.copy(uuid = old?.uuid ?: incoming.uuid,
                     updatedAt = maxOf(incoming.updatedAt, (old?.updatedAt ?: 0) + 1))
-        } + previous.filter { !it.deleted && (it.kind to it.key) !in keys }.map {
+        } + previous.filter {
+            !it.deleted && (it.kind to it.key) !in keys &&
+                (if (kind == "group_members") it.key.substringAfterLast('.') else it.key) in knownUuids
+        }.map {
             it.copy(deleted = true, updatedAt = maxOf(System.currentTimeMillis(), it.updatedAt + 1),
                 syncStatus = com.android.everytalk.data.database.entities.SyncStatus.PENDING)
         }

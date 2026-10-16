@@ -68,8 +68,8 @@ interface McpOAuthSecrets {
     suspend fun remove(key: String)
 }
 
-internal class EncryptedMcpOAuthSecrets(context: Context) : McpOAuthSecrets {
-    private val store = ComputerCredentialStore(context)
+internal class EncryptedMcpOAuthSecrets(context: Context, recordSyncChanges: Boolean = true) : McpOAuthSecrets {
+    private val store = ComputerCredentialStore(context, recordSyncChanges)
     override suspend fun read(key: String): String? {
         val chars = store.loadAgentAuthorization("mcp:$key") ?: return null
         return try { chars.concatToString() } finally { chars.fill('\u0000') }

@@ -18,6 +18,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
@@ -32,12 +33,23 @@ internal class SyncSettingsProjector(
     private val settings = database.settingsDao()
     private val sessions = database.chatDao()
     private var currentKeyVersion: Long? = null
+    private var existingValues: Map<Pair<String, String>, JsonObject> = emptyMap()
 
-    suspend fun refresh() {
+    /** 在用户删除时保留逐条墓碑；下次联网才发送，不依赖设备当时是否登录。 */
+    suspend fun markDeleted(kind: String, key: String) {
+        val old = settings.getUserSetting(kind, key) ?: return
+        if (!old.deleted) settings.upsertUserSettings(listOf(old.copy(value = "{}", deleted = true,
+            updatedAt = maxOf(System.currentTimeMillis(), old.updatedAt + 1), syncStatus = SyncStatus.PENDING)))
+    }
+
+    suspend fun refresh() = database.withTransaction {
         migrateLegacySettingKeys()
+        existingValues = settings.getSyncableUserSettings().mapNotNull { row ->
+            (runCatching { syncJson.parseToJsonElement(row.value) }.getOrNull() as? JsonObject)?.let { (row.kind to row.key) to it }
+        }.toMap()
         currentKeyVersion = settings.getUserSetting("crypto_keys", "default")?.let {
             runCatching { syncJson.decodeFromString<SyncCryptoKeysValue>(it.value).version }.getOrNull()
-        }
+        } ?: userId?.let { secrets?.cachedKeyVersion(it, secretsEpoch) }
         database.apiConfigDao().getConfigs(false).forEach { upsert("api_configs", it.id, configValue(it)) }
         database.apiConfigDao().getConfigs(true).forEach { upsert("api_configs", it.id, configValue(it, image = true)) }
         selectedModels(); webSearchConfigs(); memorySwitches(); conversationSettings(); groupMembers(); pinnedItems()
@@ -61,9 +73,16 @@ internal class SyncSettingsProjector(
                 parseHeaders(server.headers)?.let { secretJson("headers", it, "mcp_servers", syncKey, "/headers") }
             })
         }
-        database.skillDao().getAll().forEach { upsert("skills", it.skillId, skillValue(it)) }
+        database.skillDao().getAll().forEach {
+            val value = syncSkillValue(it).toMutableMap()
+            val previous = existingValues["skills" to it.skillId]
+            if (previous?.get("contentHash") == value["contentHash"]) {
+                listOf("fileRefs", "fileManifest", "manifestRef").forEach { name -> previous?.get(name)?.let { field -> value[name] = field } }
+            }
+            upsert("skills", it.skillId, JsonObject(value), it.updatedAt)
+        }
         customVoiceModels(); voicePlatforms()
-        database.computerDao().getAllSnapshot().forEach { upsert("computers", it.id, computerValue(it)) }
+        database.computerDao().getAllSnapshot().forEach { upsert("computers", it.id, computerValue(it), it.updatedAt) }
         database.computerDao().getAllWorkspacesSnapshot().forEach { workspace ->
             upsert("computer_workspaces", syncStableSettingKey("computer_workspaces", workspace.id), workspaceValue(workspace, sessions.getStoredSession(workspace.conversationId)?.uuid))
         }
@@ -71,8 +90,9 @@ internal class SyncSettingsProjector(
 
     private suspend fun selectedModels() {
         listOf("text" to "selected_api_config_id", "image" to "selected_image_gen_config_id", "voice" to "selected_voice_config_id", "web_search" to "selected_external_web_search_provider_id").forEach { (scope, localKey) ->
-            val value = settings.getValue(localKey) ?: return@forEach
-            upsert("selected_models", scope, buildJsonObject { if (scope == "web_search") put("providerId", value) else put("configId", value) })
+            val value = settings.getValue(localKey)
+            if (value == null && settings.getUserSetting("selected_models", scope) == null) return@forEach
+            upsert("selected_models", scope, buildJsonObject { put(if (scope == "web_search") "providerId" else "configId", value?.let(::JsonPrimitive) ?: JsonNull) })
         }
     }
 
@@ -96,19 +116,30 @@ internal class SyncSettingsProjector(
 
     /** 每个文字会话一条记录；本地偏好中的设备状态字段不进入同步。 */
     private suspend fun conversationSettings() {
-        val raw = settings.getValue("conversation_function_toggle_states") ?: return
-        val toggles = runCatching { syncJson.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return
+        suspend fun mapping(key: String): JsonObject = settings.getValue(key)?.let {
+            runCatching { syncJson.parseToJsonElement(it).jsonObject }.getOrNull()
+        } ?: JsonObject(emptyMap())
+        val toggles = mapping("conversation_function_toggle_states")
+        val models = mapping("conversation_api_config_ids")
+        val computerSelections = database.computerDao().getAllSelectionsSnapshot().associate { it.conversationId to it.selectedComputerId }
         sessions.getAllSessions(false).filterNot { it.deleted || it.isImageGeneration }.forEach { session ->
             val toggle = toggles[session.id]?.jsonObject
             val old = settings.getUserSetting("conversation_settings", session.uuid)
             val oldValue = old?.value?.let { runCatching { syncJson.parseToJsonElement(it).jsonObject }.getOrNull() }
+            val computerId = computerSelections[session.id]
+            val legacyPrompt = if (oldValue?.containsKey("systemPrompt") != true) sessions.getLegacySystemPrompt(session.id) else null
+            if (toggle == null && models[session.id] == null && computerId == null && oldValue == null && legacyPrompt == null) return@forEach
             upsert("conversation_settings", session.uuid, buildJsonObject {
+                oldValue?.forEach { (name, element) -> put(name, element) }
+                if ("modelId" in oldValue.orEmpty() || models[session.id] != null) put("modelId", models[session.id] ?: JsonNull)
+                if ("computerId" in oldValue.orEmpty() || computerId != null) put("computerId", computerId?.let(::JsonPrimitive) ?: JsonNull)
                 oldValue?.get("systemPrompt")?.let { element -> put("systemPrompt", element) }
                 oldValue?.get("promptEnabled")?.let { element -> put("promptEnabled", element) }
-                toggle?.get("webSearchEnabled")?.let { element -> put("webSearchEnabled", element) }
-                toggle?.get("codeExecutionEnabled")?.let { element -> put("codeExecutionEnabled", element) }
-                toggle?.get("mcpEnabled")?.let { element -> put("mcpEnabled", element) }
-                toggle?.get("agentEnabled")?.let { element -> put("agentEnabled", element) }
+                legacyPrompt?.let { put("systemPrompt", it); put("promptEnabled", false) }
+                // 旧版本序列化会省略默认 false；本地已有该会话设置时，缺字段表示关闭，不能沿用云端旧 true。
+                if (toggle != null) listOf("webSearchEnabled", "codeExecutionEnabled", "mcpEnabled", "agentEnabled").forEach { name ->
+                    put(name, toggle[name] ?: JsonPrimitive(false))
+                }
             })
         }
     }
@@ -137,6 +168,11 @@ internal class SyncSettingsProjector(
                 syncStatus = legacySetting?.syncStatus ?: SyncStatus.PENDING,
             )
         } }
+        // 旧整表行只能用于一次转换，不能借用成员的 canonical_id，否则唯一索引会吞掉成员行。
+        legacySettings.forEach { legacy ->
+            settings.deleteUserSetting(legacy.kind, legacy.key)
+            settings.deleteSetting("sync_rejected:user_settings:${legacy.uuid}")
+        }
     }
 
     private suspend fun pinnedItems() {
@@ -158,7 +194,8 @@ internal class SyncSettingsProjector(
     }
 
     private suspend fun voicePlatforms() {
-        database.voiceConfigDao().getAll().flatMap { listOf(it.sttPlatform, it.chatPlatform, it.ttsPlatform) }
+        (database.voiceConfigDao().getAll().flatMap { listOf(it.sttPlatform, it.chatPlatform, it.ttsPlatform) } +
+            settings.getByPrefix("voice_llm_platform:").map { it.key.removePrefix("voice_llm_platform:") })
             .filter(String::isNotBlank).distinct().forEach { platform ->
                 upsert("voice_llm_platforms", platform, buildJsonObject { put("platform", platform) })
             }
@@ -167,22 +204,55 @@ internal class SyncSettingsProjector(
     private fun configValue(config: ApiConfigEntity, image: Boolean = false): JsonObject = buildJsonObject {
         put("name", config.name); syncEndpoint("address", config.address); put("model", config.model); put("provider", config.provider)
         put("channel", config.channel); put("imageConfig", image); put("modality", config.modalityType.name); put("temperature", config.temperature)
-        config.topP?.let { put("topP", it) }; config.maxTokens?.let { put("outputLimit", it) }; config.defaultUseWebSearch?.let { put("defaultUseWebSearch", it) }
-        config.imageSize?.let { put("imageSize", it) }; config.numInferenceSteps?.let { put("inferenceSteps", it) }; config.guidanceScale?.let { put("guidanceScale", it) }
-        config.enableCodeExecution?.let { put("codeExecutionEnabled", it) }
+        // null 表示用户已清空可选参数；缺字段只用于兼容旧客户端，不能把清空误当成“沿用旧值”。
+        put("topP", config.topP?.let(::JsonPrimitive) ?: JsonNull)
+        put("outputLimit", config.maxTokens?.let(::JsonPrimitive) ?: JsonNull)
+        put("defaultUseWebSearch", config.defaultUseWebSearch?.let(::JsonPrimitive) ?: JsonNull)
+        put("imageSize", config.imageSize?.let(::JsonPrimitive) ?: JsonNull)
+        put("inferenceSteps", config.numInferenceSteps?.let(::JsonPrimitive) ?: JsonNull)
+        put("guidanceScale", config.guidanceScale?.let(::JsonPrimitive) ?: JsonNull)
+        put("codeExecutionEnabled", config.enableCodeExecution?.let(::JsonPrimitive) ?: JsonNull)
+        // 自定义工具定义同样属于模型配置；可疑内容只能进密文，不能绕过配置扫描。
+        if (config.toolsJson == null) put("toolDefinitions", JsonNull)
+        else runCatching { syncJson.parseToJsonElement(config.toolsJson) }.getOrNull()?.let { definitions ->
+            if (runCatching { SyncContractSanitizer.validate(definitions) }.isSuccess) put("toolDefinitions", definitions)
+            else secretJson("toolDefinitions", definitions, "api_configs", config.id, "/toolDefinitions")
+        }
         put("modelParameters", buildJsonObject {
             put("protocolOverride", config.modelParameters.apiProtocolOverride?.name ?: ""); put("reasoningMode", config.modelParameters.reasoningMode.name)
             put("reasoningEffort", config.modelParameters.reasoningEffort); put("thoughtBudget", config.modelParameters.thinkingBudget)
             put("contextLimit", config.modelParameters.maxContextTokens); put("autoCompressionEnabled", config.modelParameters.autoContextCompressionEnabled)
             put("autoCompressionThreshold", config.modelParameters.autoContextCompressionThresholdPercent)
+            put("customReasoningEfforts", JsonArray(config.modelParameters.customReasoningEfforts.map(::JsonPrimitive)))
+            // 参数名作为列表项的值保存，不当作 JSON 属性名；敏感参数的值仍必须加密。
+            val parameters = config.modelParameters.customParameters
+            if (parameters != null) {
+                put("customParameters", JsonArray(parameters.mapIndexed { index, parameter ->
+                    buildJsonObject {
+                        put("name", parameter.name); put("type", parameter.type.name); put("enabled", parameter.enabled)
+                        val raw = JsonPrimitive(parameter.value)
+                        val nested = if (parameter.type == com.android.everytalk.data.DataClass.CustomParameterType.JSON)
+                            runCatching { syncJson.parseToJsonElement(parameter.value) }.getOrNull() else raw
+                        if (SyncContractSanitizer.isForbiddenFieldName(parameter.name) ||
+                            runCatching { SyncContractSanitizer.validate(nested ?: raw) }.isFailure) {
+                            secretJson("value", raw, "api_configs", config.id, "/modelParameters/customParameters/$index/value")
+                        } else put("value", raw)
+                    }
+                }))
+            } else put("customParameters", JsonNull)
+            val previous = (existingValues["api_configs" to config.id]?.get("modelParameters") as? JsonObject)?.get("customParameters")
+            fun containsEnvelope(element: JsonElement): Boolean = when (element) {
+                is JsonObject -> SyncContractSanitizer.isValidEnvelope(element) || element.values.any(::containsEnvelope)
+                is JsonArray -> element.any(::containsEnvelope)
+                else -> false
+            }
+            if (previous != null && containsEnvelope(previous) &&
+                (userId == null || currentKeyVersion == null || secrets?.hasCachedDek(userId, currentKeyVersion!!, secretsEpoch) != true)) {
+                // 未解锁时不重排带密文的参数数组，防止 AAD 下标改变或把云端凭据投影成空列表。
+                put("customParameters", previous)
+            }
         })
         secret("apiKey", config.key, "api_configs", config.id, "/apiKey")
-    }
-
-    /** 技能只同步安装和版本信息，路径、使用次数和文件内容留在本机。 */
-    private fun skillValue(skill: SkillInstallationEntity): JsonObject = buildJsonObject {
-        put("packageId", skill.packageId); put("packageName", skill.packageName); put("name", skill.name); put("sourceType", skill.sourceType)
-        put("contentHash", skill.currentHash); put("enabled", skill.enabled); put("invocationMode", skill.invocationMode); put("installedAt", skill.createdAt)
     }
 
     private fun computerValue(computer: ComputerEntity): JsonObject = buildJsonObject {
@@ -206,27 +276,62 @@ internal class SyncSettingsProjector(
         val old = settings.getUserSetting(kind, key)
         val merged = preserveEncryptedLeaves(old?.value, value)
         val raw = merged.toString()
+        fun withToggleDefaults(element: JsonElement): JsonElement =
+            if (kind == "conversation_settings" && element is JsonObject) JsonObject(
+                mapOf("webSearchEnabled" to JsonPrimitive(false), "codeExecutionEnabled" to JsonPrimitive(false),
+                    "mcpEnabled" to JsonPrimitive(false), "agentEnabled" to JsonPrimitive(false)) + element
+            ) else element
         // 服务端会排序 JSON 属性，并可能把 0.0 写成 0；这些变化不代表用户修改了配置。
-        if (old != null && !old.deleted && syncSettingValuesEqual(syncJson.parseToJsonElement(old.value), merged)) return
+        // 同样，旧云端缺省的 false 和显式 false 等价，不能在拉取后制造“本地修改”。
+        if (old != null && !old.deleted && syncSettingValuesEqual(withToggleDefaults(syncJson.parseToJsonElement(old.value)), withToggleDefaults(merged))) return
         settings.upsertUserSettings(listOf(UserSettingEntity(kind, key, raw, old?.uuid ?: localSyncUuid("user_settings", "$kind:$key"), maxOf(modifiedAt, (old?.updatedAt ?: 0L) + 1), false, syncStatus)))
     }
 
     /** 未解锁时保留已有密文，防止后台投影把已同步凭据清空。 */
     private fun preserveEncryptedLeaves(oldRaw: String?, current: JsonObject): JsonObject {
         val old = oldRaw?.let { runCatching { syncJson.parseToJsonElement(it) }.getOrNull() as? JsonObject } ?: return current
-        return buildJsonObject {
-            current.forEach { (name, child) -> put(name, child) }
-            old.forEach { (name, child) -> if (!current.containsKey(name) && SyncContractSanitizer.isForbiddenFieldName(name) && SyncContractSanitizer.isValidEnvelope(child)) put(name, child) }
+        fun preserve(previous: JsonElement?, next: JsonElement): JsonElement = when {
+            previous is JsonObject && next is JsonObject -> buildJsonObject {
+                next.forEach { (name, child) -> put(name, preserve(previous[name], child)) }
+                previous.forEach { (name, child) ->
+                    if (name !in next && SyncContractSanitizer.isValidEnvelope(child)) put(name, child)
+                }
+            }
+            // AAD 包含数组下标；只有同位置同名参数才能沿用旧密文，不能挪动密文。
+            previous is JsonArray && next is JsonArray -> JsonArray(next.mapIndexed { index, child ->
+                val prior = previous.getOrNull(index)
+                if (prior is JsonObject && child is JsonObject && prior["name"] == child["name"]) preserve(prior, child) else child
+            })
+            else -> next
         }
+        return preserve(old, current) as JsonObject
     }
 
     private fun kotlinx.serialization.json.JsonObjectBuilder.secret(name: String, value: String, kind: String, key: String, pointer: String) {
-        if (value.isNotBlank()) secretJson(name, JsonPrimitive(value), kind, key, pointer)
+        // 空值也要加密：用户清空 Key 是一次真实修改，不能沿用旧密文使其复活。
+        secretJson(name, JsonPrimitive(value), kind, key, pointer)
     }
 
     private fun kotlinx.serialization.json.JsonObjectBuilder.secretJson(name: String, value: JsonElement, kind: String, key: String, pointer: String) {
         val account = userId ?: return
         val version = currentKeyVersion ?: return
+        val previous = pointer.removePrefix("/").split('/').fold(existingValues[kind to key] as JsonElement?) { parent, part ->
+            when (parent) {
+                is JsonObject -> parent[part.replace("~1", "/").replace("~0", "~")]
+                is JsonArray -> part.toIntOrNull()?.let(parent::getOrNull)
+                else -> null
+            }
+        }
+        // 随机 nonce 只用于真实改动；每次轮询重加密会让配置永远 PENDING。
+        if (previous != null) {
+            val decrypted = secrets?.decryptField(account, kind, key, pointer, secretsEpoch, previous)
+            if (decrypted == null || (decrypted == value && SyncContractSanitizer.isValidEnvelope(previous))) {
+                // 损坏密文不能被尚未恢复的空字段覆盖；上层显示错误，保留本机已有 Key。
+                put(name, previous)
+                return
+            }
+            // 旧版漏序列化 $enc/alg；能认证但形状不合法时重新封装，不能永久沿用旧错误信封。
+        }
         val encrypted = secrets?.encryptField(account, kind, key, pointer, version, secretsEpoch, value) ?: return
         put(name, encrypted)
     }
@@ -277,6 +382,11 @@ internal class SyncSettingsProjector(
 internal fun syncStableSettingKey(kind: String, localId: String): String =
     if (isCanonicalUuid(localId)) localId.lowercase() else localSyncUuid(kind, localId)
 
+/** 远端目录实际保存 owner/repo，兼容安全 URL；不能把本机路径或带凭据的地址当来源。 */
+internal fun syncSafeSkillRepository(raw: String): String? =
+    if (Regex("[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+").matches(raw) && raw.substringAfter('/') !in setOf(".", "..")) raw
+    else syncSafeEndpoint(raw)
+
 internal fun isCanonicalUuid(value: String): Boolean =
     runCatching { UUID.fromString(value).toString() == value.lowercase() }.getOrDefault(false)
 
@@ -316,4 +426,24 @@ internal fun syncSettingValuesEqual(left: JsonElement, right: JsonElement): Bool
         if (a != null && b != null) a.compareTo(b) == 0 else left == right
     }
     else -> left == right
+}
+
+/** 技能只同步安装和版本信息，路径、使用次数和文件内容留在本机。 */
+internal fun syncSkillValue(skill: SkillInstallationEntity): JsonObject = buildJsonObject {
+    put("packageId", skill.packageId); put("packageName", skill.packageName); put("name", skill.name); put("sourceType", skill.sourceType)
+    put("contentHash", skill.currentHash); put("enabled", skill.enabled); put("invocationMode", skill.invocationMode); put("installedAt", skill.createdAt)
+    put("description", skill.description)
+    // 远端仓库中的相对路径属于来源信息；本机绝对路径和 Skill 文件内容不传。
+    if (skill.sourceType == "REMOTE") {
+        skill.sourceRepository?.let(::syncSafeSkillRepository)?.let { put("sourceRepository", it) }
+        skill.sourcePath?.takeIf { !it.startsWith('/') && !it.contains(':') && !it.contains('\\') && it.split('/').none { part -> part == ".." } }
+            ?.let { put("repositoryPath", it) }
+    }
+}
+
+/** 本地保存复用已缓存账号密钥封存修改；无网络请求，游客状态也不启动后台任务。 */
+internal suspend fun captureSyncSettings(context: android.content.Context, database: AppDatabase) {
+    val user = database.settingsDao().getValue(SyncStateStore.KEY_ACCOUNT)
+    val epoch = SyncStateStore(database).readSecretsEpoch().coerceAtLeast(0)
+    SyncSettingsProjector(database, SyncSecretManager(context), user, epoch).refresh()
 }

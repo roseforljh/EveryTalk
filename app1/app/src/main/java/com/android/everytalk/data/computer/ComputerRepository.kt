@@ -1,6 +1,7 @@
 package com.android.everytalk.data.computer
 
 import android.content.Context
+import androidx.room.withTransaction
 import com.android.everytalk.service.ComputerConnectionServiceController
 import com.android.everytalk.data.database.AppDatabase
 import com.android.everytalk.data.database.daos.ComputerDao
@@ -578,7 +579,12 @@ class ComputerRepository(
                 action = "SELECT_COMPUTER",
             )
         }
-        dao.selectComputer(conversationId, computerId)
+        // 绑定修改和同步快照一起保存，避免下一页拉取用旧绑定覆盖用户刚选的服务器。
+        val database = AppDatabase.getDatabase(applicationContext)
+        database.withTransaction {
+            dao.selectComputer(conversationId, computerId)
+            com.android.everytalk.data.sync.SyncSettingsProjector(database).refresh()
+        }
     }
 
     suspend fun probeReplacementHostKey(computerId: String): HostKeyProbeResult {

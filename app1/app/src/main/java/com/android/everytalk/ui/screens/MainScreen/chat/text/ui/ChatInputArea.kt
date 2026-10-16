@@ -1065,7 +1065,7 @@ fun ChatInputArea(
                 } == true
                 val effectiveWebSearchAvailable = isWebSearchAvailable || supportsNativeWebSearch
                 val activeTagCount =
-                    (if (isWebSearchEnabled && effectiveWebSearchAvailable) 1 else 0) +
+                    (if (isWebSearchEnabled) 1 else 0) +
                         (if (isMcpEnabled) 1 else 0) +
                         (if (isAgentEnabled) 1 else 0) +
                         (if (!isAgentEnabled && currentAgentResourceState != null) 1 else 0)
@@ -1499,10 +1499,11 @@ fun ChatInputArea(
                                             },
                                             verticalArrangement = Arrangement.spacedBy(2.dp),
                                         ) {
-                                            if (isWebSearchEnabled && effectiveWebSearchAvailable) {
+                                            // 账号同步的是用户选择；缺本机 Key 时仍显示选择，发送前继续校验凭据。
+                                            if (isWebSearchEnabled) {
                                                 ActiveFunctionTag(
                                                     iconRes = R.drawable.ic_globe,
-                                                    label = stringResource(R.string.chat_input_search_tag),
+                                                    label = stringResource(if (effectiveWebSearchAvailable) R.string.chat_input_search_tag else R.string.chat_input_search_tag_unconfigured),
                                                     tint = Color(0xFF66B5FF),
                                                     lightBackground = Color(0xFFDDEEFF),
                                                     closeContentDescription = stringResource(R.string.chat_input_close_web_search),

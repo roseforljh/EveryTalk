@@ -63,7 +63,8 @@ internal object SyncCrypto {
     private const val DEK_BYTES = 32
     private const val MAX_ENVELOPE_BYTES = 8192
     private val random = SecureRandom()
-    private val json = Json { encodeDefaults = false; explicitNulls = false }
+    // 信封中的 $enc 和 alg 即使使用默认值也必须输出；否则服务端会把密文当成普通对象拒绝。
+    private val json = Json { encodeDefaults = true; explicitNulls = false }
 
     /** 合同推荐参数；派生必须放在 Dispatchers.Default/IO，不能在 Compose 主线程调用。 */
     val defaultKdfParams: SyncKdfParams = SyncKdfParams(

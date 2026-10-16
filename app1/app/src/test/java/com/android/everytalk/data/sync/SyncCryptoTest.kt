@@ -5,9 +5,19 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Test
+import kotlinx.serialization.json.*
 
 /** 合同 openapi.yaml 中的跨实现 Argon2id、AAD 和 AES-GCM 固定向量。 */
 class SyncCryptoTest {
+    @Test fun `实际字段信封保留默认协议字段并通过名称扫描`() {
+        val dek = ByteArray(32) { it.toByte() }
+        val aad = SyncCrypto.aad("account", "api_configs", "config", "/apiKey", 1, 0)
+        val value = JsonPrimitive("test-only")
+        val envelope = SyncCrypto.encryptJson(dek, value, aad, 1)
+        assertEquals(setOf("\$enc", "alg", "nonce", "ct", "keyVersion"), envelope.keys)
+        SyncContractSanitizer.validate(buildJsonObject { put("apiKey", envelope) })
+        assertEquals(value, SyncCrypto.decryptJson(dek, syncJson.decodeFromJsonElement(SyncEncryptedEnvelope.serializer(), envelope), aad))
+    }
     @Test
     fun `合同 Argon2id 向量`() {
         val result = SyncCrypto.deriveKek(

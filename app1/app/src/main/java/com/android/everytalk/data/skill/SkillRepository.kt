@@ -14,6 +14,8 @@ import java.io.InputStream
 import java.util.zip.ZipInputStream
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
@@ -43,13 +45,13 @@ class SkillRepository(
     suspend fun setPackageEnabled(packageId: String, enabled: Boolean) = dao.setPackageEnabled(packageId, enabled)
 
     suspend fun delete(skillId: String) {
-        dao.delete(skillId)
+        dao.deleteLocally(skillId)
         File(root, skillId.directoryKey()).deleteRecursively()
     }
 
     suspend fun deletePackage(packageId: String) {
         val children = dao.getPackageChildren(packageId)
-        dao.deletePackage(packageId)
+        dao.deletePackageLocally(packageId)
         children.forEach { child -> File(root, child.skillId.directoryKey()).deleteRecursively() }
     }
 
@@ -455,7 +457,8 @@ ${rules.trim()}
     suspend fun createSnapshot(
         manualReferences: List<MessageSkillReference> = emptyList(),
     ): SkillRequestSnapshot {
-        val enabled = dao.getEnabled()
+        // 安装记录先于文件到达很正常；不能把只有云端元数据的 Skill 当作可执行能力。
+        val enabled = dao.getEnabled().filter { hasVersionFiles(it.skillId, it.currentHash) }
         val automatic = enabled.mapNotNull { entity ->
             val mode = enumValueOrNull<SkillInvocationMode>(entity.invocationMode) ?: return@mapNotNull null
             if (mode == SkillInvocationMode.MANUAL_ONLY) return@mapNotNull null
@@ -469,6 +472,12 @@ ${rules.trim()}
 
     suspend fun readSkillMarkdown(skillId: String, contentHash: String): String =
         readTextFile(skillId, contentHash, "SKILL.md")
+
+    /** 只确认该冻结版本在本机可读，不把另一台设备的安装/连接状态当成本机状态。 */
+    suspend fun hasVersionFiles(skillId: String, contentHash: String): Boolean = withContext(Dispatchers.IO) {
+        val version = dao.getVersion(skillId, contentHash) ?: return@withContext false
+        File(version.rootPath, "SKILL.md").isFile
+    }
 
     suspend fun readTextFile(skillId: String, contentHash: String, relativePath: String): String {
         val version = dao.getVersion(skillId, contentHash) ?: error("Skill 版本不存在")

@@ -488,8 +488,15 @@ fun ComputerDetailScreen(
                                 }
                             },
                             onRepair = {
-                                repairSetupStage = null
-                                repairDialogVisible = true
+                                // 同步的服务器基础信息不包含 SSH 凭据；先使用已有编辑表单补齐，不能假装可直接修复。
+                                if (computer.credentialState == ComputerCredentialState.MISSING) {
+                                    editForm = computer.toEditFormState()
+                                    editErrorText = "这台设备没有服务器登录凭据，请先填写密码或私钥；服务器信息已保留。"
+                                    editDialogVisible = true
+                                } else {
+                                    repairSetupStage = null
+                                    repairDialogVisible = true
+                                }
                             },
                             onNetworkChange = { allowed ->
                                 launchAction("network") {
@@ -587,7 +594,7 @@ fun ComputerDetailScreen(
             onDismiss = ::closeEditDialog,
             title = stringResource(R.string.computer_edit_title),
             submitLabel = stringResource(R.string.computer_edit_save),
-            keepCredentialHint = true,
+            keepCredentialHint = computer.credentialState != ComputerCredentialState.MISSING,
             allowBusyDismiss = true,
         )
     }

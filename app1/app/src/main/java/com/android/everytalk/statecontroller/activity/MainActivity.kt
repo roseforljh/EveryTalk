@@ -6,6 +6,8 @@ import android.net.Uri
 import android.os.Bundle
 import androidx.profileinstaller.ProfileInstaller
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.Lifecycle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -163,6 +165,16 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 两台手机都停在前台时也要获知对方的更改；原先只能等回前台或后台 15 分钟任务。
+        // 后台立即停止轮询；调度层继续校验登录、联网、限流和唯一任务，本地模式不会发请求。
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                while (true) {
+                    delay(30_000)
+                    com.android.everytalk.service.SyncScheduler.request(applicationContext)
+                }
+            }
+        }
         intent.data?.let(com.android.everytalk.data.computer.CloudflareOAuthCallbackBus::publish)
         intent.data?.let(com.android.everytalk.data.mcp.McpOAuthCallbackBus::publish)
         intent.data?.let { uri ->
@@ -646,7 +658,6 @@ class MainActivity : AppCompatActivity() {
                                         accountDataActions = {
                                             com.android.everytalk.ui.screens.settings.AccountDataActions(
                                                 controller = appViewModel.syncController,
-                                                onDeleteCloudData = { appViewModel.syncController.deleteCloudData() },
                                                 onResumeUpload = { appViewModel.syncController.decideEpoch(true) },
                                             )
                                         },

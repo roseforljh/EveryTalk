@@ -551,7 +551,7 @@ internal fun markdownImageIntrinsicSize(
 ): Size = if (hasError) MARKDOWN_IMAGE_ERROR_INTRINSIC_SIZE else intrinsicSize
 
 @Composable
-internal fun MarkdownImageFailure(modifier: Modifier = Modifier) {
+internal fun MarkdownImageFailure(modifier: Modifier = Modifier, missingLocalFile: Boolean = false) {
     Surface(
         modifier = modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.errorContainer,
@@ -565,7 +565,7 @@ internal fun MarkdownImageFailure(modifier: Modifier = Modifier) {
             contentAlignment = androidx.compose.ui.Alignment.Center,
         ) {
             Text(
-                text = stringResource(R.string.image_load_failed),
+                text = stringResource(if (missingLocalFile) R.string.image_not_synced else R.string.image_load_failed),
                 style = MaterialTheme.typography.labelMedium,
                 maxLines = 1,
             )
@@ -592,6 +592,10 @@ internal fun MarkdownInlineImageWithFailure(
     model: MarkdownComponentModel,
     onImageClick: ((String) -> Unit)?,
 ) {
+    if (isMissingLocalMarkdownImage(model.content)) {
+        MarkdownImageFailure(modifier = Modifier.fillMaxSize(), missingLocalFile = true)
+        return
+    }
     val imageData = EveryTalkMarkdownImageTransformer.transform(model.content)
     val painterState = (imageData?.painter as? AsyncImagePainter)?.state?.collectAsState()?.value
     when {
@@ -618,6 +622,16 @@ internal fun MarkdownInlineImageWithFailure(
             )
         }
     }
+}
+
+/** 另一台设备的私有文件路径没有实际文件；显示未同步占位，不发起加载或打开无效预览。 */
+internal fun isMissingLocalMarkdownImage(source: String): Boolean {
+    val path = when {
+        source.startsWith("/") -> source
+        source.startsWith("file:", ignoreCase = true) -> runCatching { java.io.File(java.net.URI(source)).path }.getOrNull()
+        else -> null
+    } ?: return false
+    return !java.io.File(path).isFile
 }
 
 @Composable

@@ -55,6 +55,7 @@ class MemoryRepository(private val database: AppDatabase) {
             put(ENABLED_KEY, enabled.toString())
             put(AUTO_CAPTURE_KEY, autoCapture.toString())
             advanceVersion(old)
+            com.android.everytalk.data.sync.SyncSettingsProjector(database).refresh()
         }
     }
 

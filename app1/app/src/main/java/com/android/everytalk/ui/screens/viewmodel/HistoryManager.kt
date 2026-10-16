@@ -688,10 +688,8 @@ class HistoryManager(
                 currentConversationIdInMessages = messagesToSave.any { it.id == migrationSourceId },
             )
         } else {
-            // 文本模式：优先使用首条用户消息ID，其次系统消息ID
-            messagesToSave.firstOrNull { it.sender == Sender.User }?.id
-                ?: messagesToSave.firstOrNull { it.sender == Sender.System && !it.isPlaceholderName }?.id
-                ?: messagesToSave.firstOrNull()?.id
+            // 云端恢复和编辑首条消息后，消息 ID 不再代表会话；仅旧消息缺少会话身份时回退。
+            stableConversationId(messagesToSave)
         }
         
         if (stableKeyFromMessages != null) {
@@ -758,6 +756,12 @@ class HistoryManager(
                     stateHolder.systemPromptExpandedState[stableId] = currentExpanded
                     stateHolder.systemPromptExpandedState.remove(migrationSourceId)
                 }
+            }
+
+            // 首条消息落库后才有稳定会话；把发送前编辑的提示词一起落到该会话的逐条设置。
+            if (!isImageGeneration && stateHolder.systemPrompts.containsKey(stableId)) {
+                persistenceManager.saveConversationSettings(stableId, stateHolder.systemPrompts[stableId].orEmpty(),
+                    stateHolder.systemPromptEngagedState[stableId] ?: false)
             }
 
             // 迁移会话滚动状态

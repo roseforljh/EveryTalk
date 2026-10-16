@@ -1114,14 +1114,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             aiContentReportRepository.retryPendingReports()
         }
 
-        viewModelScope.launch(Dispatchers.IO) {
-            val initialToggleStates = persistenceManager.loadConversationFunctionToggleStates()
-
-            withContext(Dispatchers.Main) {
-                stateHolder.conversationFunctionToggleStates.value = initialToggleStates
-            }
-        }
-
         // 加载自定义提供商
         viewModelScope.launch(Dispatchers.IO) {
             // Use persistenceManager instead of dataSource
@@ -1167,6 +1159,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 com.android.everytalk.data.sync.SyncLocalChanges.revision.debounce(300).collect { revision ->
                     if (revision == 0L) return@collect
                     try {
+                        persistenceManager.refreshSyncedConfigurations(simpleModeManager::isInImageMode)
+                        _externalWebSearchConfigs.value = persistenceManager.loadExternalWebSearchConfigs().associateBy { it.providerId }
+                        persistenceManager.loadSelectedExternalWebSearchProviderId()?.let { _selectedExternalWebSearchProviderId.value = it }
                         val history = withContext(Dispatchers.IO) { persistenceManager.roomDataSource.loadChatHistoryPreviewResult() }
                         stateHolder._historicalConversations.value = history.sessions.map { it.messages }
                         stateHolder.conversationGroups.value = persistenceManager.loadConversationGroups()
@@ -1181,6 +1176,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                                 if (stateHolder._currentConversationId.value == currentId && !stateHolder.isTextConversationDirty.value) {
                                     stateHolder.messages.clear()
                                     stateHolder.messages.addAll(messages.orEmpty())
+                                    // 与手动打开历史页走同一账本恢复，避免同步后把步骤与耗时退回旧快照。
+                                    apiHandler.restoreVisibleAgentState()
                                 }
                             }
                         }

@@ -2,6 +2,9 @@ package com.android.everytalk.statecontroller.viewmodel
 
 import android.content.Context
 import android.util.Log
+import androidx.room.withTransaction
+import com.android.everytalk.data.sync.SyncSettingsProjector
+import com.android.everytalk.data.sync.syncStableSettingKey
 import com.android.everytalk.data.database.AppDatabase
 import com.android.everytalk.data.database.entities.McpServerConfigEntity
 import com.android.everytalk.data.mcp.*
@@ -50,21 +53,40 @@ class McpManager(private val context: Context) {
             }
         }
         scope.launch {
-            mcpDao.getEnabledConfigs().collect { entities ->
-                entities.forEach { entity ->
-                    val config = entity.toModel()
-                    if (!serverStates.value.containsKey(config.id)) {
+            var observed = emptyMap<String, McpServerConfig>()
+            var observedCredentials = emptyMap<String, String?>()
+            // 同时监听停用和删除，才能把另一台设备的修改落实到当前连接。
+            // 按配置变化连接，不随普通数据库通知反复重试认证失败的服务。
+            combine(mcpDao.getAllConfigs(), com.android.everytalk.data.sync.SyncLocalChanges.revision) { entities, _ -> entities }.collect { entities ->
+                val current = entities.associate { it.id to it.toModel() }
+                val credentials = current.keys.associateWith { id ->
+                    val row = database.settingsDao().getUserSetting("mcp_servers", syncStableSettingKey("mcp_servers", id))
+                    row?.let { database.settingsDao().getValue("sync_private_applied:${it.uuid}") }
+                }
+                coroutineScope {
+                    (observed.keys - current.keys).forEach { id ->
+                        launch { clientManager.removeServer(id) }
+                    }
+                    current.values.forEach { config ->
+                        val previous = observed[config.id]
+                        val authorizationChanged = previous != null && credentials[config.id] != observedCredentials[config.id]
+                        if (previous != null && !authorizationChanged && hasSameMcpConnectionSettings(previous, config)) return@forEach
                         launch {
                             try {
-                                clientManager.addServer(config)
+                                // OAuth/邮箱授权在配置之后恢复；凭据变化时丢掉旧连接，不能沿用认证失败或旧用户的连接。
+                                if (authorizationChanged) clientManager.removeServer(config.id)
+                                if (config.enabled) clientManager.addServer(config)
+                                else clientManager.disconnectServer(config.id)
                             } catch (e: CancellationException) {
                                 throw e
                             } catch (e: Exception) {
-                                Log.e(TAG, "Failed to add server ${config.name}", e)
+                                Log.e(TAG, "MCP 配置生效失败: ${config.id}", e)
                             }
                         }
                     }
                 }
+                observed = current
+                observedCredentials = credentials
             }
         }
     }
@@ -110,12 +132,18 @@ class McpManager(private val context: Context) {
     }
 
     suspend fun addServer(config: McpServerConfig) {
-        mcpDao.insertConfig(McpServerConfigEntity.fromModel(config))
+        database.withTransaction {
+            mcpDao.insertConfig(McpServerConfigEntity.fromModel(config))
+            com.android.everytalk.data.sync.captureSyncSettings(context, database)
+        }
         clientManager.addServer(config)
     }
 
     suspend fun updateServer(config: McpServerConfig) {
-        mcpDao.updateConfig(McpServerConfigEntity.fromModel(config))
+        database.withTransaction {
+            mcpDao.updateConfig(McpServerConfigEntity.fromModel(config))
+            com.android.everytalk.data.sync.captureSyncSettings(context, database)
+        }
         if (config.enabled) {
             clientManager.addServer(config)
         } else {
@@ -124,14 +152,20 @@ class McpManager(private val context: Context) {
     }
 
     suspend fun removeServer(serverId: String) {
-        mcpDao.deleteConfigById(serverId)
+        database.withTransaction {
+            mcpDao.deleteConfigById(serverId)
+            SyncSettingsProjector(database).markDeleted("mcp_servers", syncStableSettingKey("mcp_servers", serverId))
+        }
         clientManager.removeServer(serverId)
         McpOAuthProvider.entries.firstOrNull { it.serverId == serverId }?.let { oauth.logout(it) }
         McpMailProvider.entries.firstOrNull { it.serverId == serverId }?.let { mail.remove(it) }
     }
 
     suspend fun toggleServer(serverId: String, enabled: Boolean) {
-        mcpDao.setEnabled(serverId, enabled)
+        database.withTransaction {
+            mcpDao.setEnabled(serverId, enabled)
+            com.android.everytalk.data.sync.captureSyncSettings(context, database)
+        }
         if (enabled) {
             val entity = mcpDao.getConfigById(serverId)
             entity?.let {

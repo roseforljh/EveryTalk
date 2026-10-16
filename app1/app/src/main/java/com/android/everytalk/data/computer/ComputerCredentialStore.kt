@@ -218,7 +218,7 @@ internal object ComputerCredentialCodec {
     }
 }
 
-class ComputerCredentialStore(private val context: Context) {
+class ComputerCredentialStore(private val context: Context, private val recordSyncChanges: Boolean = true) {
     private val rootDirectory = File(context.noBackupFilesDir, "computer_credentials")
     private val envelopeCipher by lazy { ComputerEnvelopeCipher(getOrCreateMasterKey()) }
 
@@ -245,6 +245,7 @@ class ComputerCredentialStore(private val context: Context) {
 
     suspend fun deleteComputerCredential(computerId: String) = withContext(Dispatchers.IO) {
         cryptoShred(fileForScope("credential:$computerId"))
+        recordMutation("credential:$computerId")
     }
 
     /**
@@ -260,6 +261,7 @@ class ComputerCredentialStore(private val context: Context) {
 
     suspend fun deleteOriginalComputerCredential(computerId: String) = withContext(Dispatchers.IO) {
         cryptoShred(fileForScope("original-credential:$computerId"))
+        recordMutation("original-credential:$computerId")
     }
 
     /** sudo 密码与 SSH 凭据分开加密，root 或免密 sudo 时传 null 会清除旧值。 */
@@ -285,6 +287,7 @@ class ComputerCredentialStore(private val context: Context) {
 
     suspend fun deleteComputerSudoPassword(computerId: String) = withContext(Dispatchers.IO) {
         cryptoShred(fileForScope("sudo-password:$computerId"))
+        recordMutation("sudo-password:$computerId")
     }
 
     suspend fun saveWorkspaceSecret(secretId: String, value: CharArray) = withContext(Dispatchers.IO) {
@@ -293,6 +296,7 @@ class ComputerCredentialStore(private val context: Context) {
         val plaintext = ComputerCredentialCodec.encode(credential)
         try {
             writeEnvelope(fileForScope(scope), envelopeCipher.encrypt(scope, plaintext))
+            recordMutation(scope)
         } finally {
             plaintext.fill(0)
             credential.clear()
@@ -325,6 +329,7 @@ class ComputerCredentialStore(private val context: Context) {
 
     suspend fun deleteWorkspaceSecret(secretId: String) = withContext(Dispatchers.IO) {
         cryptoShred(fileForScope("workspace-secret:$secretId"))
+        recordMutation("workspace-secret:$secretId")
     }
 
     /** OAuth PKCE verifier 只进入 Keystore 封装的文件，Room 仅保存 opaque reference。 */
@@ -370,16 +375,26 @@ class ComputerCredentialStore(private val context: Context) {
     suspend fun deleteAgentAuthorization(reference: String) = withContext(Dispatchers.IO) {
         requireAgentAuthorizationReference(reference)
         cryptoShred(fileForScope("agent-authorization:$reference"))
+        recordMutation("agent-authorization:$reference")
     }
 
     private suspend fun saveCredential(scope: String, credential: ComputerCredential) = withContext(Dispatchers.IO) {
         val plaintext = ComputerCredentialCodec.encode(credential)
         try {
             writeEnvelope(fileForScope(scope), envelopeCipher.encrypt(scope, plaintext))
+            recordMutation(scope)
         } finally {
             plaintext.fill(0)
             credential.clear()
         }
+    }
+
+    /** 只记录修改时刻；恢复远端凭据时关闭此记录，避免把下载当成新的本地编辑。 */
+    private fun recordMutation(scope: String) {
+        if (!recordSyncChanges || scope.startsWith("oauth-verifier:")) return
+        val mutations = context.getSharedPreferences("sync_credential_mutations", Context.MODE_PRIVATE)
+        check(mutations.edit().putLong(scope, maxOf(System.currentTimeMillis(), mutations.getLong(scope, 0) + 1)).commit())
+        com.android.everytalk.service.SyncScheduler.request(context)
     }
 
     private suspend fun loadOptionalCredential(scope: String): ComputerCredential? = withContext(Dispatchers.IO) {

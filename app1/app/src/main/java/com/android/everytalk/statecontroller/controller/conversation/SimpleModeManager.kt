@@ -336,11 +336,11 @@ class SimpleModeManager(
             }
         }
         Log.d(TAG, "🔥 Found conversation to load with ${conversationToLoad.size} messages.")
-        val stableId = conversationToLoad.firstOrNull { it.sender == Sender.User }?.id
-            ?: conversationToLoad.firstOrNull { it.sender == Sender.System && !it.isPlaceholderName }?.id
-            ?: conversationToLoad.firstOrNull()?.id
-            ?: "history_${UUID.randomUUID()}"
-        val systemPrompt = conversationToLoad.firstOrNull { it.sender == Sender.System && !it.isPlaceholderName }?.text ?: ""
+        // 云端消息 UUID 与会话 UUID 不同，必须沿用会话身份，否则模型、标签和后续刷新都会查错键。
+        val stableId = ConversationNameHelper.resolveStableId(conversationToLoad) ?: previewStableId
+        // 已同步/编辑的逐会话设置优先，包括用户明确保存的空字符串；旧 System 消息仅作兼容回退。
+        val systemPrompt = stateHolder.systemPrompts[stableId]
+            ?: conversationToLoad.firstOrNull { it.sender == Sender.System && !it.isPlaceholderName }?.text.orEmpty()
         Log.d(TAG, "🔥 Stable ID: $stableId, System Prompt chars=${systemPrompt.length}")
 
         val (processedMessages, reasoningCompleteStates, animationPlayedStates) = withContext(Dispatchers.Default) {

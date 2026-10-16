@@ -6,6 +6,23 @@ import java.time.Instant
 
 /** 合同假服务器：两份设备数据库共用；保留序号、逻辑键 canonical id 和消息追加语义。 */
 internal class FakeSyncApi : SyncApi {
+    var chunkSize = 4L * 1024 * 1024
+    override suspend fun fileChunkBytes() = chunkSize
+    override suspend fun recoverHistoryKey(): AccountSyncKey = AccountSyncKey(1, 0, java.util.Base64.getEncoder().encodeToString(ByteArray(32) { it.toByte() }))
+    private val files = mutableMapOf<String, Pair<SyncFileInfo, ByteArray>>()
+    var fileUploads = 0
+    override suspend fun uploadFile(file: java.io.File, mime: String): SyncFileInfo {
+        require(file.length() <= chunkSize)
+        val sha = syncFileHash(file)
+        files.values.firstOrNull { it.first.sha256 == sha }?.let { return it.first }
+        val info = SyncFileInfo(java.util.UUID.randomUUID().toString(), file.length(), sha, mime)
+        files[info.fileId] = info to file.readBytes(); fileUploads++
+        return info
+    }
+    override suspend fun downloadFile(info: SyncFileInfo, target: java.io.File) {
+        val stored = requireNotNull(files[info.fileId]); require(stored.first.size == info.size && stored.first.sha256 == info.sha256)
+        target.parentFile?.mkdirs(); target.writeBytes(stored.second)
+    }
     val rows = linkedMapOf<Pair<String, String>, SyncRecord>()
     var seq = 0L
     var epoch = 0L
@@ -14,7 +31,7 @@ internal class FakeSyncApi : SyncApi {
     var failPushNumber: Int? = null
     var beforePushReply: (suspend () -> Unit)? = null
     var pageSize = 500
-    private val now = System.currentTimeMillis()
+    private val now get() = System.currentTimeMillis()
 
     fun clearCloud() { rows.clear(); epoch++ }
 
@@ -28,6 +45,14 @@ internal class FakeSyncApi : SyncApi {
             val old = rows[change.entity to id]
             val session = change.payload["sessionId"]?.jsonPrimitive?.content?.let { rows["sessions" to it] }
             val rejection = when {
+                change.entity == "messages" && !change.deleted &&
+                    !isCanonicalUuid(change.payload["sessionId"]?.jsonPrimitive?.content.orEmpty()) -> "INVALID_SESSION_ID"
+                // 服务端不只检查本次增量，也检查同 UUID 合并后的总大小。
+                change.entity == "messages" && !change.deleted &&
+                    JsonObject(old?.payload.orEmpty() + change.payload).toString().toByteArray(Charsets.UTF_8).size > 65536 -> "MESSAGE_PAYLOAD_TOO_LARGE"
+                change.entity == "messages" && old != null && !change.deleted && change.payload.any { (name, value) ->
+                    old.payload.containsKey(name) && old.payload[name] != value
+                } -> "IMMUTABLE_FIELD"
                 change.entity == "user_settings" && change.payload["kind"]?.jsonPrimitive?.content !in setOf(
                     "api_configs", "selected_models", "web_search_configs", "voice_configs", "voice_llm_platforms",
                     "voice_custom_models", "mcp_servers", "skills", "skill_variables", "computers", "computer_workspaces",
@@ -44,11 +69,10 @@ internal class FakeSyncApi : SyncApi {
             if (rejection != null) return@mapIndexed PushResult(index, change.entity, change.id, "rejected", error = SyncError(rejection, "测试拒绝"))
             val incomingPayload = if (change.entity == "user_settings") canonicalConfiguration(change.payload) as JsonObject else change.payload
             val payload = if (change.deleted && change.entity == "messages") JsonObject(emptyMap())
-                else if (change.entity == "messages") change.payload else JsonObject(incomingPayload +
+                else if (change.entity == "messages") JsonObject(old?.payload.orEmpty() + change.payload) else JsonObject(incomingPayload +
                     ("clientModifiedAt" to JsonPrimitive(minOf(change.payload.getValue("clientModifiedAt").jsonPrimitive.long, now))))
             val status = when {
-                old != null && old.deleted && !change.deleted -> "ignored"
-                old != null && change.entity == "messages" && !change.deleted -> "ignored"
+                old != null && old.deleted && !change.deleted && change.entity != "user_settings" -> "ignored"
                 old != null && old.payload == payload && old.deleted == change.deleted -> "unchanged"
                 old != null && change.entity != "messages" && old.payload.getValue("clientModifiedAt").jsonPrimitive.long > payload.getValue("clientModifiedAt").jsonPrimitive.long -> "ignored"
                 else -> "accepted"
@@ -75,10 +99,6 @@ internal class FakeSyncApi : SyncApi {
         val remaining = rows.values.filter { it.serverSeq > since }.sortedBy { it.serverSeq }
         val page = remaining.take(minOf(limit, pageSize))
         return PullResponse(page, page.lastOrNull()?.serverSeq ?: since, remaining.size > page.size, epoch)
-    }
-
-    override suspend fun deleteAll() {
-        clearCloud()
     }
 
     /** 与服务端相同：配置对象按属性名排序，数字可能从 0.0 变成 0。 */

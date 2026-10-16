@@ -126,6 +126,12 @@ fun SkillDetailScreen(navController: NavController, skillId: String) {
     LaunchedEffect(installation?.currentHash, skillPackage?.packageId) {
         val current = installation ?: return@LaunchedEffect
         withContext(Dispatchers.IO) {
+            if (!repository.hasVersionFiles(current.skillId, current.currentHash)) {
+                files = emptyList()
+                markdown = ""
+                message = "此设备只有 Skill 安装记录，文件尚未同步，请重新下载或导入。"
+                return@withContext
+            }
             files = repository.manifest(current.skillId, current.currentHash)
             markdown = repository.readSkillMarkdown(current.skillId, current.currentHash)
             savedSecrets = secretStore.list(current.skillId)

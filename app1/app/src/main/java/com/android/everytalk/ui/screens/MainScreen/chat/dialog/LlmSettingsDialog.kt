@@ -101,7 +101,11 @@ fun LlmSettingsDialog(
         android.util.Log.d("LlmSettingsDialog", "  Chat API Key 非空: ${effectiveConfig.chatApiKey.isNotBlank()}, 长度: ${effectiveConfig.chatApiKey.length}")
     }
     
-    val platforms = listOf("Google", "OpenAI")
+    val syncedPlatforms by produceState(initialValue = emptyList<String>(), selectedPlatform) {
+        value = viewModel.persistenceManager.loadVoicePlatforms()
+    }
+    val platforms = (listOf("Google", "OpenAI") + syncedPlatforms + effectiveConfig.chatPlatform)
+        .filter(String::isNotBlank).distinct()
     
     // 自定义模型管理 (存储在 SharedPreferences 中，按平台分开)
     val uiPrefs = remember { context.getSharedPreferences("voice_ui_prefs", android.content.Context.MODE_PRIVATE) }
@@ -113,6 +117,13 @@ fun LlmSettingsDialog(
             if (savedCustomModelsStr.isNotEmpty()) savedCustomModelsStr.split(",").filter { it.isNotEmpty() }
             else emptyList()
         )
+    }
+    LaunchedEffect(selectedPlatform) {
+        val models = viewModel.persistenceManager.loadVoiceCustomModels("chat", selectedPlatform)
+        if (models.isNotEmpty()) {
+            customModels = models
+            uiPrefs.edit { putString(customModelsKey, models.joinToString(",")) }
+        }
     }
     // 确保当前选中的模型也在列表中（即使不在 SharedPreferences 中）
     val allModels = remember(customModels, model) {
@@ -289,6 +300,7 @@ fun LlmSettingsDialog(
                             val newList = customModels + newModel.trim()
                             customModels = newList
                             uiPrefs.edit { putString(customModelsKey, newList.joinToString(",")) }
+                            coroutineScope.launch { viewModel.persistenceManager.saveVoiceCustomModels("chat", selectedPlatform, newList) }
                             model = newModel.trim()
                         }
                     },
@@ -296,6 +308,7 @@ fun LlmSettingsDialog(
                         val newList = customModels - modelToRemove
                         customModels = newList
                         uiPrefs.edit { putString(customModelsKey, newList.joinToString(",")) }
+                        coroutineScope.launch { viewModel.persistenceManager.saveVoiceCustomModels("chat", selectedPlatform, newList) }
                         if (model == modelToRemove) {
                             model = ""
                         }

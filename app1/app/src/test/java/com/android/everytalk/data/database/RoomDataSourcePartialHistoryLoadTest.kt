@@ -45,7 +45,7 @@ class RoomDataSourcePartialHistoryLoadTest {
     }
 
     @Test
-    fun `单个坏会话不阻断其他历史并返回失败会话 ID`() = runBlocking {
+    fun `损坏的渲染缓存不阻断历史也不丢弃原正文`() = runBlocking {
         dataSource.saveChatHistory(listOf(conversation("good"), conversation("bad")))
         database.openHelper.writableDatabase.execSQL(
             "UPDATE messages SET parts = 'not-json' WHERE sessionId = 'bad'"
@@ -53,8 +53,9 @@ class RoomDataSourcePartialHistoryLoadTest {
 
         val result = dataSource.loadChatHistoryResult()
 
-        assertEquals(setOf("good"), result.sessions.map { it.sessionId }.toSet())
-        assertEquals(setOf("bad"), result.failedSessionIds)
+        assertEquals(setOf("good", "bad"), result.sessions.map { it.sessionId }.toSet())
+        assertEquals(emptySet<String>(), result.failedSessionIds)
+        assertEquals("消息 bad", result.sessions.single { it.sessionId == "bad" }.messages.single().text)
     }
 
     @Test
@@ -107,6 +108,6 @@ class RoomDataSourcePartialHistoryLoadTest {
     }
 
     private fun conversation(id: String): List<Message> = listOf(
-        Message(id = id, text = "消息 $id", sender = Sender.User)
+        Message(id = id, text = "消息 $id", sender = Sender.User, timestamp = 1)
     )
 }

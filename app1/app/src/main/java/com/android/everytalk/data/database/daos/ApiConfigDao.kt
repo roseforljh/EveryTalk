@@ -23,6 +23,9 @@ interface ApiConfigDao {
     @Query("DELETE FROM api_configs WHERE isImageGenConfig = :isImageGen")
     suspend fun clearConfigs(isImageGen: Boolean)
 
+    @Query("DELETE FROM api_configs WHERE id = :id")
+    suspend fun deleteConfigById(id: String)
+
     @Transaction
     suspend fun replaceConfigs(isImageGen: Boolean, configs: List<ApiConfigEntity>) {
         clearConfigs(isImageGen)
@@ -32,6 +35,8 @@ interface ApiConfigDao {
 
 @Dao
 interface VoiceConfigDao {
+    @Query("DELETE FROM voice_backend_configs WHERE id = :id")
+    suspend fun deleteById(id: String)
     @Query("SELECT * FROM voice_backend_configs")
     suspend fun getAll(): List<VoiceBackendConfigEntity>
 

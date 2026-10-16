@@ -45,6 +45,57 @@ class ImageHistoryLoadingTest {
     private fun user(id: String) = Message(id = id, text = id, sender = Sender.User)
 
     @Test
+    fun `云端会话打开后按会话身份恢复模型标签提示词且不随首条问题改变`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        try {
+            val sessionId = "cloud:session-uuid"
+            val config = com.android.everytalk.data.DataClass.ApiConfig(
+                address = "https://example.test", key = "", model = "gpt", provider = "test", name = "会话模型")
+            val state = ViewModelStateHolder().apply {
+                setApiHandler(mockk(relaxed = true))
+                _apiConfigs.value = listOf(config)
+                conversationApiConfigIds.value = mapOf(sessionId to config.id)
+                conversationFunctionToggleStates.value = mapOf(sessionId to
+                    com.android.everytalk.statecontroller.ConversationFunctionToggleState(mcpEnabled = true, agentEnabled = true))
+                systemPrompts[sessionId] = "会话提示词"
+            }
+            for (messageId in listOf("cloud:first-question", "cloud:edited-question")) {
+                val message = user(messageId).copy(conversationId = sessionId)
+                state._historicalConversations.value = listOf(listOf(message))
+                val manager = SimpleModeManager(state, mockk(relaxed = true), this,
+                    loadHistorySession = { assertEquals(sessionId, it); listOf(message) })
+                manager.loadTextHistory(0)
+                assertEquals(sessionId, state._currentConversationId.value)
+                assertEquals(config.id, state._selectedApiConfig.value?.id)
+                assertTrue(state._isMcpEnabledForNextRequest.value)
+                assertTrue(state._isAgentEnabled.value)
+                assertEquals("会话提示词", state.systemPrompts[state._currentConversationId.value])
+                assertEquals(sessionId, state.messages.single().conversationId)
+            }
+        } finally { Dispatchers.resetMain() }
+    }
+
+    @Test
+    fun `打开文本历史优先逐会话提示词且保留显式清空`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        try {
+            for (savedPrompt in listOf("修改后的提示词", "")) {
+                val state = ViewModelStateHolder().apply {
+                    setApiHandler(mockk(relaxed = true))
+                    _historicalConversations.value = listOf(listOf(
+                        Message(id = "system", sender = Sender.System, text = "旧的提示词"), user("conversation")))
+                    systemPrompts["conversation"] = savedPrompt
+                }
+                val manager = SimpleModeManager(state, mockk(relaxed = true), this)
+                manager.loadTextHistory(0)
+                assertEquals(savedPrompt, state.systemPrompts["conversation"])
+            }
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
     fun `恢复正文和状态表在后台执行并保留原消息附件`() = runTest {
         val callerThread = Thread.currentThread()
         val readThreads = ConcurrentLinkedQueue<Thread>()

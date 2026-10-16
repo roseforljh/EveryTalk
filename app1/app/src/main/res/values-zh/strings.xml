@@ -715,6 +715,7 @@
     <string name="computer_audit_summary_port">端口 %1$s</string>
     <string name="computer_audit_summary_secret">名称：%1$s</string>
     <string name="chat_input_search_tag">搜索</string>
+    <string name="chat_input_search_tag_unconfigured">搜索·需配置</string>
     <string name="chat_input_search_web_hint">搜索网页</string>
     <string name="chat_input_reply_hint">回复 EveryTalk</string>
     <string name="chat_input_expand_functions">展开功能面板</string>
@@ -929,6 +930,7 @@
     <string name="image_download">下载图片</string>
     <string name="image_preview_coming_soon">即将支持图片预览</string>
     <string name="image_load_failed">图片加载失败</string>
+    <string name="image_not_synced">图片未同步到此设备</string>
     <string name="image_saved">图片已保存</string>
     <string name="image_save_failed">图片保存失败</string>
     <string name="image_share_failed">图片分享失败</string>
@@ -1504,7 +1506,7 @@
     <string name="account_privacy">隐私政策</string>
     <string name="account_local_data_notice">登录后，本地文字对话、思考过程、长期记忆、置顶和分组会自动合并到账号。数据存储在德国，国内用户涉及数据跨境传输。API Key、语音 Key、MCP 配置、图片、附件、工具执行轨迹和生图对话不参与账号同步。不登录则只在本机保存数据。</string>
     <string name="privacy_account_title">EveryTalk 账号</string>
-    <string name="privacy_account_body">账号登录为可选功能，由 Supabase Auth 提供。邮箱登录会向认证服务发送邮箱地址和验证码；Google 和 GitHub 登录仅申请基本身份及邮箱信息，不申请 Gmail、网盘或代码仓库权限。Supabase 保存账号标识、邮箱、名称、关联身份及登录记录。自行选择的头像会上传到 Supabase 头像存储，使用公开图片地址展示。\n\n配置账号数据服务时，登录后会自动合并本地和账号的文字会话、消息、思考过程、长期记忆、置顶和分组。本地模式不会连接 EveryTalk 自有服务器。API Key、语音 Key、MCP 配置、图片、附件、工具执行轨迹和生图对话不参与账号同步。同步数据保存在德国，国内用户涉及数据跨境传输。你可以在账号页删除云端数据，本机副本保留；服务器加密备份在删除后最多保留 7 天。权限和额度由服务器判断。\n\n应用通过 Android Keystore 加密保存会话凭据。退出登录会停止账号同步并删除本地账号凭据，保留聊天记录和 API 配置；卸载应用不会删除服务端账号。可通过项目页面联系维护者提出账号删除申请，请勿公开发布验证码或凭据。</string>
+    <string name="privacy_account_body">账号登录为可选功能，由 Supabase Auth 提供。邮箱登录会向认证服务发送邮箱地址和验证码；Google 和 GitHub 登录仅申请基本身份及邮箱信息，不申请 Gmail、网盘或代码仓库权限。Supabase 保存账号标识、邮箱、名称、关联身份及登录记录。自行选择的头像会上传到 Supabase 头像存储，使用公开图片地址展示。\n\n配置账号数据服务时，登录后会自动合并本地和账号的文字会话、消息、思考过程、长期记忆、置顶和分组。本地模式不会连接 EveryTalk 自有服务器。API Key、语音 Key、MCP 配置、图片、附件、工具执行轨迹和生图对话不参与账号同步。同步数据保存在德国，国内用户涉及数据跨境传输。服务器加密备份在数据删除后最多保留 7 天。权限和额度由服务器判断。\n\n应用通过 Android Keystore 加密保存会话凭据。退出登录会停止账号同步并删除本地账号凭据，保留聊天记录和 API 配置；卸载应用不会删除服务端账号。可通过项目页面联系维护者提出账号删除申请，请勿公开发布验证码或凭据。</string>
 
     <!-- 界面文案统一从资源读取，英文为默认语言，中文按应用设置切换。 -->
     <string name="skill_download">下载</string>

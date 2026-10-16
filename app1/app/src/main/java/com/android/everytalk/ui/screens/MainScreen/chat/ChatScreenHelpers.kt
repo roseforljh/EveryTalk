@@ -91,9 +91,7 @@ internal fun shouldPreserveScrollSessionOnConversationIdChange(
         return true
     }
 
-    val derivedStableConversationId = messages.firstOrNull { it.sender == Sender.User }?.id
-        ?: messages.firstOrNull { it.sender == Sender.System && !it.isPlaceholderName }?.id
-        ?: messages.firstOrNull()?.id
+    val derivedStableConversationId = com.android.everytalk.util.ConversationNameHelper.resolveStableId(messages)
 
     val previousIdWasTemporary = previousConversationId.startsWith("new_chat_") ||
         previousConversationId.startsWith("chat_") ||

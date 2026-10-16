@@ -14,9 +14,9 @@ import kotlinx.serialization.json.Json
 data class SkillSecretMetadata(val skillId: String, val name: String, val updatedAt: Long)
 
 /** 密钥正文只进入 Android Keystore 加密文件，偏好设置只保存变量名和更新时间。 */
-class SkillSecretStore(context: Context) {
+class SkillSecretStore(context: Context, private val recordSyncChanges: Boolean = true) {
     private val appContext = context.applicationContext
-    private val credentials = ComputerCredentialStore(appContext)
+    private val credentials = ComputerCredentialStore(appContext, recordSyncChanges)
     private val preferences = appContext.getSharedPreferences("skill_secret_metadata", Context.MODE_PRIVATE)
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -24,15 +24,28 @@ class SkillSecretStore(context: Context) {
         readMetadata().filter { it.skillId == skillId }.sortedBy(SkillSecretMetadata::name)
     }
 
-    suspend fun save(skillId: String, name: String, value: CharArray) = withContext(Dispatchers.IO) {
+    /** 删除只保留变量名和时间供同步墓碑使用，不保留变量值。 */
+    suspend fun deleted(): List<SkillSecretMetadata> = withContext(Dispatchers.IO) {
+        preferences.getString("deleted", null)?.let {
+            json.decodeFromString(ListSerializer(SkillSecretMetadata.serializer()), it)
+        }.orEmpty()
+    }
+
+    private fun recordDeleted(items: List<SkillSecretMetadata>) {
+        check(preferences.edit().putString("deleted", json.encodeToString(ListSerializer(SkillSecretMetadata.serializer()), items)).commit())
+    }
+
+    suspend fun save(skillId: String, name: String, value: CharArray, modifiedAt: Long = System.currentTimeMillis()) = withContext(Dispatchers.IO) {
         requireSecretName(name)
         require(value.isNotEmpty()) { "密钥不能为空" }
         val copy = value.copyOf()
         try {
             credentials.saveWorkspaceSecret(secretId(skillId, name), copy)
             val next = readMetadata().filterNot { it.skillId == skillId && it.name == name } +
-                SkillSecretMetadata(skillId, name, System.currentTimeMillis())
+                SkillSecretMetadata(skillId, name, modifiedAt)
             writeMetadata(next)
+            recordDeleted(deleted().filterNot { it.skillId == skillId && it.name == name })
+            if (recordSyncChanges) com.android.everytalk.service.SyncScheduler.request(appContext)
         } finally {
             copy.fill('\u0000')
         }
@@ -46,6 +59,10 @@ class SkillSecretStore(context: Context) {
     suspend fun delete(skillId: String, name: String) = withContext(Dispatchers.IO) {
         credentials.deleteWorkspaceSecret(secretId(skillId, name))
         writeMetadata(readMetadata().filterNot { it.skillId == skillId && it.name == name })
+        if (recordSyncChanges) {
+            recordDeleted(deleted().filterNot { it.skillId == skillId && it.name == name } + SkillSecretMetadata(skillId, name, System.currentTimeMillis()))
+            com.android.everytalk.service.SyncScheduler.request(appContext)
+        }
     }
 
     private fun readMetadata(): List<SkillSecretMetadata> = preferences.getString(METADATA_KEY, null)

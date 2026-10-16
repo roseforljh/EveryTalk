@@ -717,6 +717,7 @@
     <string name="computer_audit_summary_port">Port %1$s</string>
     <string name="computer_audit_summary_secret">Name: %1$s</string>
     <string name="chat_input_search_tag">Search</string>
+    <string name="chat_input_search_tag_unconfigured">Search · setup required</string>
     <string name="chat_input_search_web_hint">Search the web</string>
     <string name="chat_input_reply_hint">Message EveryTalk</string>
     <string name="chat_input_expand_functions">Expand function panel</string>
@@ -933,6 +934,7 @@
     <string name="image_download">Download image</string>
     <string name="image_preview_coming_soon">Image preview is coming soon</string>
     <string name="image_load_failed">Failed to load image</string>
+    <string name="image_not_synced">Image not synced to this device</string>
     <string name="image_saved">Image saved</string>
     <string name="image_save_failed">Failed to save image</string>
     <string name="image_share_failed">Failed to share image</string>
@@ -1530,7 +1532,7 @@
     <string name="account_privacy">Privacy policy</string>
     <string name="account_local_data_notice">Signing in automatically merges local text chats, reasoning, memories, pinned items and groups with your account. Data is stored in Germany; users in mainland China will transfer this data across borders. API keys, voice keys, MCP settings, images, attachments, tool traces and image generation chats stay local. Continue without an account to keep data on this device.</string>
     <string name="privacy_account_title">EveryTalk accounts</string>
-    <string name="privacy_account_body">Account sign-in is optional and provided by Supabase Auth. Email sign-in sends your email address and verification code to the authentication service. Google and GitHub sign-in request basic identity information only, not Gmail, Drive or repository access. Supabase stores account identifiers, email, display name, linked identities and sign-in records. Custom avatars are uploaded to Supabase Storage and displayed through public URLs.\n\nWhen the sync server is configured, signing in automatically merges local text sessions, messages, reasoning, long term memories, pinned items and groups with your account. Local mode does not connect to EveryTalk servers. API keys, voice keys, MCP configuration, images, attachments, tool traces and image generation chats are excluded from account sync. Synced data is stored in Germany; users in mainland China transfer this data across borders. You can delete cloud data from the account page while keeping local copies. Encrypted server backups may remain for up to 7 days. Server permissions and quotas are decided by the server.\n\nSession credentials are encrypted using Android Keystore. Signing out stops account sync and removes local account credentials while keeping local chats and API configurations. Uninstalling does not delete the account. Contact the maintainers through the project page to request account deletion; do not post verification codes or credentials publicly.</string>
+    <string name="privacy_account_body">Account sign-in is optional and provided by Supabase Auth. Email sign-in sends your email address and verification code to the authentication service. Google and GitHub sign-in request basic identity information only, not Gmail, Drive or repository access. Supabase stores account identifiers, email, display name, linked identities and sign-in records. Custom avatars are uploaded to Supabase Storage and displayed through public URLs.\n\nWhen the sync server is configured, signing in automatically merges local text sessions, messages, reasoning, long term memories, pinned items and groups with your account. Local mode does not connect to EveryTalk servers. API keys, voice keys, MCP configuration, images, attachments, tool traces and image generation chats are excluded from account sync. Synced data is stored in Germany; users in mainland China transfer this data across borders. Encrypted server backups may remain for up to 7 days after data deletion. Server permissions and quotas are decided by the server.\n\nSession credentials are encrypted using Android Keystore. Signing out stops account sync and removes local account credentials while keeping local chats and API configurations. Uninstalling does not delete the account. Contact the maintainers through the project page to request account deletion; do not post verification codes or credentials publicly.</string>
 
     <!-- 界面文案统一从资源读取，英文为默认语言，中文按应用设置切换。 -->
     <string name="skill_download">Download</string>

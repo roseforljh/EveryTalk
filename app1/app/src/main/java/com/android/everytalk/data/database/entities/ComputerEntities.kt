@@ -62,6 +62,7 @@ data class ComputerEntity(
 
 /** Cloudflare Computer 的非敏感配置；Token 通过 authorizationId 间接引用安全存储。 */
 @Entity(tableName = "cloudflare_computer_configs")
+@kotlinx.serialization.Serializable
 data class CloudflareComputerConfigEntity(
     @PrimaryKey val computerId: String,
     val authorizationId: String,
@@ -72,6 +73,7 @@ data class CloudflareComputerConfigEntity(
 
 /** Cloudflare OAuth 授权索引，不保存 Token 明文。 */
 @Entity(tableName = "cloudflare_authorizations")
+@kotlinx.serialization.Serializable
 data class CloudflareAuthorizationEntity(
     @PrimaryKey val authorizationId: String,
     val credentialReference: String,

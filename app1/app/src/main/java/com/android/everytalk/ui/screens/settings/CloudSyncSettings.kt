@@ -14,12 +14,9 @@ import java.util.Date
 @Composable
 internal fun AccountDataActions(
     controller: SyncController,
-    onDeleteCloudData: () -> Unit,
     onResumeUpload: () -> Unit,
 ) {
     val state by controller.state.collectAsState()
-    val message by controller.message.collectAsState()
-    var showDeleteConfirm by remember { mutableStateOf(false) }
     var showResumeConfirm by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (!state.configured) Text("当前版本未配置账号数据服务，本机数据仍可使用。", style = MaterialTheme.typography.bodySmall)
@@ -36,10 +33,20 @@ internal fun AccountDataActions(
                     "messages" -> "消息"
                     "sessions" -> "会话"
                     "memories" -> "长期记忆"
+                    "services" -> if (item.id == "credentials") "账号凭据恢复服务" else "文件与完整历史服务"
                     else -> "同步项目"
                 }
                 Text("• $category / ${item.id.take(12)}：${item.code}", style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error)
+                if (item.code == "MESSAGE_PAYLOAD_TOO_LARGE") {
+                    Text("这条消息需要完整历史文件服务补传。本机原文保留；服务可用后会自动补传。",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                }
+                if (item.code in setOf("ACCOUNT_KEY_NOT_CONFIGURED", "FILE_SERVICE_NOT_CONFIGURED", "SERVER_UPGRADE_REQUIRED", "NOT_FOUND")) {
+                    Text("服务器需要更新并配置账号密钥和文件存储，完成后会自动恢复；本机数据保留。", style = MaterialTheme.typography.bodySmall)
+                }
+                if (item.code == "CREDENTIAL_DECRYPTION_FAILED") Text("这项凭据的云端密文损坏，本机 Key 保留，其他项目继续同步。", style = MaterialTheme.typography.bodySmall)
+                if (item.code == "CREDENTIAL_STORAGE_FAILED") Text("这项凭据暂时无法从本机加密存储读取或写入，其他项目继续同步。", style = MaterialTheme.typography.bodySmall)
                 if (item.code == "CONTAINS_SECRET") {
                     val hint = if (item.kind == "conversation_settings") "这个提示词含疑似密钥，没有同步" else "该配置含疑似密钥，没有同步；本机配置保留。"
                     Text(hint, style = MaterialTheme.typography.bodySmall,
@@ -52,24 +59,11 @@ internal fun AccountDataActions(
                 ?: "上次同步：从未成功同步",
             style = MaterialTheme.typography.bodySmall,
         )
-        TextButton(onClick = { showDeleteConfirm = true }, enabled = state.configured) {
-            Text("删除云端数据")
-        }
         if (state.pausedAfterCloudReset) {
             Text("云端清空后已暂停上传，本机数据保留。", style = MaterialTheme.typography.bodySmall)
             TextButton(onClick = { showResumeConfirm = true }, enabled = state.configured) { Text("重新上传本机数据") }
         }
-        message?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
     }
-    if (showDeleteConfirm) AlertDialog(
-        onDismissRequest = { showDeleteConfirm = false },
-        title = { Text("删除云端数据？") },
-        text = { Text("这会删除当前账号的云端数据，并暂停本机上传；本机聊天和设置会保留。服务器加密备份删除后最多保留 7 天。") },
-        confirmButton = {
-            TextButton(onClick = { showDeleteConfirm = false; onDeleteCloudData() }) { Text("确认删除") }
-        },
-        dismissButton = { TextButton(onClick = { showDeleteConfirm = false }) { Text("取消") } },
-    )
     if (showResumeConfirm) AlertDialog(
         onDismissRequest = { showResumeConfirm = false },
         title = { Text("重新上传本机数据？") },

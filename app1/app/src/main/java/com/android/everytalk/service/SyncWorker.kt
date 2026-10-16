@@ -31,23 +31,66 @@ class SyncWorker(context: Context, parameters: WorkerParameters) : CoroutineWork
             it is AuthState.SignedIn && it.user.id == user.id && !runtime.account.state.value.sessionExpired &&
                 runtime.binding.readBoundAccountId() == user.id && state.isEnabled() && state.epochDecision() == null
         }
-        if (!syncServerConfigured(BuildConfig.EVERYTALK_SYNC_BASE_URL) || !permitted()) return Result.success()
-        // 不占用 Worker 睡眠；截止时间跨重启持久化，WorkManager 指数退避后仍不得提前请求。
-        if (state.retryAt() > System.currentTimeMillis()) return Result.retry()
+        if (!syncServerConfigured(BuildConfig.EVERYTALK_SYNC_BASE_URL) || !permitted()) {
+            syncDiagnostic("worker skipped: configuration or account binding or cloud reset pause")
+            return Result.success()
+        }
+        // 限流截止时间跨重启保留；到期前只安排后续任务，不能让多次 429 累积成数小时退避。
+        if (state.retryAt() > System.currentTimeMillis()) {
+            syncDiagnostic("worker waiting Retry-After")
+            SyncScheduler.continueResources(applicationContext, state.retryAt() - System.currentTimeMillis())
+            return Result.success()
+        }
         val secrets = SyncSecretManager(applicationContext)
         val api = KtorSyncApi(BuildConfig.EVERYTALK_SYNC_BASE_URL, runtime.account,
             isLocalOnly = { runtime.auth.state.value !is AuthState.SignedIn },
-            canRequest = { permitted() })
+            canRequest = { permitted() }, readSecretsEpoch = { state.readSecretsEpoch().coerceAtLeast(0L) })
+        syncDiagnostic("worker start attempt=$runAttemptCount")
+        val resources = SyncResourceSynchronizer(applicationContext, db, api, user.id)
+        val credentials = SyncCredentialSynchronizer(applicationContext, db, api, secrets, user.id)
         return try {
             when (SyncEngine(
                 api = api,
+                beforePull = { credentials.captureLocal() },
+                afterPull = {
+                    // 后端未升级/未配置时明确显示缺项，但普通文字同步仍可继续，不能假报完整成功。
+                    recoverService(db, "credentials") { credentials.recover() }
+                },
+                beforeComplete = {
+                    recoverService(db, "resources") { resources.synchronize() }
+                },
                 store = RoomSyncStore(db, secrets, user.id),
                 state = state,
                 canSync = ::permitted,
                 onSecretsEpochChanged = { secrets.clearCachedDek() },
             ).runOnce()) {
-                SyncRunResult.MoreWork -> Result.retry()
-                SyncRunResult.Completed -> { state.markSyncCompleted(); state.clearRetry(); Result.success() }
+                SyncRunResult.MoreWork -> {
+                    SyncScheduler.continueResources(applicationContext)
+                    Result.success()
+                }
+                SyncRunResult.Completed -> {
+                    if (resources.moreWork) {
+                        SyncScheduler.continueResources(applicationContext)
+                        return Result.success()
+                    }
+                    if (db.settingsDao().getByPrefix("sync_rejected:services:").isEmpty()) state.markSyncCompleted()
+                    state.clearRetry()
+                    val rejectionCodes = db.settingsDao().getByPrefix("sync_rejected:").groupingBy {
+                        it.value.takeIf { code -> code.matches(Regex("[A-Za-z_]{1,64}")) } ?: "UNKNOWN"
+                    }.eachCount()
+                    if (rejectionCodes.isNotEmpty()) syncDiagnostic("rejected codes=$rejectionCodes")
+                    withContext(Dispatchers.IO) {
+                        db.openHelper.readableDatabase.query("""
+                            SELECT COUNT(*), SUM(CASE WHEN reasoning IS NOT NULL AND reasoning != '' THEN 1 ELSE 0 END)
+                            FROM messages WHERE deleted = 0 AND sessionId IN
+                            (SELECT id FROM chat_sessions WHERE deleted = 0 AND isImageGeneration = 0
+                            AND id NOT IN ('last_open_chat_v1', 'last_open_image_generation_v1'))
+                        """.trimIndent()).use { cursor ->
+                            if (cursor.moveToFirst()) syncDiagnostic("complete messages=${cursor.getLong(0)} withReasoning=${cursor.getLong(1)} sessions=${db.chatDao().getAllSessions(false).size} settings=${db.settingsDao().getSyncableUserSettings().size} rejected=${db.settingsDao().syncRejectedCount()}")
+                        }
+                    }
+                    Result.success()
+                }
                 else -> Result.success()
             }
         } catch (cancelled: CancellationException) {
@@ -56,15 +99,32 @@ class SyncWorker(context: Context, parameters: WorkerParameters) : CoroutineWork
             // AccountManager 已将明确无效的刷新凭据转换为 SessionExpired；不清任何本地业务数据。
             Result.success()
         } catch (error: SyncHttpException) {
-            if (error.statusCode == 429) state.deferRetry(error.retryAfterSeconds ?: 30)
+            syncDiagnostic("retry http=${error.statusCode}")
+            if (error.statusCode == 429) {
+                state.deferRetry((error.retryAfterSeconds ?: 30).coerceAtLeast(1))
+                SyncScheduler.continueResources(applicationContext, state.retryAt() - System.currentTimeMillis())
+                return Result.success()
+            }
             // 刷新成功后服务器仍报 401，按暂态请求失败重试，不能伪造 SessionExpired。
             Result.retry()
         } catch (_: SyncNotConfiguredException) {
             Result.success()
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            // 仅记录异常类型，不输出异常 message/stack，避免 URL 或数据内容进入 Release 日志。
+            syncDiagnostic("retry error=${error.javaClass.simpleName}")
             AppLogger.warn("Sync", "同步暂未完成，等待重试")
             if (permitted()) Result.retry() else Result.success()
-        } finally { api.close() }
+        } finally { resources.close(); api.close() }
+    }
+
+    private suspend fun recoverService(db: AppDatabase, name: String, block: suspend () -> Unit) {
+        val marker = "sync_rejected:services:$name"
+        try { block(); db.settingsDao().deleteSetting(marker) }
+        catch (error: SyncHttpException) {
+            if (error.statusCode != 404 && error.serverCode !in setOf("ACCOUNT_KEY_NOT_CONFIGURED", "FILE_SERVICE_NOT_CONFIGURED", "LEGACY_KEY_REQUIRED")) throw error
+            db.settingsDao().insertSetting(com.android.everytalk.data.database.entities.SystemSettingEntity(marker,
+                error.serverCode?.takeIf { it.matches(Regex("[A-Z_]{1,64}")) } ?: "SERVER_UPGRADE_REQUIRED"))
+        }
     }
 }
 
@@ -79,6 +139,11 @@ object SyncScheduler {
     private var debounceJob: Job? = null
     private var observer: InvalidationTracker.Observer? = null
     private val constraints = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
+
+    /** 正常分批和 429 都用新任务续传；延迟遵守服务端截止时间，保留联网约束且重新从第零次尝试开始。 */
+    internal fun continueResources(context: Context, delayMillis: Long = 1_000): Operation =
+        WorkManager.getInstance(context).enqueueUniqueWork(NOW, ExistingWorkPolicy.APPEND_OR_REPLACE,
+            immediateWork(delayMillis.coerceAtLeast(1_000)))
 
     fun start(context: Context) {
         val app = context.applicationContext
@@ -127,7 +192,12 @@ object SyncScheduler {
         if (dataChanged && RoomSyncStore(AppDatabase.getDatabase(context)).pendingBatch(1).isEmpty()) return
         val manager = WorkManager.getInstance(context)
         val immediate = immediateWork((state.retryAt() - System.currentTimeMillis()).coerceAtLeast(0))
-        manager.enqueueUniqueWork(NOW, ExistingWorkPolicy.KEEP, immediate)
+        // 用户重新打开应用时接管旧版积累的限流退避；正在传输的任务继续运行。
+        // 已持久化的 Retry-After 仍作为 initialDelay，不能通过重启绕过服务端限流。
+        val resumeRateLimited = !dataChanged && state.retryAt() > 0 && withContext(Dispatchers.IO) {
+            manager.getWorkInfosForUniqueWork(NOW).get().none { it.state == WorkInfo.State.RUNNING }
+        }
+        manager.enqueueUniqueWork(NOW, if (resumeRateLimited) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP, immediate)
         val periodic = PeriodicWorkRequestBuilder<SyncWorker>(15, TimeUnit.MINUTES).setConstraints(constraints)
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).build()
         manager.enqueueUniquePeriodicWork(PERIODIC, ExistingPeriodicWorkPolicy.KEEP, periodic)

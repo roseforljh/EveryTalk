@@ -103,7 +103,36 @@ class SyncApiTest {
             assertTrue(runCatching { KtorSyncApi(url, manager, { false }, httpClient = http).pull(0) }.exceptionOrNull() is SyncNotConfiguredException)
         }
         assertTrue(runCatching { KtorSyncApi("https://sync.example", manager, { true }, httpClient = http).pull(0) }.isFailure)
+        val local = KtorSyncApi("https://sync.example", manager, { true }, httpClient = http)
+        assertTrue(runCatching { local.recoverAccountKey(0) }.isFailure)
+        assertTrue(runCatching { local.recoverHistoryKey() }.isFailure)
+        assertTrue(runCatching { local.fileChunkBytes() }.isFailure)
         assertTrue(runCatching { KtorSyncApi("https://sync.example", manager, { false }, httpClient = http, canRequest = { false }).pull(0) }.isFailure)
+        http.close()
+    }
+
+    @Test fun `账号密钥恢复接口带鉴权版本头且不走密码解锁`() = runTest {
+        val dek = java.util.Base64.getEncoder().encodeToString(ByteArray(32) { it.toByte() })
+        val paths = mutableListOf<String>()
+        val http = http { request ->
+            assertEquals("Bearer old-access", request.headers[HttpHeaders.Authorization])
+            assertEquals("0.2.0", request.headers["X-EveryTalk-Sync-Version"])
+            assertEquals(HttpMethod.Post, request.method)
+            paths += request.url.encodedPath
+            val body = request.body.toByteArray().toString(Charsets.UTF_8)
+            when (request.url.encodedPath) {
+                "/sync/account-key" -> {
+                    assertEquals("""{"secrets_epoch":3,"existing_dek":"$dek"}""", body)
+                    respond("""{"version":4,"secrets_epoch":3,"dek":"$dek"}""", HttpStatusCode.OK)
+                }
+                "/sync/history-key" -> respond("""{"version":1,"secrets_epoch":0,"dek":"$dek"}""", HttpStatusCode.OK)
+                else -> error("意外接口")
+            }
+        }
+        val api = KtorSyncApi("https://sync.example", account(http), { false }, httpClient = http)
+        assertEquals(AccountSyncKey(4, 3, dek), api.recoverAccountKey(3, dek))
+        assertEquals(AccountSyncKey(1, 0, dek), api.recoverHistoryKey())
+        assertEquals(listOf("/sync/account-key", "/sync/history-key"), paths)
         http.close()
     }
 

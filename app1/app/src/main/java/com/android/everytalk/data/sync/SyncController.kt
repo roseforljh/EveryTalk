@@ -6,7 +6,6 @@ import com.android.everytalk.data.auth.*
 import com.android.everytalk.data.database.AppDatabase
 import com.android.everytalk.service.SyncScheduler
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withLock
@@ -23,7 +22,7 @@ internal data class SyncUiState(
 internal data class SyncRejectedItem(val entity: String, val id: String, val code: String, val kind: String? = null)
 
 /**
- * 账号数据的自动同步、删除、云端清空后恢复与换账号选择。
+ * 账号数据的自动同步、云端清空后恢复与换账号选择。
  * 普通登录的自动绑定由 SyncScheduler 统一处理，不依赖页面是否打开。
  */
 internal class SyncController(
@@ -49,37 +48,6 @@ internal class SyncController(
             lastSyncAt = values[SyncStateStore.KEY_LAST_SYNC_AT]?.toLongOrNull(),
             pausedAfterCloudReset = values[SyncStateStore.KEY_RESET_PAUSED] == "true")
     }.stateIn(scope, SharingStarted.Eagerly, SyncUiState())
-    private val mutableMessage = MutableStateFlow<String?>(null)
-    val message: StateFlow<String?> = mutableMessage.asStateFlow()
-
-    /** 删除云端同步数据；服务器只删除云端，本地 Room 数据保持不变。 */
-    fun deleteCloudData() = scope.launch {
-        val user = (auth.value as? AuthState.SignedIn)?.user ?: return@launch
-        if (!state.value.configured) return@launch
-        val runtime = AuthRuntime.get(context)
-        val api = KtorSyncApi(
-            BuildConfig.EVERYTALK_SYNC_BASE_URL,
-            runtime.account,
-            isLocalOnly = { runtime.auth.state.value !is AuthState.SignedIn },
-            canRequest = { (auth.value as? AuthState.SignedIn)?.user?.id == user.id },
-        )
-        SyncScheduler.cancel(context)
-        try {
-            SyncRuntimeLock.mutex.withLock {
-                if ((auth.value as? AuthState.SignedIn)?.user?.id != user.id) return@launch
-                store.pauseAfterCloudReset()
-                api.deleteAll()
-            }
-            mutableMessage.value = "云端数据已删除，本地数据保留。"
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: Exception) {
-            mutableMessage.value = "未能确认云端是否删除，已暂停上传；请重试删除或选择重新上传本机数据。"
-        } finally {
-            api.close()
-        }
-    }
-
     fun decideEpoch(upload: Boolean) = scope.launch {
         val accountId = (auth.value as? AuthState.SignedIn)?.user?.id
         if (upload && (accountId == null || binding.readBoundAccountId() != accountId)) return@launch

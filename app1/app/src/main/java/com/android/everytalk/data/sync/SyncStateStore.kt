@@ -5,6 +5,7 @@ import com.android.everytalk.data.auth.SyncAccountBindingStore
 import com.android.everytalk.data.database.AppDatabase
 import com.android.everytalk.data.database.entities.SystemSettingEntity
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.json.*
 
 /**
  * 游标、epoch、限流截止与提示复用本地 system_settings；永不纳入同步 payload。
@@ -37,6 +38,10 @@ internal class SyncStateStore(private val database: AppDatabase) {
         settings.deleteSetting(KEY_CURSOR)
         settings.deleteSetting(KEY_EPOCH)
         settings.getByPrefix("sync_secret_cache:").forEach { settings.deleteSetting(it.key) }
+        for (row in settings.getAllUserSettings()) {
+            if (row.kind == "crypto_keys") settings.deleteUserSetting(row.kind, row.key)
+            else settings.upsertUserSettings(listOf(row.copy(value = stripAccountFields(syncJson.parseToJsonElement(row.value), false)?.toString() ?: "{}")))
+        }
     }
 
     suspend fun saveCursor(cursor: Long, epoch: Long) {
@@ -100,6 +105,31 @@ internal class SyncStateStore(private val database: AppDatabase) {
                 settings.deleteSetting(row.key)
                 return@forEach
             }
+            if (row.value == "MESSAGE_PAYLOAD_TOO_LARGE" && parts[0] == "messages") {
+                // 旧版本把整条超限消息永久拒绝了。只自动补传一次新的核心字段；
+                // 若核心或后续补充字段仍超限，保留失败提示，避免每次启动重复上传。
+                val retryMarker = "sync_message_size_retry:${parts[1]}"
+                if (settings.getValue(retryMarker) != "3") {
+                    // 本版移除了显示片段中的重复正文/思考，旧超限记录最多再核对一次。
+                    settings.insertSetting(SystemSettingEntity(retryMarker, "3"))
+                    markPending(parts[0], parts[1])
+                    settings.deleteSetting(row.key)
+                }
+                // 已核对仍超限时保留失败提示，不能把“停止重试”伪装成同步成功。
+                return@forEach
+            }
+            if (row.value == "INVALID_SESSION_ID" && parts[0] == "messages") {
+                val message = database.chatDao().getMessageByUuid(parts[1])
+                val session = message?.let { database.chatDao().getStoredSession(it.sessionId) }
+                val marker = "sync_message_session_retry:${parts[1]}"
+                // 只修复旧补充请求漏带 sessionId；无合法父会话的数据仍保留拒绝，不能无限重试。
+                if (session != null && isCanonicalUuid(session.uuid) && settings.getValue(marker) == null) {
+                    markPending(parts[0], parts[1])
+                    settings.insertSetting(SystemSettingEntity(marker, "1"))
+                    settings.deleteSetting(row.key)
+                }
+                return@forEach
+            }
             if (!canRetry) return@forEach
             markPending(parts[0], parts[1])
             // 记录不存在时也清掉提示，避免设置页永久显示幽灵错误。
@@ -152,7 +182,13 @@ internal class SyncStateStore(private val database: AppDatabase) {
     /** 换账号前取消任务，事务内重置账号专属云端快照；API Key 和本地数据不受影响。 */
     suspend fun prepareAccount(accountId: String, upload: Boolean) = database.withTransaction {
         if (settings.getValue(KEY_ACCOUNT) != accountId) {
+            val oldAccount = settings.getValue(KEY_ACCOUNT)
+            if (oldAccount != null) {
+                // 本机明文和已下载文件保留，密文 AAD、fileId 和 canonical id 都属于旧账号，不能转发。
+                resetAccountReferences()
+            }
             settings.insertSetting(SystemSettingEntity(KEY_ACCOUNT, accountId))
+            settings.deleteSetting(KEY_SECRETS_EPOCH)
             settings.deleteSetting(KEY_EPOCH)
             settings.deleteSetting(KEY_EPOCH_DECISION)
             settings.insertSetting(SystemSettingEntity(KEY_CURSOR, "0"))
@@ -176,9 +212,38 @@ internal class SyncStateStore(private val database: AppDatabase) {
         database.chatDao().markAllTextMessagesPending()
         database.memoryDao().markAllPending()
         settings.markAllUserSettingsPending()
+        // 云端 epoch 变化后，旧的远端字段清单已经失效；重新上传必须从消息核心字段开始。
+        settings.getByPrefix("sync_message_fields:").forEach { settings.deleteSetting(it.key) }
+        listOf("sync_resource_source:", "sync_resource_failed:", "sync_resource_receive_failed:").forEach { prefix ->
+            settings.getByPrefix(prefix).forEach { settings.deleteSetting(it.key) }
+        }
+        settings.insertSetting(SystemSettingEntity("sync_resource_republish", "true"))
         settings.clearSyncRejections()
         settings.deleteSetting(KEY_EPOCH_DECISION)
         settings.deleteSetting(KEY_RESET_PAUSED)
+    }
+
+    /** 换账号只清账号专属快照，下一轮从本机明文重新加密和上传资源。 */
+    private suspend fun resetAccountReferences() {
+        for (row in settings.getAllUserSettings()) {
+            if (row.kind == "crypto_keys") settings.deleteUserSetting(row.kind, row.key)
+            else settings.upsertUserSettings(listOf(row.copy(uuid = com.android.everytalk.data.database.entities.localSyncUuid("user_settings", "${row.kind}:${row.key}"),
+                value = stripAccountFields(syncJson.parseToJsonElement(row.value), true)?.toString() ?: "{}")))
+        }
+        database.openHelper.writableDatabase.execSQL("DELETE FROM sync_attachments")
+        listOf("sync_resource_meta:", "sync_private_applied:", "sync_secret_cache:", "sync_resource_restored:").forEach { prefix ->
+            settings.getByPrefix(prefix).forEach { settings.deleteSetting(it.key) }
+        }
+    }
+
+    private fun stripAccountFields(value: JsonElement, removeFileRefs: Boolean): JsonElement? = when {
+        value is JsonObject && value.containsKey("\$enc") -> null
+        value is JsonObject -> JsonObject(value.mapNotNull { (name, child) ->
+            if (removeFileRefs && name in setOf("fileRefs", "fileManifest", "manifestRef")) null
+            else stripAccountFields(child, removeFileRefs)?.let { name to it }
+        }.toMap())
+        value is JsonArray -> JsonArray(value.mapNotNull { stripAccountFields(it, removeFileRefs) })
+        else -> value
     }
 
     suspend fun rejectEpochUpload() = database.withTransaction {
@@ -210,10 +275,7 @@ internal class SyncStateStore(private val database: AppDatabase) {
         const val KEY_SECRETS_EPOCH = "sync_secrets_epoch"
 
         /** 这些错误在客户端修复映射或重新拉取密钥代次后可以安全重试。 */
-        private val RECOVERABLE_REJECTION_CODES = setOf(
-            "MESSAGE_PAYLOAD_TOO_LARGE",
-            "SECRETS_EPOCH_MISMATCH",
-        )
+        private val RECOVERABLE_REJECTION_CODES = setOf("SECRETS_EPOCH_MISMATCH")
         private val CURRENT_SETTING_KINDS = setOf(
             "api_configs", "selected_models", "web_search_configs", "voice_configs",
             "voice_llm_platforms", "voice_custom_models", "mcp_servers", "skills",
