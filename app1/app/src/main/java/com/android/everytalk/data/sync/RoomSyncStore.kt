@@ -69,6 +69,17 @@ internal class RoomSyncStore(
         }
     }
 
+    private suspend fun preparePullPage() {
+        // 不能只在请求开始时投影一次：用户可能在网络请求期间修改服务器、密钥或会话设置。
+        // 这里先把最新业务表快照转成 PENDING，再进入应用远端页的 Room 事务。
+        SyncSettingsProjector(
+            database = database,
+            secrets = secrets,
+            userId = userId,
+            secretsEpoch = state.readSecretsEpoch().coerceAtLeast(0L),
+        ).refresh()
+    }
+
     /**
      * 同步密码输入成功后重新应用已经拉取的配置。
      * 这里只写入实际配置表，不修改 user_settings 的同步状态，因此不会产生回传。
@@ -503,6 +514,8 @@ internal class RoomSyncStore(
 
     /** 一页记录和 next_cursor 原子提交；任何写入失败都不推进游标，不静默丢弃数据。 */
     override suspend fun applyPullPage(response: PullResponse) {
+      // 让直接调用该入口的同步测试和恢复路径也具备同样的版本保护。
+      preparePullPage()
       database.withTransaction {
         response.changes.sortedBy { it.serverSeq }.forEach { record ->
             validateUuid(record.id)
@@ -678,6 +691,20 @@ internal class RoomSyncStore(
         require(kind in REGISTERED_SETTING_KINDS && key.toByteArray().size in 1..1024)
         val old = settings.getUserSetting(kind, key)
         val version = modified(record)
+        // 已同步的本地删除也是事实。旧的非删除快照不能把它复活；只有更晚的
+        // 客户端修改版本才允许重新创建同一个配置。
+        if (old?.deleted == true && !record.deleted && old.updatedAt >= version) {
+            if (kind == "computers") {
+                // 兼容墓碑写入后进程在删除业务行前被杀的窗口；旧云端快照到达时
+                // 也必须把残留业务行清掉，不能只保护 user_settings 墓碑。
+                database.computerDao().deleteComputer(
+                    old.value.let { runCatching { syncJson.parseToJsonElement(it).jsonObject["localId"]?.jsonPrimitive?.contentOrNull }.getOrNull() }
+                        ?: key,
+                )
+            }
+            settings.upsertUserSettings(listOf(old.copy(uuid = record.id)))
+            return
+        }
         if (old?.syncStatus == SyncStatus.PENDING && old.updatedAt > version) {
             // 内容保留本地较新版本，但始终采用服务器逻辑键的 canonical id。
             settings.upsertUserSettings(listOf(old.copy(uuid = record.id)))
@@ -696,6 +723,12 @@ internal class RoomSyncStore(
                 "mcp_servers" -> database.mcpConfigDao().deleteConfigById(
                     old?.value?.let { runCatching { syncJson.parseToJsonElement(it).jsonObject["localId"]?.jsonPrimitive?.contentOrNull }.getOrNull() } ?: key)
                 "skills" -> database.skillDao().delete(key)
+                // computers 是业务表，不是只读的设置投影。云端墓碑到达后必须删除
+                // 本地实体；其外键会继续清理工作区、会话绑定和连接相关索引。
+                "computers" -> database.computerDao().deleteComputer(
+                    old?.value?.let { runCatching { syncJson.parseToJsonElement(it).jsonObject["localId"]?.jsonPrimitive?.contentOrNull }.getOrNull() }
+                        ?: key,
+                )
             }
         }
         if (record.deleted && kind == UserSettingKind.CONVERSATION_GROUPS) settings.deleteConversationGroup(key)

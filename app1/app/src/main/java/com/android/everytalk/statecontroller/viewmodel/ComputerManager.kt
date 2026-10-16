@@ -314,7 +314,16 @@ class ComputerManager(
 
     suspend fun deleteLocalCloudflareComputer(computerId: String) {
         val api = CloudflareApiClient(cloudflareHttpClient, { "unused" })
-        api.use { CloudflareComputerManager(repository.dao(), ComputerCredentialStore(appContext), api).deleteLocalComputer(computerId) }
+        api.use {
+            CloudflareComputerManager(
+                repository.dao(), ComputerCredentialStore(appContext), api,
+                onComputerDeleted = { id ->
+                    com.android.everytalk.data.sync.SyncSettingsProjector(
+                        com.android.everytalk.data.database.AppDatabase.getDatabase(appContext),
+                    ).markDeleted("computers", id)
+                },
+            ).deleteLocalComputer(computerId)
+        }
     }
 
     private fun cloudflareLifecycleManager() = CloudflareComputerManager(

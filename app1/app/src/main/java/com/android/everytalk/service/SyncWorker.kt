@@ -52,6 +52,7 @@ class SyncWorker(context: Context, parameters: WorkerParameters) : CoroutineWork
             when (SyncEngine(
                 api = api,
                 beforePull = { credentials.captureLocal() },
+                beforePullPage = { credentials.captureLocal() },
                 afterPull = {
                     // 后端未升级/未配置时明确显示缺项，但普通文字同步仍可继续，不能假报完整成功。
                     recoverService(db, "credentials") { credentials.recover() }

@@ -37,9 +37,23 @@ internal class SyncSettingsProjector(
 
     /** 在用户删除时保留逐条墓碑；下次联网才发送，不依赖设备当时是否登录。 */
     suspend fun markDeleted(kind: String, key: String) {
-        val old = settings.getUserSetting(kind, key) ?: return
-        if (!old.deleted) settings.upsertUserSettings(listOf(old.copy(value = "{}", deleted = true,
-            updatedAt = maxOf(System.currentTimeMillis(), old.updatedAt + 1), syncStatus = SyncStatus.PENDING)))
+        val now = System.currentTimeMillis()
+        val old = settings.getUserSetting(kind, key)
+        if (old == null) {
+            // 服务器已有记录但本机尚未完成投影时，也必须创建墓碑；否则删除后旧记录会再次被拉回。
+            settings.upsertUserSettings(listOf(UserSettingEntity(
+                kind = kind,
+                key = key,
+                value = "{}",
+                uuid = localSyncUuid("user_settings", "$kind:$key"),
+                updatedAt = now,
+                deleted = true,
+                syncStatus = SyncStatus.PENDING,
+            )))
+        } else if (!old.deleted) {
+            settings.upsertUserSettings(listOf(old.copy(value = "{}", deleted = true,
+                updatedAt = maxOf(now, old.updatedAt + 1), syncStatus = SyncStatus.PENDING)))
+        }
     }
 
     suspend fun refresh() = database.withTransaction {
@@ -82,7 +96,13 @@ internal class SyncSettingsProjector(
             upsert("skills", it.skillId, JsonObject(value), it.updatedAt)
         }
         customVoiceModels(); voicePlatforms()
-        database.computerDao().getAllSnapshot().forEach { upsert("computers", it.id, computerValue(it), it.updatedAt) }
+        database.computerDao().getAllSnapshot().forEach {
+            // 删除服务器分两步完成：先写同步墓碑，再删除业务行。同步刷新可能正好
+            // 发生在两步之间；旧业务行不能把刚写入的墓碑重新投影成活动配置。
+            val tombstone = settings.getUserSetting("computers", it.id)
+            if (tombstone?.deleted == true && it.updatedAt <= tombstone.updatedAt) return@forEach
+            upsert("computers", it.id, computerValue(it), it.updatedAt)
+        }
         database.computerDao().getAllWorkspacesSnapshot().forEach { workspace ->
             upsert("computer_workspaces", syncStableSettingKey("computer_workspaces", workspace.id), workspaceValue(workspace, sessions.getStoredSession(workspace.conversationId)?.uuid))
         }

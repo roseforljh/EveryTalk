@@ -906,6 +906,117 @@ class SyncEngineTest {
         assertTrue(RoomSyncStore(b).pendingBatch().isEmpty())
     }
 
+    @Test fun `已同步删除墓碑不会被旧配置复活`() = runBlocking {
+        val db = device()
+        val serverId = UUID.randomUUID().toString()
+        val oldValue = buildJsonObject {
+            put("localId", serverId); put("displayName", "旧服务器"); put("provider", "SSH")
+            put("host", "old.example"); put("port", 22); put("username", "user")
+            put("authKind", "PASSWORD"); put("runMode", "DIRECT"); put("createdAt", 1)
+        }
+        db.settingsDao().upsertUserSettings(listOf(UserSettingEntity(
+            "computers", serverId, "{}", updatedAt = 200, deleted = true, syncStatus = SyncStatus.SYNCED,
+        )))
+
+        val old = SyncRecord("user_settings", UUID.randomUUID().toString(), buildJsonObject {
+            put("kind", "computers"); put("key", serverId); put("value", oldValue); put("clientModifiedAt", 100)
+        }, updatedAt = "2026-10-14T18:30:01Z", deleted = false, serverSeq = 1)
+        RoomSyncStore(db).applyPullPage(PullResponse(listOf(old), 1, false, 0))
+
+        val tombstone = requireNotNull(db.settingsDao().getUserSetting("computers", serverId))
+        assertTrue(tombstone.deleted)
+        assertEquals(SyncStatus.SYNCED, tombstone.syncStatus)
+        assertNull(db.computerDao().getComputer(serverId))
+    }
+
+    @Test fun `删除墓碑和业务行删除之间的同步刷新不会重新入队活动服务器`() = runBlocking {
+        val db = device()
+        val serverId = UUID.randomUUID().toString()
+        val computer = com.android.everytalk.data.computer.Computer(
+            id = serverId, displayName = "612", host = "old.example", port = 22,
+            username = "user", authKind = com.android.everytalk.data.computer.ComputerAuthKind.PASSWORD,
+            runMode = com.android.everytalk.data.computer.ComputerRunMode.DIRECT,
+        ).toEntity(syncJson).copy(updatedAt = 100)
+        db.computerDao().upsertComputer(computer)
+        SyncSettingsProjector(db).markDeleted("computers", serverId)
+
+        // 模拟删除流程尚未执行 dao.deleteComputer 时，同步 Worker 先进入刷新。
+        SyncSettingsProjector(db).refresh()
+
+        val setting = requireNotNull(db.settingsDao().getUserSetting("computers", serverId))
+        assertTrue(setting.deleted)
+        assertEquals(SyncStatus.PENDING, setting.syncStatus)
+        assertTrue(RoomSyncStore(db).pendingBatch().any { it.change.deleted && it.change.id == setting.uuid })
+    }
+
+    @Test fun `删除服务器先写墓碑旧云端记录不会复活`() = runBlocking {
+        val db = device()
+        val serverId = UUID.randomUUID().toString()
+        db.computerDao().upsertComputer(com.android.everytalk.data.computer.Computer(
+            id = serverId, displayName = "612", host = "old.example", port = 22,
+            username = "user", authKind = com.android.everytalk.data.computer.ComputerAuthKind.PASSWORD,
+            runMode = com.android.everytalk.data.computer.ComputerRunMode.DIRECT,
+        ).toEntity(syncJson))
+        val serverValue = buildJsonObject {
+            put("localId", serverId); put("displayName", "旧服务器"); put("provider", "SSH")
+            put("host", "old.example"); put("port", 22); put("username", "user")
+            put("authKind", "PASSWORD"); put("runMode", "DIRECT"); put("createdAt", 1)
+        }
+        db.settingsDao().upsertUserSettings(listOf(UserSettingEntity(
+            "computers", serverId, serverValue.toString(), updatedAt = 100, syncStatus = SyncStatus.SYNCED,
+        )))
+        SyncSettingsProjector(db).markDeleted("computers", serverId)
+
+        val tombstone = db.settingsDao().getUserSetting("computers", serverId)!!
+        assertTrue(tombstone.deleted)
+        assertEquals(SyncStatus.PENDING, tombstone.syncStatus)
+        assertTrue(RoomSyncStore(db).pendingBatch().any { it.change.id == tombstone.uuid && it.change.deleted })
+
+        // 旧快照晚到时，本地墓碑版本更高，不能重新创建服务器实体。
+        val old = SyncRecord("user_settings", tombstone.uuid, buildJsonObject {
+            put("kind", "computers"); put("key", serverId); put("value", serverValue); put("clientModifiedAt", 100)
+        }, updatedAt = "2026-10-14T18:30:01Z", deleted = false, serverSeq = 1)
+        RoomSyncStore(db).applyPullPage(PullResponse(listOf(old), 1, false, 0))
+        assertNull(db.computerDao().getComputer(serverId))
+        assertTrue(db.settingsDao().getUserSetting("computers", serverId)!!.deleted)
+    }
+
+    @Test fun `删除时本地尚无设置投影也会创建服务器墓碑`() = runBlocking {
+        val db = device()
+        val serverId = UUID.randomUUID().toString()
+        SyncSettingsProjector(db).markDeleted("computers", serverId)
+
+        val tombstone = db.settingsDao().getUserSetting("computers", serverId)
+        requireNotNull(tombstone)
+        assertTrue(tombstone.deleted)
+        assertEquals(SyncStatus.PENDING, tombstone.syncStatus)
+        assertEquals("{}", tombstone.value)
+        assertTrue(RoomSyncStore(db).pendingBatch().any { it.change.deleted && it.change.id == tombstone.uuid })
+    }
+
+    @Test fun `网络等待期间修改服务器应用旧拉取页不会覆盖本地新值`() = runBlocking {
+        val db = device()
+        val api = FakeSyncApi()
+        val computer = com.android.everytalk.data.computer.Computer(
+            id = UUID.randomUUID().toString(), displayName = "旧名称", host = "old.example", port = 22,
+            username = "user", authKind = com.android.everytalk.data.computer.ComputerAuthKind.PASSWORD,
+            runMode = com.android.everytalk.data.computer.ComputerRunMode.DIRECT,
+        ).toEntity(syncJson).copy(updatedAt = 100)
+        db.computerDao().upsertComputer(computer)
+        run(db, api)
+
+        // 模拟网络请求进行中，用户已在本机输入新地址/密钥并落盘。
+        db.computerDao().upsertComputer(computer.copy(displayName = "新名称", host = "new.example", updatedAt = 200))
+        val page = api.pull(0)
+        RoomSyncStore(db).applyPullPage(page)
+
+        val local = db.computerDao().getComputer(computer.id)!!
+        assertEquals("新名称", local.displayName)
+        assertEquals("new.example", local.host)
+        assertEquals(SyncStatus.PENDING,
+            db.settingsDao().getUserSetting("computers", computer.id)!!.syncStatus)
+    }
+
     @Test fun `已发送Skill标签与上下文统计恢复且不上传设备路径或草稿`() = runBlocking {
         val a = device(); val b = device(); val s = seed(a); val api = FakeSyncApi()
         val original = a.chatDao().getMessageByUuid(message("local-0", s).uuid)!!

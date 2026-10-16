@@ -31,6 +31,7 @@ internal class SyncEngine(
     private val afterPull: suspend () -> Unit = {},
     private val beforePull: suspend () -> Unit = {},
     private val beforeComplete: suspend () -> Unit = {},
+    private val beforePullPage: suspend () -> Unit = {},
 ) {
     suspend fun runOnce(): SyncRunResult = SyncRuntimeLock.mutex.withLock {
         if (!canSync() || !state.isEnabled() || state.epochDecision() != null) return@withLock SyncRunResult.Disabled
@@ -89,6 +90,8 @@ internal class SyncEngine(
             require(page.changes.all { it.serverSeq > cursor.cursor && it.serverSeq <= page.nextCursor })
             require(page.changes.map { it.serverSeq }.distinct().size == page.changes.size)
             require(!page.hasMore || page.nextCursor > cursor.cursor) { "服务器返回无进展的分页" }
+            // 凭据保存在 Keystore 文件，不能只依赖 Room 投影；每页应用前也要封存最新修改。
+            beforePullPage()
             store.applyPullPage(page)
             if (knownSecretsEpoch < 0) state.recordSecretsEpoch(page.secretsEpoch)
             cursor = SyncCursorState(page.nextCursor, page.epoch)

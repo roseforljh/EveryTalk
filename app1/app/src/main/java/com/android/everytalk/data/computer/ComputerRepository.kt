@@ -689,6 +689,11 @@ class ComputerRepository(
         credentialStore.deleteComputerCredential(computerId)
         credentialStore.deleteOriginalComputerCredential(computerId)
         credentialStore.deleteComputerSudoPassword(computerId)
+        // 先写云端墓碑再删本地实体。否则下一次 pull 看不到本地记录，
+        // 会把云端旧的 computers 记录重新恢复，表现为“已删除的服务器又出现”。
+        com.android.everytalk.data.sync.SyncSettingsProjector(
+            AppDatabase.getDatabase(applicationContext),
+        ).markDeleted("computers", computerId)
         dao.deleteComputer(computerId)
         return ComputerDeleteResult(remoteKeyRemoved = remoteKeyRemoved)
     }

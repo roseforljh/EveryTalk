@@ -117,6 +117,7 @@ class CloudflareComputerManager(
     private val credentials: ComputerCredentialStore,
     private val api: CloudflareApiClient,
     private val json: Json = Json,
+    private val onComputerDeleted: suspend (String) -> Unit = {},
 ) : AutoCloseable {
     data class Details(
         val config: CloudflareComputerConfigEntity,
@@ -243,6 +244,8 @@ class CloudflareComputerManager(
                 credentials.deleteAgentAuthorization(authorization.credentialReference)
             }
         }
+        // 先写墓碑再删除本地实体，避免 pull 时用云端旧快照把服务器复活。
+        onComputerDeleted(computerId)
         dao.deleteComputer(computerId)
     }
 
