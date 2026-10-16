@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.30.0](https://github.com/roseforljh/EveryTalk/compare/v1.29.0...v1.30.0) (2026-10-16)
+
+
+### Features
+
+* add local mode and unified commercial login gate ([8ba1447](https://github.com/roseforljh/EveryTalk/commit/8ba144713928aabc81b1d4d9de8d63c678f2f922))
+* **agent:** enhance intervention lifecycle, steering and dialog interaction ([91fbcee](https://github.com/roseforljh/EveryTalk/commit/91fbcee32ab6ed25de0ba972eeede41ec71f81cd))
+* **database:** upgrade Room to schema 44 with sync attachments and conversation settings ([df6e344](https://github.com/roseforljh/EveryTalk/commit/df6e3447fb9c2cb65e9474a2923d55c63bd3871a))
+* implement immutable message persistence and streaming draft recovery ([14f22d4](https://github.com/roseforljh/EveryTalk/commit/14f22d4edb90902e57a7156314fa6f5e5f651280))
+* **sync:** complete stage 2 data migration ([dfc9c14](https://github.com/roseforljh/EveryTalk/commit/dfc9c14c1d9f3dbe3c399d86d2901444e40e8b0c))
+* **sync:** implement cloud sync engine ([6029bc9](https://github.com/roseforljh/EveryTalk/commit/6029bc9c6d2411c34e2f8eab6a40e5e9a1930382))
+* **sync:** implement end-to-end cloud sync with sanitization, crypto and worker recovery ([66b97f7](https://github.com/roseforljh/EveryTalk/commit/66b97f767cea90a8184c44b4c4030455e3d4a3d7))
+* 增加应用管理与订阅方案页面 ([882b456](https://github.com/roseforljh/EveryTalk/commit/882b456c02e275fb9216e2c7c92d79489e95d6b0))
+* 完善账号登录与管理界面 ([03f5f38](https://github.com/roseforljh/EveryTalk/commit/03f5f38ec06e8cefe4d6e46c2c71038035865568))
+* 接入账号登录认证体系与账户管理页面 ([bf36cd2](https://github.com/roseforljh/EveryTalk/commit/bf36cd270a4fc7d07ea8b25c24df4dc6c93c35c0))
+
+
+### Bug Fixes
+
+* **agent:** preserve compacted context and calibrate request usage ([5b51724](https://github.com/roseforljh/EveryTalk/commit/5b51724145fe474021e409a6d52242840119171c))
+* **agent:** recover legacy protected server secrets ([d0395da](https://github.com/roseforljh/EveryTalk/commit/d0395dab5aef4ff496a92f82496a93f151e64cec))
+* **sync:** prevent stale resources and computer resurrection ([62351cb](https://github.com/roseforljh/EveryTalk/commit/62351cb824bd5e9201852d4c9883c67b218ab97a))
+* **sync:** restore account credentials, resources and conversation state ([6fa26b0](https://github.com/roseforljh/EveryTalk/commit/6fa26b0c8a5928bd71ae63e8ab95339687526cdf))
+* **sync:** sanitize endpoints, canonicalize keys and optimize setting projection ([8f4c6d0](https://github.com/roseforljh/EveryTalk/commit/8f4c6d061395fe88bb7f2268bded473de2b0a63f))
+* **ui:** keep the conversation top bar transparent ([502fcf6](https://github.com/roseforljh/EveryTalk/commit/502fcf6327e4b2508dcd7a2e11fe74165f0887d1))
+* **ui:** refine top bar fade gradient and implement stepped back navigation for bottom sheet ([5d24065](https://github.com/roseforljh/EveryTalk/commit/5d240658e111e97e84eecdf16ad945793c05ea72))
+* 完善多语言国际化文案适配与本地化提示解析机制 ([b58af3c](https://github.com/roseforljh/EveryTalk/commit/b58af3cea612c4f9433828d6d36cfece0e70047c))
+
 ## [1.29.0](https://github.com/roseforljh/EveryTalk/compare/v1.28.1...v1.29.0) (2026-10-04)
 
 
