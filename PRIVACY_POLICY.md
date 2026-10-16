@@ -1,6 +1,6 @@
 # EveryTalk Privacy Policy / EveryTalk 隐私政策
 
-**Effective date / 生效日期: October 15, 2026 / 2026 年 10 月 15 日**
+**Effective date / 生效日期: October 16, 2026 / 2026 年 10 月 16 日**
 
 EveryTalk is an Android AI client maintained by the EveryTalk project maintainers. This policy explains how EveryTalk handles information when you use chat, image, voice, web search, Model Context Protocol (MCP), and AI content reporting features.
 
@@ -37,9 +37,9 @@ These services process information under their own terms and privacy policies. D
 
 You can choose LocalOnly mode and use the app without an account. In this mode, EveryTalk does not connect to its own server. Your locally entered API keys, chats, roles, prompts, and settings stay on the device. Requests to third party models are sent directly to the endpoints you configure when you use them, and those providers handle the requests under their own policies.
 
-When a sync server is configured, signing in automatically merges local and account sessions, message text, reasoning, long term memories, pinned items, and conversation groups. There is no separate sync switch. Signing out stops account sync and keeps local copies. Signing back into the same account includes changes made in local mode. Switching to another account asks how to handle existing local data before uploading it. Account sync does not upload API keys, voice keys, MCP configuration, images, attachments, tool execution traces, or image generation conversations.
+When a sync server is configured, signing in automatically merges local and account sessions, message text, reasoning, long term memories, pinned items, and conversation groups. There is no separate sync switch. Signing out stops account sync and keeps local copies. Signing back into the same account includes changes made in local mode. Switching to another account asks how to handle existing local data before uploading it. Account sync includes model/voice/search configurations and keys, MCP headers and authorization, remote computer settings and SSH credentials, Skill files and variable values, chat images and attachments, and complete text-chat history including tool traces and results. Credentials and complete history archives are encrypted with AES-GCM before upload. The server stores account recovery keys wrapped under a separate deployment key and can decrypt these synchronized secrets; this is not encryption that only you can unlock. New devices recover keys after account authentication and store credentials in their own Android Keystore. Image generation conversations, drafts, pending commands, port forwards and live connection state are excluded. External providers can revoke authorizations; restoring a credential does not prove that a remote connection is currently usable.
 
-The sync service stores this data on servers in Germany. If you use the app in mainland China, signing in involves cross border transfer of the listed data. You can delete cloud data from account settings at any time. Local data remains on the device and uploads pause. Restarting or signing in again does not re-upload it without your explicit choice. Encrypted server backups may remain for up to 7 days after deletion. The Android client is open source; server side permission, membership, and quota decisions are made by the server.
+The sync service stores this data on servers in Germany. If you use the app in mainland China, signing in involves cross border transfer of the listed data. Encrypted server backups may remain for up to 7 days after deletion. The Android client is open source; server side permission, membership, and quota decisions are made by the server.
 
 ### 3. Permissions
 
@@ -70,7 +70,7 @@ EveryTalk blocks cleartext network traffic for production app connections and st
 
 ### 8. Accounts
 
-EveryTalk offers optional Google and email-code account sign-in through the configured Supabase Auth service. Email sign-in transmits the email address and verification code. Google sign-in requests basic identity information (openid, email, profile), not Gmail or Drive access. Supabase stores the account ID, email, linked login identities, registration and login records, and processes authentication requests under its privacy policy. Account sync never uploads model API keys.
+EveryTalk offers optional Google and email-code account sign-in through the configured Supabase Auth service. Email sign-in transmits the email address and verification code. Google sign-in requests basic identity information (openid, email, profile), not Gmail or Drive access. Supabase stores the account ID, email, linked login identities, registration and login records, and processes authentication requests under its privacy policy. Model API keys are included in account sync as encrypted fields, with account-managed recovery as described in section 2A.
 
 Signing in automatically syncs only the fields described in section 2A. You can choose local mode to use the app without account sync.
 
@@ -86,7 +86,7 @@ To provide these features, the app may process your mailbox address, message and
 
 #### Processing path and third-party AI services
 
-Gmail requests communicate with the Google Gmail API through the EveryTalk OAuth/MCP Worker hosted on Cloudflare. The Worker exchanges or refreshes tokens and processes mail operations during requests; its application code does not write tokens, mail bodies or user profiles to persistent storage. Google access and refresh tokens are encrypted on Android and are not sent as model prompts.
+Gmail requests communicate with the Google Gmail API through the EveryTalk OAuth/MCP Worker hosted on Cloudflare. The Worker exchanges or refreshes tokens and processes mail operations during requests; its application code does not write tokens, mail bodies or user profiles to persistent storage. Google access and refresh tokens are encrypted on Android and are not sent as model prompts. When signed in, linked MCP authorization material is also synchronized as an encrypted field through account-managed recovery; the sync service can recover it as described in section 2A.
 
 When you use AI for a Gmail task, mail information returned by tools may be sent as conversation context to your currently selected model service to interpret your request, display or summarize mail and generate related responses. If a proxy or aggregator provides the model, its operator and upstream model providers may also process that content. AI mail features therefore do not mean that mail always stays on your device.
 
@@ -141,9 +141,9 @@ EveryTalk 本身不提供 AI 模型。当你主动使用联网功能时，应用
 
 你可以选择本地模式，不登录账号也能使用应用。本地模式不会连接 EveryTalk 自有服务器。你自己填写的 API 密钥、聊天记录、角色、提示词和设置会保存在设备上。使用第三方模型时，请求会直接发送到你配置的接口，具体由相应服务商按自己的政策处理。
 
-配置同步服务器时，登录后会自动合并本地与账号的会话、消息文字、思考过程、长期记忆、置顶和分组，不需要另外开启同步。退出后停止账号同步并保留本机副本；重新登录同一账号时，会同步游客期间的新数据。换成另一个账号时，会先询问如何处理已有本地数据，再决定是否上传。以下信息不参与账号同步：API 密钥、语音 Key、MCP 配置、图片、附件、工具执行轨迹和生图对话。
+配置同步服务器时，登录后会自动合并本地与账号的会话、消息文字、思考过程、长期记忆、置顶和分组，不需要另外开启同步。退出后停止账号同步并保留本机副本；重新登录同一账号时，会同步游客期间的新数据。换成另一个账号时，会先询问如何处理已有本地数据，再决定是否上传。账号同步包括模型、语音和搜索配置及 Key、MCP headers 和授权、远程电脑设置及 SSH 凭据、Skill 文件与变量值、聊天图片和附件，以及文字会话的完整正文、思考、工具轨迹和结果。凭据和完整历史归档会先用 AES-GCM 加密。服务端以独立部署密钥包裹账号恢复密钥，具有解密这些同步机密的能力，不是只有你能解密。新设备通过账号鉴权自动恢复，再存入该设备自己的 Android Keystore。生图对话、草稿、待执行命令、端口转发和实时连接状态不复制。第三方可撤销授权，恢复凭据不代表远程连接此刻可用。
 
-同步数据存储在德国的服务器上。中国大陆用户登录后会涉及上述数据的跨境传输。你可以随时在账号设置中一键删除云端数据，本地数据会保留，并暂停本机上传；重启或重新登录不会自动重新上传，需你再次明确选择。服务器的加密备份在删除后最多保留 7 天。客户端代码开源，但具体权限、会员资格和额度由服务器判断。
+同步数据存储在德国的服务器上。中国大陆用户登录后会涉及上述数据的跨境传输。服务器的加密备份在删除后最多保留 7 天。客户端代码开源，但具体权限、会员资格和额度由服务器判断。
 
 ### 3. 权限用途
 
@@ -188,7 +188,7 @@ Google 账号登录与 Gmail 连接是两个独立功能。账号登录仅使用
 
 #### 处理路径与第三方 AI 服务
 
-Gmail 请求通过部署在 Cloudflare 的 EveryTalk OAuth/MCP Worker 与 Google Gmail API 通信。Worker 使用授权凭据换取或刷新令牌，并在请求期间处理邮件操作；其应用代码不将令牌、邮件正文或用户资料写入持久存储。Google 访问令牌和刷新令牌在 Android 端加密保存，不作为模型提示词发送。
+Gmail 请求通过部署在 Cloudflare 的 EveryTalk OAuth/MCP Worker 与 Google Gmail API 通信。Worker 使用授权凭据换取或刷新令牌，并在请求期间处理邮件操作；其应用代码不将令牌、邮件正文或用户资料写入持久存储。Google 访问令牌和刷新令牌在 Android 端加密保存，不作为模型提示词发送。登录后，关联的 MCP 授权材料也会作为加密字段同步，账号同步服务可按第 2A 节恢复这些凭据。
 
 当你使用 AI 执行 Gmail 任务时，工具返回的邮件信息可能作为会话上下文发送到当前选择的模型服务，用于理解请求、展示或总结邮件及生成相关回答。若模型经代理或聚合平台提供，网关运营方和上游模型服务商也可能处理这些内容。因此，使用 AI 邮件功能并不意味着邮件始终只在设备本地处理。
 
