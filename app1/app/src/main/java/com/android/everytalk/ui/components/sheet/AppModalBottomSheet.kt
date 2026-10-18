@@ -284,7 +284,10 @@ internal fun AppModalBottomSheet(
             } ?: 0f
         },
         sheetState = sheetState,
-        sheetGesturesEnabled = !interactionLocked,
+        // 普通吸附动画必须能被下一次拖动打断。若跟随 isAnimationRunning 禁用手势，
+        // Material 会移除嵌套滚动连接和拖动处理，正文到顶后的连续下拉会失去接收方。
+        // 仅在初次展示和返回逐档下降期间锁定，继续使用 Material 原生的动画打断逻辑。
+        sheetGesturesEnabled = presentationReady && !backTransitionRunning,
         // 抽屉本身必须保持实体底色，避免顶部把下面的聊天内容透出来。
         containerColor = MaterialTheme.colorScheme.surface,
         contentWindowInsets = { WindowInsets(0, 0, 0, 0) },

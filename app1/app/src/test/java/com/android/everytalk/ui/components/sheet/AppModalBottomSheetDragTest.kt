@@ -24,6 +24,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
@@ -229,6 +231,58 @@ class AppModalBottomSheetDragTest {
         rule.waitForIdle()
         assertTrue(scroll.value in 1 until before)
         assertEquals(top, rule.onNodeWithTag("sheet").fetchSemanticsNode().boundsInRoot.top, 1f)
+    }
+
+    @Test
+    fun `展开动画中正文到顶后继续下拉可以关闭`() {
+        open()
+        val middleTop = handleTop()
+        rule.mainClock.autoAdvance = false
+        rule.onNodeWithTag("handle", useUnmergedTree = true).performTouchInput {
+            // 先上拉进入全屏吸附动画，下一次下拉必须能立即打断该动画。
+            swipe(center, center.copy(y = center.y - 80f), durationMillis = 500L)
+        }
+        repeat(5) {
+            rule.mainClock.advanceTimeByFrame()
+            rule.waitForIdle()
+        }
+        assertTrue("测试必须在全屏吸附尚未结束时继续手势", handleTop() > 0f && handleTop() < middleTop - 1f)
+        assertTrue(
+            "吸附期间不能撤掉抽屉的手势与无障碍展开入口",
+            rule.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsActions.Expand)).fetchSemanticsNodes().isNotEmpty(),
+        )
+        rule.onNodeWithTag("body").performTouchInput {
+            val start = center.copy(y = top + 40f)
+            swipe(start, start.copy(y = start.y + 700f), durationMillis = 700L)
+        }
+        rule.mainClock.advanceTimeBy(1_000L)
+        rule.waitForIdle()
+        assertTrue("吸附动画中继续下拉不能丢失手势", rule.onAllNodesWithTag("sheet").fetchSemanticsNodes().isEmpty())
+    }
+
+    @Test
+    fun `中档正文已到顶部时继续下拉可以关闭`() {
+        open()
+        rule.onNodeWithTag("body").performTouchInput {
+            val start = center.copy(y = top + 40f)
+            swipe(start, start.copy(y = start.y + 700f), durationMillis = 700L)
+        }
+        rule.waitForIdle()
+        assertEquals(0, scroll.value)
+        assertTrue("正文到顶后下拉应关闭抽屉", rule.onAllNodesWithTag("sheet").fetchSemanticsNodes().isEmpty())
+    }
+
+    @Test
+    fun `同一次下拉先将正文滚到顶部再继续关闭抽屉`() {
+        open()
+        rule.runOnIdle { scroll.dispatchRawDelta(120f) }
+        rule.onNodeWithTag("body").performTouchInput {
+            val start = center.copy(y = top + 40f)
+            swipe(start, start.copy(y = start.y + 900f), durationMillis = 900L)
+        }
+        rule.waitForIdle()
+        assertEquals(0, scroll.value)
+        assertTrue("到顶后的剩余手势应交给抽屉", rule.onAllNodesWithTag("sheet").fetchSemanticsNodes().isEmpty())
     }
 
     @Test
