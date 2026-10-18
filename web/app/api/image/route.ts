@@ -1,0 +1,143 @@
+import { modelUpstream, publicImageData } from '@/lib/model-upstream'
+import { isObject } from '@/src/sync-core'
+import { modalImageDimensions } from '@/src/model'
+import type { ImageProtocol } from '@/src/model'
+
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
+const MAX_REQUEST_BYTES = 4 * 1024 * 1024
+const MAX_RESPONSE_BYTES = 64 * 1024 * 1024
+const isProtocol = (value: unknown): value is ImageProtocol => value === 'openai' || value === 'gemini' || value === 'qwen' || value === 'modal'
+
+async function readAtMost(response: Response, maxBytes: number): Promise<string> {
+  const reader = response.body?.getReader()
+  if (!reader) throw new Error('图片服务响应为空')
+  const chunks: Uint8Array[] = []; let size = 0
+  try {
+    for (;;) {
+      const part = await reader.read()
+      if (part.done) break
+      size += part.value.byteLength
+      if (size > maxBytes) { await reader.cancel(); throw new Error('图片服务响应过大') }
+      chunks.push(part.value)
+    }
+  } finally { reader.releaseLock() }
+  const bytes = new Uint8Array(size); let offset = 0
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength }
+  return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+}
+
+async function imageData(source: unknown, signal: AbortSignal): Promise<string | undefined> {
+  if (typeof source !== 'string') return undefined
+  if (/^data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=]+$/i.test(source)) return source
+  if (/^https:\/\//i.test(source)) return publicImageData(source, signal)
+  return undefined
+}
+
+/** 把客户端校验过的单张 data URL 转成 OpenAI images/edits 所需的 multipart 字节。 */
+function openAiEditBody(body: Record<string, unknown>): { bytes: Buffer; contentType: string } {
+  const model = typeof body.model === 'string' ? body.model.trim() : ''
+  const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : ''
+  const source = typeof body.image === 'string' ? body.image : ''
+  const match = /^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=]+)$/i.exec(source)
+  if (!model || model.length > 200 || !prompt || prompt.length > 2000 || !match) throw new Error('OpenAI 图片编辑请求无效')
+  const image = Buffer.from(match[2], 'base64')
+  if (!image.byteLength || image.byteLength > 3 * 1024 * 1024) throw new Error('参考图片超过 3 MiB 限制')
+  const boundary = `----EveryTalkImage${crypto.randomUUID().replace(/-/g, '')}`
+  const chunks: Buffer[] = []
+  const field = (name: string, value: string): void => {
+    chunks.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`, 'utf8'))
+  }
+  field('model', model)
+  field('prompt', prompt)
+  if (typeof body.size === 'string' && body.size.length <= 32) field('size', body.size)
+  if (typeof body.quality === 'string' && body.quality.length <= 32) field('quality', body.quality)
+  if (typeof body.n === 'number' && Number.isSafeInteger(body.n)) field('n', String(body.n))
+  chunks.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="image"; filename="reference.${match[1].split('/')[1].replace(/[^a-z0-9]/gi, '') || 'png'}"\r\nContent-Type: ${match[1]}\r\n\r\n`, 'utf8'))
+  chunks.push(image, Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8'))
+  return { bytes: Buffer.concat(chunks), contentType: `multipart/form-data; boundary=${boundary}` }
+}
+
+/** 统一 Android 图片合同的 Gemini inlineData、OpenAI data.url 和 b64_json 返回值。 */
+async function parseImages(protocol: Exclude<ImageProtocol, 'modal'>, raw: string, signal: AbortSignal): Promise<{ images: string[]; text?: string }> {
+  const value: unknown = JSON.parse(raw)
+  if (!isObject(value)) throw new Error('图片服务返回格式无效')
+  const images: string[] = []; let text = ''
+  if (protocol === 'gemini') {
+    const candidates = Array.isArray(value.candidates) ? value.candidates : []
+    for (const candidate of candidates) if (isObject(candidate) && isObject(candidate.content) && Array.isArray(candidate.content.parts)) {
+      for (const part of candidate.content.parts) if (isObject(part)) {
+        if (typeof part.text === 'string') text += part.text
+        const inline = isObject(part.inlineData) ? part.inlineData : isObject(part.inline_data) ? part.inline_data : undefined
+        if (inline) {
+          const data = typeof inline.data === 'string' ? inline.data : ''
+          const mime = typeof inline.mimeType === 'string' ? inline.mimeType : typeof inline.mime_type === 'string' ? inline.mime_type : 'image/png'
+          if (/^image\/[a-z0-9.+-]+$/i.test(mime) && /^[a-z0-9+/=]+$/i.test(data)) images.push(`data:${mime};base64,${data}`)
+        }
+      }
+    }
+  } else if (protocol === 'openai') {
+    const items = Array.isArray(value.data) ? value.data : Array.isArray(value.images) ? value.images : []
+    for (const item of items) if (isObject(item)) {
+      const b64 = typeof item.b64_json === 'string' ? item.b64_json : undefined
+      if (b64 && /^[a-z0-9+/=]+$/i.test(b64)) images.push(`data:image/png;base64,${b64}`)
+      else {
+        const converted = await imageData(item.url, signal)
+        if (converted) images.push(converted)
+      }
+    }
+  } else {
+    const candidate = value.result ?? value.image_base64 ?? value.image ?? value.data
+    const values = Array.isArray(candidate) ? candidate : [candidate]
+    for (const item of values) if (typeof item === 'string') {
+      if (/^data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=]+$/i.test(item)) images.push(item)
+      else if (/^[a-z0-9+/=]+$/i.test(item)) images.push(`data:image/png;base64,${item}`)
+    }
+    if (value.status !== undefined && value.status !== 'success') throw new Error('Qwen 图片服务返回失败')
+  }
+  if (!images.length) throw new Error('图片服务没有返回可保存的图片')
+  return { images, ...(text ? { text } : {}) }
+}
+
+/** 登录用户的图片生成中转；只保留图片字节，不保存 API Key、供应商 URL 或请求正文。 */
+export async function POST(request: Request): Promise<Response> {
+  const fail = (message: string, status: number) => Response.json({ error: message }, { status, headers: { 'Cache-Control': 'no-store' } })
+  if (request.headers.get('origin') !== new URL(request.url).origin) return fail('请求来源无效', 403)
+  const authorization = request.headers.get('authorization')
+  if (!authorization?.startsWith('Bearer ') || authorization.length > 17000) return fail('请先登录', 401)
+  try {
+    const auth = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/auth/v1/user`, { headers: { authorization, apikey: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? '' }, cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(15_000) })
+    if (!auth.ok) return fail(auth.status === 401 || auth.status === 403 ? '登录已失效' : '账号服务暂时不可用', auth.status === 401 || auth.status === 403 ? 401 : 503)
+    const body = await request.arrayBuffer()
+    if (body.byteLength > MAX_REQUEST_BYTES) return fail('图片请求过大', 413)
+    const input: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body))
+    if (!isObject(input) || !isProtocol(input.protocol) || typeof input.target !== 'string' || typeof input.apiKey !== 'string' || input.apiKey.length > 8192 || /[\r\n]/.test(input.apiKey) || !isObject(input.body)) return fail('图片请求格式无效', 400)
+    const target = new URL(input.target)
+    if (input.protocol === 'modal') {
+      // Modal Z-Image-Turbo 使用 GET 查询参数并直接返回图片字节，
+      // 复用固定公网地址和大小校验，避免把任意 URL 代理给浏览器。
+      const prompt = typeof input.body.prompt === 'string' ? input.body.prompt : ''
+      if (!prompt || prompt.length > 2000) return fail('图片提示词无效', 422)
+      target.searchParams.set('prompt', prompt)
+      const dimensions = modalImageDimensions(input.body.imageSize, input.body.aspectRatio)
+      const width = dimensions.width
+      const height = dimensions.height
+      target.searchParams.set('width', String(width)); target.searchParams.set('height', String(height))
+      if (Number.isSafeInteger(input.body.numInferenceSteps)) target.searchParams.set('steps', String(input.body.numInferenceSteps))
+      if (typeof input.body.guidanceScale === 'number') target.searchParams.set('guidance_scale', String(input.body.guidanceScale))
+      const image = await publicImageData(target.toString(), request.signal, MAX_RESPONSE_BYTES)
+      return Response.json({ images: [image] }, { headers: { 'Cache-Control': 'private,no-store', 'X-Content-Type-Options': 'nosniff' } })
+    }
+    const headers = input.protocol === 'gemini' ? { 'x-goog-api-key': input.apiKey } : input.protocol === 'qwen' ? { 'x-api-key': input.apiKey } : { Authorization: `Bearer ${input.apiKey}` }
+    const edit = input.protocol === 'openai' && typeof input.body.image === 'string'
+    const multipart = edit ? openAiEditBody(input.body) : undefined
+    const upstream = await modelUpstream(target, headers, multipart?.bytes ?? JSON.stringify(input.body), AbortSignal.any([request.signal, AbortSignal.timeout(180_000)]), multipart?.contentType)
+    if (!upstream.ok) {
+      await upstream.body?.cancel().catch(() => undefined)
+      return fail(`图片供应商请求失败（HTTP ${upstream.status}）`, upstream.status >= 400 && upstream.status < 600 ? upstream.status : 502)
+    }
+    const result = await parseImages(input.protocol, await readAtMost(upstream, MAX_RESPONSE_BYTES), request.signal)
+    return Response.json(result, { headers: { 'Cache-Control': 'private,no-store', 'X-Content-Type-Options': 'nosniff' } })
+  } catch (error) { return fail(error instanceof Error ? error.message : '无法连接图片服务', 502) }
+}

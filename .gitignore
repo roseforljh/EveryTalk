@@ -21,6 +21,17 @@ services/**/.env*
 services/**/coverage/
 services/**/wrangler.jsonc
 
+# ===== Web 客户端 =====
+!web/
+!web/**
+web/node_modules/
+web/dist/
+web/.next/
+web/next-env.d.ts
+web/*.tsbuildinfo
+web/.env*
+!web/.env.example
+
 # ===== 允许 Gradle 相关文件 =====
 !gradle/
 !gradle/**
