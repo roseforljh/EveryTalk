@@ -932,6 +932,8 @@ fun ChatInputArea(
                     )
                 }
 
+                FileChangesCapsule(messages = viewModel.stateHolder.messages)
+
                 PendingMessageQueue(
                     messages = pendingMessages,
                     onEdit = { id ->

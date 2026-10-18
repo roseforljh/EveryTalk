@@ -27,7 +27,7 @@ class BubbleContentTypesRenderRouteTest {
         assertTrue(
             source.lineSequence()
                 .map(String::trim)
-                .any { it == "USER_BUBBLE_TEXT_OPTICAL_OFFSET" },
+                .any { it.contains("USER_BUBBLE_TEXT_OPTICAL_OFFSET") },
         )
     }
 

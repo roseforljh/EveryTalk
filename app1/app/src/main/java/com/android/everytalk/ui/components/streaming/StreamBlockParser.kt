@@ -329,7 +329,7 @@ object StreamBlockParser {
         includePendingMathRaw: Boolean = true,
     ): PreparedMessage {
         val fenceRecoveredContent = MarkdownContractValidator.recoverMalformedFenceBoundaries(content)
-        val renderableContent = unwrapRenderableMarkdownFences(fenceRecoveredContent)
+        val renderableContent = unwrapRenderableMarkdownFences(promoteNestedFenceMarkers(fenceRecoveredContent))
         val renderBlocks: List<StreamBlock>
         val renderHasPendingFormula: Boolean
         if (renderableContent == content) {

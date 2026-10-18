@@ -18,6 +18,7 @@ import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.DataClass.ThinkingConfig
 import com.android.everytalk.data.DataClass.ChatRequest
+import com.android.everytalk.data.DataClass.ImageGenerationResponse
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.safety.AiContentReportRepository
 import com.android.everytalk.data.auth.AccountSwitchProtection
@@ -346,7 +347,89 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 computerSessionStateProvider = computerManager::computerSessionState,
                 prepareAgentResumeRequest = ::prepareAgentRequestedChatRequest,
                 prepareMcpResumeRequest = ::prepareMcpRequestedChatRequest,
+                persistImageGenerationResult = ::persistImageGenerationResult,
         )
+    }
+
+    /**
+     * 把图像任务结果写回指定会话。
+     * 任务可能在用户已经切换页面后完成，因此这里始终通过会话 ID 读取和保存 Room，
+     * 只有目标会话当前可见时才同步更新 Compose 列表。
+     */
+    private suspend fun persistImageGenerationResult(
+        conversationId: String,
+        messageId: String,
+        response: ImageGenerationResponse?,
+        error: Throwable?,
+    ) {
+        val stored = persistenceManager.loadHistorySession(conversationId).orEmpty()
+        val baseMessages = if (stored.isNotEmpty()) {
+            stored
+        } else if (stateHolder._currentImageGenerationConversationId.value == conversationId) {
+            stateHolder.imageGenerationMessages.toList()
+        } else {
+            emptyList()
+        }
+        if (baseMessages.isEmpty()) {
+            Log.w("AppViewModel", "图像任务完成但目标会话不存在: $conversationId")
+            return
+        }
+
+        val storedTitle = ConversationNameHelper.getStoredConversationTitle(baseMessages)
+        val messages = ConversationNameHelper.withoutStoredConversationTitle(baseMessages).toMutableList()
+        val existingIndex = messages.indexOfFirst { it.id == messageId }
+        val existing = messages.getOrNull(existingIndex)
+        val now = System.currentTimeMillis()
+        val updated = if (response != null && response.images.isNotEmpty()) {
+            val localUrls = response.images.mapIndexedNotNull { index, image ->
+                when (val result = historyManager.persistGeneratedImageSource(image.url, messageId, index)) {
+                    is com.android.everytalk.util.image.ImagePersistenceResult.Success -> result.filePath
+                    is com.android.everytalk.util.image.ImagePersistenceResult.Failure -> null
+                }
+            }
+            (existing ?: Message(
+                id = messageId,
+                text = "",
+                sender = Sender.AI,
+                conversationId = conversationId,
+            )).copy(
+                text = response.text.orEmpty(),
+                sender = Sender.AI,
+                imageUrls = localUrls,
+                contentStarted = true,
+                isError = localUrls.isEmpty(),
+                executionFinishedAt = now,
+                conversationId = conversationId,
+            )
+        } else {
+            (existing ?: Message(
+                id = messageId,
+                text = "",
+                sender = Sender.AI,
+                conversationId = conversationId,
+            )).copy(
+                text = "⚠️ 图像生成失败：${error?.message ?: response?.text ?: "未返回图片"}",
+                contentStarted = true,
+                isError = true,
+                executionFinishedAt = now,
+                conversationId = conversationId,
+            )
+        }
+        if (existingIndex >= 0) messages[existingIndex] = updated
+        else addAiMessageAfterUserMessage(messages, updated, messages.lastOrNull { it.sender == Sender.User }?.id)
+
+        val toSave = if (storedTitle == null) messages else {
+            listOfNotNull(baseMessages.firstOrNull { it.sender == Sender.System && it.isPlaceholderName }) + messages
+        }
+        persistenceManager.saveHistorySession(conversationId, toSave, isImageGeneration = true)
+
+        withContext(Dispatchers.Main.immediate) {
+            if (stateHolder._currentImageGenerationConversationId.value == conversationId) {
+                stateHolder.imageGenerationMessages.clear()
+                stateHolder.imageGenerationMessages.addAll(messages)
+                stateHolder.isImageConversationDirty.value = false
+            }
+        }
     }
 
     /** 仅在持久化批准后启用原会话，切换页面不会把权限误授给另一个会话。 */
@@ -460,7 +543,33 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 cloudflareWorkerWriteEnabled = { computerManager.cloudflareWorkerWriteEnabled },
                 cloudflareResourceToolsEnabled = { computerManager.cloudflareResourceToolsEnabled },
                 localBashEnabled = { computerManager.localBashEnabled },
+                generateConversationTitle = ::generateConversationTitle,
         )
+    }
+
+    /** 异步生成首条问题的会话标题；失败时不写入标题元数据，列表继续显示首条问题。 */
+    private fun generateConversationTitle(
+        conversationId: String,
+        prompt: String,
+        config: ApiConfig,
+        isImageGeneration: Boolean,
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val generated = runCatching {
+                com.android.everytalk.statecontroller.controller.conversation.ConversationTitleGenerator
+                    .generate(prompt, config)
+            }.onFailure { error ->
+                Log.w("AppViewModel", "会话标题生成失败，将使用首条问题: ${error.message}")
+            }.getOrNull() ?: return@launch
+
+            // 用户在模型返回前手动改过标题时，尊重手动标题，不覆盖它。
+            val current = persistenceManager.loadHistorySession(conversationId).orEmpty()
+            if (com.android.everytalk.util.ConversationNameHelper.getStoredConversationTitle(current) != null) return@launch
+            historyManager.renameHistorySession(conversationId, generated)
+            withContext(Dispatchers.Main.immediate) {
+                conversationPreviewController.setCachedTitle(conversationId, generated, isImageGeneration)
+            }
+        }
     }
 
     /** 当前可见 AgentRun 的真实安全暂停状态。UI 只消费 Coordinator 投影。 */
@@ -1171,7 +1280,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                             val stored = AppDatabase.getDatabase(getApplication()).chatDao().getStoredSession(currentId)
                             if (stored?.deleted == true) {
                                 startNewChat()
-                            } else if (stored != null && !stateHolder.isTextConversationDirty.value && stateHolder.textApiJob?.isActive != true) {
+                            } else if (stored != null && !stateHolder.isTextConversationDirty.value && stateHolder.textApiJob?.isActive != true &&
+                                // 回答提问后由协调器续写，textApiJob 已结束；Agent 仍在输出时不能用 Room 快照覆盖实时消息。
+                                !stateHolder._isTextApiCalling.value
+                            ) {
                                 val messages = persistenceManager.loadHistorySession(currentId)
                                 if (stateHolder._currentConversationId.value == currentId && !stateHolder.isTextConversationDirty.value) {
                                     stateHolder.messages.clear()

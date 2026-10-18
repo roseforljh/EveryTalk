@@ -83,6 +83,7 @@ import com.android.everytalk.data.DataClass.ExecutionStepType
 import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.data.DataClass.hasReviewableExecutionProcess
+import com.android.everytalk.ui.components.ChatMarkdownTextStyle
 import com.android.everytalk.ui.components.sheet.AppModalBottomSheet
 import com.android.everytalk.ui.components.markdown.EveryTalkMarkdownFlavourDescriptor
 import com.android.everytalk.ui.components.streaming.PreparedMarkdownDocument
@@ -355,7 +356,11 @@ internal fun ReasoningToggleAndContent(
         val endedAt = executionFinishedAtMillis ?: nowMillis.takeIf { processIsActive }
         endedAt?.minus(startedAt)?.coerceAtLeast(0L)
     }
-    val elapsedText = elapsedMillis?.let { localizedExecutionDuration(it) }
+    // 不足 1 秒的耗时没有信息量，不显示“0秒”，结束后改为概括做了什么。
+    val elapsedText = elapsedMillis?.takeIf { it >= 1_000L }?.let { localizedExecutionDuration(it) }
+    val summarySteps = executionSteps.ifEmpty {
+        executionTrace.filterIsInstance<ExecutionTraceEvent.Tool>().map { it.step }
+    }
     val executionChainTitle = when {
         processIsActive && activityStatusText == TOOL_CALL_WRITING_STATUS ->
             stringResource(R.string.thinking_writing)
@@ -366,6 +371,7 @@ internal fun ReasoningToggleAndContent(
             stringResource(R.string.thinking_failed_duration, elapsedText)
         messageIsError -> stringResource(R.string.thinking_execution_failed)
         elapsedText != null -> stringResource(R.string.thinking_elapsed_duration, elapsedText)
+        summarySteps.isNotEmpty() -> executionStepsSummary(summarySteps.map { it.type }.toSet(), summarySteps.size)
         else -> stringResource(R.string.thinking_process)
     }
     val openReasoningSheet = {
@@ -391,7 +397,9 @@ internal fun ReasoningToggleAndContent(
         ) {
             Surface(
                 shape = if (flatDarkStyle) RectangleShape else RoundedCornerShape(16.dp),
-                color = if (flatDarkStyle) Color.Transparent else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.52f),
+                // QoneAgent 的执行区不使用整块灰底；旁白作为普通文本与工具条自然衔接。
+                // 真正的思考卡片仍在下方按自己的样式显示。
+                color = Color.Transparent,
                 contentColor = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -572,12 +580,19 @@ private fun ExecutionProcessContent(
         sections.forEachIndexed { sectionIndex, section ->
             when (section) {
                 is ExecutionProcessSection.Narrative -> {
-                    ReasoningPreviewCard(
-                        text = section.text,
-                        sectionIndex = sectionIndex,
-                        active = sectionIndex == activeNarrativeIndex,
-                        onOpenDetails = onOpenDetails,
-                    )
+                    if (section.isCommentary) {
+                        CommentaryText(
+                            text = section.text,
+                            onOpenDetails = onOpenDetails,
+                        )
+                    } else {
+                        ReasoningPreviewCard(
+                            text = section.text,
+                            sectionIndex = sectionIndex,
+                            active = sectionIndex == activeNarrativeIndex,
+                            onOpenDetails = onOpenDetails,
+                        )
+                    }
                 }
 
                 is ExecutionProcessSection.ToolGroup -> {
@@ -636,6 +651,43 @@ private fun ExecutionProcessContent(
             }
         }
     }
+}
+
+/**
+ * 工具前后的模型旁白使用普通正文颜色和透明背景，保持与 QoneAgent 的 commentary 一致。
+ * 点击旁白仍打开完整执行详情，但旁白不会被误显示成灰色思考卡片。
+ */
+@Composable
+private fun CommentaryText(
+    text: String,
+    onOpenDetails: () -> Unit,
+) {
+    if (text.isBlank()) return
+    val preparedMessage = remember(text) {
+        StreamBlockParser.prepareMessage(
+            content = text,
+            messageId = "reasoning-commentary-${text.hashCode()}",
+            contentVersion = contentVersionForRendering(text),
+        )
+    }
+    UnifiedMarkdownRenderer(
+        preparedMessage = preparedMessage,
+        sender = Sender.AI,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(
+                indication = null,
+                interactionSource = remember { MutableInteractionSource() },
+                onClick = onOpenDetails,
+            )
+            .padding(
+                start = ChatMarkdownTextStyle.ASSISTANT_CONTENT_START_PADDING_DP.dp,
+                top = ChatMarkdownTextStyle.ASSISTANT_CONTENT_TOP_PADDING_DP.dp,
+                end = ChatMarkdownTextStyle.ASSISTANT_CONTENT_END_PADDING_DP.dp,
+                bottom = ChatMarkdownTextStyle.ASSISTANT_CONTENT_BOTTOM_PADDING_DP.dp,
+            )
+            .testTag("reasoning-chain-commentary"),
+    )
 }
 
 /** 每段连续思考都有独立小容器，工具调用仍保持在它们之间。 */
@@ -881,7 +933,11 @@ private fun executionToolGroupSummary(entries: List<ExecutionTimelineEntry>): St
     val count = entries.sumOf { it.invocationCount.toLong() }
         .coerceAtMost(Int.MAX_VALUE.toLong())
         .toInt()
-    val types = entries.map { it.step.type }.toSet()
+    return executionStepsSummary(entries.map { it.step.type }.toSet(), count)
+}
+
+@Composable
+private fun executionStepsSummary(types: Set<ExecutionStepType>, count: Int): String {
     val resource = when {
         types == setOf(ExecutionStepType.Agent) -> R.string.thinking_server_actions_count
         types == setOf(ExecutionStepType.Tool) -> R.string.thinking_tool_actions_count

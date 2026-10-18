@@ -300,9 +300,11 @@ internal fun DataPersistenceManager.loadInitialDataInternal(
                             val mapping = roomDataSource.loadConversationApiConfigIds()
                             val migratedMapping = migrateApiConfigIds(mapping, imageConfigIdMigrations)
                             val toggleStates = loadConversationFunctionToggleStates()
+                            val groupComputerIds = loadConversationGroupComputerIds()
                             withContext(Dispatchers.Main.immediate) {
                                 stateHolder.conversationApiConfigIds.value = migratedMapping
                                 stateHolder.conversationFunctionToggleStates.value = toggleStates
+                                stateHolder.conversationGroupComputerIds.value = groupComputerIds
                             }
                             if (migratedMapping != mapping) {
                                 roomDataSource.saveConversationApiConfigIds(migratedMapping)

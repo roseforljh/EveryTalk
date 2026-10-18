@@ -28,6 +28,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
@@ -291,7 +292,6 @@ fun CodeBlockCard(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color.Transparent)  // 移除显式背景色，跟随 Surface
                     .zIndex(1f) // 确保在内容之上绘制
                     // 动态吸顶偏移：使用 graphicsLayer 在绘制阶段计算偏移
                     .graphicsLayer {
@@ -305,6 +305,8 @@ fun CodeBlockCard(
                             min(offset, maxOffset)
                         }
                     }
+                    // 吸顶时要盖住下面滚过的代码，背景必须放在 graphicsLayer 之后才会跟着平移
+                    .background(previewBgColor.copy(alpha = previewRevealAlpha).compositeOver(bg))
                     .onSizeChanged { headerHeightPx = it.height },
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically // 垂直居中对齐，与右侧按钮对齐

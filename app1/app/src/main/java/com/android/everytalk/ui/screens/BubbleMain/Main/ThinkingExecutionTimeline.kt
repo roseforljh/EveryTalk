@@ -201,6 +201,8 @@ internal data class ExecutionTimelineEntry(
 
 internal sealed interface OrderedExecutionItem {
     data class Reasoning(val text: String) : OrderedExecutionItem
+    /** 工具前后的模型旁白，按普通文本展示，不使用思考的灰色样式。 */
+    data class Commentary(val text: String) : OrderedExecutionItem
     data class Step(val entry: ExecutionTimelineEntry) : OrderedExecutionItem
 }
 
@@ -211,7 +213,11 @@ internal sealed interface OrderedExecutionItem {
  * 这里只负责分组，不改写事件顺序，也不生成模型没有返回的思考内容。
  */
 internal sealed interface ExecutionProcessSection {
-    data class Narrative(val text: String) : ExecutionProcessSection
+    data class Narrative(
+        val text: String,
+        /** true 表示来自 Content 旁白，应使用普通正文颜色。 */
+        val isCommentary: Boolean = false,
+    ) : ExecutionProcessSection
     data class ToolGroup(val entries: List<ExecutionTimelineEntry>) : ExecutionProcessSection
 }
 
@@ -269,7 +275,9 @@ internal fun orderedExecutionItems(
     if (executionTrace.isNotEmpty()) {
         executionTrace.forEach { event ->
             when (event) {
-                is ExecutionTraceEvent.Content,
+                is ExecutionTraceEvent.Content -> event.text
+                    .takeIf(String::isNotBlank)
+                    ?.let { add(OrderedExecutionItem.Commentary(it)) }
                 is ExecutionTraceEvent.UserMessageBoundary -> Unit
                 is ExecutionTraceEvent.Reasoning -> event.text
                     .takeIf(String::isNotBlank)
@@ -343,8 +351,17 @@ internal fun executionProcessSections(
         when (item) {
             is OrderedExecutionItem.Reasoning -> {
                 val previous = lastOrNull() as? ExecutionProcessSection.Narrative
-                if (previous == null) {
+                if (previous == null || previous.isCommentary) {
                     add(ExecutionProcessSection.Narrative(item.text))
+                } else {
+                    this[lastIndex] = previous.copy(text = previous.text + item.text)
+                }
+            }
+
+            is OrderedExecutionItem.Commentary -> {
+                val previous = lastOrNull() as? ExecutionProcessSection.Narrative
+                if (previous == null || !previous.isCommentary) {
+                    add(ExecutionProcessSection.Narrative(item.text, isCommentary = true))
                 } else {
                     this[lastIndex] = previous.copy(text = previous.text + item.text)
                 }
@@ -362,6 +379,7 @@ internal fun executionProcessSections(
             }
         }
     }
+
 }
 
 @Composable
@@ -431,6 +449,23 @@ internal fun ThinkingExecutionTimeline(
                         last = nodeIndex == nodeCount - 1,
                         modifier = focusModifier.testTag(
                             "reasoning-execution-reasoning-step-$currentReasoningIndex"
+                        ),
+                    ) {
+                        reasoningContent(item.text, currentReasoningIndex)
+                    }
+                }
+                is OrderedExecutionItem.Commentary -> {
+                    val currentReasoningIndex = reasoningNodeIndex++
+                    TimelineNode(
+                        icon = R.drawable.ic_gpt_sparkle,
+                        iconTint = MaterialTheme.colorScheme.onSurface,
+                        title = stringResource(R.string.thinking_process),
+                        active = false,
+                        completed = true,
+                        first = nodeIndex == 0,
+                        last = nodeIndex == nodeCount - 1,
+                        modifier = focusModifier.testTag(
+                            "reasoning-execution-commentary-step-$currentReasoningIndex"
                         ),
                     ) {
                         reasoningContent(item.text, currentReasoningIndex)

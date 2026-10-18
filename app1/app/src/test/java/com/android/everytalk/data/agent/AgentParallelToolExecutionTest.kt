@@ -68,6 +68,40 @@ class AgentParallelToolExecutionTest {
     fun tearDown() = database.close()
 
     @Test
+    fun `恢复旧容器Run后模型收到SSH默认规则和新工具定义`() = runBlocking {
+        val sessionId = "legacy-container-resume"
+        seedSession(sessionId)
+        val legacyEnvironment = "Agent server tools are enabled for this request. The Android app connects to the VPS directly over SSH. " +
+            "For exec, use target=container by default. Architecture: x86_64. Available tools: ${ComputerToolNames.all.sorted().joinToString(", ")}."
+        val original = loopRequest(sessionId, ComputerRequestContext(sessionId, "server", "ws_legacy"),
+            tools = listOf(mapOf("type" to "function", "function" to mapOf("name" to "exec", "description" to "Default container"))))
+        val input = original.copy(request = original.request.copy(messages =
+            listOf(SimpleTextApiMessage(role = "system", content = legacyEnvironment)) + original.request.messages))
+        val savedRun = store.createRun(sessionId, input.userMessageId, input.visibleAssistantMessageId, null, input.request)
+        val observed = mutableListOf<ChatRequest>()
+        val environment = "Use exec target=host for normal work. Earlier container defaults do not describe the current environment."
+        val loop = AgentLoop(
+            runStore = store,
+            computerSessionStateProvider = { "$environment\n<computer-session-state>当前没有活动任务。</computer-session-state>" },
+            toolRuntime = AgentToolRuntime(executorProvider = { null }, approvalProvider = { null }),
+            modelTransport = ModelTurnTransport { turn ->
+                observed += turn.request
+                flowOf(AppStreamEvent.Content("继续SSH任务"), AppStreamEvent.Finish("stop"))
+            },
+        )
+
+        loop.run(input.copy(existingRun = savedRun)).toList()
+
+        val sent = observed.single()
+        val system = (SystemPromptInjector.injectSystemPrompt(sent.messages).first() as SimpleTextApiMessage).content
+        assertTrue(system.contains(environment))
+        assertFalse(system.contains("For exec, use target=container by default"))
+        val exec = sent.tools!!.single { (it["function"] as? Map<*, *>)?.get("name") == "exec" }
+        val params = (exec["function"] as Map<*, *>)["parameters"] as Map<*, *>
+        assertEquals("host", ((params["properties"] as Map<*, *>)["target"] as Map<*, *>)["default"])
+    }
+
+    @Test
     fun `同轮工具并发执行且结果按模型顺序返回`() = runBlocking {
         seedSession("parallel-session")
         val startedCount = AtomicInteger(0)

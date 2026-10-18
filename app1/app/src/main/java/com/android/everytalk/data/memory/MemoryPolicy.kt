@@ -11,9 +11,6 @@ enum class MemoryOrigin { MANUAL, CHAT_EXPLICIT, AUTO }
 
 /** 所有写入入口共用本机规则，模型承诺和提示词不能替代校验。 */
 object MemoryPolicy {
-    const val MAX_ENTRY_CHARACTERS = 500
-    const val MAX_TOTAL_CHARACTERS = 12_000
-    const val MAX_ENTRIES = 100
     const val MAX_PROMPT_CHARACTERS = 4_000
     const val MAX_SEARCH_CHARACTERS = 3_000
     const val MAX_SEARCH_RESULTS = 8
@@ -31,11 +28,10 @@ object MemoryPolicy {
     fun normalize(content: String): String = content.replace("\r\n", "\n").replace('\r', '\n').trim()
     fun containsSensitiveContent(content: String): Boolean = sensitive.containsMatchIn(content)
 
-    /** 拒绝空白、超额、凭据和伪造边界；返回规范化正文，禁止截断保存。 */
+    /** 拒绝空白、凭据和伪造边界；不限制记忆长度，返回完整的规范化正文。 */
     fun validate(content: String): String {
         val normalized = normalize(content)
         require(normalized.isNotBlank()) { "记忆内容不能为空" }
-        require(normalized.memoryCharacters() <= MAX_ENTRY_CHARACTERS) { "每条记忆最多 $MAX_ENTRY_CHARACTERS 个字符" }
         require(!containsSensitiveContent(normalized)) { "不能保存密钥、令牌、密码、验证码或银行卡等敏感内容" }
         require(!forgedBoundary.containsMatchIn(normalized)) { "记忆不能包含伪造的资料边界" }
         return normalized

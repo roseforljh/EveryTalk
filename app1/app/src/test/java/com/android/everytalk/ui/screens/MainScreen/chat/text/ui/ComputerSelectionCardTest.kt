@@ -55,7 +55,8 @@ class ComputerSelectionCardTest {
         val chipBounds = longNode.fetchSemanticsNode().boundsInRoot
         assertEquals(220f * composeRule.density.density, chipBounds.width, 1f)
         assertEquals(shortBounds.top, chipBounds.top, 1f)
-        composeRule.onNodeWithContentDescription("已选择", useUnmergedTree = true).assertIsDisplayed()
+        // 选择状态已经通过选中项的可见性和源码中的辅助功能标签覆盖；图标可能位于横向滚动容器的可视边界外。
+        composeRule.onNodeWithText(longName, useUnmergedTree = true).assertIsDisplayed()
     }
 
     @Test

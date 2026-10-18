@@ -737,6 +737,18 @@ class HistoryManager(
             // 迁移系统提示及其相关状态
             if (migrationSourceId != stableId) {
                 if (!isImageGeneration) {
+                    // 分组在新建时记录临时编号，历史列表则使用首条消息确定的稳定编号。
+                    // 必须在历史会话落库后迁移并保存分组，既保留本地归属，也刷新同步成员记录。
+                    // 使用保存请求的来源编号，避免排队期间切换会话后把归属迁到别的会话。
+                    stateHolder.conversationGroups.value = persistenceManager.updateConversationGroups { groups ->
+                        groups.mapValues { (_, members) ->
+                            if (migrationSourceId in members) {
+                                members.map { if (it == migrationSourceId) stableId else it }.distinct()
+                            } else {
+                                members
+                            }
+                        }
+                    }
                     onConversationIdMigrated(migrationSourceId, stableId)
                 }
                 val currentSysPrompt = stateHolder.systemPrompts[migrationSourceId]

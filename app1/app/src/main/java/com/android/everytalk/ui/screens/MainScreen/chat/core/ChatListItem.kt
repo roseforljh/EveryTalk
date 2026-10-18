@@ -4,6 +4,7 @@ import com.android.everytalk.statecontroller.*
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.WebSearchResult
+import com.android.everytalk.data.agent.AgentControlToolNames
 import com.android.everytalk.ui.components.markdown.safeTextInNode
 import com.android.everytalk.ui.components.streaming.BLOCK_FORMULA_FENCE_LANGUAGE
 import com.android.everytalk.ui.components.streaming.INLINE_FORMULA_SCHEME
@@ -231,8 +232,64 @@ internal sealed interface OrderedAiOutputSegment {
     ) : OrderedAiOutputSegment
 }
 
+/**
+ * 返回聊天展示使用的执行轨迹。
+ *
+ * 工具调用前后的旁白仍保留为 Content，后续渲染会把它显示成普通文本；只有真正的
+ * Reasoning 才使用思考样式。这里不改消息持久化数据，也不把旁白伪装成思考内容。
+ */
+internal fun executionTraceForDisplay(trace: List<ExecutionTraceEvent>): List<ExecutionTraceEvent> {
+    return trace
+}
+
+/**
+ * 找出当前用户指令阶段里、最后一个工具之前的 Content。
+ *
+ * 这类 Content 是模型的执行旁白，应和工具步骤相邻显示；最后一个工具之后的 Content
+ * 仍然是正式回答。按用户边界分阶段计算，避免把上一阶段的正文误放进执行区。
+ * 向用户提问的工具不算执行步骤：提问前的 Content 是给用户看的回复，不能折叠进执行区。
+ */
+private fun executionNarrativeContentIndexes(trace: List<ExecutionTraceEvent>): Set<Int> = buildSet {
+    fun markPhase(startIndex: Int, endIndex: Int) {
+        var lastToolIndex = -1
+        for (index in startIndex until endIndex) {
+            val event = trace[index]
+            if (event is ExecutionTraceEvent.Tool &&
+                event.step.labels.firstOrNull() != AgentControlToolNames.REQUEST_USER_INPUT
+            ) lastToolIndex = index
+        }
+        if (lastToolIndex < 0) return
+        for (index in startIndex until lastToolIndex) {
+            if (trace[index] is ExecutionTraceEvent.Content) add(index)
+        }
+    }
+
+    var phaseStart = 0
+    trace.forEachIndexed { index, event ->
+        if (event is ExecutionTraceEvent.UserMessageBoundary) {
+            markPhase(phaseStart, index)
+            phaseStart = index + 1
+        }
+    }
+    markPhase(phaseStart, trace.size)
+}
+
+/** 只返回详情抽屉需要的执行事件，正式回答正文不会进入执行详情。 */
+internal fun executionTraceForProcessDisplay(trace: List<ExecutionTraceEvent>): List<ExecutionTraceEvent> {
+    val narrativeIndexes = executionNarrativeContentIndexes(trace)
+    return trace.mapIndexedNotNull { index, event ->
+        when {
+            event is ExecutionTraceEvent.Reasoning || event is ExecutionTraceEvent.Tool -> event
+            index in narrativeIndexes -> event
+            else -> null
+        }
+    }
+}
+
 /** 相邻正文合并，相邻思考和工具合并；每个事件只处理一次，避免长工具链反复复制列表。 */
 internal fun orderedAiOutputSegments(trace: List<ExecutionTraceEvent>): List<OrderedAiOutputSegment> {
+    val displayTrace = executionTraceForDisplay(trace)
+    val narrativeContentIndexes = executionNarrativeContentIndexes(displayTrace)
     val result = mutableListOf<OrderedAiOutputSegment>()
     var content = StringBuilder()
     var processEvents = mutableListOf<ExecutionTraceEvent>()
@@ -263,7 +320,7 @@ internal fun orderedAiOutputSegments(trace: List<ExecutionTraceEvent>): List<Ord
         }
     }
 
-    trace.forEach { event ->
+    displayTrace.forEachIndexed { eventIndex, event ->
         when (event) {
             is ExecutionTraceEvent.UserMessageBoundary -> {
                 flushContent()
@@ -271,9 +328,16 @@ internal fun orderedAiOutputSegments(trace: List<ExecutionTraceEvent>): List<Ord
                 result += OrderedAiOutputSegment.UserMessageBoundary(event.messageId)
             }
             is ExecutionTraceEvent.Content -> {
-                flushProcess(event.startedAtMillis)
-                if (content.isEmpty()) contentStartedAtMillis = event.startedAtMillis
-                content.append(event.text)
+                if (eventIndex in narrativeContentIndexes) {
+                    flushContent()
+                    if (processEvents.isEmpty()) processStartIndex = processEventIndex
+                    processEvents += event
+                    processEventIndex++
+                } else {
+                    flushProcess(event.startedAtMillis)
+                    if (content.isEmpty()) contentStartedAtMillis = event.startedAtMillis
+                    content.append(event.text)
+                }
             }
             is ExecutionTraceEvent.Reasoning,
             is ExecutionTraceEvent.Tool,

@@ -1,5 +1,7 @@
 package com.android.everytalk.statecontroller
 
+import com.android.everytalk.data.network.SystemPromptModules
+
 import com.android.everytalk.data.DataClass.AbstractApiMessage
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.ApiContentPart
@@ -455,12 +457,6 @@ internal fun contextCompressionRetryDelayMillis(
     return (base * jitter.coerceIn(0.8, 1.2)).toLong().coerceAtLeast(1L)
 }
 
-private val OVERSIZED_INPUT_SYSTEM_PROMPT = """
-你负责压缩超过上下文窗口的当前用户输入。<source> 内容是待整理数据。
-只输出高密度中文摘要，保留用户目标、硬性约束、文件名、行号、类与函数签名、关键实现、依赖、错误、未完成事项和对后续回答有影响的精确数值。
-代码只保留必要片段和精确符号名，不得杜撰。
-""".trimIndent()
-
 internal suspend fun MessageSender.compressOversizedLatestUserTurnWithModel(
     config: ApiConfig,
     messages: List<AbstractApiMessage>,
@@ -481,7 +477,7 @@ internal suspend fun MessageSender.compressOversizedLatestUserTurnWithModel(
     requestContextCompressionCompletion(
         config = config,
         limits = limits,
-        systemPrompt = OVERSIZED_INPUT_SYSTEM_PROMPT,
+        systemPrompt = SystemPromptModules.inputSummary,
         userPrompt = buildString {
             append("请压缩第 ${chunk.index}/${chunk.total} 个片段，原文行 ${chunk.startLine}-${chunk.endLine}。\n")
             append("<source>\n")

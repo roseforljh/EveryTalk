@@ -12,13 +12,16 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 
 data class MemorySettings(
     val enabled: Boolean = false,
-    val autoCaptureEnabled: Boolean = false,
     /** 用户改变授权或删除资料时递增，晚到的模型结果不得写回。 */
     val version: Long = 0,
-)
+) {
+    /** 自动保存始终跟随全局开关；兼容旧同步数据时不再读取独立开关。 */
+    val autoCaptureEnabled: Boolean get() = enabled
+}
 
 data class MemoryState(val settings: MemorySettings, val entries: List<MemoryEntity>) {
     val characters: Int get() = entries.sumOf { it.content.memoryCharacters() }
+    val document: String get() = entries.joinToString("\n\n") { it.content }
 }
 
 /** 来源由请求运行时绑定，模型不能伪造会话和用户消息 ID。 */
@@ -30,7 +33,7 @@ data class MemoryWriteContext(
 )
 
 /**
- * 公共读写边界：容量、重复和授权版本在同一 Room 事务内校验。
+ * 全会话共用的读写边界：重复内容和授权版本在同一 Room 事务内校验。
  * 管理页的手动编辑不依赖模型使用开关；模型写入必须带当前授权。
  */
 class MemoryRepository(private val database: AppDatabase) {
@@ -49,11 +52,12 @@ class MemoryRepository(private val database: AppDatabase) {
     suspend fun sourceTitle(conversationId: String): String? = database.chatDao().getSession(conversationId)?.let { it.title ?: it.id }
 
     /** 开关和版本原子提交，关闭后后台任务不能通过旧授权继续写入。 */
-    suspend fun setSettings(enabled: Boolean, autoCapture: Boolean) = database.withTransaction {
+    suspend fun setSettings(enabled: Boolean) = database.withTransaction {
         val old = settings()
-        if (old.enabled != enabled || old.autoCaptureEnabled != autoCapture) {
+        if (old.enabled != enabled) {
             put(ENABLED_KEY, enabled.toString())
-            put(AUTO_CAPTURE_KEY, autoCapture.toString())
+            // 保留旧同步字段供旧版本客户端读取，但它不再是独立设置。
+            put(AUTO_CAPTURE_KEY, enabled.toString())
             advanceVersion(old)
             com.android.everytalk.data.sync.SyncSettingsProjector(database).refresh()
         }
@@ -77,9 +81,6 @@ class MemoryRepository(private val database: AppDatabase) {
             require(id == null) { "已有相同内容的记忆" }
             return@withTransaction duplicate
         }
-        require(old != null || entries.size < MemoryPolicy.MAX_ENTRIES) { "记忆已达到 ${MemoryPolicy.MAX_ENTRIES} 条上限" }
-        val characters = entries.sumOf { it.content.memoryCharacters() } - (old?.content?.memoryCharacters() ?: 0)
-        require(characters + normalized.memoryCharacters() <= MemoryPolicy.MAX_TOTAL_CHARACTERS) { "记忆总容量已满，请先整理旧内容" }
         val now = maxOf(System.currentTimeMillis(), (old?.clientModifiedAt ?: 0L) + 1)
         val savedId = old?.id ?: UUID.randomUUID().toString()
         val saved = MemoryEntity(
@@ -113,6 +114,30 @@ class MemoryRepository(private val database: AppDatabase) {
 
     suspend fun clear() = database.withTransaction { dao.clear(); advanceVersion(settings()) }
 
+    /**
+     * 把编辑区全文原子保存；空白表示删除用户看到的全部记忆。
+     * baseline 是开始编辑时的条目快照：后来 AI 新增的条目会保留，已被其他任务修改的旧条目
+     * 则拒绝覆盖。先验证再删除，任何失败都会回滚，旧提取任务也不能在保存后恢复已删内容。
+     */
+    suspend fun saveDocument(content: String, baseline: List<MemoryEntity>): MemoryState = database.withTransaction {
+        val normalized = MemoryPolicy.normalize(content)
+        if (normalized.isNotEmpty()) MemoryPolicy.validate(normalized)
+        val current = dao.getAll()
+        val currentById = current.associateBy { it.id }
+        check(baseline.all { previous ->
+            currentById[previous.id]?.let { it.content == previous.content && it.enabled == previous.enabled } == true
+        }) { "记忆已被更新，本次未覆盖。请保留输入内容，重新进入页面核对后保存。" }
+        val settings = settings()
+        if (normalized == baseline.joinToString("\n\n") { it.content }) {
+            advanceVersion(settings)
+            return@withTransaction state()
+        }
+        baseline.forEach { dao.delete(it.id) }
+        if (normalized.isNotEmpty()) save(normalized)
+        advanceVersion(settings)
+        state()
+    }
+
     /** 小集合字面搜索；百分号、下划线按普通字符处理，查询不拼接 SQL。 */
     suspend fun search(query: String, forModel: Boolean = false): List<MemoryEntity> = database.withTransaction {
         if (forModel) check(settings().enabled) { "记忆功能已关闭" }
@@ -145,7 +170,7 @@ class MemoryRepository(private val database: AppDatabase) {
         const val VERSION_KEY = "memory_task_version"
         val SETTING_KEYS = listOf(ENABLED_KEY, AUTO_CAPTURE_KEY, VERSION_KEY)
         private fun decodeSettings(values: Map<String, String?>): MemorySettings = MemorySettings(
-            enabled = values[ENABLED_KEY] == "true", autoCaptureEnabled = values[AUTO_CAPTURE_KEY] == "true",
+            enabled = values[ENABLED_KEY] == "true",
             version = values[VERSION_KEY]?.toLongOrNull() ?: 0,
         )
     }

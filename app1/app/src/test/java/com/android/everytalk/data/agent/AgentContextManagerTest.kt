@@ -460,6 +460,26 @@ class AgentContextManagerTest {
     }
 
     @Test
+    fun `超过窗口减最大输出的硬上限时即使未到压缩线也先压缩`() {
+        val messages = buildList {
+            repeat(4) { index ->
+                add(SimpleTextApiMessage(id = "user-$index", role = "user", content = "问".repeat(19_300)))
+                add(SimpleTextApiMessage(id = "assistant-$index", role = "assistant", content = "答".repeat(19_300)))
+            }
+        }
+
+        // 约 15.4 万 token：高于 25.6 万 - 12.8 万的硬上限，低于 20.48 万压缩线。
+        val prepared = manager.prepare(
+            requestId = "request-between-budget-and-threshold",
+            request = request(messages, maxContextTokens = 256_000, compactThresholdTokens = 204_800),
+            limits = ModelTokenLimits(maxOutputTokens = 128_000, maxContextTokens = 256_000),
+        )
+
+        val plan = checkNotNull(prepared.compactionPlan)
+        assertTrue(plan.targetAfterCompaction < 128_000)
+    }
+
+    @Test
     fun `单个用户任务产生多轮工具调用时从原子组边界切分`() {
         val messages = buildList {
             add(SimpleTextApiMessage(id = "user-1", role = "user", content = "持续检查服务器"))

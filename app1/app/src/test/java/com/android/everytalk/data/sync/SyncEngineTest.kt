@@ -104,6 +104,53 @@ class SyncEngineTest {
         assertTrue(store.pendingBatch().none { it.change.entity == "messages" })
     }
 
+    @Test fun `升级重放补齐游标以前缺行且保留主动本地数据不回传`() = runBlocking {
+        val a = device(); val b = device(); val api = FakeSyncApi(); val s = seed(a, count = 12)
+        run(a, api); run(b, api)
+        val messages = b.chatDao().getMessagesForSession("cloud:${s.uuid}")
+        messages.take(9).forEach { b.chatDao().discardMessageByUuid(it.uuid) }
+        val local = message("keep-local", s).copy(sessionId = "cloud:${s.uuid}", syncStatus = SyncStatus.LOCAL_ONLY)
+        b.chatDao().writeMessages(listOf(local))
+        val pushes = api.pushes
+        b.settingsDao().insertSetting(SystemSettingEntity("sync_projection_recovery_version", "4"))
+        run(b, api)
+        assertEquals(messages.map { it.uuid }.toSet() + local.uuid,
+            b.chatDao().getMessagesForSession("cloud:${s.uuid}").map { it.uuid }.toSet())
+        assertEquals(SyncStatus.LOCAL_ONLY, b.chatDao().getMessageByUuid(local.uuid)!!.syncStatus)
+        assertEquals(pushes, api.pushes)
+    }
+
+    @Test fun `待上传读取忽略大型本地JSON且保留全部同步字段`() = runBlocking {
+        val db = device(); val s = seed(db, count = 0)
+        val item = message("large-local", s).copy(everSynced = true,
+            executionStatus = "local-only", executionFinishedAt = 1234)
+        db.chatDao().writeMessages(listOf(item))
+        // 本地非同步字段超过常见 CursorWindow 单行容量，白名单查询不应读取这些列。
+        db.openHelper.writableDatabase.execSQL("UPDATE messages SET parts = ?, executionSteps = ? WHERE uuid = ?",
+            arrayOf("x".repeat(3 * 1024 * 1024), "y".repeat(3 * 1024 * 1024), item.uuid))
+        val projected = db.chatDao().getPendingSyncMessages().single()
+        assertEquals(SyncPayloadMapper.message(item, s.uuid), SyncPayloadMapper.message(projected, s.uuid))
+        assertTrue(projected.everSynced)
+        assertEquals(1234L, projected.executionFinishedAt)
+        assertTrue(projected.parts.isEmpty()); assertTrue(projected.executionSteps.isEmpty())
+    }
+
+    @Test fun `远端消息插入被主键冲突忽略时整页回滚且不推进游标`() = runBlocking {
+        val db = device(); val s = seed(db, count = 0)
+        val remoteUuid = UUID.randomUUID().toString()
+        val existing = message("cloud:$remoteUuid", s).copy(uuid = UUID.randomUUID().toString())
+        db.chatDao().writeMessages(listOf(existing))
+        val state = SyncStateStore(db)
+        state.saveCursor(100, 0)
+        val change = SyncPayloadMapper.message(existing.copy(uuid = remoteUuid), s.uuid)
+        val error = runCatching { RoomSyncStore(db).applyPullPage(page(change, since = 100)) }.exceptionOrNull()
+        assertTrue(error is IllegalStateException)
+        assertEquals("SYNC_MESSAGE_IDENTITY_CONFLICT", error?.message)
+        assertEquals(100L, state.readCursor().cursor)
+        assertNull(db.chatDao().getSyncMessageByUuid(remoteUuid))
+        assertEquals(existing.uuid, db.chatDao().getStoredMessage(existing.id, "")!!.uuid)
+    }
+
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Test fun `两设备修改标签后刷新当前输入框且取消立即生效`() = runBlocking {
         val a = device(); val b = device(); val api = FakeSyncApi(); val s = seed(a)
@@ -991,6 +1038,29 @@ class SyncEngineTest {
         assertTrue(tombstone.deleted)
         assertEquals(SyncStatus.PENDING, tombstone.syncStatus)
         assertEquals("{}", tombstone.value)
+        assertTrue(RoomSyncStore(db).pendingBatch().any { it.change.deleted && it.change.id == tombstone.uuid })
+    }
+
+    @Test fun `删除旧版非 UUID 服务器使用稳定同步 key`() = runBlocking {
+        val db = device()
+        val legacyId = "cloudflare_legacy-server"
+        val syncKey = syncStableSettingKey("computers", legacyId)
+        db.computerDao().upsertComputer(com.android.everytalk.data.computer.Computer(
+            id = legacyId, displayName = "旧服务器", host = "old.example", port = 22,
+            username = "user", authKind = com.android.everytalk.data.computer.ComputerAuthKind.PASSWORD,
+            runMode = com.android.everytalk.data.computer.ComputerRunMode.DIRECT,
+        ).toEntity(syncJson))
+        db.settingsDao().upsertUserSettings(listOf(UserSettingEntity(
+            "computers", syncKey, buildJsonObject { put("localId", legacyId) }.toString(),
+            updatedAt = 100, deleted = false, syncStatus = SyncStatus.SYNCED,
+        )))
+
+        SyncSettingsProjector(db).markDeleted("computers", legacyId)
+
+        val tombstone = requireNotNull(db.settingsDao().getUserSetting("computers", syncKey))
+        assertTrue(tombstone.deleted)
+        assertEquals(SyncStatus.PENDING, tombstone.syncStatus)
+        assertNull(db.settingsDao().getUserSetting("computers", legacyId))
         assertTrue(RoomSyncStore(db).pendingBatch().any { it.change.deleted && it.change.id == tombstone.uuid })
     }
 

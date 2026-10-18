@@ -1073,6 +1073,21 @@ internal fun MessageSender.sendMessageInternal(
                 )
                 PromptCachePolicy.logToolProfile(chatRequestForApi.tools)
 
+                if ((isNewTextChatFirstMessage || isNewImageChatFirstMessage) && textToActuallySend.isNotBlank()) {
+                    val titleSessionId = if (isImageGeneration) {
+                        stateHolder._currentImageGenerationConversationId.value
+                    } else {
+                        stateHolder._currentConversationId.value
+                    }
+                    // 图像模型通常只返回图片，优先使用已配置的文本模型生成标题；没有文本配置时再回退当前配置。
+                    val titleConfig = if (isImageGeneration) {
+                        stateHolder._selectedApiConfig.value ?: currentConfig
+                    } else {
+                        currentConfig
+                    }
+                    generateConversationTitle(titleSessionId, textToActuallySend, titleConfig, isImageGeneration)
+                }
+
                 apiHandler.streamChatResponse(
                     requestBody = chatRequestForApi,
                     attachmentsToPassToApiClient = if (isImageGeneration) attachmentsForApiClient else emptyList(),

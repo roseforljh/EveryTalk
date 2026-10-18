@@ -23,6 +23,7 @@ import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.DataClass.ExecutionStep
 import com.android.everytalk.data.DataClass.ExecutionStepType
 import com.android.everytalk.data.DataClass.ExecutionTraceEvent
+import com.android.everytalk.data.DataClass.executionFileChange
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.MessageContentPart
 import com.android.everytalk.data.DataClass.Message
@@ -1373,8 +1374,13 @@ class AgentRunStore(
                     }
                     if (index >= 0) {
                         val tool = this[index] as ExecutionTraceEvent.Tool
+                        // 失败的写入/编辑没有真正落盘，不能出现在改动胶囊里。
+                        val failed = tool.step.fileChange != null && decodeToolResultEntry(entry)?.isError != false
                         this[index] = tool.copy(
-                            step = tool.step.copy(completed = true),
+                            step = tool.step.copy(
+                                completed = true,
+                                fileChange = tool.step.fileChange.takeUnless { failed },
+                            ),
                             finishedAtMillis = entry.finalizedAt ?: entry.createdAt,
                         )
                     }
@@ -1813,7 +1819,7 @@ class AgentRunStore(
             content = buildString {
                 append("[EveryTalk Agent 状态] ").append(reason).append(": ").append(message)
                 executionId?.let { append("，execution_id=").append(it) }
-                append("。这是已有任务的状态，禁止重复创建或重跑命令。")
+                append("。这是已有任务的状态，请据此判断是否继续或重试，避免重复副作用。")
             },
         )
     }.getOrNull()
@@ -1953,6 +1959,7 @@ private fun AgentContentBlock.ToolCall.toExecutionStep(completed: Boolean): Exec
         detail = detail.takeIf { type == ExecutionStepType.Agent && it.isNotBlank() },
         completed = completed,
         reasoningBefore = "",
+        fileChange = executionFileChange(name, arguments),
     )
 }
 

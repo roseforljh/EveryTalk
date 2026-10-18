@@ -107,6 +107,7 @@ class ThinkingExecutionTimelineGroupingTest {
             items.map { item ->
                 when (item) {
                     is OrderedExecutionItem.Reasoning -> item.text
+                    is OrderedExecutionItem.Commentary -> item.text
                     is OrderedExecutionItem.Step -> item.entry.step.labels.single()
                 }
             },
@@ -114,7 +115,7 @@ class ThinkingExecutionTimelineGroupingTest {
     }
 
     @Test
-    fun `正文与过程按真实顺序分成多段`() {
+    fun `工具前旁白进入执行区而最终正文留在执行区之后`() {
         val segments = orderedAiOutputSegments(
             listOf(
                 ExecutionTraceEvent.Content("正文 1"),
@@ -128,7 +129,7 @@ class ThinkingExecutionTimelineGroupingTest {
         )
 
         assertEquals(
-            listOf("正文 1", "process:2", "正文 2", "process:2", "正文 3"),
+            listOf("process:6", "正文 3"),
             segments.map { segment ->
                 when (segment) {
                     is OrderedAiOutputSegment.UserMessageBoundary -> "user:${segment.messageId}"
@@ -138,8 +139,33 @@ class ThinkingExecutionTimelineGroupingTest {
             },
         )
         assertEquals(
-            listOf(0, 2),
+            listOf(0),
             segments.filterIsInstance<OrderedAiOutputSegment.Process>().map { it.detailStartIndex },
+        )
+    }
+
+    @Test
+    fun `向用户提问前的正文不会折叠进执行区`() {
+        val segments = orderedAiOutputSegments(
+            listOf(
+                ExecutionTraceEvent.Content("先看看。"),
+                ExecutionTraceEvent.Tool(toolStep("1", "exec")),
+                ExecutionTraceEvent.Content("你说的是哪个项目？"),
+                ExecutionTraceEvent.Tool(toolStep("2", "request_user_input")),
+                ExecutionTraceEvent.UserMessageBoundary("answer"),
+                ExecutionTraceEvent.Tool(toolStep("3", "exec")),
+            )
+        )
+
+        assertEquals(
+            listOf("process:2", "你说的是哪个项目？", "process:1", "user:answer", "process:1"),
+            segments.map { segment ->
+                when (segment) {
+                    is OrderedAiOutputSegment.UserMessageBoundary -> "user:${segment.messageId}"
+                    is OrderedAiOutputSegment.Content -> segment.text
+                    is OrderedAiOutputSegment.Process -> "process:${segment.events.size}"
+                }
+            },
         )
     }
 
@@ -166,6 +192,22 @@ class ThinkingExecutionTimelineGroupingTest {
     }
 
     @Test
+    fun `工具旁白标记为普通评论而不使用思考样式`() {
+        val sections = executionProcessSections(
+            reasoningText = "",
+            executionSteps = emptyList(),
+            executionTrace = listOf(
+                ExecutionTraceEvent.Content("先检查配置。"),
+                ExecutionTraceEvent.Tool(toolStep("1", "read_file")),
+            ),
+        )
+
+        val narrative = sections.first() as ExecutionProcessSection.Narrative
+        assertEquals("先检查配置。", narrative.text)
+        assertTrue(narrative.isCommentary)
+    }
+
+    @Test
     fun `每个过程段保留自己的开始和结束时间`() {
         val segments = orderedAiOutputSegments(
             listOf(
@@ -182,7 +224,7 @@ class ThinkingExecutionTimelineGroupingTest {
         )
 
         val processes = segments.filterIsInstance<OrderedAiOutputSegment.Process>()
-        assertEquals(listOf(200L, 700L), processes.map { it.startedAtMillis })
+        assertEquals(listOf(100L, 700L), processes.map { it.startedAtMillis })
         assertEquals(listOf(500L, null), processes.map { it.finishedAtMillis })
     }
 

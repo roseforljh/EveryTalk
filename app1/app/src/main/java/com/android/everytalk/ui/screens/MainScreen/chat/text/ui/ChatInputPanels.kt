@@ -40,6 +40,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
@@ -79,6 +80,8 @@ import androidx.compose.ui.zIndex
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.core.content.FileProvider
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.models.ImageSourceOption
@@ -317,76 +320,98 @@ internal fun ComputerSelectionCard(
                 Text(stringResource(R.string.computer_audit_added))
             }
         } else {
-            // 每行固定三枚等宽胶囊，多出来的自动换行；末行不足三枚时用占位补齐，保持列对齐。
-            computers.chunked(3).forEach { rowComputers ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    rowComputers.forEach { computer ->
-                        val isReady = computer.status == ComputerStatus.READY
-                        val isSelected = selectedComputerId == computer.id
-                        val accentColor = ComputerCardAccentPalette[accentColorIndexes.getValue(computer.id)]
-                        val shape = RoundedCornerShape(percent = 50)
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .heightIn(min = 48.dp)
-                                .background(
-                                    color = if (isSelected) {
-                                        accentColor.copy(alpha = if (isSystemInDarkTheme()) 0.18f else 0.11f)
-                                    } else {
-                                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.52f)
-                                    },
-                                    shape = shape,
-                                )
-                                .then(if (isSelected) Modifier.border(1.dp, accentColor, shape) else Modifier)
-                                .clip(shape)
-                                .combinedClickable(
-                                    onClick = {
-                                        if (isReady) onSelect(computer) else onUnavailable(computer)
-                                    },
-                                    onLongClick = onAddComputer,
-                                )
-                                .padding(horizontal = 10.dp),
-                            contentAlignment = Alignment.CenterStart,
+            // 名称卡片横向排列并按内容自适应宽度，服务器较多时可以横向滑动查看。
+            Row(
+                modifier = Modifier
+                    .horizontalScroll(rememberScrollState())
+                    .wrapContentWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                computers.forEach { computer ->
+                    val isReady = computer.status == ComputerStatus.READY
+                    val isSelected = selectedComputerId == computer.id
+                    val accentColor = ComputerCardAccentPalette[accentColorIndexes.getValue(computer.id)]
+                    val shape = RoundedCornerShape(percent = 50)
+                    val selectedDescription = if (isSelected) {
+                        stringResource(R.string.state_selected)
+                    } else {
+                        null
+                    }
+                    Box(
+                        modifier = Modifier
+                            .wrapContentWidth()
+                            .widthIn(min = 72.dp, max = 220.dp)
+                            .height(48.dp)
+                            .background(
+                                color = if (isSelected) {
+                                    accentColor.copy(alpha = if (isSystemInDarkTheme()) 0.18f else 0.11f)
+                                } else {
+                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.52f)
+                                },
+                                shape = shape,
+                            )
+                            .then(if (isSelected) Modifier.border(1.dp, accentColor, shape) else Modifier)
+                            .then(
+                                if (selectedDescription != null) {
+                                    Modifier.semantics {
+                                        contentDescription = selectedDescription
+                                    }
+                                } else {
+                                    Modifier
+                                },
+                            )
+                            .clip(shape)
+                            .combinedClickable(
+                                onClick = {
+                                    if (isReady) onSelect(computer) else onUnavailable(computer)
+                                },
+                                onLongClick = onAddComputer,
+                            )
+                            .padding(horizontal = 10.dp),
+                        contentAlignment = Alignment.CenterStart,
+                    ) {
+                        Row(
+                            modifier = Modifier.wrapContentWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_gpt_terminal),
-                                    contentDescription = null,
-                                    tint = if (isReady) accentColor else accentColor.copy(alpha = 0.42f),
-                                    modifier = Modifier.size(20.dp),
-                                )
+                            Icon(
+                                painter = painterResource(R.drawable.ic_gpt_terminal),
+                                contentDescription = null,
+                                tint = if (isReady) accentColor else accentColor.copy(alpha = 0.42f),
+                                modifier = Modifier.size(20.dp),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = computer.displayName,
+                                // 窄胶囊只放单行，超出部分省略号截断。
+                                modifier = Modifier.weight(1f, fill = false)
+                                    .wrapContentWidth()
+                                    .then(
+                                        if (selectedDescription != null) {
+                                            Modifier.semantics {
+                                                contentDescription = selectedDescription
+                                            }
+                                        } else {
+                                            Modifier
+                                        },
+                                    ),
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = if (isReady) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            )
+                            if (isSelected) {
                                 Spacer(Modifier.width(6.dp))
-                                Text(
-                                    text = computer.displayName,
-                                    // 窄胶囊只放单行，超出部分省略号截断。
-                                    modifier = Modifier.weight(1f),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.Medium,
-                                    color = if (isReady) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    softWrap = false,
-                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_check),
+                                    contentDescription = stringResource(R.string.state_selected),
+                                    tint = accentColor,
+                                    modifier = Modifier.size(16.dp),
                                 )
-                                if (isSelected) {
-                                    Spacer(Modifier.width(6.dp))
-                                    Icon(
-                                        painter = painterResource(R.drawable.ic_check),
-                                        contentDescription = stringResource(R.string.state_selected),
-                                        tint = accentColor,
-                                        modifier = Modifier.size(16.dp),
-                                    )
-                                }
                             }
                         }
-                    }
-                    repeat(3 - rowComputers.size) {
-                        Spacer(Modifier.weight(1f))
                     }
                 }
             }

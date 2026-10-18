@@ -108,7 +108,7 @@ internal fun builtInWebFetchToolDefinition(): Map<String, Any> {
         "type" to "function",
         "function" to mapOf(
             "name" to BUILT_IN_WEBFETCH_TOOL_NAME,
-            "description" to "读取网页正文及正文图片，或直接读取网络图片并作为视觉输入返回。用户提供网页或图片 URL 时优先使用本工具；不要通过文本接口读取图片二进制。无扩展名的图片地址请指定 format=image。只有图片读取成功才能描述画面，失败时不要猜测。",
+            "description" to "读取网页正文及图片，或将网络图片作为视觉输入返回。已知是图片但无扩展名时指定 format=image；描述画面需以成功返回的视觉内容为依据。",
             "parameters" to mapOf(
                 "type" to "object",
                 "properties" to mapOf(
@@ -137,7 +137,7 @@ internal fun builtInCurrentTimeToolDefinition(): Map<String, Any> {
         "type" to "function",
         "function" to mapOf(
             "name" to BUILT_IN_CURRENT_TIME_TOOL_NAME,
-                "description" to "Get the current local date, time, hour, minute, second, timezone, and Unix timestamp from the device. You MUST call this tool whenever the user asks anything related to the current time, date, day of week, or any time-sensitive question. Do not guess the time.",
+            "description" to "Read the device’s current local date, time, timezone and Unix timestamp when needed.",
             "parameters" to mapOf(
                 "type" to "object",
                 "properties" to emptyMap<String, Any>()
@@ -257,7 +257,7 @@ internal fun mcpApprovalSystemPrompt(
             ) == true
         }
     ) return null
-    return MCP_PENDING_APPROVAL_PROMPT
+    return com.android.everytalk.data.network.SystemPromptModules.mcpAccess
 }
 
 /**
@@ -267,9 +267,11 @@ internal fun mcpApprovalSystemPrompt(
  * 因此旧提示不能继续留在系统消息里，否则模型会再次寻找已经移除的 request_mcp。
  */
 internal fun removeMcpPendingApprovalPrompt(content: String): String =
-    content.replace(MCP_PENDING_APPROVAL_PROMPT, "").trim()
+    content.replace(com.android.everytalk.data.network.SystemPromptModules.mcpAccess, "")
+        .replace(LEGACY_MCP_PENDING_APPROVAL_PROMPT, "").trim()
 
-private val MCP_PENDING_APPROVAL_PROMPT = """
+// 仅用于清理旧版持久化请求，不再向模型发送。精确匹配，避免误删用户自定义指令。
+private val LEGACY_MCP_PENDING_APPROVAL_PROMPT = """
         当前会话有已连接的 MCP 外部工具，但本轮尚未获得 MCP 使用授权。
         如果用户的问题需要读取或操作外部服务数据，必须先调用 request_mcp 申请开启，说明申请原因，然后等待用户确认；不要直接回答“没有该能力”，也不要假装已经读取到数据。
         如果用户的问题与外部工具无关，则直接正常回答。
@@ -279,7 +281,7 @@ internal fun builtInReadAttachmentToolDefinition(): Map<String, Any> = mapOf(
     "type" to "function",
     "function" to mapOf(
         "name" to BUILT_IN_READ_ATTACHMENT_TOOL_NAME,
-        "description" to "读取当前会话中的文本附件。每次只读取一页，禁止并行读取多页；内容被截断时，使用返回的 next_offset 继续读取。",
+        "description" to "分页读取当前会话中的文本附件，使用返回的 next_offset 继续读取。",
         "parameters" to mapOf(
             "type" to "object",
             "properties" to mapOf(
@@ -466,6 +468,8 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
     internal val cloudflareWorkerWriteEnabled: () -> Boolean = { true },
     internal val cloudflareResourceToolsEnabled: () -> Boolean = { true },
     internal val localBashEnabled: () -> Boolean = { true },
+    /** 首条用户问题被保存后异步生成会话标题。 */
+    internal val generateConversationTitle: (String, String, ApiConfig, Boolean) -> Unit = { _, _, _, _ -> },
 ) {
 
     internal val fileManager: FileManager by lazy { FileManager(application) }

@@ -58,7 +58,14 @@ class ComputerToolExecutor(
     ): JsonElement {
         val foregroundActivity = repository.acquireForegroundActivity()
         return try {
-            executeWhileActive(toolName, arguments, toolCallId, requestContext, updateStatus)
+            // 权限模式可以在 Agent 运行期间从服务器详情页修改，不能沿用启动时快照。
+            executeWhileActive(
+                toolName,
+                arguments,
+                toolCallId,
+                repository.refreshPermissionMode(requestContext),
+                updateStatus,
+            )
         } finally {
             foregroundActivity.close()
         }
@@ -139,8 +146,9 @@ class ComputerToolExecutor(
         phase: ComputerToolApprovalPhase,
     ): ComputerToolApprovalRequest? {
         if (toolName !in ComputerToolNames.all) return null
-        val workspace = requireRequestWorkspace(requestContext)
-        val context = requestContext.copy(conversationId = workspace.conversationId)
+        val currentRequestContext = repository.refreshPermissionMode(requestContext)
+        val workspace = requireRequestWorkspace(currentRequestContext)
+        val context = currentRequestContext.copy(conversationId = workspace.conversationId)
         val computer = repository.getComputer(context.computerId)
             ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
 
@@ -455,13 +463,14 @@ class ComputerToolExecutor(
         val request = parseExecRequest(arguments, context, loadSecrets = true)
         val readOnlyRequest = ComputerToolCallSafety.isReadOnly(ComputerToolNames.EXEC, arguments)
         val result = run {
+            var executionWorkspace = workspace
             if (request.target == ComputerExecTarget.CONTAINER) {
-                workspaceManager.prepareContainer(workspace.id)
+                executionWorkspace = workspaceManager.prepareContainer(workspace.id)
             }
             val runRequest: suspend (ComputerExecRequest) -> ComputerExecResult = { frozenRequest ->
                 executeManagedRequestWithRecovery(
                     context = context,
-                    workspace = workspace,
+                    workspace = executionWorkspace,
                     executionId = executionId,
                     requestHash = requestHash,
                     request = frozenRequest,
@@ -577,12 +586,10 @@ class ComputerToolExecutor(
         val startedAtMillis = System.currentTimeMillis()
         val processId = "process_$executionId"
         updateStatus("正在启动命令")
-        val statePath = if (request.target == ComputerExecTarget.HOST) {
-            "~/.everytalk/host-executions/$executionId/state"
-        } else if (computer.runMode == ComputerRunMode.DIRECT) {
-            "~/.everytalk/workspaces/${workspace.id}/.everytalk/executions/$executionId/state"
-        } else {
-            "/workspace/.everytalk/executions/$executionId/state"
+        val statePath = when (request.target) {
+            ComputerExecTarget.HOST -> "~/.everytalk/host-executions/$executionId/state"
+            // 执行目标由本次 Tool 请求决定。服务器记录仍为 Direct 时，首次使用沙箱也必须记录容器路径。
+            ComputerExecTarget.CONTAINER -> "/workspace/.everytalk/executions/$executionId/state"
         }
         repository.dao().updateRemoteExecutionReference(
             executionId = executionId,
@@ -1051,7 +1058,7 @@ class ComputerToolExecutor(
         val port = (arguments.optionalLong("port") ?: throw invalidArgument("port")).toIntChecked("port")
         val protocol = arguments.optionalString("protocol") ?: "http"
         val visibility = arguments.optionalString("visibility") ?: "private"
-        val target = when (arguments.optionalString("target") ?: "container") {
+        val target = when (arguments.optionalString("target") ?: "host") {
             "container" -> ComputerExecTarget.CONTAINER
             "host" -> ComputerExecTarget.HOST
             else -> throw invalidArgument("target")
@@ -1205,7 +1212,7 @@ class ComputerToolExecutor(
             ComputerPermissionMode.FULL -> false
         }
         if (!requiresConfirmation) return null
-        val target = when (arguments.optionalString("target") ?: "container") {
+        val target = when (arguments.optionalString("target") ?: "host") {
             "container" -> ComputerExecTarget.CONTAINER
             "host" -> ComputerExecTarget.HOST
             else -> throw invalidArgument("target")
@@ -1250,7 +1257,7 @@ class ComputerToolExecutor(
 
     /** 审批预检只解析参数，不读取 Keystore，避免用户批准前触碰 Secret。 */
     private fun parseExecRequestWithoutSecrets(arguments: JsonObject): ComputerExecRequest {
-        val target = when (arguments.optionalString("target") ?: "container") {
+        val target = when (arguments.optionalString("target") ?: "host") {
             "container" -> ComputerExecTarget.CONTAINER
             "host" -> ComputerExecTarget.HOST
             else -> throw invalidArgument("target")
@@ -1281,9 +1288,9 @@ class ComputerToolExecutor(
         target: ComputerExecTarget,
     ): String = when {
         target == ComputerExecTarget.HOST -> "~/.everytalk/host-executions/$executionId/state"
-        workspace.runMode == ComputerRunMode.DIRECT ->
-            "~/.everytalk/workspaces/${workspace.id}/.everytalk/executions/$executionId/state"
-        else -> "/workspace/.everytalk/executions/$executionId/state"
+        // 沙箱目标可以在服务器仍是 Direct 记录时才首次准备，路径必须由本次目标决定。
+        target == ComputerExecTarget.CONTAINER -> "/workspace/.everytalk/executions/$executionId/state"
+        else -> "~/.everytalk/workspaces/${workspace.id}/.everytalk/executions/$executionId/state"
     }
 
     /** 删除 Workspace 前关闭仍在本机进程中的 PTY，避免留下失效会话。 */

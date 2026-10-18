@@ -11,6 +11,24 @@ import java.util.concurrent.atomic.AtomicInteger
 
 class ComputerRuntimeWrapperCacheTest {
     @Test
+    fun `旧容器服务器启动时只准备SSHWrapper不检查Docker`() = runTest {
+        val context = io.mockk.mockk<android.content.Context>()
+        val assets = io.mockk.mockk<android.content.res.AssetManager>()
+        val connection = io.mockk.mockk<ComputerSshConnection>()
+        io.mockk.every { context.applicationContext } returns context
+        io.mockk.every { context.assets } returns assets
+        io.mockk.every { assets.open(any()) } answers { "#!/bin/sh\n".byteInputStream() }
+        io.mockk.coEvery { connection.ensureRuntimeWrapper(any(), any()) } returns false
+        val legacy = Computer(id = "server", displayName = "server", host = "example.com", port = 22,
+            username = "user", authKind = ComputerAuthKind.PASSWORD, runMode = ComputerRunMode.CONTAINER)
+
+        ComputerRuntimeEnvelope(context).prewarm(connection, legacy)
+
+        io.mockk.coVerify(exactly = 1) { connection.ensureRuntimeWrapper(any(), any()) }
+        io.mockk.coVerify(exactly = 0) { connection.execute(any(), any(), any(), any()) }
+    }
+
+    @Test
     fun `同一连接与相同版本只安装一次`() = runTest {
         val cache = ComputerRuntimeWrapperCache()
         val installs = AtomicInteger()

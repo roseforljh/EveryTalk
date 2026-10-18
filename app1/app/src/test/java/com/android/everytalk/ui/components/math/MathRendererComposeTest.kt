@@ -117,6 +117,7 @@ class MathRendererComposeTest {
             display = false,
             fontSizePx = 32f,
             color = "#000000",
+            maxWidthPx = 320f,
             requestVersion = mathFormulaRequestVersion(formula),
         )
         val result = MathJaxRenderResult(

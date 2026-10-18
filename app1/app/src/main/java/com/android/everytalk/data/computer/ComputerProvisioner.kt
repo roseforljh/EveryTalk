@@ -19,8 +19,8 @@ internal fun Computer.needsContainerRuntimeUpgrade(): Boolean =
 
 /** v8～v11 已有完整 Docker 环境；升级只替换 Helper 和 Wrapper，不重建容器或镜像。 */
 internal fun Computer.canUseRuntimeOnlyUpgrade(): Boolean =
-    needsContainerRuntimeUpgrade() &&
-        bootstrapVersion in setOf("8", "9", "10", "11") &&
+    // 是否升级可选 Docker Helper 由已安装版本决定，不受 SSH 默认模式影响。
+    bootstrapVersion in setOf("8", "9", "10", "11") &&
         capabilities?.dockerAvailable == true
 
 /** APK 可能由 Windows 工作区构建，上传 VPS 前统一把 CRLF/CR 转成 POSIX Shell 需要的 LF。 */
@@ -66,7 +66,6 @@ class ComputerProvisioner(private val context: Context) {
         runtimeOnly: Boolean = false,
         onProgress: suspend (ComputerSetupStage) -> Unit = {},
     ): ComputerProvisionResult {
-        require(computer.runMode == ComputerRunMode.CONTAINER) { "只有 Container 模式需要配置" }
         ComputerIdentifier.requireValid(computer.id, "Computer ID")
         val remoteDirectory = "/tmp/everytalk-bootstrap-${computer.id}"
         try {

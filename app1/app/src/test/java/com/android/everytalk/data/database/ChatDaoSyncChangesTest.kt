@@ -242,12 +242,12 @@ class ChatDaoSyncChangesTest {
         } finally { db.close(); context.deleteDatabase(name) }
     }
 
-    @Test fun `生图和lastopen快照不进入待同步变更`() = runBlocking {
+    @Test fun `生图历史进入同步且lastopen快照仍不进入`() = runBlocking {
         val image = ChatSessionEntity("image", 1, 2, true)
         val snapshot = ChatSessionEntity("last_open_chat_v1", 1, 2, false)
         dao.saveSessionWithMessages(image, listOf(answer.toEntity(image.id)))
         dao.saveSessionWithMessages(snapshot, listOf(question.toEntity(snapshot.id)))
-        assertTrue(dao.getPendingSyncMessages().isEmpty())
-        assertTrue(dao.getPendingSyncSessions().isEmpty())
+        assertEquals(listOf("a"), dao.getPendingSyncMessages().map { it.id })
+        assertEquals(listOf("image"), dao.getPendingSyncSessions().map { it.id })
     }
 }

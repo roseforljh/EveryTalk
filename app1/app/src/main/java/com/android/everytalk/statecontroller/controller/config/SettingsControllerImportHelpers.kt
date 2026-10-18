@@ -60,7 +60,8 @@ internal data class BackupState(
         val imageGenerationHistoricalConversations: List<List<Message>>,
         val pinnedTextConversationIds: Set<String>,
         val pinnedImageConversationIds: Set<String>,
-        val conversationGroups: Map<String, List<String>>
+        val conversationGroups: Map<String, List<String>>,
+        val conversationGroupComputerIds: Map<String, String>
     )
     
     /**
@@ -80,6 +81,7 @@ internal suspend fun SettingsController.rollbackStateInternal(backup: BackupStat
         stateHolder.pinnedTextConversationIds.value = backup.pinnedTextConversationIds
         stateHolder.pinnedImageConversationIds.value = backup.pinnedImageConversationIds
         stateHolder.conversationGroups.value = backup.conversationGroups
+        stateHolder.conversationGroupComputerIds.value = backup.conversationGroupComputerIds
         
         // 恢复持久化数据
         persistenceManager.saveApiConfigs(backup.apiConfigs, isImageGen = false)
@@ -93,6 +95,7 @@ internal suspend fun SettingsController.rollbackStateInternal(backup: BackupStat
         persistenceManager.savePinnedIds(backup.pinnedTextConversationIds, isImageGeneration = false)
         persistenceManager.savePinnedIds(backup.pinnedImageConversationIds, isImageGeneration = true)
         persistenceManager.saveConversationGroups(backup.conversationGroups)
+        persistenceManager.saveConversationGroupComputerIds()
     }
 
     /**
@@ -578,6 +581,14 @@ internal suspend fun SettingsController.importConversationGroupsInternal(setting
             }
             stateHolder.conversationGroups.value = currentGroups
             persistenceManager.saveConversationGroups(currentGroups)
+        }
+        if (settings.conversationGroupComputerIds.isNotEmpty()) {
+            val validGroupNames = stateHolder.conversationGroups.value.keys
+            val importedDefaults = settings.conversationGroupComputerIds
+                .filterKeys { it in validGroupNames }
+            stateHolder.conversationGroupComputerIds.value =
+                stateHolder.conversationGroupComputerIds.value + importedDefaults
+            persistenceManager.saveConversationGroupComputerIds()
         }
     }
 

@@ -65,6 +65,9 @@ internal fun SelectableCodeTextView(
         factory = { context ->
             ScrollView(context).apply {
                 isFillViewport = true
+                // 代码区保留滚动能力，但不绘制系统滚动条，避免右侧占位影响代码宽度。
+                isVerticalScrollBarEnabled = false
+                isHorizontalScrollBarEnabled = false
                 overScrollMode = android.view.View.OVER_SCROLL_IF_CONTENT_SCROLLS
                 setBackgroundColor(android.graphics.Color.TRANSPARENT)
 

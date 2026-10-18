@@ -68,6 +68,8 @@ data class ExecutionStep(
      * null 表示旧版消息没有顺序信息，空字符串表示新版消息在调用前没有文本。
      */
     val reasoningBefore: String? = null,
+    /** write_file / edit 的改动内容；其它工具和旧消息为 null。 */
+    val fileChange: ExecutionFileChange? = null,
 )
 
 /** 用户消息正文中的有序内容。Skill 引用保持原位置并携带冻结版本。 */

@@ -156,7 +156,7 @@ internal fun AccountScreen(
                         shape = CircleShape, colors = actionColors, modifier = Modifier.fillMaxWidth()) {
                         Text(stringResource(R.string.account_save_profile))
                     }
-                    Text("登录后自动同步账号数据；退出登录后仅保留本地数据，API Key 等本地机密不会自动上传。", style = MaterialTheme.typography.bodyMedium)
+                    Text(stringResource(R.string.account_local_sync_notice), style = MaterialTheme.typography.bodyMedium)
                     OutlinedButton(onClick = { manager.refreshAccount() }, enabled = !state.busy,
                         modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.account_refresh)) }
                     Button(onClick = { showLogout = true }, enabled = !state.busy,

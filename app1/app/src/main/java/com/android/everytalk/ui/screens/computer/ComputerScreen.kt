@@ -1,11 +1,6 @@
 package com.android.everytalk.ui.screens.computer
 
-import android.Manifest
-import android.content.pm.PackageManager
-import android.os.Build
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -53,15 +48,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
 import androidx.navigation.NavController
 import com.android.everytalk.R
 import com.android.everytalk.BuildConfig
 import com.android.everytalk.data.computer.ComputerDiagnostics
 import com.android.everytalk.data.computer.ComputerFailureStage
-import com.android.everytalk.data.computer.ComputerRunMode
 import com.android.everytalk.data.computer.ComputerSetupStage
-import com.android.everytalk.data.computer.ComputerStatus
 import com.android.everytalk.data.computer.CloudflareOAuthConfig
 import com.android.everytalk.data.computer.CloudflareSettingsOAuthFlow
 import com.android.everytalk.data.computer.CloudflareSettingsOAuthStore
@@ -71,7 +63,6 @@ import com.android.everytalk.navigation.Screen
 import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.statecontroller.addConfirmedComputer
 import com.android.everytalk.statecontroller.probeComputerHostKey
-import com.android.everytalk.statecontroller.provisionComputerContainer
 import com.android.everytalk.statecontroller.refreshComputerFromList
 import com.android.everytalk.statecontroller.showSnackbar
 import com.android.everytalk.statecontroller.listCloudflareAccounts
@@ -158,10 +149,6 @@ fun ComputerScreen(
         }
     }
     ComputerSecureWindowEffect(showAddCard)
-
-    val notificationPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { }
 
     DisposableEffect(Unit) {
         onDispose {
@@ -280,19 +267,11 @@ fun ComputerScreen(
         val current = prepared ?: return
         val confirmed = hostKey ?: return
         hostKey = null
-        if (
-            current.request.runMode == ComputerRunMode.CONTAINER &&
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        }
         setupStage = ComputerSetupStage.AUTHENTICATING
         errorText = null
         isBusy = true
         scope.launch {
             var addedComputer: com.android.everytalk.data.computer.Computer? = null
-            var failureStage = ComputerFailureStage.ADD_SERVER
             try {
                 val added = withContext(Dispatchers.IO) {
                     viewModel.addConfirmedComputer(
@@ -303,18 +282,6 @@ fun ComputerScreen(
                     )
                 }
                 addedComputer = added
-                if (
-                    added.runMode == ComputerRunMode.CONTAINER &&
-                    added.status == ComputerStatus.CONFIGURATION_REQUIRED
-                ) {
-                    failureStage = ComputerFailureStage.CONTAINER_PROVISION
-                    withContext(Dispatchers.IO) {
-                        viewModel.provisionComputerContainer(
-                            added.id,
-                            onProgress = { stage -> withContext(Dispatchers.Main) { setupStage = stage } },
-                        )
-                    }
-                }
                 viewModel.showSnackbar(context.getString(R.string.computer_add_success))
                 prepared = null
                 setupStage = null
@@ -322,7 +289,7 @@ fun ComputerScreen(
                 form = ComputerAddFormState()
                 showAddCard = false
             } catch (error: Throwable) {
-                ComputerDiagnostics.logFailure(failureStage, error)
+                ComputerDiagnostics.logFailure(ComputerFailureStage.ADD_SERVER, error)
                 val localizedError = context.localizeUiMessage(
                     error.message ?: context.getString(R.string.unknown_error),
                 )

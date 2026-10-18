@@ -23,6 +23,43 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34], application = android.app.Application::class)
 class RoomReplaceTransactionTest {
 
+    @Test
+    fun `旧容器默认值迁移和按需容器元数据更新保留SSH归属及可用状态`() = runBlocking {
+        val dao = database.computerDao()
+        val server = com.android.everytalk.data.computer.Computer(
+            id = "legacy-server", displayName = "旧服务器", host = "example.com", port = 22, username = "user",
+            authKind = com.android.everytalk.data.computer.ComputerAuthKind.PASSWORD,
+            runMode = com.android.everytalk.data.computer.ComputerRunMode.CONTAINER,
+            status = com.android.everytalk.data.computer.ComputerStatus.READY,
+            bootstrapVersion = "8", sandboxImage = "existing-image",
+        )
+        val workspace = com.android.everytalk.data.computer.ComputerWorkspace(
+            id = "ws_legacy", computerId = server.id, conversationId = "stable-session",
+            runMode = com.android.everytalk.data.computer.ComputerRunMode.CONTAINER,
+            hostPath = "/home/user/work", containerName = "old-container", containerImage = "existing-image",
+            status = com.android.everytalk.data.computer.ComputerWorkspaceStatus.READY,
+        )
+        dao.upsertComputer(server.toEntity(kotlinx.serialization.json.Json))
+        dao.upsertWorkspace(workspace.toEntity())
+        dao.migrateSshExecutionDefaults()
+        dao.recoverInterruptedComputerOperations(com.android.everytalk.data.computer.COMPUTER_BOOTSTRAP_VERSION)
+        val migrated = checkNotNull(dao.getComputer(server.id))
+        assertEquals("DIRECT", migrated.runMode)
+        assertEquals("READY", migrated.status)
+        assertEquals("8", migrated.bootstrapVersion)
+        assertEquals("existing-image", migrated.sandboxImage)
+
+        dao.useSshWorkspaceDefault(workspace.id)
+        dao.updateWorkspaceContainer(workspace.id, "old-container", "new-image")
+        val saved = checkNotNull(dao.getWorkspaceById(workspace.id))
+        assertEquals("DIRECT", saved.runMode)
+        assertEquals("READY", saved.status)
+        assertEquals(workspace.hostPath, saved.hostPath)
+        assertEquals("stable-session", saved.conversationId)
+        assertEquals("old-container", saved.containerName)
+        assertEquals("new-image", saved.containerImage)
+    }
+
     private lateinit var database: AppDatabase
 
     @Before

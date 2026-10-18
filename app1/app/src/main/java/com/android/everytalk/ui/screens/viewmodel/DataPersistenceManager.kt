@@ -307,6 +307,7 @@ class DataPersistenceManager(
 ) {
     internal val TAG = "PersistenceManager"
     internal val conversationGroupsSaveMutex = kotlinx.coroutines.sync.Mutex()
+    internal val conversationGroupComputerIdsSaveMutex = kotlinx.coroutines.sync.Mutex()
     internal val conversationScrollStatesSaveMutex = kotlinx.coroutines.sync.Mutex()
     
     // Room 数据源
@@ -944,6 +945,28 @@ class DataPersistenceManager(
             }
             updatedGroups
         }
+    }
+
+    /**
+     * 保存当前分组默认服务器映射。
+     * 必须在锁内读取最新 StateFlow，避免旧快照排队后覆盖用户最后一次选择。
+     */
+    suspend fun saveConversationGroupComputerIds() {
+        conversationGroupComputerIdsSaveMutex.withLock {
+            withContext(Dispatchers.IO) {
+                roomDataSource.setSetting(
+                    "conversation_group_computer_ids",
+                    json.encodeToString(stateHolder.conversationGroupComputerIds.value),
+                )
+            }
+        }
+    }
+
+    /** 读取分组新会话默认服务器映射；损坏数据按空映射处理。 */
+    suspend fun loadConversationGroupComputerIds(): Map<String, String> = withContext(Dispatchers.IO) {
+        val raw = roomDataSource.getSetting("conversation_group_computer_ids")
+        if (raw.isNullOrBlank()) return@withContext emptyMap()
+        runCatching { json.decodeFromString<Map<String, String>>(raw) }.getOrDefault(emptyMap())
     }
 
     suspend fun loadPinnedIds(isImageGeneration: Boolean): Set<String> {

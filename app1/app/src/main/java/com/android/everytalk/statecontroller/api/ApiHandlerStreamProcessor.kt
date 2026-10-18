@@ -6,6 +6,7 @@ import com.android.everytalk.data.DataClass.ContextCompressionState
 import com.android.everytalk.data.DataClass.ExecutionStep
 import com.android.everytalk.data.DataClass.ExecutionStepType
 import com.android.everytalk.data.DataClass.ExecutionTraceEvent
+import com.android.everytalk.data.DataClass.executionFileChange
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.data.network.AppStreamEvent
@@ -206,6 +207,7 @@ internal fun executionStepForToolCall(
         labels = labels,
         detail = agentTarget.takeIf { type == ExecutionStepType.Agent && it.isNotBlank() },
         reasoningBefore = reasoningBefore,
+        fileChange = executionFileChange(toolName, event.argumentsObj),
     )
 }
 

@@ -7,6 +7,40 @@ import org.junit.Test
 
 class ComputerToolCatalogTest {
     @Test
+    fun `恢复旧请求时刷新默认工具和system规则但保留用户历史与其他工具`() {
+        val user = com.android.everytalk.data.DataClass.SimpleTextApiMessage(role = "user", content = "之前沙箱里有文件，请继续处理")
+        val externalTool = mapOf<String, Any>("type" to "function", "function" to mapOf("name" to "external_tool"))
+        val legacyExec = mapOf<String, Any>("type" to "function", "function" to mapOf(
+            "name" to "exec", "description" to "Defaults to the isolated Container"))
+        val legacyEnvironment = "Agent server tools are enabled for this request. The Android app connects to the VPS directly over SSH. " +
+            "For exec, use target=container by default. Architecture: x86_64. Available tools: ${ComputerToolNames.all.sorted().joinToString(", ")}."
+        val request = com.android.everytalk.data.DataClass.ChatRequest(
+            messages = listOf(com.android.everytalk.data.DataClass.SimpleTextApiMessage(
+                role = "system", content = "保留用户自定义规则\n\n$legacyEnvironment"), user),
+            provider = "OpenAI", channel = "OpenAI", apiAddress = "https://example.com", apiKey = "", model = "test",
+            tools = listOf(legacyExec, externalTool),
+            localComputerRequestContext = ComputerRequestContext("session", "server", "ws_legacy"),
+        )
+        val environment = "Use exec target=host for normal work. Earlier container defaults do not describe the current environment."
+        val refreshed = refreshComputerExecutionPolicy(request, "$environment\n<computer-session-state>任务状态</computer-session-state>")
+        assertTrue(refreshed.messages.any { it === user })
+        assertEquals(environment, (refreshed.messages.last() as com.android.everytalk.data.DataClass.SimpleTextApiMessage).content)
+        assertEquals("system", refreshed.messages.last().role)
+        assertTrue(refreshed.tools!!.contains(externalTool))
+        val exec = refreshed.tools!!.first { (it["function"] as? Map<*, *>)?.get("name") == "exec" }
+        val parameters = (exec["function"] as Map<*, *>)["parameters"] as Map<*, *>
+        val target = (parameters["properties"] as Map<*, *>)["target"] as Map<*, *>
+        assertEquals("host", target["default"])
+        val sent = com.android.everytalk.data.network.SystemPromptInjector.injectSystemPrompt(refreshed.messages)
+        val system = (sent.first() as com.android.everytalk.data.DataClass.SimpleTextApiMessage).content
+        assertTrue(system.contains(environment))
+        assertTrue(system.contains("保留用户自定义规则"))
+        assertFalse(system.contains("For exec, use target=container by default"))
+        assertEquals(1, refreshComputerExecutionPolicy(refreshed, "$environment\n<computer-session-state></computer-session-state>").messages
+            .count { it.id == "computer-execution-policy" })
+    }
+
+    @Test
     fun `所有工具名满足OpenAI函数名约束`() {
         val pattern = Regex("[a-zA-Z0-9_-]+")
         val names = (ComputerToolCatalog.definitions() + ComputerToolCatalog.cloudflareDefinitions()).map { definition ->
@@ -80,7 +114,7 @@ class ComputerToolCatalogTest {
     }
 
     @Test
-    fun `exec默认进入容器并允许模型明确选择主机`() {
+    fun `exec默认使用SSH并允许按次选择容器`() {
         val exec = ComputerToolCatalog.definitions().first { definition ->
             val function = definition["function"] as Map<*, *>
             function["name"] == ComputerToolNames.EXEC
@@ -91,7 +125,8 @@ class ComputerToolCatalogTest {
         val target = properties["target"] as Map<*, *>
 
         assertEquals(listOf("container", "host"), target["enum"])
-        assertEquals("container", target["default"])
+        assertEquals("host", target["default"])
+        assertTrue((function["description"] as String).contains("specific operation needs isolation"))
     }
 
     @Test
@@ -106,6 +141,6 @@ class ComputerToolCatalogTest {
         val target = properties["target"] as Map<*, *>
 
         assertEquals(listOf("container", "host"), target["enum"])
-        assertEquals("container", target["default"])
+        assertEquals("host", target["default"])
     }
 }

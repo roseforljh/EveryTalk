@@ -36,8 +36,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -112,20 +110,6 @@ internal fun ComputerAddCard(
         disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
         disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
     )
-    // 黑色弹窗背景下，默认关闭态颜色对比度太低，必须显式画出轨道、边框和滑块。
-    val sandboxSwitchColors = SwitchDefaults.colors(
-        checkedThumbColor = dialogBackground,
-        checkedTrackColor = contentColor,
-        uncheckedThumbColor = contentColor,
-        uncheckedTrackColor = contentColor.copy(alpha = 0.22f),
-        uncheckedBorderColor = contentColor.copy(alpha = 0.7f),
-        disabledCheckedThumbColor = dialogBackground.copy(alpha = 0.6f),
-        disabledCheckedTrackColor = contentColor.copy(alpha = 0.4f),
-        disabledUncheckedThumbColor = contentColor.copy(alpha = 0.5f),
-        disabledUncheckedTrackColor = contentColor.copy(alpha = 0.12f),
-        disabledUncheckedBorderColor = contentColor.copy(alpha = 0.35f),
-    )
-
     Dialog(
         onDismissRequest = { if (!isBusy || allowBusyDismiss) onDismiss() },
         properties = DialogProperties(
@@ -341,43 +325,6 @@ internal fun ComputerAddCard(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(bottom = 12.dp),
                         )
-                    }
-
-                    // 编辑服务器时也必须保留这个开关；keepCredentialHint 只负责提示凭据沿用，
-                    // 不能再把运行模式配置一起隐藏。
-                    if (form.provider == ComputerProvider.SSH) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(bottom = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    text = stringResource(R.string.computer_sandbox_title),
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    fontWeight = FontWeight.Medium,
-                                )
-                                Text(
-                                    text = stringResource(
-                                        if (form.sandboxEnabled) {
-                                            R.string.computer_sandbox_enabled_description
-                                        } else {
-                                            R.string.computer_sandbox_disabled_description
-                                        },
-                                    ),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            Spacer(Modifier.width(12.dp))
-                            Switch(
-                                checked = form.sandboxEnabled,
-                                onCheckedChange = { onFormChange(form.copy(sandboxEnabled = it)) },
-                                enabled = !isBusy,
-                                colors = sandboxSwitchColors,
-                            )
-                        }
                     }
 
                     if (form.provider == ComputerProvider.SSH && form.username.trim() != "root") {

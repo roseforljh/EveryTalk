@@ -117,6 +117,7 @@ internal fun attachmentImageBorderColor(onSurface: Color): Color =
 
 internal const val USER_BUBBLE_COLLAPSED_MAX_HEIGHT_RATIO = 0.32f
 internal const val USER_BUBBLE_EXPANDED_MAX_HEIGHT_RATIO = 0.56f
+internal val USER_BUBBLE_TEXT_OPTICAL_OFFSET = (-8).dp
 
 internal fun resolveUserBubbleMaxHeightDp(
     screenHeightDp: Float,
@@ -285,6 +286,7 @@ internal fun UserOrErrorMessageContent(
                         contentAlignment = Alignment.CenterStart,
                         modifier = Modifier
                             .wrapContentWidth()
+                            .offset(y = if (message.sender == Sender.User) USER_BUBBLE_TEXT_OPTICAL_OFFSET else 0.dp)
                             .padding(
                                 start = if (message.sender == Sender.User) 14.dp else 0.dp,
                                 end = if (message.sender == Sender.User) 14.dp else 0.dp,

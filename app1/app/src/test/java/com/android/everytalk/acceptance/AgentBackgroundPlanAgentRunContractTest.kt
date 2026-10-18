@@ -56,7 +56,7 @@ class AgentBackgroundPlanAgentRunContractTest {
     fun `状态事件必须写入AgentEntry并进入模型恢复上下文`() {
         assertTrue("缺少状态事件持久化入口", runStore.contains("appendStatusEvent("))
         assertTrue("STATUS Entry 没有还原进模型 Transcript", runStore.contains("AgentEntryKind.STATUS.name -> decodeStatusEntry"))
-        assertTrue("状态事件必须明确禁止模型重复执行", runStore.contains("禁止重复创建或重跑命令"))
+        assertTrue("状态事件应提醒模型避免重复副作用", runStore.contains("避免重复副作用"))
     }
 
     @Test

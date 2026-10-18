@@ -125,25 +125,17 @@ object GeminiDirectClient {
         val enableCodeExecution = shouldEnableCodeExecution(request)
 
         val payload = buildJsonObject {
-            // 准备系统指令内容
-            var effectiveSystemContent = systemContent
-            if (enableCodeExecution) {
-                // 强化提示：要求模型务必执行代码
-                // Gemini 有时会偷懒只生成代码而不执行，这段提示能显著提高工具调用率
-                val enforcementPrompt = "\n\nIMPORTANT: You have access to a code execution tool. When asked to calculate, plot, or solve problems, you MUST use the code execution tool to run the code and show the results/plots, instead of just writing the code."
-                effectiveSystemContent = if (effectiveSystemContent.isBlank()) enforcementPrompt.trim() else effectiveSystemContent + enforcementPrompt
-            }
-
+            // 工具可用性由 schema 声明，是否执行由模型结合任务判断。
             // 添加 systemInstruction（Gemini 原生系统指令字段）
-            if (effectiveSystemContent.isNotBlank()) {
+            if (systemContent.isNotBlank()) {
                 putJsonObject("systemInstruction") {
                     putJsonArray("parts") {
                         addJsonObject {
-                            put("text", effectiveSystemContent)
+                            put("text", systemContent)
                         }
                     }
                 }
-                Log.i(TAG, "📝 已注入系统指令 (${effectiveSystemContent.length} 字符)")
+                Log.i(TAG, "📝 已注入系统指令 (${systemContent.length} 字符)")
             }
 
             put(

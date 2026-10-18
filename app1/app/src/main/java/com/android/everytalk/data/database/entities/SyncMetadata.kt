@@ -17,9 +17,9 @@ object SyncStatus {
 fun localSyncUuid(table: String, id: String): String =
     UUID.nameUUIDFromBytes("EveryTalk:$table:$id".toByteArray(Charsets.UTF_8)).toString()
 
-/** 最近打开记录只是历史的副本，不能上传成另一份对话。 */
+/** 最近打开记录只是历史的副本，不能上传成另一份对话；文字和图片历史都可同步。 */
 fun isSyncableTextSession(id: String, isImageGeneration: Boolean): Boolean =
-    !isImageGeneration && id != "last_open_chat_v1" && id != "last_open_image_generation_v1"
+    id != "last_open_chat_v1" && id != "last_open_image_generation_v1"
 
 object UserSettingKind {
     const val CONVERSATION_GROUPS = "conversation_groups"

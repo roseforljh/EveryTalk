@@ -13,6 +13,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import com.android.everytalk.util.AppLogger
@@ -63,6 +65,8 @@ class ComputerRepository(
     private val dedicatedKeyManager = ComputerDedicatedKeyManager(sshClient)
     private val provisioner = ComputerProvisioner(applicationContext)
     private val runtimeEnvelope = ComputerRuntimeEnvelope(applicationContext)
+    /** 串行化“检查重复服务器 + 写入服务器记录”，避免并发添加绕过重复检查。 */
+    private val addComputerMutex = Mutex()
     private val executionReconciler by lazy {
         ComputerExecutionReconciler(
             dao = dao,
@@ -94,6 +98,16 @@ class ComputerRepository(
         dao.observeAuditEvents(computerId).map { entities -> entities.map { it.toModel() } }
 
     suspend fun getComputer(computerId: String): Computer? = dao.getComputer(computerId)?.toModel(json)
+
+    /**
+     * 读取当前服务器的权限模式并更新请求上下文。
+     * Agent 请求开始时会保存一份上下文快照，但用户可以在执行期间修改权限；
+     * 工具边界必须在每次审批或执行前重新读取 Room，才能让下一次调用立即生效。
+     * 这里只替换权限模式，已批准调用的临时字段会由 copy 一并保留。
+     */
+    suspend fun refreshPermissionMode(context: ComputerRequestContext): ComputerRequestContext {
+        return refreshComputerPermissionMode(context, ::getComputer)
+    }
 
     suspend fun getWorkspace(workspaceId: String): ComputerWorkspace? =
         dao.getWorkspaceById(workspaceId)?.toModel()
@@ -189,7 +203,6 @@ class ComputerRepository(
             sudoPassword?.fill('\u0000')
             throw ComputerException(ComputerErrorCodes.HOST_KEY_CHANGED, "确认期间服务器地址发生变化")
         }
-
         onProgress(ComputerSetupStage.AUTHENTICATING)
         val now = System.currentTimeMillis()
         var computer = Computer(
@@ -204,25 +217,33 @@ class ComputerRepository(
             hostKeyFingerprint = confirmedHostKey.fingerprint,
             authKind = request.credential.kind,
             credentialState = ComputerCredentialState.ORIGINAL_ENCRYPTED,
-            runMode = request.runMode,
+            runMode = ComputerRunMode.DIRECT,
             status = ComputerStatus.AUTHENTICATING,
             createdAt = now,
             updatedAt = now,
         )
 
         val originalCredential = request.credential.copySecret()
-        try {
-            credentialStore.saveOriginalComputerCredential(computer.id, originalCredential)
-            credentialStore.saveComputerSudoPassword(computer.id, sudoPassword)
-            credentialStore.saveComputerCredential(computer.id, request.credential)
-            dao.upsertComputer(computer.toEntity(json))
-        } catch (error: Throwable) {
-            credentialStore.deleteComputerCredential(computer.id)
-            credentialStore.deleteOriginalComputerCredential(computer.id)
-            credentialStore.deleteComputerSudoPassword(computer.id)
-            request.credential.clear()
-            sudoPassword?.fill('\u0000')
-            throw error
+        addComputerMutex.withLock {
+            if (dao.findActiveSshComputer(endpoint.host, endpoint.port, endpoint.username.orEmpty()) != null) {
+                originalCredential.clear()
+                request.credential.clear()
+                sudoPassword?.fill('\u0000')
+                throw ComputerException(ComputerErrorCodes.COMPUTER_DUPLICATE, "这台 SSH 服务器已经添加过了")
+            }
+            try {
+                credentialStore.saveOriginalComputerCredential(computer.id, originalCredential)
+                credentialStore.saveComputerSudoPassword(computer.id, sudoPassword)
+                credentialStore.saveComputerCredential(computer.id, request.credential)
+                dao.upsertComputer(computer.toEntity(json))
+            } catch (error: Throwable) {
+                credentialStore.deleteComputerCredential(computer.id)
+                credentialStore.deleteOriginalComputerCredential(computer.id)
+                credentialStore.deleteComputerSudoPassword(computer.id)
+                request.credential.clear()
+                sudoPassword?.fill('\u0000')
+                throw error
+            }
         }
 
         return try {
@@ -231,16 +252,8 @@ class ComputerRepository(
                 onProgress(ComputerSetupStage.INSPECTING_VPS)
                 probe.probe(connection, computer.port)
             }
-            val status = if (
-                computer.runMode == ComputerRunMode.CONTAINER &&
-                (!capabilities.dockerAvailable || computer.bootstrapVersion != COMPUTER_BOOTSTRAP_VERSION)
-            ) {
-                ComputerStatus.CONFIGURATION_REQUIRED
-            } else {
-                ComputerStatus.READY
-            }
             computer = computer.copy(
-                status = status,
+                status = ComputerStatus.READY,
                 capabilities = capabilities,
                 lastConnectedAt = System.currentTimeMillis(),
                 lastErrorCode = null,
@@ -275,14 +288,9 @@ class ComputerRepository(
             // 连接池可能刚自动保存新 Host Key；从 Room 读取最新记录，避免旧快照将其覆盖。
             val latest = requireComputer(computerId)
             val refreshed = latest.copy(
-                status = if (
-                    latest.runMode == ComputerRunMode.CONTAINER &&
-                    (!capabilities.dockerAvailable || latest.bootstrapVersion != COMPUTER_BOOTSTRAP_VERSION)
-                ) {
-                    ComputerStatus.CONFIGURATION_REQUIRED
-                } else {
-                    ComputerStatus.READY
-                },
+                // SSH 连通性不取决于可选 Docker 环境是否安装或升级。
+                status = ComputerStatus.READY,
+                runMode = ComputerRunMode.DIRECT,
                 capabilities = capabilities,
                 lastConnectedAt = System.currentTimeMillis(),
                 lastErrorCode = null,
@@ -312,9 +320,6 @@ class ComputerRepository(
         onProgress: suspend (ComputerSetupStage) -> Unit = {},
     ): Computer {
         val current = requireComputer(computerId)
-        if (current.runMode != ComputerRunMode.CONTAINER) {
-            throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "当前服务器使用 Direct 模式")
-        }
         val runtimeOnlyUpgrade = current.canUseRuntimeOnlyUpgrade()
         // 轻量升级不再重建容器，可以保留正常服务；完整配置仍要求没有活动 Container 任务。
         if (!runtimeOnlyUpgrade && hasActiveContainerExecution(dao.getActiveRemoteExecutionsForComputer(computerId))) {
@@ -335,8 +340,12 @@ class ComputerRepository(
             )
         }
         val foregroundActivity = acquireForegroundActivity()
+        // Docker 是可选能力。安装失败或取消时保留原先可用的 SSH 状态，不能阻断后续主机工具。
+        val failureStatus = if (current.status == ComputerStatus.READY) ComputerStatus.READY else ComputerStatus.CONFIGURATION_REQUIRED
         try {
-            dao.updateComputerStatus(computerId, ComputerStatus.PROVISIONING.name, null)
+            if (current.status != ComputerStatus.READY) {
+                dao.updateComputerStatus(computerId, ComputerStatus.PROVISIONING.name, null)
+            }
             return try {
                 val result = withConnection(computerId, requireReady = false) { connection, computer ->
                     provisioner.provision(
@@ -351,7 +360,7 @@ class ComputerRepository(
                 val configured = requireComputer(computerId).copy(
                     bootstrapVersion = result.bootstrapVersion,
                     sandboxImage = result.sandboxImage,
-                    status = ComputerStatus.VERIFYING,
+                    status = if (current.status == ComputerStatus.READY) ComputerStatus.READY else ComputerStatus.VERIFYING,
                     lastErrorCode = null,
                     updatedAt = System.currentTimeMillis(),
                 )
@@ -365,7 +374,7 @@ class ComputerRepository(
                     connectionPool.disconnect(computerId)
                     dao.updateComputerStatus(
                         computerId,
-                        ComputerStatus.CONFIGURATION_REQUIRED.name,
+                        failureStatus.name,
                         current.lastErrorCode,
                     )
                 }
@@ -386,7 +395,11 @@ class ComputerRepository(
                 } else {
                     error
                 }
-                dao.updateComputerStatus(computerId, ComputerStatus.CONFIGURATION_REQUIRED.name, reportedError.code)
+                dao.updateComputerStatus(
+                    computerId,
+                    failureStatus.name,
+                    if (failureStatus == ComputerStatus.READY) current.lastErrorCode else reportedError.code,
+                )
                 recordAudit(computerId, "CONTAINER_PROVISION", "FAILED", reportedError.code)
                 throw reportedError
             } catch (error: Throwable) {
@@ -394,7 +407,7 @@ class ComputerRepository(
                     connectionPool.disconnect(computerId)
                     dao.updateComputerStatus(
                         computerId,
-                        ComputerStatus.CONFIGURATION_REQUIRED.name,
+                        failureStatus.name,
                         current.lastErrorCode,
                     )
                 }
@@ -404,6 +417,24 @@ class ComputerRepository(
             sudoPassword?.fill('\u0000')
             foregroundActivity.close()
         }
+    }
+
+    /**
+     * 只有执行目标明确选择 Container 时才调用。
+     * 添加服务器和普通 SSH 操作不会触发 Docker 安装或沙箱初始化。
+     */
+    suspend fun ensureContainerRuntime(
+        computerId: String,
+        onProgress: suspend (ComputerSetupStage) -> Unit = {},
+    ): Computer {
+        val current = requireComputer(computerId)
+        if (
+            current.capabilities?.dockerAvailable == true &&
+            current.bootstrapVersion == COMPUTER_BOOTSTRAP_VERSION
+        ) {
+            return current
+        }
+        return provisionContainer(computerId, onProgress)
     }
 
     /** 修复页取消后立即关闭该服务器的 SSH Transport，让阻塞中的 Channel 尽快退出。 */
@@ -452,7 +483,7 @@ class ComputerRepository(
                 current.hostKeyBlobBase64 == confirmedKeyBlob
             val remoteAccountChanged = endpointChanged && !sameRemoteAccount
             val suppliedCredential = request.credential != null
-            val runModeChanged = current.runMode != request.runMode
+            val runModeChanged = current.runMode != ComputerRunMode.DIRECT
             val credential = request.credential ?: if (remoteAccountChanged) {
                 credentialStore.loadOriginalComputerCredential(request.id)
                     ?: credentialStore.loadComputerCredential(request.id)
@@ -486,7 +517,7 @@ class ComputerRepository(
                 hostKeyBlobBase64 = confirmedKeyBlob,
                 hostKeyFingerprint = confirmedHostKey.fingerprint,
                 authKind = if (suppliedCredential) credential.kind else current.authKind,
-                runMode = request.runMode,
+                runMode = ComputerRunMode.DIRECT,
                 credentialState = when {
                     keepDedicatedConnection -> ComputerCredentialState.DEDICATED_KEY
                     replaceActiveCredential -> ComputerCredentialState.ORIGINAL_ENCRYPTED
@@ -515,18 +546,7 @@ class ComputerRepository(
             connectionPool.disconnect(candidate.id)
 
             var updated = candidate.copy(
-                status = if (
-                    request.runMode == ComputerRunMode.CONTAINER &&
-                    (
-                        runModeChanged ||
-                            !capabilities.dockerAvailable ||
-                            current.bootstrapVersion != COMPUTER_BOOTSTRAP_VERSION
-                        ) || remoteAccountChanged
-                ) {
-                    ComputerStatus.CONFIGURATION_REQUIRED
-                } else {
-                    ComputerStatus.READY
-                },
+                status = ComputerStatus.READY,
                 capabilities = capabilities,
                 bootstrapVersion = current.bootstrapVersion.takeUnless { remoteAccountChanged },
                 sandboxImage = current.sandboxImage.takeUnless { remoteAccountChanged },
@@ -702,8 +722,8 @@ class ComputerRepository(
         // 普通工具无法从 VPS 续接；exec 保留原状态交给 ExecutionReconciler 查询。
         dao.markInterruptedNonExecExecutionsUnknown()
         dao.markPrivatePreviewsStopped()
+        dao.migrateSshExecutionDefaults()
         dao.recoverInterruptedComputerOperations(COMPUTER_BOOTSTRAP_VERSION)
-        dao.markOutdatedContainerConfiguration(COMPUTER_BOOTSTRAP_VERSION)
         connectionPool.closeIdle(maxIdleMillis = 0)
     }
 

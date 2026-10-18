@@ -503,6 +503,23 @@ import java.util.TimeZone
         }
     }
 
+    /**
+     * 保存分组创建新会话时使用的默认服务器。
+     * 这个设置只影响以后从该分组创建的新会话，不改动已有会话的服务器选择。
+     */
+    internal fun AppViewModel.setConversationGroupComputer(groupName: String, computerId: String?) {
+        if (computerId != null && computerManager.computers.value.none {
+                it.id == computerId && it.status == com.android.everytalk.data.computer.ComputerStatus.READY
+            }) return
+        val updated = stateHolder.conversationGroupComputerIds.value.toMutableMap().apply {
+            if (computerId == null) remove(groupName) else put(groupName, computerId)
+        }.toMap()
+        stateHolder.conversationGroupComputerIds.value = updated
+        viewModelScope.launch(Dispatchers.IO) {
+            persistenceManager.saveConversationGroupComputerIds()
+        }
+    }
+
     internal fun AppViewModel.renameGroup(oldName: String, newName: String) {
         viewModelScope.launch(Dispatchers.IO) {
             val updatedGroups = persistenceManager.updateConversationGroups { currentGroups ->
@@ -518,7 +535,11 @@ import java.util.TimeZone
             // 在 IO 线程中更新 UI 状态
             withContext(Dispatchers.Main) {
                 stateHolder.conversationGroups.value = updatedGroups
+                val updatedDefaults = stateHolder.conversationGroupComputerIds.value.toMutableMap()
+                updatedDefaults.remove(oldName)?.let { updatedDefaults[newName] = it }
+                stateHolder.conversationGroupComputerIds.value = updatedDefaults
             }
+            persistenceManager.saveConversationGroupComputerIds()
         }
     }
 
@@ -534,8 +555,23 @@ import java.util.TimeZone
             // 在 IO 线程中更新 UI 状态
             withContext(Dispatchers.Main) {
                 stateHolder.conversationGroups.value = updatedGroups
+                stateHolder.conversationGroupComputerIds.value = stateHolder.conversationGroupComputerIds.value - groupName
+            }
+            persistenceManager.saveConversationGroupComputerIds()
+        }
+    }
+
+    /** 将一个新建的文本会话加入指定分组，避免先显示会话再异步补分组造成短暂漂移。 */
+    internal suspend fun AppViewModel.addConversationToGroup(conversationId: String, groupName: String) {
+        val updatedGroups = persistenceManager.updateConversationGroups { currentGroups ->
+            if (groupName !in currentGroups) return@updateConversationGroups currentGroups
+            currentGroups.toMutableMap().apply {
+                val members = getValue(groupName).toMutableList()
+                if (conversationId !in members) members += conversationId
+                put(groupName, members)
             }
         }
+        stateHolder.conversationGroups.value = updatedGroups
     }
 
     internal fun AppViewModel.moveConversationToGroup(conversationIndex: Int, groupName: String?, isImageGeneration: Boolean) {

@@ -19,6 +19,52 @@ internal fun syncDiagnostic(message: String) {
 }
 
 /**
+ * 对账日志只读取标量列，不读取正文或机密；随机标识散列后用于比较两台设备的缺行、
+ * 墓碑、所属会话、正文/思考过程截断哈希和过滤条件。每个进程只在快照变化时输出，不能用总数代替逐条对账。
+ */
+internal object SyncInventoryDiagnostic {
+    private var previous: String? = null
+
+    suspend fun log(database: com.android.everytalk.data.database.AppDatabase) =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            fun tag(value: String): String = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(value.toByteArray(Charsets.UTF_8)).take(8).joinToString("") { "%02x".format(it) }
+            val rows = mutableListOf<String>()
+            database.openHelper.readableDatabase.query("""
+                SELECT m.uuid, s.uuid, m.deleted, s.deleted, m.sync_status, m.ever_synced,
+                       m.isPlaceholderName, m.sender, length(m.text), length(m.reasoning),
+                       substr(m.text, 1, 4096), substr(m.text, -4096),
+                       substr(m.reasoning, 1, 4096), substr(m.reasoning, -4096),
+                       substr(m.contentParts, 1, 2048), substr(m.executionTrace, 1, 2048),
+                       CASE WHEN m.id LIKE 'cloud:%' THEN 1 ELSE 0 END
+                FROM messages m LEFT JOIN chat_sessions s ON s.id=m.sessionId
+                WHERE s.id NOT IN ('last_open_chat_v1','last_open_image_generation_v1')
+                   OR s.id IS NULL
+                ORDER BY m.uuid
+            """.trimIndent()).use { cursor ->
+                while (cursor.moveToNext()) rows += buildString {
+                    append(tag(cursor.getString(0))); append('/'); append(tag(cursor.getString(1).orEmpty()))
+                    // 只输出删除、同步状态、发送者和长度；10..15 是正文采样列，只能参与哈希，不能写入日志。
+                    for (column in 2..9) { append('/'); append(cursor.getString(column) ?: "-") }
+                    append('/'); append(tag(listOf(10, 11).joinToString("\u001f") { cursor.getString(it).orEmpty() }))
+                    append('/'); append(tag(listOf(12, 13).joinToString("\u001f") { cursor.getString(it).orEmpty() }))
+                    append('/'); append(tag(listOf(14, 15).joinToString("\u001f") { cursor.getString(it).orEmpty() }))
+                    append('/'); append(cursor.getString(16) ?: "-")
+                }
+            }
+            val digest = tag(rows.joinToString("\n"))
+            if (digest != previous) {
+                syncDiagnostic("inventory v=2 digest=$digest rows=${rows.size} columns=message/session/md/sd/status/ever/placeholder/sender/textChars/reasoningChars/textHash/reasoningHash/bodyPartsHash/cloud")
+                // 每行日志控制在 logcat 的 4 KiB 上限内，防止诊断本身被截断。
+                rows.chunked(20).forEachIndexed { index, page ->
+                    syncDiagnostic("inventory part=$index rows=${page.joinToString(",")}")
+                }
+                previous = digest
+            }
+        }
+}
+
+/**
  * 先 pull 检查 epoch 再 push；每页数据与游标原子提交，每批结果独立确认。
  * 上传不推进 pull 游标，以免跳过其他设备的并发变更。最多连续上传 20 批，避免超过 Worker 时间预算。
  */

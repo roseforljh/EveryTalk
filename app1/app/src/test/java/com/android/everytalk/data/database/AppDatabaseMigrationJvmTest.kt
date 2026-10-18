@@ -85,7 +85,7 @@ class AppDatabaseMigrationJvmTest {
 
         val startedAt = System.nanoTime()
         val migrated = Room.databaseBuilder(context, AppDatabase::class.java, databaseName)
-            .addMigrations(AppDatabase.MIGRATION_42_43)
+            .addMigrations(AppDatabase.MIGRATION_42_43, AppDatabase.MIGRATION_43_44)
             .build()
         try {
             val database = migrated.openHelper.readableDatabase

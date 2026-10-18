@@ -28,6 +28,7 @@ import androidx.compose.ui.zIndex
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.android.everytalk.data.DataClass.Message
+import com.android.everytalk.data.computer.Computer
 import com.android.everytalk.ui.screens.MainScreen.drawer.* // 导入抽屉子包下的所有内容
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -78,6 +79,10 @@ fun AppDrawerContent(
     onToggleGroup: (String) -> Unit,
     isGroupSectionExpanded: Boolean = false,
     onToggleGroupSection: () -> Unit = {},
+    computers: List<Computer> = emptyList(),
+    groupComputerIds: Map<String, String> = emptyMap(),
+    onCreateConversationInGroup: (String) -> Unit = {},
+    onSelectGroupComputer: (String, String?) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
     isLoadingHistoryData: Boolean = false, // 新增：历史数据加载状态
     onShareConversation: (Int) -> Unit = {}, // 新增：分享会话回调
@@ -91,6 +96,7 @@ fun AppDrawerContent(
     var renamingIndex by remember { mutableStateOf<Int?>(null) }
     var showCreateGroupDialog by remember { mutableStateOf(false) }
     var showMoveToGroupDialog by remember { mutableStateOf<Int?>(null) }
+    var serverSelectionGroup by remember { mutableStateOf<String?>(null) }
     var isAddGroupButtonVisible by remember(isGroupSectionExpanded) { mutableStateOf(isGroupSectionExpanded) } // 控制"创建分组"按钮的可见性（跟随展开状态）
     // 分组删除保留原有动画；会话显示状态直接由历史列表决定。
     val deletingGroups = remember { mutableStateListOf<String>() }
@@ -341,6 +347,8 @@ fun AppDrawerContent(
                                                 groupName = groupName,
                                                 isExpanded = expandedGroups.contains(groupName),
                                                 onToggleExpand = { onToggleGroup(groupName) },
+                                                onCreateConversation = { onCreateConversationInGroup(groupName) },
+                                                onSelectServer = { serverSelectionGroup = groupName },
                                                 onRename = { newName -> onRenameGroup(groupName, newName) },
                                                 onDelete = {
                                                     deletingGroups.add(groupName)
@@ -630,6 +638,18 @@ fun AppDrawerContent(
                         onMoveConversationToGroup(conversationIndex, group, isImageGenerationMode)
                         showMoveToGroupDialog = null
                     }
+                )
+            }
+            serverSelectionGroup?.let { groupName ->
+                GroupComputerSelectionDialog(
+                    groupName = groupName,
+                    computers = computers,
+                    selectedComputerId = groupComputerIds[groupName],
+                    onDismiss = { serverSelectionGroup = null },
+                    onSelect = { computerId ->
+                        onSelectGroupComputer(groupName, computerId)
+                        serverSelectionGroup = null
+                    },
                 )
             }
         }

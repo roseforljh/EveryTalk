@@ -29,14 +29,16 @@ class SystemPromptInjectorRenderSafetyTest {
     }
 
     @Test
-    fun `系统提示要求工具调用之间输出可见过程说明`() {
+    fun `工具可以连续执行且只在关键进展说明`() {
         val zhPrompt = SystemPromptInjector.getSystemPrompt("zh-CN")
         val enPrompt = SystemPromptInjector.getSystemPrompt("en")
 
-        assertTrue(zhPrompt.contains("调用工具前先用一两句简短正文"))
-        assertTrue(zhPrompt.contains("禁止只连续输出工具调用"))
-        assertTrue(enPrompt.contains("Before each tool call"))
-        assertTrue(enPrompt.contains("Do not emit only a sequence of tool calls"))
+        assertTrue(zhPrompt.contains("可以连续完成相关步骤"))
+        assertTrue(zhPrompt.contains("不重复索要已有授权"))
+        assertTrue(enPrompt.contains("Related calls may proceed together"))
+        assertTrue(enPrompt.contains("Reuse existing authorization"))
+        assertFalse(zhPrompt.contains("禁止只连续输出工具调用"))
+        assertFalse(enPrompt.contains("Before each tool call"))
     }
 
 
@@ -63,33 +65,31 @@ class SystemPromptInjectorRenderSafetyTest {
 
         assertTrue(prompt.contains("load_skill"))
         assertTrue(prompt.contains("read_skill_file"))
-        assertTrue(prompt.contains("完整 Skill 目录"))
+        assertTrue(prompt.contains("Skill 目录只是索引"))
+        assertTrue(prompt.contains("Skill 不授予工具权限"))
+        assertTrue(prompt.contains("request_agent"))
+        assertTrue(prompt.contains("request_user_input"))
         assertTrue(prompt.contains("# AI 内容安全"))
         assertTrue(prompt.contains("非自愿私密内容"))
     }
 
     @Test
-    fun `stable prompt should preserve markdown table math and code contracts`() {
+    fun `保留渲染需要的格式且不强制禁止标准Markdown结构`() {
         val zhPrompt = SystemPromptInjector.getSystemPrompt("zh-CN")
         val enPrompt = SystemPromptInjector.getSystemPrompt("en")
 
-        assertTrue(zhPrompt.contains("表头、分隔行和所有数据行列数一致"))
-        assertTrue(zhPrompt.contains("表格从独立行开始"))
-        assertTrue(zhPrompt.contains("竖线写成 `\\|`"))
-        assertTrue(zhPrompt.contains("禁止 `\\(...\\)`、`\\[...\\]`"))
-        assertTrue(zhPrompt.contains("禁止把代码围栏嵌入列表或引用"))
-        assertTrue(zhPrompt.contains("围栏必须从物理行第 1 列开始"))
-        assertTrue(zhPrompt.contains("围栏内只保留代码自身需要的缩进"))
-        assertTrue(zhPrompt.contains("URL 不放在反引号中"))
-        assertTrue(zhPrompt.contains("备用参数另起一行"))
+        assertTrue(zhPrompt.contains("表格每行独立、列数一致"))
+        assertTrue(zhPrompt.contains("竖线转义为 `\\|`"))
+        assertTrue(zhPrompt.contains("代码围栏独占一行"))
+        assertTrue(zhPrompt.contains("URL 不加反引号、不换行"))
+        assertTrue(zhPrompt.contains("`\$...\$` 或独立行 `\$\$...\$\$`"))
+        assertFalse(zhPrompt.contains("禁止把代码围栏嵌入列表或引用"))
 
         assertTrue(enPrompt.contains("one row per line"))
-        assertTrue(enPrompt.contains("escape `|`"))
-        assertTrue(enPrompt.contains("no `\\(...\\)` or `\\[...\\]`"))
-        assertTrue(enPrompt.contains("column 1"))
-        assertTrue(enPrompt.contains("never nest them in lists or quotes"))
-        assertTrue(enPrompt.contains("Never put URLs in backticks"))
-        assertTrue(enPrompt.contains("fallback parameters on a separate line"))
+        assertTrue(enPrompt.contains("escaped `\\|`"))
+        assertTrue(enPrompt.contains("code fences on separate lines"))
+        assertTrue(enPrompt.contains("do not backtick or split URLs"))
+        assertTrue(enPrompt.contains("`\$...\$` or standalone `\$\$...\$\$`"))
     }
 
     @Test
@@ -97,18 +97,57 @@ class SystemPromptInjectorRenderSafetyTest {
         val zhPrompt = SystemPromptInjector.getSystemPrompt("zh-CN")
         val enPrompt = SystemPromptInjector.getSystemPrompt("en")
 
-        assertTrue(zhPrompt.contains("`#` 标记与标题正文之间必须有一个空格"))
-        assertTrue(zhPrompt.contains("`-`、`*`、`+` 等行首标记后必须有一个空格"))
-        assertTrue(zhPrompt.contains("每项只使用一个标记"))
-        assertTrue(zhPrompt.contains("禁止在同一物理行继续写第二个标记"))
-        assertTrue(zhPrompt.contains("缩进到父项正文起始列"))
-        assertTrue(zhPrompt.contains("改用同级列表或普通段落"))
+        assertTrue(zhPrompt.contains("标题和列表标记后留空格"))
+        assertTrue(zhPrompt.contains("每项另起一行"))
+        assertTrue(zhPrompt.contains("嵌套列表正确缩进"))
 
-        assertTrue(enPrompt.contains("one space between the `#` marker and text"))
-        assertTrue(enPrompt.contains("one space after a leading `-`, `*`, or `+`"))
-        assertTrue(enPrompt.contains("one marker per physical line"))
-        assertTrue(enPrompt.contains("parent text column"))
-        assertTrue(enPrompt.contains("Use siblings or prose"))
+        assertTrue(enPrompt.contains("space after heading/list markers"))
+        assertTrue(enPrompt.contains("one item per line"))
+        assertTrue(enPrompt.contains("proper nesting"))
+    }
+
+    @Test
+    fun `打包模块按固定顺序组合且与安全策略保持一致`() {
+        listOf("zh-CN", "en", "ja-JP").forEach { language ->
+            val directory = if (language.startsWith("zh")) "zh-CN" else "en"
+            val modules = listOf("core", "execution", "tools", "output").map { name ->
+                val stream = checkNotNull(javaClass.getResourceAsStream("/system-prompts/$directory/$name.md"))
+                stream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                    .removePrefix("\uFEFF").replace("\r\n", "\n").replace('\r', '\n').trim()
+            }
+            val expected = (listOf(SystemPromptInjector.PROTOCOL_MARKER) + modules +
+                com.android.everytalk.util.AiContentSafetyPolicy.systemInstruction(language)).joinToString("\n\n")
+            assertEquals(expected, SystemPromptInjector.getSystemPrompt(language))
+        }
+    }
+
+    @Test
+    fun `升级旧版包装时移除旧规则但保留自定义指令`() {
+        listOf(5, 6).forEach { version ->
+            val oldPrompt = "[EveryTalk Prompt Protocol v$version]\n旧版固定规则"
+            listOf("", "\n\n[EveryTalk Custom Instructions]\n请保留我的指令").forEach { custom ->
+                val result = SystemPromptInjector.injectSystemPrompt(listOf(
+                    SimpleTextApiMessage(role = "system", content = oldPrompt + custom),
+                    SimpleTextApiMessage(role = "user", content = "继续"),
+                ))
+                val prompt = (result.first() as SimpleTextApiMessage).content
+                assertFalse(prompt.contains("旧版固定规则"))
+                assertFalse(prompt.contains("Protocol v$version"))
+                assertEquals(custom.isNotEmpty(), prompt.contains("请保留我的指令"))
+                assertEquals(result, SystemPromptInjector.injectSystemPrompt(result))
+            }
+        }
+    }
+
+    @Test
+    fun `专项提示打包可读且不会混入普通聊天`() {
+        val tasks = listOf(SystemPromptModules.historySummary, SystemPromptModules.inputSummary,
+            SystemPromptModules.memoryExtraction, SystemPromptModules.conversationTitle, SystemPromptModules.mcpAccess)
+        val ordinary = SystemPromptInjector.getSystemPrompt()
+        tasks.forEach { task ->
+            assertTrue(task.isNotBlank())
+            assertFalse(ordinary.contains(task))
+        }
     }
 
     @Test

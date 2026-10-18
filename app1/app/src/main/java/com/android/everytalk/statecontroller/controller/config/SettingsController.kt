@@ -222,7 +222,9 @@ class SettingsController(
         val pinnedImageIds: Set<String> = emptySet(),
         // 新增：分组信息
         @EncodeDefault
-        val conversationGroups: Map<String, List<String>> = emptyMap()
+        val conversationGroups: Map<String, List<String>> = emptyMap(),
+        @EncodeDefault
+        val conversationGroupComputerIds: Map<String, String> = emptyMap()
     )
 
     @OptIn(ExperimentalSerializationApi::class)
@@ -311,7 +313,8 @@ class SettingsController(
                     imageGenerationHistory = imageHistoryToExport,
                     pinnedTextIds = pinnedTextIds,
                     pinnedImageIds = pinnedImageIds,
-                    conversationGroups = groups
+                    conversationGroups = groups,
+                    conversationGroupComputerIds = stateHolder.conversationGroupComputerIds.value,
                 )
                 
                 // 强制使用 encodeDefaults = true 的 Json 实例，确保空列表/Map 也能被序列化输出
@@ -402,7 +405,8 @@ class SettingsController(
                 imageGenerationHistoricalConversations = stateHolder._imageGenerationHistoricalConversations.value.toList(),
                 pinnedTextConversationIds = stateHolder.pinnedTextConversationIds.value.toSet(),
                 pinnedImageConversationIds = stateHolder.pinnedImageConversationIds.value.toSet(),
-                conversationGroups = stateHolder.conversationGroups.value.toMap()
+                conversationGroups = stateHolder.conversationGroups.value.toMap(),
+                conversationGroupComputerIds = stateHolder.conversationGroupComputerIds.value.toMap()
             )
             
             try {

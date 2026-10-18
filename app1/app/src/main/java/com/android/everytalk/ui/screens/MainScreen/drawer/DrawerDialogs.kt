@@ -1,5 +1,7 @@
 package com.android.everytalk.ui.screens.MainScreen.drawer
 import com.android.everytalk.statecontroller.*
+import com.android.everytalk.data.computer.Computer
+import com.android.everytalk.data.computer.ComputerStatus
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -19,6 +21,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -487,4 +490,132 @@ internal fun MoveToGroupDialog(
         },
         dismissButton = {}
     )
+}
+
+/**
+ * 选择分组默认服务器。
+ * 这里保存的是分组级默认值，只影响以后从该分组新建的会话；已有会话不会被切换。
+ * 只有 READY 状态的服务器可以被设为默认值，避免新会话创建后立即因为服务器不可用而失败。
+ */
+@Composable
+internal fun GroupComputerSelectionDialog(
+    groupName: String,
+    computers: List<Computer>,
+    selectedComputerId: String?,
+    onDismiss: () -> Unit,
+    onSelect: (String?) -> Unit,
+) {
+    val dialogBg = appDialogContainerColor()
+    val contentColor = appDialogContentColor()
+    val cancelButtonColor = appDialogCancelColor()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
+        shape = AppDialogShape,
+        containerColor = dialogBg,
+        titleContentColor = contentColor,
+        textContentColor = contentColor,
+        title = { Text(stringResource(R.string.drawer_group_server_title, groupName)) },
+        text = {
+            if (computers.isEmpty()) {
+                Text(stringResource(R.string.agent_server_picker_empty))
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 360.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    item {
+                        GroupComputerOption(
+                            title = stringResource(R.string.drawer_group_server_none),
+                            subtitle = null,
+                            selected = selectedComputerId == null,
+                            enabled = true,
+                            onClick = {
+                                onSelect(null)
+                                onDismiss()
+                            },
+                        )
+                    }
+                    items(computers, key = { it.id }) { computer ->
+                        val isReady = computer.status == ComputerStatus.READY
+                        GroupComputerOption(
+                            title = computer.displayName,
+                            subtitle = "${computer.username}@${computer.host}:${computer.port} · " +
+                                stringResource(
+                                    if (isReady) R.string.agent_server_ready else R.string.agent_server_unavailable,
+                                ),
+                            selected = selectedComputerId == computer.id,
+                            enabled = isReady,
+                            onClick = {
+                                onSelect(computer.id)
+                                onDismiss()
+                            },
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            OutlinedButton(
+                onClick = onDismiss,
+                shape = AppDialogButtonShape,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(44.dp),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = dialogBg,
+                    contentColor = cancelButtonColor,
+                ),
+                border = BorderStroke(1.dp, cancelButtonColor),
+            ) {
+                Text(stringResource(R.string.action_cancel), fontWeight = FontWeight.Medium)
+            }
+        },
+        dismissButton = {},
+    )
+}
+
+@Composable
+private fun GroupComputerOption(
+    title: String,
+    subtitle: String?,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    val itemShape = RoundedCornerShape(14.dp)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(itemShape)
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (enabled) 0.5f else 0.25f))
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, itemShape)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(selected = selected, onClick = onClick, enabled = enabled)
+        Spacer(Modifier.width(8.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            subtitle?.let {
+                Text(
+                    text = it,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
 }

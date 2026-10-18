@@ -159,8 +159,11 @@ class AgentContextManager(
             (forceLocalCompaction || !hasActiveNativeCompaction) &&
             hasNewCompactionSource &&
             // Pi 只比较当前上下文与压缩线；最大输出不参与触发，否则大输出模型会过早反复压缩。
+            // 但压缩线按窗口百分比计算，可能高于“窗口 - 最大输出”的硬上限。超过硬上限时必须先压缩，
+            // 否则只能裁掉旧历史或直接报单轮超窗。
             (forceLocalCompaction ||
                 activeBeforeTrim > genericCompactionThreshold ||
+                activeBeforeTrim > inputBudget ||
                 (staleCheckpointRecovery && activeBeforeTrim > recoveryThreshold))
         val plan = if (needsCompaction) {
             planCompaction(
@@ -325,7 +328,9 @@ class AgentContextManager(
             ?.coerceAtMost(contextWindow)
         val triggerThreshold = maxOf(configuredTrigger, checkpointRetrigger ?: 1L)
             .coerceAtMost(contextWindow)
-        val targetAfterCompaction = (triggerThreshold - hysteresisGap).coerceAtLeast(1L)
+        // 压缩线可能高于硬输入上限，压缩目标必须同时低于硬上限，否则压完仍然超窗。
+        val targetAfterCompaction = (minOf(triggerThreshold, contextWindow - reserveTokens) - hysteresisGap)
+            .coerceAtLeast(1L)
         val fixedOverhead = estimate.systemPromptTokens + estimate.toolSchemaTokens +
             estimate.protocolOverheadTokens
         val availableBeforeTrigger = (triggerThreshold - fixedOverhead).coerceAtLeast(1L)

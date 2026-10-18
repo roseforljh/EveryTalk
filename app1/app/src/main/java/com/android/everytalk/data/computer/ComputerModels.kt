@@ -338,11 +338,10 @@ data class ComputerSessionState(
     /** 固定边界标签，明确告诉模型这些是只读状态，不是用户指令。 */
     fun toPrompt(): String = buildString {
         appendLine("<computer-session-state>")
-        appendLine("当前 Workspace: $workspaceId")
         if (activeTasks.isEmpty()) {
             appendLine("当前没有活动的远端任务。")
         } else {
-            appendLine("当前 Workspace 活动任务：")
+            appendLine("当前服务器活动任务：")
             activeTasks.forEach { task ->
                 append("- ").append(task.executionId)
                     .append(", ").append(task.target.name.lowercase())
@@ -420,7 +419,7 @@ data class UpdateComputerRequest(
     val host: String,
     val port: Int,
     val username: String,
-    /** 编辑后服务器默认执行目标，决定后续 Workspace 是否进入 Docker 沙箱。 */
+    /** 兼容旧配置的字段；SSH 服务器统一以 Direct 为默认，容器由单次工具调用选择。 */
     val runMode: ComputerRunMode,
     val credential: ComputerCredential?,
 )
@@ -448,6 +447,19 @@ data class ComputerRequestContext(
     /** 用户明确选择重试 UNKNOWN 工具后才设置，禁止写进请求快照。 */
     @Transient val retryUnknownToolCallId: String? = null,
 )
+
+/**
+ * 用当前服务器记录刷新请求权限，同时保留本次调用的批准与恢复标记。
+ * 这个纯上下文变换由 Repository 在工具边界调用，便于保证 SSH、Cloudflare 和测试使用同一规则。
+ */
+internal suspend fun refreshComputerPermissionMode(
+    context: ComputerRequestContext,
+    computerLookup: suspend (String) -> Computer?,
+): ComputerRequestContext {
+    val computer = computerLookup(context.computerId)
+        ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
+    return context.copy(permissionMode = computer.permissionMode)
+}
 
 /**
  * 校验冻结请求仍指向同一服务器和 Workspace。
@@ -496,6 +508,7 @@ class ComputerException(
 ) : Exception(message, cause)
 
 object ComputerErrorCodes {
+    const val COMPUTER_DUPLICATE = "COMPUTER_DUPLICATE"
     const val HOST_INVALID = "HOST_INVALID"
     const val HOST_RESOLUTION_FAILED = "HOST_RESOLUTION_FAILED"
     const val SSH_TIMEOUT = "SSH_TIMEOUT"

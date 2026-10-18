@@ -49,6 +49,7 @@ class SyncWorker(context: Context, parameters: WorkerParameters) : CoroutineWork
         val resources = SyncResourceSynchronizer(applicationContext, db, api, user.id)
         val credentials = SyncCredentialSynchronizer(applicationContext, db, api, secrets, user.id)
         return try {
+            SyncInventoryDiagnostic.log(db)
             when (SyncEngine(
                 api = api,
                 beforePull = { credentials.captureLocal() },
@@ -84,10 +85,10 @@ class SyncWorker(context: Context, parameters: WorkerParameters) : CoroutineWork
                         db.openHelper.readableDatabase.query("""
                             SELECT COUNT(*), SUM(CASE WHEN reasoning IS NOT NULL AND reasoning != '' THEN 1 ELSE 0 END)
                             FROM messages WHERE deleted = 0 AND sessionId IN
-                            (SELECT id FROM chat_sessions WHERE deleted = 0 AND isImageGeneration = 0
+                            (SELECT id FROM chat_sessions WHERE deleted = 0
                             AND id NOT IN ('last_open_chat_v1', 'last_open_image_generation_v1'))
                         """.trimIndent()).use { cursor ->
-                            if (cursor.moveToFirst()) syncDiagnostic("complete messages=${cursor.getLong(0)} withReasoning=${cursor.getLong(1)} sessions=${db.chatDao().getAllSessions(false).size} settings=${db.settingsDao().getSyncableUserSettings().size} rejected=${db.settingsDao().syncRejectedCount()}")
+                            if (cursor.moveToFirst()) syncDiagnostic("complete messages=${cursor.getLong(0)} withReasoning=${cursor.getLong(1)} sessions=${db.chatDao().getAllSessions(false).size + db.chatDao().getAllSessions(true).size} settings=${db.settingsDao().getSyncableUserSettings().size} rejected=${db.settingsDao().syncRejectedCount()}")
                         }
                     }
                     Result.success()

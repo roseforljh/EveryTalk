@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.ConcurrentHashMap
  
  class ViewModelStateHolder {
     // 🎯 Streaming message state manager for efficient UI updates
@@ -59,6 +60,9 @@ import java.util.concurrent.atomic.AtomicLong
     
     // 分组状态
     val conversationGroups = MutableStateFlow<Map<String, List<String>>>(emptyMap())
+
+    /** 分组创建新会话时默认使用的服务器，键为分组名，值为 Computer ID。 */
+    val conversationGroupComputerIds = MutableStateFlow<Map<String, String>>(emptyMap())
 
     // 分组总区域展开/折叠状态（默认折叠）
     val isGroupSectionExpanded = MutableStateFlow(false)
@@ -121,6 +125,13 @@ val _isStreamingPaused = MutableStateFlow(false)
     // 分离的API Job
     var textApiJob: Job? = null
     var imageApiJob: Job? = null
+    /**
+     * 图像生成任务按会话保存。页面切换只会更换可见会话，不应取消其他会话的任务。
+     * key 是稳定会话 ID，value 是该会话当前正在运行的生成 Job。
+     */
+    val imageApiJobs: MutableMap<String, Job> = ConcurrentHashMap()
+    /** 每个图像会话当前生成中的 AI 消息，用于切换回来时恢复停止按钮和加载状态。 */
+    val imageApiMessageIds: MutableMap<String, String> = ConcurrentHashMap()
 
     // 分离的推理完成状态
     val textReasoningCompleteMap: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
@@ -143,7 +154,18 @@ val _isStreamingPaused = MutableStateFlow(false)
     fun updateCurrentConversationFunctionToggleState(
         update: (ConversationFunctionToggleState) -> ConversationFunctionToggleState
     ) {
-        val conversationId = _currentConversationId.value
+        updateConversationFunctionToggleState(_currentConversationId.value, update)
+    }
+
+    /**
+     * 更新指定会话的功能开关状态。
+     * 后台选服、预热等异步任务必须使用启动任务时捕获的会话 ID，
+     * 不能因为用户在任务完成前切换会话而把结果写到新会话。
+     */
+    fun updateConversationFunctionToggleState(
+        conversationId: String,
+        update: (ConversationFunctionToggleState) -> ConversationFunctionToggleState
+    ) {
         conversationFunctionToggleStates.update { currentMap ->
             val currentState = currentMap[conversationId] ?: ConversationFunctionToggleState()
             currentMap + (conversationId to update(currentState))
@@ -239,9 +261,12 @@ val _isStreamingPaused = MutableStateFlow(false)
 
     // 清理图像模式状态的方法 - 增强版本，确保完全隔离
     fun clearForNewImageChat() {
+        val oldConversationId = _currentImageGenerationConversationId.value
         imageGenerationMessages.clear()
         _isImageApiCalling.value = false
         imageApiJob?.cancel()
+        imageApiJobs.remove(oldConversationId)
+        imageApiMessageIds.remove(oldConversationId)
         imageApiJob = null
         _currentImageStreamingAiMessageId.value = null
         imageReasoningCompleteMap.clear()

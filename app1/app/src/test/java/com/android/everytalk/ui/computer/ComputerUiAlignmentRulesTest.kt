@@ -298,10 +298,8 @@ class ComputerUiAlignmentRulesTest {
         assertTrue(source.contains("computer_form_login"))
         assertTrue(source.contains("ComputerFormSectionTitle("))
         assertTrue(source.contains("if (keepCredentialHint)"))
-        assertTrue(source.contains("form.copy(sandboxEnabled = it)"))
-        val sandboxSection = source.substringAfter("// 编辑服务器时也必须保留这个开关")
-            .substringBefore("if (form.provider == ComputerProvider.SSH && form.username.trim() != \"root\")")
-        assertFalse("编辑时沙箱开关不能被凭据提示条件隐藏", sandboxSection.contains("!keepCredentialHint"))
+        assertFalse("服务器添加页不得出现沙箱开关", source.contains("sandboxEnabled"))
+        assertFalse("服务器添加页不得渲染沙箱 Switch", source.contains("Switch("))
     }
 
     @Test
@@ -335,7 +333,7 @@ class ComputerUiAlignmentRulesTest {
     }
 
     @Test
-    fun `首次添加逐阶段展示SSH与Container配置进度`() {
+    fun `首次添加只展示SSH检查，不触发Container配置`() {
         val screenSource = sourceFile("ui/screens/computer/ComputerScreen.kt")
             .readText(Charsets.UTF_8)
         val dialogSource = sourceFile("ui/screens/computer/ComputerAddCard.kt")
@@ -345,7 +343,7 @@ class ComputerUiAlignmentRulesTest {
 
         assertTrue(screenSource.contains("ComputerSetupStage.READING_HOST_KEY"))
         assertTrue(screenSource.contains("ComputerSetupStage.INSPECTING_VPS"))
-        assertTrue(screenSource.contains("ComputerSetupStage.BUILDING_IMAGE"))
+        assertFalse("首次添加不得触发 Container 配置", screenSource.contains("provisionComputerContainer"))
         assertTrue(screenSource.contains("progressDetailText"))
         assertTrue(provisionerSource.contains("onProgress(ComputerSetupStage.PREPARING_DOCKER)"))
         assertTrue(provisionerSource.contains("onProgress(ComputerSetupStage.BUILDING_IMAGE)"))

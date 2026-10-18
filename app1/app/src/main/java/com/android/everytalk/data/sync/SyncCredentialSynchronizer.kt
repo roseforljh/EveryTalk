@@ -228,13 +228,21 @@ internal class SyncCredentialSynchronizer(
                         }
                         val raw = plain(field) ?: continue
                         val bytes = SyncCrypto.decodeCanonicalBase64(raw)
+                        // 云端凭据与本机一致时不重写，否则会把正常连接打回 DISCONNECTED 并再次触发上传。
+                        val local = try {
+                            if (field == "sshCredential") credentials.loadComputerCredential(row.key) else credentials.loadOriginalComputerCredential(row.key)
+                        } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { null }
+                        val localBytes = local?.let { try { ComputerCredentialCodec.encode(it) } finally { it.clear() } }
+                        val unchanged = localBytes != null && java.security.MessageDigest.isEqual(bytes, localBytes)
+                        localBytes?.fill(0)
+                        if (unchanged) { bytes.fill(0); continue }
                         val credential = try { ComputerCredentialCodec.decode(bytes) } finally { bytes.fill(0) }
                         try {
                             if (field == "sshCredential") {
-                                val kind = credential.kind.name
                                 credentials.saveComputerCredential(row.key, credential)
+                                // authKind 是用户原始登录方式，由普通配置同步负责；专用私钥不能覆盖它。
                                 db.computerDao().getComputer(row.key)?.let { computer -> db.computerDao().upsertComputer(computer.copy(
-                                    authKind = kind, credentialState = ComputerCredentialState.ORIGINAL_ENCRYPTED.name,
+                                    credentialState = ComputerCredentialState.ORIGINAL_ENCRYPTED.name,
                                     status = ComputerStatus.DISCONNECTED.name, lastErrorCode = null)) }
                             }
                             else credentials.saveOriginalComputerCredential(row.key, credential)

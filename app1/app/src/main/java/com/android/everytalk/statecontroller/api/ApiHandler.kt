@@ -9,6 +9,7 @@ import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.ChatRequest
+import com.android.everytalk.data.DataClass.ImageGenerationResponse
 import com.android.everytalk.data.DataClass.ContextUsageSnapshot
 import com.android.everytalk.data.DataClass.ContextCompressionState
 import com.android.everytalk.ui.components.MarkdownPart
@@ -377,6 +378,8 @@ class ApiHandler(
     private val computerSessionStateProvider: suspend (ComputerRequestContext?) -> String? = { null },
     private val prepareAgentResumeRequest: suspend (String, ChatRequest, List<String>) -> ChatRequest = { _, request, _ -> request },
     private val prepareMcpResumeRequest: suspend (String, ChatRequest) -> ChatRequest = { _, _ -> error("MCP 开启入口不可用") },
+    /** 图像任务完成后按会话 ID 回写 Room，避免结果依赖当前可见页面。 */
+    private val persistImageGenerationResult: suspend (String, String, ImageGenerationResponse?, Throwable?) -> Unit = { _, _, _, _ -> },
 ) {
     private val context = context.applicationContext
     private val logger = AppLogger.forComponent("ApiHandler")
@@ -1446,6 +1449,11 @@ class ApiHandler(
         }
         // 🔧 修复：取消时必须重置所有流式状态，否则UI会继续显示"正在连接"
         if (isImageGeneration) {
+            val conversationId = stateHolder._currentImageGenerationConversationId.value
+            if (stateHolder.imageApiJobs[conversationId] === jobToCancel) {
+                stateHolder.imageApiJobs.remove(conversationId)
+            }
+            stateHolder.imageApiMessageIds.remove(conversationId)
             stateHolder.imageApiJob = null
             stateHolder._isImageApiCalling.value = false
             stateHolder._currentImageStreamingAiMessageId.value = null
@@ -1542,6 +1550,7 @@ class ApiHandler(
         contextUsageSnapshot: ContextUsageSnapshot? = null,
         onRequestFinished: () -> Unit = {},
     ) {
+        val requestConversationId = requestBody.conversationId.orEmpty()
         logger.debug(
             "streamChatResponse request summary: inputChars=${userMessageTextForContext.length}, trimmedChars=${userMessageTextForContext.trim().length}, messages.size=${requestBody.messages.size}, conversationId=${requestBody.conversationId}, preCreatedId=$preCreatedAiMessageId"
         )
@@ -1612,7 +1621,10 @@ class ApiHandler(
             
             val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
             viewModelScope.launch(Dispatchers.Main.immediate) {
-                addAiMessageAfterUserMessage(messageList, newAiMessage, afterUserMessageId)
+                // 后台图像任务可能已经先通过 Room 回写并刷新了当前页面，避免重复添加占位消息。
+                if (messageList.none { it.id == aiMessageId }) {
+                    addAiMessageAfterUserMessage(messageList, newAiMessage, afterUserMessageId)
+                }
                 onNewAiMessageAdded()
                 logger.debug("🔧 AI message added to list: $aiMessageId")
             }
@@ -1622,10 +1634,29 @@ class ApiHandler(
 
         viewModelScope.launchRegisteredJob(
             register = { job ->
-                if (isImageGeneration) stateHolder.imageApiJob = job else stateHolder.textApiJob = job
+                if (isImageGeneration) {
+                    stateHolder.imageApiMessageIds[requestConversationId] = aiMessageId
+                    // 同一会话发送新问题时会替换该会话自己的任务；其他会话的任务继续运行。
+                    stateHolder.imageApiJobs[requestConversationId] = job
+                    if (stateHolder._currentImageGenerationConversationId.value == requestConversationId) {
+                        stateHolder.imageApiJob = job
+                    }
+                } else stateHolder.textApiJob = job
             },
             onCompletion = { job ->
-                clearCompletedStreamingJob(stateHolder, job, aiMessageId, isImageGeneration)
+                if (isImageGeneration) {
+                    if (stateHolder.imageApiJobs[requestConversationId] === job) {
+                        stateHolder.imageApiJobs.remove(requestConversationId)
+                    }
+                    if (stateHolder.imageApiMessageIds[requestConversationId] == aiMessageId) {
+                        stateHolder.imageApiMessageIds.remove(requestConversationId)
+                    }
+                    if (stateHolder._currentImageGenerationConversationId.value == requestConversationId) {
+                        clearCompletedStreamingJob(stateHolder, job, aiMessageId, true)
+                    }
+                } else {
+                    clearCompletedStreamingJob(stateHolder, job, aiMessageId, false)
+                }
                 // 协程结束时必须通知发送闭包，使外部发送协程生命周期正常闭环并释放调度槽位，不可在此抑制
                 runCatching(onRequestFinished).onFailure { error ->
                     logger.warn("Request finished callback failed: ${error.message}")
@@ -1656,103 +1687,24 @@ class ApiHandler(
                         }
                     }
                 }
-               if (isImageGeneration) {
+                if (isImageGeneration) {
                     try {
                         val response = ApiClient.generateImage(requestBody)
                         logger.debug(
                             "[ImageGen] Response received: images=${response.images.size}, textChars=${response.text?.length ?: 0}"
                         )
-
-                        val imageUrls = response.images.mapNotNull { it.url.takeIf(String::isNotBlank) }
-                        val responseText = response.text
-
-                        logger.debug("[ImageGen] 🖼️ Extracted ${imageUrls.size} image URLs from response")
-                        imageUrls.forEachIndexed { idx, url ->
-                            logger.debug("[ImageGen] 🖼️ Image[$idx] urlChars=${url.length}")
-                        }
-
-                        if (imageUrls.isNotEmpty()) {
-                            // 同步完成本地持久化后再更新消息，避免 UI 与历史记录不一致。
-                            logger.debug("[ImageGen] 🖼️ Starting synchronous image persistence for ${imageUrls.size} images")
-                            
-                            val persistenceResult = withContext(Dispatchers.IO) {
-                                streamProcessor.persistGeneratedImageUrlsForMessage(aiMessageId, imageUrls)
-                            }
-                            val persistedUrls = persistenceResult.urls
-                            
-                            // 只使用校验完成的本地路径更新消息。
-                            withContext(Dispatchers.Main.immediate) {
-                                val messageList = stateHolder.imageGenerationMessages
-                                val index = messageList.indexOfFirst { it.id == aiMessageId }
-                                logger.debug("[ImageGen] 🖼️ Looking for message with ID: $aiMessageId, found at index: $index")
-                                
-                                if (index != -1) {
-                                    val currentMessage = messageList[index]
-                                    logger.debug(
-                                        "[ImageGen] Current message: id=${currentMessage.id}, hasImageUrls=${currentMessage.imageUrls?.isNotEmpty()}, textChars=${currentMessage.text.length}"
-                                    )
-                                    
-                                    val persistenceFailureText = if (persistenceResult.failures.isNotEmpty()) {
-                                        val firstFailure = persistenceResult.failures.first().toGeneratedImageMessage(context)
-                                        val countText = if (persistenceResult.failures.size > 1) {
-                                            context.resources.getQuantityString(
-                                                R.plurals.generated_images_not_saved_count,
-                                                persistenceResult.failures.size,
-                                                persistenceResult.failures.size,
-                                            )
-                                        } else {
-                                            ""
-                                        }
-                                        "\n\n> $firstFailure$countText"
-                                    } else {
-                                        ""
-                                    }
-                                    val updatedMessage = currentMessage.copy(
-                                        imageUrls = persistedUrls,
-                                        text = (responseText ?: currentMessage.text) + persistenceFailureText,
-                                        contentStarted = true,
-                                        isError = persistedUrls.isEmpty(),
-                                        currentWebSearchStage = null,
-                                        executionStatus = null
-                                    )
-                                    
-                                    // 🔥 关键修复：使用removeAt+add替代直接赋值，确保触发Compose重组
-                                    messageList.removeAt(index)
-                                    messageList.add(index, updatedMessage)
-                                    
-                                    logger.debug("[ImageGen] 🖼️ Updated message with ${persistedUrls.size} local image paths at index $index")
-                                    logger.debug("[ImageGen] 🖼️ Message list size after update: ${messageList.size}")
-                                    
-                                    // 🔥 强制触发状态变化，确保Flow重新计算
-                                    stateHolder.isImageConversationDirty.value = true
-                                    
-                                    logger.debug("[ImageGen] 🖼️ Marked conversation as dirty to trigger UI update")
-                                } else {
-                                    logger.error("[ImageGen] 🖼️ ERROR: Message with ID $aiMessageId not found in list!")
-                                    logger.debug("[ImageGen] 🖼️ Current message list IDs: ${messageList.map { it.id }}")
-                                }
-                            }
-
-                            // 图片本地持久化完成后立即保存历史，确保只记录稳定路径。
-                            withContext(Dispatchers.IO) {
-                                try {
-                                    historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = true)
-                                    logger.debug("[ImageGen] 🖼️ History saved with local image paths")
-                                } catch (e: Exception) {
-                                    logger.warn("[ImageGen] 🖼️ Failed to save history: ${e.message}")
-                                }
-                            }
-                        } else {
-                            // 后端已完成所有重试但仍无图片，将返回的文本作为错误消息处理
-                            val error = IOException(responseText ?: "图像生成失败，且未返回明确错误信息。")
-                            updateMessageWithError(aiMessageId, error, isImageGeneration = true)
+                        // 结果处理与当前页面解耦：切换到其他会话后仍按 requestConversationId 写入原会话。
+                        withContext(Dispatchers.IO) {
+                            persistImageGenerationResult(requestConversationId, aiMessageId, response, null)
                         }
                     } catch (exception: CancellationException) {
                         throw exception
                     } catch (e: Exception) {
                         // 网络请求失败或任何其他异常
                         logger.error("[ImageGen] Exception during image generation for message $aiMessageId", e)
-                        updateMessageWithError(aiMessageId, e, isImageGeneration = true)
+                        withContext(Dispatchers.IO) {
+                            persistImageGenerationResult(requestConversationId, aiMessageId, null, e)
+                        }
                         // 不再调用 onRequestFailed，避免 Snackbar 弹出
                     }
                } else {

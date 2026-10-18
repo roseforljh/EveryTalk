@@ -36,6 +36,79 @@ class HistoryManagerCustomPromptPersistenceTest {
 
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
+    fun `分组新会话首次保存和再次聊天后仍属于原分组`() = runTest {
+        // 同时覆盖普通新会话、目标编号已存在，以及保存排队期间切到另一会话。
+        for ((grouped, switchWhileSaving, targetAlreadyPresent) in listOf(
+            Triple(true, false, false),
+            Triple(true, false, true),
+            Triple(true, true, false),
+            Triple(false, false, false),
+        )) {
+            val state = ViewModelStateHolder()
+            val scope = TestScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+            val persistence = mockk<DataPersistenceManager>(relaxed = true)
+            val temporaryId = "chat-group-draft"
+            val user = Message(id = "group-user", text = "分组中的首条消息", sender = Sender.User)
+            val initialMembers = if (grouped) listOf("existing", temporaryId) else listOf("existing")
+            var storedGroups = mapOf(
+                "工作" to if (targetAlreadyPresent) initialMembers + user.id else initialMembers,
+                "其他" to listOf("unrelated-session"),
+            )
+            state.conversationGroups.value = storedGroups
+            state.setCurrentConversationId(temporaryId)
+            state.messages.add(user)
+            val writes = mutableListOf<String>()
+            coEvery { persistence.saveHistorySession(any(), any(), any()) } coAnswers {
+                writes += "session"
+            }
+            coEvery { persistence.updateConversationGroups(any()) } coAnswers {
+                val update = firstArg<(Map<String, List<String>>) -> Map<String, List<String>>>()
+                storedGroups = update(storedGroups)
+                writes += "groups"
+                storedGroups
+            }
+            val history = HistoryManager(state, persistence, { a, b -> a == b }, {}, scope)
+
+            try {
+                history.saveCurrentChatToHistoryIfNeeded(forceSave = true)
+                if (switchWhileSaving) {
+                    state.setCurrentConversationId("chat-other-draft")
+                    state.messages.clear()
+                }
+                advanceUntilIdle()
+
+                val savedId = com.android.everytalk.util.ConversationNameHelper.resolveStableId(
+                    state._historicalConversations.value.single(),
+                )
+                assertEquals(user.id, savedId)
+                val expectedMembers = if (grouped) listOf("existing", user.id) else listOf("existing")
+                assertEquals(expectedMembers, storedGroups.getValue("工作"))
+                assertEquals(storedGroups, state.conversationGroups.value)
+                assertEquals(listOf("unrelated-session"), storedGroups.getValue("其他"))
+                // 抽屉以稳定编号查找分组；找不到的记录才会落到普通“会话”列表。
+                assertEquals(grouped, state.conversationGroups.value.any { savedId in it.value })
+                assertTrue(writes.indexOf("session") < writes.indexOf("groups"))
+                assertEquals(if (switchWhileSaving) "chat-other-draft" else user.id, state._currentConversationId.value)
+
+                // 恢复该会话继续聊天，再次保存不能丢归属或重复添加成员。
+                state.setCurrentConversationId(user.id)
+                state._loadedHistoryIndex.value = 0
+                state.messages.clear()
+                state.messages.addAll(listOf(user, Message(id = "group-reply", text = "回答", sender = Sender.AI)))
+                state.isTextConversationDirty.value = true
+                history.saveCurrentChatToHistoryNow(forceSave = true)
+                assertEquals(expectedMembers, storedGroups.getValue("工作"))
+                assertEquals(storedGroups, state.conversationGroups.value)
+                assertEquals(1, state._historicalConversations.value.size)
+            } finally {
+                scope.coroutineContext[Job]?.cancel()
+                advanceUntilIdle()
+            }
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
     fun `实际保存队列识别token补写和停止定稿即使页面内容判等相同`() = runTest {
         val state = ViewModelStateHolder()
         val scope = TestScope(SupervisorJob() + StandardTestDispatcher(testScheduler))

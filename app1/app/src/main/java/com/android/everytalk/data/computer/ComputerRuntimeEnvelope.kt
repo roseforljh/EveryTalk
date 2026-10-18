@@ -136,13 +136,13 @@ internal fun hostForegroundRuntimeCommand(
 
 data class ComputerExecRequest(
     val command: String,
-    val cwd: String = "/workspace",
+    val target: ComputerExecTarget = ComputerExecTarget.HOST,
+    val cwd: String = if (target == ComputerExecTarget.HOST) "~" else "/workspace",
     val environment: Map<String, String> = emptyMap(),
     val stdin: String? = null,
     val timeoutMillis: Long = 120_000,
     val background: Boolean = false,
     val asRoot: Boolean = false,
-    val target: ComputerExecTarget = ComputerExecTarget.CONTAINER,
 )
 
 data class ComputerExecResult(
@@ -317,10 +317,8 @@ class ComputerRuntimeEnvelope(
 
     /** 模型首轮响应期间预连接 SSH，并校验 VPS 上持久化的 Wrapper。 */
     suspend fun prewarm(connection: ComputerSshConnection, computer: Computer) {
-        when (computer.runMode) {
-            ComputerRunMode.DIRECT -> ensureDirectRuntimeWrapper(connection)
-            ComputerRunMode.CONTAINER -> verifyContainerRuntime(connection, computer)
-        }
+        // 旧服务器即使保存过 Container 模式，启动 Agent 也只预热 SSH；容器由显式工具请求准备。
+        ensureDirectRuntimeWrapper(connection)
     }
 
     suspend fun execute(
@@ -334,7 +332,7 @@ class ComputerRuntimeEnvelope(
         val timings = RuntimeExecutionTimings()
         var envelope: ByteArray? = null
         return try {
-            if (computer.runMode == ComputerRunMode.DIRECT) {
+            if (request.target == ComputerExecTarget.HOST) {
                 val wrapperStarted = System.nanoTime()
                 try {
                     timings.wrapperInstalled = ensureDirectRuntimeWrapper(connection)
@@ -400,7 +398,7 @@ class ComputerRuntimeEnvelope(
     }
         var envelope: ByteArray? = null
         return try {
-            if (request.target == ComputerExecTarget.HOST || computer.runMode == ComputerRunMode.DIRECT) {
+            if (request.target == ComputerExecTarget.HOST) {
                 ensureDirectRuntimeWrapper(connection)
             }
             val runtimeEnvelope = buildComputerRuntimeEnvelope(request)
@@ -451,7 +449,7 @@ class ComputerRuntimeEnvelope(
         expectedRequestHash: String? = null,
     ): ComputerRemoteExecutionSnapshot {
         ComputerIdentifier.requireValid(executionId, "Execution ID")
-        if (target == ComputerExecTarget.HOST || computer.runMode == ComputerRunMode.DIRECT) {
+        if (target == ComputerExecTarget.HOST) {
             ensureDirectRuntimeWrapper(connection)
         }
         val command = executionQueryCommand(
@@ -501,7 +499,7 @@ class ComputerRuntimeEnvelope(
         ComputerIdentifier.requireValid(executionId, "Execution ID")
         require(stdoutOffset >= 0 && stderrOffset >= 0) { "日志偏移无效" }
         require(maxBytes in 1..MAX_REMOTE_READ_BYTES) { "日志读取长度无效" }
-        if (target == ComputerExecTarget.HOST || computer.runMode == ComputerRunMode.DIRECT) {
+        if (target == ComputerExecTarget.HOST) {
             ensureDirectRuntimeWrapper(connection)
         }
         val command = executionQueryCommand(
@@ -571,7 +569,7 @@ class ComputerRuntimeEnvelope(
         ComputerIdentifier.requireValid(executionId, "Execution ID")
         require(stdoutCursor >= 0 && stderrCursor >= 0) { "日志游标无效" }
         require(maxBytes in 1..MAX_REMOTE_READ_BYTES) { "日志读取长度无效" }
-        if (target == ComputerExecTarget.HOST || computer.runMode == ComputerRunMode.DIRECT) {
+        if (target == ComputerExecTarget.HOST) {
             ensureDirectRuntimeWrapper(connection)
         }
         val command = executionQueryCommand(
@@ -628,7 +626,7 @@ class ComputerRuntimeEnvelope(
         expectedRequestHash: String? = null,
     ): ComputerRemoteExecutionSnapshot {
         ComputerIdentifier.requireValid(executionId, "Execution ID")
-        if (target == ComputerExecTarget.HOST || computer.runMode == ComputerRunMode.DIRECT) {
+        if (target == ComputerExecTarget.HOST) {
             ensureDirectRuntimeWrapper(connection)
         }
         val command = executionQueryCommand(
@@ -690,14 +688,6 @@ class ComputerRuntimeEnvelope(
             wrapperVersion = directRuntimeWrapper.version,
             requestHash = requestHash,
         )
-        computer.runMode == ComputerRunMode.DIRECT -> directManagedExecutionCommand(
-            workspaceId = workspace.id,
-            runtimeId = runtimeId,
-            executionId = executionId,
-            timeoutSeconds = timeoutSeconds,
-            wrapperVersion = directRuntimeWrapper.version,
-            requestHash = requestHash,
-        )
         else -> "${helperPrefix(computer)} start-execution ${workspace.id} $runtimeId $executionId ${request.asRoot} $timeoutSeconds $requestHash"
     }
 
@@ -720,17 +710,6 @@ class ComputerRuntimeEnvelope(
         }
         if (target == ComputerExecTarget.HOST) {
             return hostQueryCommand(executionId, action, stdoutOffset, stderrOffset, maxBytes, expectedRequestHash)
-        }
-        if (computer.runMode == ComputerRunMode.DIRECT) {
-            val wrapper = "${'$'}HOME/${runtimeWrapperRemotePath(directRuntimeWrapper.version)}"
-            val executionDirectory = "${'$'}HOME/.everytalk/workspaces/${workspace.id}/.everytalk/executions/$executionId"
-            val arguments = when (kind) {
-                QueryKind.STATUS -> "\"$executionDirectory\" '' --execution-status 0 \"${expectedRequestHash.orEmpty()}\""
-                QueryKind.RESULT -> "\"$executionDirectory\" '' --execution-result $stdoutOffset $stderrOffset $maxBytes \"${expectedRequestHash.orEmpty()}\""
-                QueryKind.WATCH -> "\"$executionDirectory\" '' --watch-execution $stdoutOffset $stderrOffset $maxBytes \"${expectedRequestHash.orEmpty()}\""
-                QueryKind.CANCEL -> "\"$executionDirectory\" '' --execution-cancel 0 \"${expectedRequestHash.orEmpty()}\""
-            }
-            return "\"$wrapper\" $arguments"
         }
         val subcommand = when (kind) {
             QueryKind.STATUS -> "execution-status ${workspace.id} $executionId ${expectedRequestHash.orEmpty()}"
@@ -810,13 +789,7 @@ class ComputerRuntimeEnvelope(
     private fun validateRequest(computer: Computer, executionId: String, request: ComputerExecRequest) {
         ComputerIdentifier.requireValid(executionId, "Execution ID")
         requireValidComputerExecRequest(request)
-        if (computer.runMode != ComputerRunMode.CONTAINER) {
-            throw ComputerException(
-                ComputerErrorCodes.COMPUTER_NOT_READY,
-                "服务器需要先完成 Container 配置",
-                action = "REPAIR_COMPUTER",
-            )
-        }
+        // Container 在进入这里前由 WorkspaceManager 按本次请求延迟准备。
     }
 
     private suspend fun executeForeground(
@@ -831,12 +804,6 @@ class ComputerRuntimeEnvelope(
         val timeoutSeconds = ((request.timeoutMillis + 999) / 1000).coerceIn(1, 3600)
         val command = when {
             request.target == ComputerExecTarget.HOST -> hostForegroundRuntimeCommand(
-                runtimeId = runtimeId,
-                timeoutSeconds = timeoutSeconds,
-                wrapperVersion = directRuntimeWrapper.version.takeIf { computer.runMode == ComputerRunMode.DIRECT },
-            )
-            computer.runMode == ComputerRunMode.DIRECT -> directForegroundRuntimeCommand(
-                workspaceId = workspace.id,
                 runtimeId = runtimeId,
                 timeoutSeconds = timeoutSeconds,
                 wrapperVersion = directRuntimeWrapper.version,
@@ -872,14 +839,14 @@ class ComputerRuntimeEnvelope(
     ): ComputerExecResult {
         val runtimeId = runtimeId(executionId)
         val processId = "process_${UUID.randomUUID().toString().replace("-", "")}"
-        val command = when (computer.runMode) {
-            ComputerRunMode.DIRECT -> {
+        val command = when (request.target) {
+            ComputerExecTarget.HOST -> {
                 val wrapperPath = runtimeWrapperRemotePath(directRuntimeWrapper.version)
                 "\"\$HOME/$wrapperPath\" " +
                     "\"\$HOME/.everytalk/workspaces/${workspace.id}/.everytalk/runtime/$runtimeId\" " +
                     "\"\$HOME/.everytalk/workspaces/${workspace.id}/.everytalk/background/$processId\" --envelope"
             }
-            ComputerRunMode.CONTAINER -> {
+            ComputerExecTarget.CONTAINER -> {
                 val helper = helperPrefix(computer)
                 "$helper run-background ${workspace.id} $runtimeId $processId ${request.asRoot}"
             }
@@ -955,22 +922,6 @@ class ComputerRuntimeEnvelope(
             }
             true
         }
-
-    /** Container Helper 已按版本持久安装，只在预热阶段确认它仍可用。 */
-    private suspend fun verifyContainerRuntime(connection: ComputerSshConnection, computer: Computer) {
-        val result = connection.execute(
-            command = "${helperPrefix(computer)} version",
-            timeoutMillis = 15_000,
-            maxOutputBytes = 1024,
-        )
-        if (
-            result.timedOut ||
-            result.exitCode != 0 ||
-            result.stdout.lineSequence().none { it.trim() == "version=$COMPUTER_BOOTSTRAP_VERSION" }
-        ) {
-            throw ComputerException(ComputerErrorCodes.HELPER_INTEGRITY_FAILED, "Container Helper 校验失败")
-        }
-    }
 
     private fun helperPrefix(computer: Computer): String = if (computer.username == "root") {
         CONTAINER_HELPER_PATH

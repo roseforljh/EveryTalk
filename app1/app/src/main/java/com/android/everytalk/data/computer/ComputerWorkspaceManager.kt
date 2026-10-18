@@ -22,7 +22,11 @@ class ComputerWorkspaceManager(private val repository: ComputerRepository) {
         val lockKey = "$computerId\u0000$conversationId"
         return workspaceLocks.forKey(lockKey).withLock {
             val dao = repository.dao()
-            dao.getWorkspace(computerId, conversationId)?.toModel()?.let { return@withLock it }
+            dao.getWorkspace(computerId, conversationId)?.toModel()?.let { existing ->
+                // 兼容旧容器会话：只恢复 SSH 默认模式，保留 ID、主机文件和按需容器信息。
+                if (existing.runMode != ComputerRunMode.DIRECT) dao.useSshWorkspaceDefault(existing.id)
+                return@withLock existing.copy(runMode = ComputerRunMode.DIRECT)
+            }
             val computer = repository.getComputer(computerId)
                 ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
             newWorkspace(computer, conversationId).also { workspace ->
@@ -136,14 +140,11 @@ class ComputerWorkspaceManager(private val repository: ComputerRepository) {
     }
 
     /** 只有模型明确选择 CONTAINER 时才启动或创建容器，Host SSH 不受容器故障影响。 */
-    suspend fun prepareContainer(workspaceId: String) {
+    suspend fun prepareContainer(workspaceId: String): ComputerWorkspace {
         ComputerIdentifier.requireValid(workspaceId, "Workspace ID")
-        workspaceLocks.forKey(workspaceId).withLock {
+        return workspaceLocks.forKey(workspaceId).withLock {
             val workspace = repository.dao().getWorkspaceById(workspaceId)?.toModel()
                 ?: throw ComputerException(ComputerErrorCodes.WORKSPACE_NOT_READY, "Workspace 不存在")
-            if (workspace.runMode != ComputerRunMode.CONTAINER) {
-                throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "当前服务器没有配置隔离环境")
-            }
             val computer = repository.getComputer(workspace.computerId)
                 ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
             if (computer.status != ComputerStatus.READY) {
@@ -153,9 +154,21 @@ class ComputerWorkspaceManager(private val repository: ComputerRepository) {
                     action = "REPAIR_COMPUTER",
                 )
             }
+            val runtime = repository.ensureContainerRuntime(workspace.computerId)
+            // Container 只是本次执行的视图。准备失败也不能把正常 SSH 目录标为故障，
+            // 更不能整行写回旧快照，覆盖首条消息落库时正在迁移的会话编号。
             repository.withConnection(workspace.computerId) { connection, _ ->
-                ensureContainerWorkspace(connection, computer, workspace.id)
+                ensureContainerWorkspace(connection, runtime, workspace.id)
             }
+            val containerName = "everytalk-${workspace.id}"
+            repository.dao().updateWorkspaceContainer(workspace.id, containerName, runtime.sandboxImage)
+            val latest = repository.dao().getWorkspaceById(workspace.id)?.toModel() ?: workspace
+            latest.copy(
+                runMode = ComputerRunMode.CONTAINER,
+                containerName = containerName,
+                containerImage = runtime.sandboxImage,
+                status = ComputerWorkspaceStatus.READY,
+            )
         }
     }
 
@@ -184,26 +197,23 @@ class ComputerWorkspaceManager(private val repository: ComputerRepository) {
         repository.dao().upsertWorkspace(workspace.copy(status = ComputerWorkspaceStatus.DELETING).toEntity())
         try {
             repository.withConnection(workspace.computerId, requireReady = false) { connection, computer ->
-                val result = when (workspace.runMode) {
-                    ComputerRunMode.CONTAINER -> {
-                        val helper = if (computer.username == "root") {
-                            CONTAINER_HELPER
-                        } else {
-                            "sudo -n -- $CONTAINER_HELPER"
-                        }
-                        connection.execute(
-                            command = "$helper delete-workspace $workspaceId $deleteFiles",
-                            timeoutMillis = WORKSPACE_COMMAND_TIMEOUT_MILLIS,
-                            maxOutputBytes = 64 * 1024,
-                        )
+                val result = if (workspace.containerName != null || workspace.runMode == ComputerRunMode.CONTAINER) {
+                    val helper = if (computer.username == "root") {
+                        CONTAINER_HELPER
+                    } else {
+                        "sudo -n -- $CONTAINER_HELPER"
                     }
-                    ComputerRunMode.DIRECT -> {
-                        connection.execute(
-                            command = directWorkspaceDeleteCommand(workspaceId, deleteFiles),
-                            timeoutMillis = WORKSPACE_COMMAND_TIMEOUT_MILLIS,
-                            maxOutputBytes = 64 * 1024,
-                        )
-                    }
+                    connection.execute(
+                        command = "$helper delete-workspace $workspaceId $deleteFiles",
+                        timeoutMillis = WORKSPACE_COMMAND_TIMEOUT_MILLIS,
+                        maxOutputBytes = 64 * 1024,
+                    )
+                } else {
+                    connection.execute(
+                        command = directWorkspaceDeleteCommand(workspaceId, deleteFiles),
+                        timeoutMillis = WORKSPACE_COMMAND_TIMEOUT_MILLIS,
+                        maxOutputBytes = 64 * 1024,
+                    )
                 }
                 if (result.timedOut || result.exitCode != 0) {
                     throw ComputerException(
@@ -300,10 +310,8 @@ class ComputerWorkspaceManager(private val repository: ComputerRepository) {
             id = id,
             computerId = computer.id,
             conversationId = conversationId,
-            runMode = computer.runMode,
+            runMode = ComputerRunMode.DIRECT,
             hostPath = "~/.everytalk/workspaces/$id",
-            containerName = if (computer.runMode == ComputerRunMode.CONTAINER) "everytalk-$id" else null,
-            containerImage = if (computer.runMode == ComputerRunMode.CONTAINER) computer.sandboxImage else null,
         )
     }
 

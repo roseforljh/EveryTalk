@@ -164,9 +164,7 @@ class SimpleModeManager(
         Log.d(TAG, "Image index after save: $savedImageIndex")
         
         
-        clearImageApiState()
-        
-       
+        // 模式切换不取消图像任务；后台任务继续按会话 ID运行。
         stateHolder._loadedImageGenerationHistoryIndex.value = savedImageIndex
         Log.d(TAG, "Preserved image history index: $savedImageIndex")
         
@@ -484,10 +482,10 @@ class SimpleModeManager(
             val latestIndex = latestHistory.indexOfFirst { ConversationNameHelper.resolveStableId(it) == requestedId }
             if (latestIndex < 0) return@withContext
             val titledHistory = ConversationNameHelper.preserveStoredConversationTitle(latestHistory[latestIndex], loaded)
-            stateHolder._isImageApiCalling.value = false
-            stateHolder.imageApiJob?.cancel()
-            stateHolder.imageApiJob = null
-            stateHolder._currentImageStreamingAiMessageId.value = null
+            // 读取历史只替换可见消息，不取消目标会话或其他会话的后台任务。
+            stateHolder.imageApiJob = stateHolder.imageApiJobs[requestedId]
+            stateHolder._isImageApiCalling.value = stateHolder.imageApiJob?.isActive == true
+            stateHolder._currentImageStreamingAiMessageId.value = stateHolder.imageApiMessageIds[requestedId]
             Snapshot.withMutableSnapshot {
                 stateHolder.imageGenerationMessages.clear()
                 stateHolder.imageGenerationMessages.addAll(prepared.messages)

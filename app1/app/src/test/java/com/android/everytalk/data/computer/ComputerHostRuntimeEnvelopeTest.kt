@@ -8,6 +8,17 @@ import java.io.ByteArrayInputStream
 
 class ComputerHostRuntimeEnvelopeTest {
     @Test
+    fun `省略目标时默认SSH主机而显式沙箱仍使用容器目录`() {
+        val direct = ComputerExecRequest(command = "pwd")
+        assertEquals(ComputerExecTarget.HOST, direct.target)
+        assertEquals("~", direct.cwd)
+        assertEquals("EVERYTALK_EXEC_HOST_V1", ByteArrayInputStream(buildComputerRuntimeEnvelope(direct)).readAsciiLine())
+        val sandbox = ComputerExecRequest(command = "pwd", target = ComputerExecTarget.CONTAINER)
+        assertEquals("/workspace", sandbox.cwd)
+        assertEquals("EVERYTALK_EXEC_V1", ByteArrayInputStream(buildComputerRuntimeEnvelope(sandbox)).readAsciiLine())
+    }
+
+    @Test
     fun `主机Envelope保留主机目录并使用独立协议`() {
         val request = ComputerExecRequest(
             command = "systemctl status nginx",

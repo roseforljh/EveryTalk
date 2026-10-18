@@ -1171,7 +1171,7 @@ class MessageItemsControllerStatusTest {
     }
 
     @Test
-    fun `新消息列表按正文过程正文顺序生成稳定节点`() {
+    fun `新消息列表把多个过程合并到正文之前的执行区`() {
         val controller = MessageItemsControllerTestAccess.newController()
         val tool = completedToolStep()
         controller.stateHolder.messages.add(
@@ -1181,10 +1181,10 @@ class MessageItemsControllerStatusTest {
                 sender = Sender.AI,
                 contentStarted = true,
                 executionTrace = listOf(
-                    ExecutionTraceEvent.Content("正文 1"),
+                    ExecutionTraceEvent.Content("旁白 1"),
                     ExecutionTraceEvent.Reasoning("思考 1"),
                     ExecutionTraceEvent.Tool(tool),
-                    ExecutionTraceEvent.Content("正文 2"),
+                    ExecutionTraceEvent.Content("旁白 2"),
                     ExecutionTraceEvent.Reasoning("思考 2"),
                     ExecutionTraceEvent.Tool(tool.copy(id = "tool-2")),
                     ExecutionTraceEvent.Content("正文 3"),
@@ -1196,7 +1196,7 @@ class MessageItemsControllerStatusTest {
         val items = controller.chatListItemsForTest()
 
         assertEquals(
-            listOf("content", "process", "content", "process", "content", "footer"),
+            listOf("process", "content", "footer"),
             items.map { item ->
                 when (item) {
                     is ChatListItem.AiMessageContentSegment -> "content"
@@ -1207,7 +1207,7 @@ class MessageItemsControllerStatusTest {
             },
         )
         assertEquals(
-            listOf("正文 1", "正文 2", "正文 3"),
+            listOf("正文 3"),
             items.filterIsInstance<ChatListItem.AiMessageContentSegment>().map { it.text },
         )
         assertTrue(
@@ -1221,6 +1221,20 @@ class MessageItemsControllerStatusTest {
             items.filterIsInstance<ChatListItem.AiMessageProcessSegment>().all {
                 it.messageId == "ordered-output"
             }
+        )
+        assertEquals(
+            listOf("旁白 1", "思考 1", "调用工具", "旁白 2", "思考 2", "调用工具"),
+            items.single { it is ChatListItem.AiMessageProcessSegment }
+                .let { it as ChatListItem.AiMessageProcessSegment }
+                .events
+                .map { event ->
+                    when (event) {
+                        is ExecutionTraceEvent.Content -> event.text
+                        is ExecutionTraceEvent.Reasoning -> event.text
+                        is ExecutionTraceEvent.Tool -> event.step.title
+                        else -> error("执行区不应包含正式正文或用户边界事件")
+                    }
+                },
         )
         assertTrue(items.filterIsInstance<ChatListItem.AiMessageProcessSegment>().all { !it.replyIsStreaming })
     }
@@ -1254,7 +1268,7 @@ class MessageItemsControllerStatusTest {
         val processItems = items.filterIsInstance<ChatListItem.AiMessageProcessSegment>()
 
         assertEquals(
-            listOf("process", "content", "process", "content", "footer"),
+            listOf("process", "content", "footer"),
             items.map { item ->
                 when (item) {
                     is ChatListItem.AiMessageProcessSegment -> "process"
@@ -1264,9 +1278,9 @@ class MessageItemsControllerStatusTest {
                 }
             },
         )
-        assertTrue(processItems.first().events.isEmpty())
+        assertEquals(3, processItems.first().events.size)
         assertEquals(100L, processItems.first().executionStartedAtMillis)
-        assertEquals(500L, processItems.first().executionFinishedAtMillis)
+        assertEquals(900L, processItems.first().executionFinishedAtMillis)
     }
 
     @Test
@@ -1286,7 +1300,7 @@ class MessageItemsControllerStatusTest {
         Snapshot.sendApplyNotifications()
 
         val writingItems = controller.chatListItemsForTest()
-        assertTrue(writingItems.first() is ChatListItem.AiMessageContentSegment)
+        assertTrue(writingItems.first() is ChatListItem.AiMessageProcessSegment)
         val writing = writingItems.filterIsInstance<ChatListItem.AiMessageProcessSegment>().single()
         assertEquals(TOOL_CALL_WRITING_STATUS, writing.activityStatusText)
         assertTrue(writing.processIsActive)
@@ -1306,7 +1320,7 @@ class MessageItemsControllerStatusTest {
     }
 
     @Test
-    fun `流式正文已经继续输出时前一个过程段停止计时`() {
+    fun `流式正文继续输出时执行区保持展开但过程已非活动状态`() {
         val controller = MessageItemsControllerTestAccess.newController()
         val messageId = "ordered-output-streaming"
         controller.stateHolder.messages.add(
@@ -1333,12 +1347,13 @@ class MessageItemsControllerStatusTest {
         val processItems = controller.chatListItemsForTest()
             .filterIsInstance<ChatListItem.AiMessageProcessSegment>()
 
-        assertEquals(listOf(false, false), processItems.map { it.replyIsStreaming })
-        assertEquals(listOf(false, false), processItems.map { it.processIsActive })
+        // 回复仍在流式输出时保持合并执行区展开，过程活动状态单独判断。
+        assertEquals(listOf(true), processItems.map { it.replyIsStreaming })
+        assertEquals(listOf(false), processItems.map { it.processIsActive })
     }
 
     @Test
-    fun `多个过程段显示各自耗时而非整条回复总耗时`() {
+    fun `多个过程段合并为整条回复执行区并显示总耗时`() {
         val controller = MessageItemsControllerTestAccess.newController()
         controller.stateHolder.messages.add(
             Message(
@@ -1371,9 +1386,10 @@ class MessageItemsControllerStatusTest {
         val processItems = controller.chatListItemsForTest()
             .filterIsInstance<ChatListItem.AiMessageProcessSegment>()
 
-        // 首段正文前已有独立的首字等待耗时，随后才是两个真实执行过程段。
-        assertEquals(listOf(50L, 200L, 700L), processItems.map { it.executionStartedAtMillis })
-        assertEquals(listOf(100L, 500L, 900L), processItems.map { it.executionFinishedAtMillis })
+        assertEquals(1, processItems.size)
+        assertEquals(50L, processItems.single().executionStartedAtMillis)
+        assertEquals(900L, processItems.single().executionFinishedAtMillis)
+        assertEquals(6, processItems.single().events.size)
     }
 
     private fun completedToolStep() = ExecutionStep(

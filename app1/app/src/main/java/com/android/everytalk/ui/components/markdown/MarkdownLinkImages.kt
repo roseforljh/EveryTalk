@@ -564,8 +564,13 @@ internal fun MarkdownImageFailure(modifier: Modifier = Modifier, missingLocalFil
                 .padding(horizontal = 8.dp),
             contentAlignment = androidx.compose.ui.Alignment.Center,
         ) {
+            val failureText = if (missingLocalFile) {
+                stringResource(R.string.image_not_synced)
+            } else {
+                stringResource(R.string.image_load_failed)
+            }
             Text(
-                text = stringResource(if (missingLocalFile) R.string.image_not_synced else R.string.image_load_failed),
+                text = failureText,
                 style = MaterialTheme.typography.labelMedium,
                 maxLines = 1,
             )

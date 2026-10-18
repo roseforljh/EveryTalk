@@ -45,13 +45,13 @@ class MemoryRepositoryTest {
         val saved = repository.save("  请使用中文\r\n先给结论  ", MemoryCategory.USER_PREFERENCE)
         assertEquals("请使用中文\n先给结论", saved.content)
         assertEquals(saved.id, repository.save(saved.content).id)
-        expectFailure { repository.save("x".repeat(501), id = saved.id) }
+        expectFailure { repository.save("密码：123456", id = saved.id) }
         assertEquals(saved.content, repository.state().entries.single().content)
-        repository.setSettings(true, false)
+        repository.setSettings(true)
         repository.setEntryEnabled(saved.id, false)
         assertTrue(repository.search("中文", forModel = true).isEmpty())
         assertEquals(1, repository.search("中文").size)
-        repository.setSettings(false, false)
+        repository.setSettings(false)
         assertEquals(1, repository.state().entries.size)
         repository.delete(saved.id)
         expectFailure { repository.save("不能复活", id = saved.id) }
@@ -69,7 +69,7 @@ class MemoryRepositoryTest {
     }
 
     @Test fun `late writes and captures are rejected after disable clear or edit`() = runBlocking {
-        repository.setSettings(true, true)
+        repository.setSettings(true)
         val grant = MemoryWriteContext(repository.settings().version, "session", "message", MemoryOrigin.AUTO)
         assertTrue(repository.claimCapture(grant))
         assertFalse(repository.claimCapture(grant))
@@ -78,13 +78,13 @@ class MemoryRepositoryTest {
         expectFailure { repository.save("晚到结果", context = grant) }
         assertTrue(repository.state().entries.isEmpty())
         val next = grant.copy(version = repository.settings().version, userMessageId = "message-2")
-        repository.setSettings(false, true)
+        repository.setSettings(false)
         expectFailure { repository.save("关闭后结果", context = next) }
         expectFailure { repository.search("", forModel = true) }
     }
 
-    @Test fun `concurrent captures cannot exceed total capacity`() = runBlocking {
-        repository.setSettings(true, true)
+    @Test fun `concurrent captures are not restricted by former total character limit`() = runBlocking {
+        repository.setSettings(true)
         val version = repository.settings().version
         val successes = coroutineScope {
             (0 until 30).map { index -> async {
@@ -93,8 +93,8 @@ class MemoryRepositoryTest {
                 }.isSuccess
             } }.awaitAll().count { it }
         }
-        assertEquals(24, successes)
-        assertEquals(12_000, repository.state().characters)
+        assertEquals(30, successes)
+        assertEquals(15_000, repository.state().characters)
     }
 
     @Test fun `opening database again restores switches edits and per-entry enabled state`() = runBlocking {
@@ -104,7 +104,7 @@ class MemoryRepositoryTest {
         val memory = repository.save("原始偏好")
         repository.save("修改后的偏好", id = memory.id)
         repository.setEntryEnabled(memory.id, false)
-        repository.setSettings(true, true)
+        repository.setSettings(true)
         val version = repository.settings().version
         db.close()
         db = Room.databaseBuilder(context, AppDatabase::class.java, "memory-persistence-test").build()
@@ -117,14 +117,53 @@ class MemoryRepositoryTest {
         assertFalse(restored.entries.single().enabled)
     }
 
-    @Test fun `entry limit and literal search do not delete existing memories`() = runBlocking {
+    @Test fun `entry count and literal search do not delete existing memories`() = runBlocking {
         repeat(100) { repository.save("条目_$it%") }
-        expectFailure { repository.save("第101条") }
-        assertEquals(100, repository.state().entries.size)
+        repository.save("第101条")
+        assertEquals(101, repository.state().entries.size)
         assertEquals(1, repository.search("_5%").size)
         assertTrue(repository.search("不存在").isEmpty())
         repository.clear()
         assertTrue(repository.state().entries.isEmpty())
+    }
+
+    @Test fun `enabling memory also enables capture despite legacy setting`() = runBlocking {
+        db.settingsDao().insertSetting(SystemSettingEntity(MemoryRepository.AUTO_CAPTURE_KEY, "false"))
+        db.settingsDao().insertSetting(SystemSettingEntity(MemoryRepository.ENABLED_KEY, "true"))
+        assertTrue(repository.settings().autoCaptureEnabled)
+        repository.setSettings(false)
+        assertFalse(repository.settings().autoCaptureEnabled)
+        repository.setSettings(true)
+        assertTrue(repository.settings().autoCaptureEnabled)
+    }
+
+    @Test fun `shared document saves long text and clearing invalidates pending model writes`() = runBlocking {
+        repository.setSettings(true)
+        val longText = "共享的项目资料😀\n".repeat(2_000)
+        val saved = repository.saveDocument(longText, emptyList())
+        assertEquals(longText.trim(), saved.document)
+        assertEquals(saved.document, MemoryRepository(db).state().document)
+        val pending = MemoryWriteContext(saved.settings.version, "other-chat", "pending", MemoryOrigin.AUTO)
+        val cleared = repository.saveDocument("", saved.entries)
+        assertTrue(cleared.entries.isEmpty())
+        expectFailure { repository.save("删除前开始的提取不能恢复记忆", context = pending) }
+    }
+
+    @Test fun `document save preserves unseen AI additions and rejects overlapping edits atomically`() = runBlocking {
+        repository.setSettings(true)
+        repository.save("编辑前的内容")
+        val baseline = repository.state().entries
+        val context = MemoryWriteContext(repository.settings().version, "another-chat", "new-message", MemoryOrigin.AUTO)
+        val automatic = repository.save("编辑期间由其他会话新增的资料", context = context)
+        val saved = repository.saveDocument("用户手动修改", baseline)
+        assertEquals(setOf("用户手动修改", automatic.content), saved.entries.map { it.content }.toSet())
+        assertTrue(saved.entries.any { it.id == automatic.id })
+        val previous = saved.entries
+        repository.save("其他地方已修改", id = automatic.id)
+        expectFailure { repository.saveDocument("不应覆盖外部修改", previous) }
+        assertEquals(setOf("用户手动修改", "其他地方已修改"), repository.state().entries.map { it.content }.toSet())
+        expectFailure { repository.saveDocument("密码：123456", repository.state().entries) }
+        assertEquals(2, repository.state().entries.size)
     }
 
     @Test fun `real version 41 schema migrates through Room without losing settings or history`() = runBlocking {
@@ -151,7 +190,11 @@ class MemoryRepositoryTest {
         helper.writableDatabase
         helper.close()
         val migrated = Room.databaseBuilder(context, AppDatabase::class.java, "memory-migration-test")
-            .addMigrations(AppDatabase.MIGRATION_41_42, AppDatabase.MIGRATION_42_43).build()
+            .addMigrations(
+                AppDatabase.MIGRATION_41_42,
+                AppDatabase.MIGRATION_42_43,
+                AppDatabase.MIGRATION_43_44,
+            ).build()
         try {
             assertEquals("preserved", migrated.settingsDao().getValue("existing-test"))
             val migratedRepo = MemoryRepository(migrated)

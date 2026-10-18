@@ -49,18 +49,17 @@ class ComputerAddFormTest {
         val prepared = form.prepare()
         assertTrue(prepared.request.credential is ComputerCredential.Password)
         assertEquals(2222, prepared.request.port)
-        assertEquals(ComputerRunMode.CONTAINER, prepared.request.runMode)
+        assertEquals(ComputerRunMode.DIRECT, prepared.request.runMode)
         assertEquals("sudo-password", prepared.sudoPassword?.concatToString())
         prepared.clear()
     }
 
     @Test
-    fun `关闭沙箱后直接使用SSH`() {
+    fun `添加服务器始终使用SSH连接`() {
         val prepared = ComputerAddFormState(
             host = "tiny.example.com",
             username = "root",
             password = "ssh-password",
-            sandboxEnabled = false,
         ).prepare()
 
         assertEquals(ComputerRunMode.DIRECT, prepared.request.runMode)
@@ -68,15 +67,12 @@ class ComputerAddFormTest {
     }
 
     @Test
-    fun `添加表单明确展示沙箱安全说明和Direct选择`() {
+    fun `添加表单不再展示服务器级沙箱开关`() {
         val source = sourceFile("ComputerAddCard.kt")
 
-        assertTrue(source.contains("computer_sandbox_title"))
-        assertTrue(source.contains("computer_sandbox_enabled_description"))
-        assertTrue(source.contains("computer_sandbox_disabled_description"))
-        assertTrue(source.contains("form.copy(sandboxEnabled = it)"))
-        assertTrue(source.contains("uncheckedTrackColor"))
-        assertTrue(source.contains("uncheckedBorderColor"))
+        assertTrue(!source.contains("computer_sandbox_title"))
+        assertTrue(!source.contains("sandboxEnabled"))
+        assertTrue(!source.contains("Switch("))
     }
 
     @Test
@@ -100,18 +96,14 @@ class ComputerAddFormTest {
         assertEquals("ubuntu", form.username)
         assertEquals(ComputerAuthKind.PASSWORD, form.authKind)
         assertEquals("", form.password)
-        assertTrue(form.sandboxEnabled)
         assertNull(form.validationError(computer.authKind))
 
         val prepared = form.prepareUpdate(computer)
         assertNull(prepared.request.credential)
-        assertEquals(ComputerRunMode.CONTAINER, prepared.request.runMode)
+        assertEquals(ComputerRunMode.DIRECT, prepared.request.runMode)
         org.junit.Assert.assertFalse(prepared.replaceSudoPassword)
         prepared.clear()
 
-        val directPrepared = form.copy(sandboxEnabled = false).prepareUpdate(computer)
-        assertEquals(ComputerRunMode.DIRECT, directPrepared.request.runMode)
-        directPrepared.clear()
     }
 
     @Test

@@ -109,8 +109,14 @@ class AgentSafePauseTest {
         assertEquals(1, store.getRunsForSession("llm-pause").size)
         assertEquals(
             1,
-            observedRequests.last().messages.count { it.role == "user" },
+            // user role 也承载内部状态快照；暂停恢复不得重复的是原始用户输入。
+            observedRequests.last().messages.count {
+                it is SimpleTextApiMessage && it.role == "user" && it.content == "执行任务"
+            },
         )
+        assertEquals(1, observedRequests.last().messages.count {
+            it.id.startsWith("runtime-context:") && it.id.endsWith(":agent-execution-checkpoint")
+        })
     }
 
     @Test

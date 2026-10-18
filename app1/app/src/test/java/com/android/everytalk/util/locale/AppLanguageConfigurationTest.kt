@@ -65,8 +65,12 @@ class AppLanguageConfigurationTest {
         assertTrue(defaultVoiceStrings.values.all(String::isNotBlank))
         assertTrue(chineseVoiceStrings.values.all(String::isNotBlank))
         assertFalse(defaultVoiceStrings.values.any(::containsHan))
-        assertTrue(defaultVoiceStrings.getValue("voice_mode_prompt").contains("standard English"))
-        assertTrue(chineseVoiceStrings.getValue("voice_mode_prompt").contains("标准中文"))
+        val englishPrompt = defaultVoiceStrings.getValue("voice_mode_prompt")
+        val chinesePrompt = chineseVoiceStrings.getValue("voice_mode_prompt")
+        assertTrue(englishPrompt.contains("user’s language"))
+        assertTrue(chinesePrompt.contains("用户的语言"))
+        assertFalse(englishPrompt.contains("real person"))
+        assertFalse(chinesePrompt.contains("真人"))
     }
 
     @Test

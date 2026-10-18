@@ -629,7 +629,7 @@ class ComputerManager(
             if (computer.provider == ComputerProvider.SSH) prepareComputer(computer, requestContext)
             PreparedComputerRequest(
                 context = requestContext,
-                environmentPrompt = buildEnvironmentPrompt(computer),
+                environmentPrompt = buildComputerEnvironmentPrompt(computer, workspace),
                 permissionMode = computer.permissionMode,
                 provider = computer.provider,
             )
@@ -650,7 +650,7 @@ class ComputerManager(
             startPrewarm(preparedContext)
             PreparedComputerRequest(
                 context = preparedContext,
-                environmentPrompt = buildEnvironmentPrompt(computer),
+                environmentPrompt = buildComputerEnvironmentPrompt(computer, workspace),
                 permissionMode = computer.permissionMode,
                 provider = computer.provider,
             )
@@ -723,19 +723,21 @@ class ComputerManager(
         // 首轮模型响应已经与 SSH 准备并行；模型真正调用工具时再确认远端 Workspace 已就绪。
         val computer = repository.getComputer(requestContext.computerId)
             ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
+        // prepareComputer 可能复用 Agent 启动时的准备结果；权限必须以本次工具调用前的 Room 值为准。
+        val refreshedContext = repository.refreshPermissionMode(requestContext)
         if (computer.provider == com.android.everytalk.data.computer.ComputerProvider.CLOUDFLARE) {
             // Cloudflare 只有本地 Workspace 快照，不创建远端 SSH Workspace 或连接。
-            val workspace = repository.getWorkspace(requestContext.workspaceId)
+            val workspace = repository.getWorkspace(refreshedContext.workspaceId)
                 ?: throw ComputerException("WORKSPACE_NOT_FOUND", "Cloudflare Workspace 不存在")
-            check(workspace.matchesRequestContext(requestContext)) { "Workspace 与 Cloudflare Computer 不匹配" }
-            return cloudflareProvider.execute(toolName, arguments, toolCallId, requestContext, updateStatus)
+            check(workspace.matchesRequestContext(refreshedContext)) { "Workspace 与 Cloudflare Computer 不匹配" }
+            return cloudflareProvider.execute(toolName, arguments, toolCallId, refreshedContext, updateStatus)
         }
-        val prepared = prepareComputer(computer, requestContext).await()
+        val prepared = prepareComputer(computer, refreshedContext).await()
         val currentContext = prepared.context.copy(
             conversationId = requestContext.conversationId,
             // 准备 Workspace 会重建上下文；必须保留原 Run 身份，下载才能绑定原消息。
             runId = requestContext.runId,
-            permissionMode = requestContext.permissionMode,
+            permissionMode = refreshedContext.permissionMode,
             approvedToolCallId = requestContext.approvedToolCallId,
             retryUnknownToolCallId = requestContext.retryUnknownToolCallId,
         )
@@ -780,10 +782,13 @@ class ComputerManager(
     ): List<com.android.everytalk.data.computer.ComputerExecutionReconciliation> =
         repository.reconcileRemoteExecutions(conversationIds)
 
-    /** 每轮模型请求前注入精简的活动远端任务状态。 */
+    /** 每轮刷新环境与权限说明，让恢复的旧请求和压缩摘要也服从当前 SSH 默认规则。 */
     suspend fun computerSessionState(requestContext: ComputerRequestContext?): String? {
         requestContext ?: return null
-        return repository.getComputerSessionState(requestContext.workspaceId)?.toPrompt()
+        val state = repository.getComputerSessionState(requestContext.workspaceId) ?: return null
+        val computer = repository.getComputer(requestContext.computerId) ?: return state.toPrompt()
+        val workspace = repository.getWorkspace(requestContext.workspaceId) ?: return state.toPrompt()
+        return buildComputerEnvironmentPrompt(computer, workspace) + "\n\n" + state.toPrompt()
     }
 
     /** AgentLoop 的持久化审批入口；普通详情页操作继续使用原内存确认入口。 */
@@ -805,13 +810,15 @@ class ComputerManager(
                 enabled = { featureFlags.localBashEnabled },
             ).approval(arguments, toolCallId, context)
         }
-        val computer = repository.getComputer(context.computerId)
+        // 审批卡也可能在 Agent 已运行后才生成，必须读取详情页刚修改的权限。
+        val refreshedContext = repository.refreshPermissionMode(context)
+        val computer = repository.getComputer(refreshedContext.computerId)
         if (computer?.provider == com.android.everytalk.data.computer.ComputerProvider.CLOUDFLARE &&
             phase == ComputerToolApprovalPhase.BEFORE_EXECUTION
         ) {
-            return cloudflareProviderApproval(toolName, arguments, toolCallId, context)
+            return cloudflareProviderApproval(toolName, arguments, toolCallId, refreshedContext)
         }
-        return toolExecutor.approvalRequest(toolName, arguments, toolCallId, context, phase)
+        return toolExecutor.approvalRequest(toolName, arguments, toolCallId, refreshedContext, phase)
     }
 
     private suspend fun cloudflareProviderApproval(
@@ -917,7 +924,7 @@ class ComputerManager(
             port = port,
             protocol = protocol,
             expiresInSeconds = expiresInSeconds,
-            target = ComputerExecTarget.CONTAINER,
+            target = ComputerExecTarget.HOST,
         ),
     )
 
@@ -1013,7 +1020,8 @@ class ComputerManager(
             toolExecutor.closeWorkspace(workspace.id)
             runCatching { previewManager.stopByWorkspace(workspace.id) }
                 .onFailure { remoteWorkspaceCleanupSucceeded = false }
-            if (deleteRemoteFiles || (cleanupContainers && workspace.runMode == com.android.everytalk.data.computer.ComputerRunMode.CONTAINER)) {
+            if (deleteRemoteFiles || (cleanupContainers && (workspace.containerName != null ||
+                    workspace.runMode == com.android.everytalk.data.computer.ComputerRunMode.CONTAINER))) {
                 runCatching { workspaceManager.deleteRemote(workspace.id, deleteRemoteFiles) }
                     .onFailure { remoteWorkspaceCleanupSucceeded = false }
             }
@@ -1058,27 +1066,6 @@ class ComputerManager(
             }
         }
 
-    private fun buildEnvironmentPrompt(computer: Computer): String {
-        if (computer.provider == ComputerProvider.CLOUDFLARE) return "当前目标是 Cloudflare Computer。使用已授权的 Cloudflare 工具管理当前 Account 的资源。" +
-                "本地 just-bash 使用 App 私有 Workspace 的内存快照；文件保存通过 local_file_save 确认并返回可打开附件。"
-        val architecture = computer.capabilities?.architecture?.takeIf(String::isNotBlank) ?: "unknown"
-        val permissionInstruction = when (computer.permissionMode) {
-            ComputerPermissionMode.MANUAL ->
-                "The app decides locally which host commands and public previews require user approval."
-            ComputerPermissionMode.SMART ->
-                "For every exec and open_port call, set ask_user_approval=true only when you judge that the user should approve it; otherwise set false and execute directly."
-            ComputerPermissionMode.FULL ->
-                "All valid Agent operations execute directly without a user approval prompt."
-        }
-        return "Agent server tools are enabled for this request. The Android app connects to the VPS directly over SSH. " +
-            "For exec, use target=container by default for code, scripts, builds, tests, dependency installation, and file-producing work. " +
-            "When the user requests a file attachment, call download for the finished /workspace file. Only claim it is attached after download returns an attachment_id. " +
-            "Use target=host only when inspecting or managing the VPS operating system, services, processes, ports, logs, packages, or deployed applications. " +
-            "$permissionInstruction " +
-            "All file, terminal, upload, and download tools operate in the persistent /workspace Container. " +
-            "Architecture: $architecture. Available tools: ${ComputerToolNames.all.sorted().joinToString(", ")}."
-    }
-
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         prewarmJobs.values.forEach(Job::cancel)
@@ -1115,6 +1102,25 @@ class ComputerManager(
 
     private fun preparationKey(computerId: String, workspaceId: String): String =
         "$computerId\u0000$workspaceId"
+}
+
+/** 当前运行规则独立于旧聊天记录和服务器模式；按需沙箱不会改变后续工具的默认执行位置。 */
+internal fun buildComputerEnvironmentPrompt(computer: Computer, workspace: ComputerWorkspace): String {
+    val architecture = computer.capabilities?.architecture?.takeIf(String::isNotBlank) ?: "unknown"
+    val permissionInstruction = when (computer.permissionMode) {
+        ComputerPermissionMode.MANUAL -> "The app applies the current approval policy."
+        ComputerPermissionMode.SMART -> "Where provided, set ask_user_approval to whether this action needs user approval."
+        ComputerPermissionMode.FULL -> "All valid Agent operations execute directly without a user approval prompt."
+    }
+    if (computer.provider == ComputerProvider.CLOUDFLARE) return "当前目标是 Cloudflare Computer，工具操作当前 Account 的资源。" +
+        "本地 just-bash 使用私有 Workspace 内存快照；local_file_save 保存文件并返回附件。$permissionInstruction"
+    return "Agent server tools connect to the selected VPS directly over SSH. " +
+        "exec defaults to target=host; choose target=container when isolation is needed. The app prepares it on demand; later calls still default to host. " +
+        "These current environment facts supersede earlier container defaults in conversation history. " +
+        "download returns attachment_id when a file is attached. " +
+        "$permissionInstruction " +
+        "File, terminal, upload and download paths are relative to ${workspace.hostPath}. exec starts in the SSH user's home; set cwd as needed. " +
+        "Architecture: $architecture. Available tools: ${ComputerToolNames.all.sorted().joinToString(", ")}."
 }
 
 /** 本地 Workspace 目录名同时保留可读前缀和完整摘要，避免截断会话 ID 造成碰撞。 */

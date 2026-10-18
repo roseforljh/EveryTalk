@@ -146,6 +146,79 @@ data class MessageStorageState(
 )
 
 /**
+ * 同步读取消息时使用的轻量投影。
+ *
+ * messages 表还保存搜索结果、附件、工具步骤和压缩状态等本地大字段。
+ * 同步白名单不需要这些字段，直接 SELECT * 会把它们全部装进 CursorWindow，
+ * 大字段增加读取内存和单行溢出风险；窗口填满日志本身不代表漏行。
+ * 这里保留网络白名单和版本判断所需的列，明确把本地大字段隔离在同步查询之外。
+ */
+data class SyncMessageRow(
+    val id: String,
+    val sessionId: String,
+    val text: String,
+    val contentPartsJson: String,
+    val sender: String,
+    val reasoning: String?,
+    val contentStarted: Boolean,
+    val isError: Boolean,
+    val name: String?,
+    val timestamp: Long,
+    val outputType: String,
+    val executionTraceJson: String,
+    val executionFinishedAt: Long?,
+    val enabledToolIdsJson: String,
+    val modelName: String?,
+    val providerName: String?,
+    val tokenUsageJson: String?,
+    val contextUsageSnapshotJson: String?,
+    val uuid: String,
+    @ColumnInfo(name = "updated_at") val updatedAt: Long,
+    val deleted: Boolean,
+    @ColumnInfo(name = "sync_status") val syncStatus: String,
+    @ColumnInfo(name = "ever_synced") val everSynced: Boolean,
+    @ColumnInfo(name = "is_incomplete") val isIncomplete: Boolean,
+)
+
+/** 把同步投影恢复成仅含同步字段的实体，禁止把本地大字段带入网络映射。 */
+fun SyncMessageRow.toSyncEntity(converters: Converters = Converters()): MessageEntity = MessageEntity(
+    id = id,
+    sessionId = sessionId,
+    text = text,
+    contentParts = converters.toMessageContentParts(contentPartsJson),
+    sender = converters.toSender(sender),
+    reasoning = reasoning,
+    contentStarted = contentStarted,
+    isError = isError,
+    name = name,
+    timestamp = timestamp,
+    isPlaceholderName = false,
+    webSearchResults = null,
+    currentWebSearchStage = null,
+    imageUrls = null,
+    attachments = emptyList(),
+    outputType = outputType,
+    parts = emptyList(),
+    executionStatus = null,
+    executionSteps = emptyList(),
+    executionTrace = converters.toExecutionTrace(executionTraceJson),
+    executionFinishedAt = executionFinishedAt,
+    enabledToolIds = converters.toStringList(enabledToolIdsJson),
+    modelName = modelName,
+    providerName = providerName,
+    tokenUsage = converters.toTokenUsage(tokenUsageJson),
+    contextUsageSnapshot = converters.toContextUsageSnapshot(contextUsageSnapshotJson),
+    contextCompressionState = null,
+    storageFingerprint = "",
+    uuid = uuid,
+    updatedAt = updatedAt,
+    deleted = deleted,
+    syncStatus = syncStatus,
+    everSynced = everSynced,
+    isIncomplete = isIncomplete,
+)
+
+/**
  * 启动阶段只读取会话列表和搜索真正需要的标量字段。
  * 大型 JSON 字段在用户打开会话时再由完整查询读取。
  */

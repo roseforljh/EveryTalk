@@ -11,6 +11,7 @@ class ComputerRuntimeEnvelopeTest {
     fun `exec参数通过单个长度前缀Envelope传输`() {
         val request = ComputerExecRequest(
             command = "printf done",
+            target = ComputerExecTarget.CONTAINER,
             cwd = "/workspace/project",
             environment = mapOf("LANG" to "zh_CN.UTF-8"),
             stdin = "第一行\n第二行",

@@ -62,10 +62,15 @@ internal class RoomSyncStore(
     /** 先封存本机设置变更再拉取，防止首个远端分页重建列表时抹掉游客的分组和置顶。 */
     override suspend fun prepareForSync() = database.withTransaction {
         SyncSettingsProjector(database, secrets, userId, state.readSecretsEpoch().coerceAtLeast(0L)).refresh()
-        if (settings.getValue("sync_projection_recovery_version") != "4") {
-            // 本版还要修复旧空白消息和密钥恢复遗漏；保留本机修改、epoch，从 0 幂等重放一次。
+        if (settings.getValue("sync_projection_recovery_version") != "5") {
+            // 仅重放远端快照，修复旧版漏应用的行。不能在没有服务器对账证据时
+            // 把 LOCAL_ONLY 或所有配置强制改成待上传，否则会突破用户的数据保留决定。
             settings.deleteSetting(SyncStateStore.KEY_CURSOR)
-            settings.insertSetting(SystemSettingEntity("sync_projection_recovery_version", "4"))
+            settings.insertSetting(SystemSettingEntity("sync_projection_recovery_version", "5"))
+            // 旧版本把图片历史标成 LOCAL_ONLY；升级后只需一次性重新排队，
+            // 让已有图片会话和附件进入新的正式同步合同。
+            chat.markImageSessionsPending()
+            chat.markImageMessagesPending()
         }
     }
 
@@ -331,15 +336,16 @@ internal class RoomSyncStore(
             snapshots += PendingChangeSnapshot(SyncPayloadMapper.session(it), SyncEntity.SESSIONS, it.id, it.updatedAt)
         }
         if (snapshots.size < maxItems) {
-            val pendingMessages = chat.getPendingSyncMessages(maxItems - snapshots.size)
+            val pendingMessages = chat.getPendingSyncMessageRows(maxItems - snapshots.size)
             pendingMessages.forEach {
-            val session = chat.getStoredSession(it.sessionId) ?: return@forEach
-            val change = messageChangeForPush(it, session.uuid)
+            val message = it.toSyncEntity()
+            val session = chat.getStoredSession(message.sessionId) ?: return@forEach
+            val change = messageChangeForPush(message, session.uuid)
             if (change == null) {
                 // 远端已经拥有这条消息的全部可同步补充字段，本地的 PENDING 只是旧版本遗留状态。
-                    advancedPendingQueue = chat.markMessageSyncedIfVersion(it.uuid, it.updatedAt) > 0 || advancedPendingQueue
+                    advancedPendingQueue = chat.markMessageSyncedIfVersion(message.uuid, message.updatedAt) > 0 || advancedPendingQueue
             } else {
-                snapshots += PendingChangeSnapshot(change, SyncEntity.MESSAGES, it.id, it.updatedAt)
+                snapshots += PendingChangeSnapshot(change, SyncEntity.MESSAGES, message.id, message.updatedAt)
             }
             }
         }
@@ -425,7 +431,7 @@ internal class RoomSyncStore(
 
     /** 来源记录允许先后乱序到达：cloud: 前缀携带 UUID，不能因为尚未拉到正文丢掉来源。 */
     private suspend fun sourceSessionUuid(id: String?): String? = id?.let {
-        chat.getStoredSession(it)?.takeIf { s -> !s.isImageGeneration }?.uuid
+            chat.getStoredSession(it)?.uuid
             ?: it.takeIf { value -> value.startsWith("cloud:") }?.removePrefix("cloud:")
     }
     private suspend fun sourceMessageUuid(id: String?): String? = id?.let {
@@ -441,9 +447,10 @@ internal class RoomSyncStore(
         SyncEntity.SESSIONS -> chat.getSessionByUuid(s.change.id)?.let {
             it.updatedAt == s.version && SyncPayloadMapper.session(it) == s.change
         } ?: false
-        SyncEntity.MESSAGES -> chat.getMessageByUuid(s.change.id)?.let {
-            val session = chat.getStoredSession(it.sessionId)
-            it.updatedAt == s.version && session != null && messageChangeForPush(it, session.uuid) == s.change
+        SyncEntity.MESSAGES -> chat.getSyncMessageByUuid(s.change.id)?.let {
+            val message = it.toSyncEntity()
+            val session = chat.getStoredSession(message.sessionId)
+            message.updatedAt == s.version && session != null && messageChangeForPush(message, session.uuid) == s.change
         } ?: false
         SyncEntity.MEMORIES -> memory.getByUuid(s.change.id)?.let {
             it.clientModifiedAt == s.version && SyncPayloadMapper.memory(it,
@@ -545,7 +552,6 @@ internal class RoomSyncStore(
     }
 
     private suspend fun applySession(record: SyncRecord) {
-        require(!SyncPayloadMapper.boolean(record.payload, "isImageGeneration"))
         val old = chat.getSessionByUuid(record.id)
         val version = modified(record)
         if (old?.deleted == true && !record.deleted) return
@@ -555,11 +561,15 @@ internal class RoomSyncStore(
             id = old?.id ?: "cloud:${record.id}",
             creationTimestamp = SyncPayloadMapper.long(record.payload, "creationTimestamp", old?.creationTimestamp ?: 0),
             lastModifiedTimestamp = SyncPayloadMapper.long(record.payload, "lastModifiedTimestamp", old?.lastModifiedTimestamp ?: version),
-            isImageGeneration = false,
+            isImageGeneration = SyncPayloadMapper.boolean(record.payload, "isImageGeneration"),
             title = if (record.payload.containsKey("title")) SyncPayloadMapper.string(record.payload, "title") else old?.title,
             uuid = record.id, updatedAt = version, deleted = record.deleted, syncStatus = SyncStatus.SYNCED,
         )
-        if (old == null) chat.insertRemoteSession(candidate) else chat.updateRemoteSession(candidate)
+        if (old == null) {
+            chat.insertRemoteSession(candidate)
+            // IGNORE 不代表成功；旧库主键冲突时必须回滚整页，不能带着缺行推进游标。
+            check(chat.getSessionByUuid(record.id) != null) { "SYNC_SESSION_IDENTITY_CONFLICT" }
+        } else chat.updateRemoteSession(candidate)
         if (record.deleted) {
             chat.deletePendingMessagesForConversation(candidate.id)
             chat.deleteDrafts(candidate.id, chat.getDrafts(candidate.id).map { it.message.id })
@@ -581,7 +591,10 @@ internal class RoomSyncStore(
         val session = chat.getSessionByUuid(sessionUuid) ?: ChatSessionEntity(
             id = "cloud:$sessionUuid", creationTimestamp = timestamp, lastModifiedTimestamp = timestamp,
             isImageGeneration = false, uuid = sessionUuid, updatedAt = 0, syncStatus = SyncStatus.SYNCED,
-        ).also { chat.insertRemoteSession(it) }
+        ).also {
+            chat.insertRemoteSession(it)
+            check(chat.getSessionByUuid(sessionUuid) != null) { "SYNC_SESSION_IDENTITY_CONFLICT" }
+        }
         if (session.deleted) return
         val sender = Sender.valueOf(requireNotNull(SyncPayloadMapper.string(record.payload, "sender")))
         require(sender in setOf(Sender.User, Sender.AI, Sender.System, Sender.Tool))
@@ -632,7 +645,10 @@ internal class RoomSyncStore(
         val remoteFieldsBefore = settings.getValue(remoteMessageFieldsKey(record.id))
             ?.split(',')?.filter(String::isNotBlank)?.toSet().orEmpty()
         val old = chat.getMessageByUuid(record.id)
-        if (old == null) chat.insertRemoteMessage(message) else {
+        if (old == null) {
+            chat.insertRemoteMessage(message)
+            check(chat.getSyncMessageByUuid(record.id) != null) { "SYNC_MESSAGE_IDENTITY_CONFLICT" }
+        } else {
             // 补充合并只填缺失字段。旧版留下的云端空白占位允许用服务器正文补齐，
             // 但不能覆盖本机原件、待上传编辑或已恢复的完整归档。
             val supplemented = old.copy(

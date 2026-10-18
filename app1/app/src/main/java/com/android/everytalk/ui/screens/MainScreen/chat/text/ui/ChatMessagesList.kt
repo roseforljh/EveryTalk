@@ -78,6 +78,7 @@ import com.android.everytalk.ui.screens.BubbleMain.Main.resolveUserBubbleMaxHeig
 import com.android.everytalk.ui.screens.BubbleMain.Main.MessageContextMenu
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
 import com.android.everytalk.ui.screens.MainScreen.chat.core.PlaceholderRole
+import com.android.everytalk.ui.screens.MainScreen.chat.core.executionTraceForProcessDisplay
 import com.android.everytalk.ui.screens.MainScreen.chat.models.sortModelConfigs
 import com.android.everytalk.ui.screens.MainScreen.chat.text.state.ChatScrollStateManager
 import com.android.everytalk.ui.theme.ChatDimensions
@@ -702,7 +703,7 @@ fun ChatMessagesList(
                                 {
                                     viewModel.getMessageById(item.messageId)
                                         ?.executionTrace
-                                        ?.filter { it is ExecutionTraceEvent.Reasoning || it is ExecutionTraceEvent.Tool }
+                                        ?.let(::executionTraceForProcessDisplay)
                                         ?: item.events
                                 }
                             }

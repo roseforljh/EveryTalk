@@ -100,7 +100,8 @@ class MessageSenderMcpGuidanceTest {
         ).tools
 
         val guidance = requireNotNull(mcpApprovalSystemPrompt(mcpEnabled = false, mcpTools = requestTool))
-        assertTrue(guidance.contains("必须先调用 request_mcp"))
+        assertTrue(guidance.contains("request_mcp"))
+        assertTrue(guidance.contains("等待用户批准"))
         assertTrue(mcpApprovalSystemPrompt(mcpEnabled = true, mcpTools = requestTool) == null)
     }
 
@@ -121,6 +122,18 @@ class MessageSenderMcpGuidanceTest {
     }
 
     @Test
+    fun `升级后仍清理旧版MCP权限提示且保留用户指令`() {
+        val legacy = """
+            当前会话有已连接的 MCP 外部工具，但本轮尚未获得 MCP 使用授权。
+            如果用户的问题需要读取或操作外部服务数据，必须先调用 request_mcp 申请开启，说明申请原因，然后等待用户确认；不要直接回答“没有该能力”，也不要假装已经读取到数据。
+            如果用户的问题与外部工具无关，则直接正常回答。
+        """.trimIndent()
+        val custom = "我希望外部数据附上来源"
+        assertEquals(custom, removeMcpPendingApprovalPrompt("$custom\n\n$legacy"))
+        assertEquals(custom, removeMcpPendingApprovalPrompt(custom))
+    }
+
+    @Test
     fun `built in time tool definition uses expected tool name`() {
         val tool = builtInCurrentTimeToolDefinition()
         val function = tool["function"] as Map<*, *>
@@ -129,13 +142,14 @@ class MessageSenderMcpGuidanceTest {
     }
 
     @Test
-    fun `附件读取工具声明安全页上限并禁止并行分页`() {
+    fun `附件读取工具声明页上限和续读游标`() {
         val function = builtInReadAttachmentToolDefinition()["function"] as Map<*, *>
         val parameters = function["parameters"] as Map<*, *>
         val properties = parameters["properties"] as Map<*, *>
         val maxChars = properties["max_chars"] as Map<*, *>
 
         assertEquals(MAX_ATTACHMENT_PAGE_CHARS, maxChars["maximum"])
-        assertTrue((function["description"] as String).contains("禁止并行"))
+        assertTrue((function["description"] as String).contains("next_offset"))
+        assertEquals(0, (properties["offset"] as Map<*, *>)["minimum"])
     }
 }

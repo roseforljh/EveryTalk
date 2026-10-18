@@ -6,6 +6,7 @@ import androidx.annotation.StringRes
 import com.android.everytalk.R
 
 private val EXACT_MESSAGE_RESOURCES = mapOf(
+    "这台 SSH 服务器已经添加过了" to R.string.computer_duplicate,
     "Cloudflare Computer 或 Workspace 已变化" to R.string.ui_message_cloudflare_context_changed,
     "读取凭据期间 Cloudflare 目标或授权已变化" to R.string.ui_message_cloudflare_credential_context_changed,
     "Worker URL 必须是 HTTPS" to R.string.ui_message_cloudflare_worker_https,

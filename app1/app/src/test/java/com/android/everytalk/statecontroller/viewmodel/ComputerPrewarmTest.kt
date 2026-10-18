@@ -9,12 +9,37 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
 class ComputerPrewarmTest {
+    @Test
+    fun `旧容器记录不会让环境提示要求隔离工作区且每轮读取当前规则`() {
+        val computer = com.android.everytalk.data.computer.Computer(
+            id = "server", displayName = "server", host = "example.com", port = 22, username = "user",
+            authKind = com.android.everytalk.data.computer.ComputerAuthKind.PASSWORD,
+            runMode = com.android.everytalk.data.computer.ComputerRunMode.CONTAINER,
+        )
+        val workspace = com.android.everytalk.data.computer.ComputerWorkspace(
+            id = "ws_legacy", computerId = computer.id, conversationId = "session",
+            runMode = com.android.everytalk.data.computer.ComputerRunMode.CONTAINER,
+            hostPath = "/home/user/.everytalk/workspaces/ws_legacy", containerName = "everytalk-ws_legacy",
+        )
+        val prompt = buildComputerEnvironmentPrompt(computer, workspace)
+        assertTrue(prompt.contains("exec defaults to target=host"))
+        assertTrue(prompt.contains("later calls still default to host"))
+        assertTrue(prompt.contains("supersede earlier container defaults in conversation history"))
+        assertTrue(prompt.contains(workspace.hostPath))
+        assertFalse(prompt.contains("persistent /workspace Container"))
+        assertFalse(prompt.contains(workspace.containerName!!))
+        val method = sourceFile("ComputerManager.kt").substringAfter("suspend fun computerSessionState(")
+            .substringBefore("suspend fun approvalRequest(")
+        assertTrue(method.contains("buildComputerEnvironmentPrompt(computer, workspace)"))
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
     fun `同一Workspace合并并发预热并在完成后允许下一次预热`() = runTest {
@@ -94,7 +119,7 @@ class ComputerPrewarmTest {
 
         assertTrue(prepareRequest.contains("getOrCreateLocal"))
         assertEquals(false, prepareRequest.contains(".await()"))
-        assertTrue(execute.contains("prepareComputer(computer, requestContext).await()"))
+        assertTrue(execute.contains("prepareComputer(computer, refreshedContext).await()"))
     }
 
     @Test
@@ -102,7 +127,7 @@ class ComputerPrewarmTest {
         val managerSource = sourceFile("../../data/computer/ComputerWorkspaceManager.kt")
         val daoSource = sourceFile("../../data/database/daos/ComputerDao.kt")
         val prepare = managerSource.substringAfter("suspend fun prepare(workspaceId: String)")
-            .substringBefore("suspend fun getWorkspace")
+            .substringBefore("suspend fun prepareContainer")
 
         assertTrue(prepare.contains("getWorkspaceById(workspaceId)"))
         assertTrue(prepare.contains("updateWorkspaceRuntimeState("))

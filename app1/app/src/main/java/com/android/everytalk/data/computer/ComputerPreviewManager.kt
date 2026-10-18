@@ -28,7 +28,7 @@ data class ComputerPublicPreviewRequest(
     val port: Int,
     val protocol: String,
     val expiresInSeconds: Long?,
-    val target: ComputerExecTarget = ComputerExecTarget.CONTAINER,
+    val target: ComputerExecTarget = ComputerExecTarget.HOST,
 )
 
 /** Private Preview 持有 SSH lease；Public Preview 只有显式确认后才创建。 */
@@ -47,7 +47,7 @@ class ComputerPreviewManager(private val repository: ComputerRepository) : Close
         context: ComputerRequestContext,
         port: Int,
         protocol: String = "http",
-        target: ComputerExecTarget = ComputerExecTarget.CONTAINER,
+        target: ComputerExecTarget = ComputerExecTarget.HOST,
     ): ComputerPreviewOpenResult {
         validatePortAndProtocol(port, protocol)
         val workspace = requireWorkspace(context)
@@ -57,7 +57,7 @@ class ComputerPreviewManager(private val repository: ComputerRepository) : Close
         try {
             computer = repository.getComputer(context.computerId)
                 ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
-            remoteHost = when (effectivePreviewTarget(computer, target)) {
+            remoteHost = when (target) {
                 ComputerExecTarget.HOST -> "127.0.0.1"
                 ComputerExecTarget.CONTAINER -> repository.withConnection(computer.id) { connection, _ ->
                     resolveContainerAddress(connection, computer, workspace.id)
@@ -79,7 +79,7 @@ class ComputerPreviewManager(private val repository: ComputerRepository) : Close
             val preview = ComputerPreview(
                 workspaceId = workspace.id,
                 remotePort = port,
-                target = effectivePreviewTarget(computer, target),
+                target = target,
                 localPort = forward.localPort,
                 protocol = protocol,
                 visibility = ComputerPreviewVisibility.PRIVATE,
@@ -101,7 +101,7 @@ class ComputerPreviewManager(private val repository: ComputerRepository) : Close
         val computer = repository.getComputer(request.context.computerId)
             ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
         val previewId = "preview_${UUID.randomUUID().toString().replace("-", "")}"
-        val target = effectivePreviewTarget(computer, request.target)
+        val target = request.target
         val publicPort = when (target) {
             ComputerExecTarget.HOST -> verifyHostPublicPort(computer, request.port)
             ComputerExecTarget.CONTAINER -> openContainerPublicPort(
@@ -153,7 +153,7 @@ class ComputerPreviewManager(private val repository: ComputerRepository) : Close
             val workspace = repository.dao().getWorkspaceById(preview.workspaceId)?.toModel()
             if (workspace != null) {
                 val computer = repository.getComputer(workspace.computerId)
-                if (preview.target == ComputerExecTarget.CONTAINER && computer?.runMode == ComputerRunMode.CONTAINER) {
+                if (preview.target == ComputerExecTarget.CONTAINER && computer != null) {
                     try {
                         repository.withConnection(computer.id, requireReady = false) { connection, _ ->
                             val result = connection.execute(
@@ -216,7 +216,7 @@ class ComputerPreviewManager(private val repository: ComputerRepository) : Close
     /** 重连后核对 Public Preview 的真实进程状态，修正 VPS 重启或远端提前停止造成的陈旧记录。 */
     suspend fun reconcileComputer(computerId: String) {
         val computer = repository.getComputer(computerId) ?: return
-        if (computer.runMode != ComputerRunMode.CONTAINER || computer.status != ComputerStatus.READY) return
+        if (computer.status != ComputerStatus.READY) return
         val previews = repository.dao().getActivePublicPreviewsForComputer(computerId)
             .map { it.toModel() }
             .filter { it.target == ComputerExecTarget.CONTAINER }
@@ -342,10 +342,6 @@ class ComputerPreviewManager(private val repository: ComputerRepository) : Close
     } else {
         "sudo -n -- $PREVIEW_HELPER"
     }
-
-    /** 旧 Direct 记录只可能访问 Host；统一模式下按 Tool 请求选择 Host 或 Container。 */
-    private fun effectivePreviewTarget(computer: Computer, requested: ComputerExecTarget): ComputerExecTarget =
-        if (computer.runMode == ComputerRunMode.DIRECT) ComputerExecTarget.HOST else requested
 
     private fun scheduleExpiry(preview: ComputerPreview) {
         val expiresAt = preview.expiresAt ?: return

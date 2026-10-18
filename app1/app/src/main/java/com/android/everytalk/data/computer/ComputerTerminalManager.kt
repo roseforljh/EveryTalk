@@ -16,7 +16,6 @@ import java.util.concurrent.atomic.AtomicReference
 
 private const val TERMINAL_BUFFER_CHARS = 128 * 1024
 private const val TERMINAL_WRITE_CHARS = 64 * 1024
-private const val CONTAINER_TERMINAL_HELPER = "/usr/local/libexec/everytalk-containerctl"
 
 data class ComputerTerminalReadResult(
     val terminalId: String,
@@ -52,7 +51,7 @@ class ComputerTerminalManager(private val repository: ComputerRepository) : Clos
         rows: Int = 40,
     ): ComputerTerminalReadResult {
         val foregroundActivity = repository.acquireForegroundActivity()
-        val (lease, computer, pty) = try {
+        val (lease, _, pty) = try {
             repository.acquireConnectionAndOpen(requestContext.computerId) { connection ->
                 connection.openPty(columns, rows)
             }
@@ -83,18 +82,8 @@ class ComputerTerminalManager(private val repository: ComputerRepository) : Clos
             val session = TerminalSession(requestContext, lease, foregroundActivity, pty, ringBuffer, jobs, lost)
             terminals[terminalId] = session
 
-            val initialization = when (computer.runMode) {
-                ComputerRunMode.DIRECT ->
-                    "cd \"${'$'}HOME/.everytalk/workspaces/${workspace.id}\" && exec \"${'$'}{SHELL:-/bin/sh}\" -l"
-                ComputerRunMode.CONTAINER -> {
-                    val helper = if (computer.username == "root") {
-                        CONTAINER_TERMINAL_HELPER
-                    } else {
-                        "sudo -n -- $CONTAINER_TERMINAL_HELPER"
-                    }
-                    "exec $helper terminal ${workspace.id}"
-                }
-            }
+            // 终端始终是 SSH 主机终端，不继承旧服务器记录或上一次命令的容器选择。
+            val initialization = "cd \"${'$'}HOME/.everytalk/workspaces/${workspace.id}\" && exec \"${'$'}{SHELL:-/bin/sh}\" -l"
             pty.output.write("$initialization\n".toByteArray(Charsets.UTF_8))
             pty.output.flush()
             return ComputerTerminalReadResult(terminalId, "", 0, false, true)

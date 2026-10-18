@@ -581,6 +581,8 @@ import java.util.UUID
         onReady: (() -> Unit)? = null,
         onFailure: (() -> Unit)? = null,
     ) {
+        // 先捕获目标会话。后续工作在 IO 线程执行，不能在那里重新读取“当前会话”。
+        val conversationId = stateHolder._currentConversationId.value
         val generation = stateHolder.agentActionGeneration.incrementAndGet()
         val shouldPrepareWorkspace = stateHolder._isAgentEnabled.value || enableAgentAfterSelection
         if (enableAgentAfterSelection && !computerManager.supportsToolCalls(stateHolder._selectedApiConfig.value)) {
@@ -589,13 +591,12 @@ import java.util.UUID
             return
         }
         if (enableAgentAfterSelection) {
-            stateHolder.updateCurrentConversationFunctionToggleState { it.copy(agentEnabled = true) }
+            stateHolder.updateConversationFunctionToggleState(conversationId) { it.copy(agentEnabled = true) }
             stateHolder._isAgentEnabled.value = true
         }
         stateHolder._isAgentPreparing.value = false
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val conversationId = stateHolder._currentConversationId.value
                 computerManager.selectComputer(conversationId, computerId, shouldPrepareWorkspace)
                 if (stateHolder.agentActionGeneration.get() != generation) return@launch
                 stateHolder.conversationFunctionToggleStates.update { current ->
@@ -613,8 +614,10 @@ import java.util.UUID
             } catch (error: ComputerException) {
                 if (stateHolder.agentActionGeneration.get() == generation) {
                     if (enableAgentAfterSelection) {
-                        stateHolder.updateCurrentConversationFunctionToggleState { it.copy(agentEnabled = false) }
-                        stateHolder._isAgentEnabled.value = false
+                        stateHolder.updateConversationFunctionToggleState(conversationId) { it.copy(agentEnabled = false) }
+                        if (stateHolder._currentConversationId.value == conversationId) {
+                            stateHolder._isAgentEnabled.value = false
+                        }
                     }
                     showSnackbar(error.message)
                     if (onFailure != null) withContext(Dispatchers.Main.immediate) { onFailure() }
@@ -622,8 +625,10 @@ import java.util.UUID
             } catch (error: Exception) {
                 if (stateHolder.agentActionGeneration.get() == generation) {
                     if (enableAgentAfterSelection) {
-                        stateHolder.updateCurrentConversationFunctionToggleState { it.copy(agentEnabled = false) }
-                        stateHolder._isAgentEnabled.value = false
+                        stateHolder.updateConversationFunctionToggleState(conversationId) { it.copy(agentEnabled = false) }
+                        if (stateHolder._currentConversationId.value == conversationId) {
+                            stateHolder._isAgentEnabled.value = false
+                        }
                     }
                     showSnackbar("服务器选择失败")
                     if (onFailure != null) withContext(Dispatchers.Main.immediate) { onFailure() }
@@ -918,6 +923,13 @@ import java.util.UUID
             .filterValues { selectedComputerId -> selectedComputerId == computerId }
             .keys
         val result = computerManager.deleteComputer(computerId, cleanupContainers, deleteRemoteFiles)
+        // 分组默认值只保存 Computer ID。服务器删除后清掉失效引用，避免之后新建会话反复尝试已不存在的服务器。
+        val updatedGroupComputerIds = stateHolder.conversationGroupComputerIds.value
+            .filterValues { selectedComputerId -> selectedComputerId != computerId }
+        if (updatedGroupComputerIds.size != stateHolder.conversationGroupComputerIds.value.size) {
+            stateHolder.conversationGroupComputerIds.value = updatedGroupComputerIds
+            persistenceManager.saveConversationGroupComputerIds()
+        }
         if (affectedConversationIds.isNotEmpty()) {
             stateHolder.conversationFunctionToggleStates.update { current ->
                 current.toMutableMap().apply {
@@ -1129,7 +1141,12 @@ import java.util.UUID
     }
 
 
-    internal fun AppViewModel.startNewChat() {
+    internal fun AppViewModel.startNewChat() = startNewChatInGroupInternal(null)
+
+    /** 从分组菜单新建文本会话，并应用该分组保存的默认服务器与 Agent 状态。 */
+    internal fun AppViewModel.startNewChatInGroup(groupName: String) = startNewChatInGroupInternal(groupName)
+
+    private fun AppViewModel.startNewChatInGroupInternal(groupName: String?) {
         historyController.cancelPendingImageHistoryLoad()
         if (isConversationSearchActive.value) setConversationSearchActive(false)
         restoredMessageDraft.value?.let(::consumeRestoredMessageDraft)
@@ -1140,6 +1157,18 @@ import java.util.UUID
             try {
                 // 使用新的模式管理器
                 simpleModeManager.switchToTextMode(forceNew = true)
+
+                if (groupName != null) {
+                    val conversationId = stateHolder._currentConversationId.value
+                    addConversationToGroup(conversationId, groupName)
+                    stateHolder.conversationGroupComputerIds.value[groupName]?.let { computerId ->
+                        // 复用现有选服流程：它会持久化会话选服、预热 Workspace 并开启 Agent。
+                        selectComputerForCurrentConversation(
+                            computerId = computerId,
+                            enableAgentAfterSelection = true,
+                        )
+                    }
+                }
 
                 messagesMutex.withLock {
                     if (stateHolder.shouldAutoScroll()) {

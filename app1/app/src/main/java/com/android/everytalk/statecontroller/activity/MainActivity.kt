@@ -425,6 +425,25 @@ class MainActivity : AppCompatActivity() {
                                             }
                                             coroutineScope.launch { appViewModel.drawerState.close() }
                                         },
+                                        onCreateConversationInGroup = { groupName ->
+                                            if (isImageGenerationMode) {
+                                                appViewModel.simpleModeManager.setIntendedMode(
+                                                    SimpleModeManager.ModeType.TEXT,
+                                                    showToast = true,
+                                                )
+                                                coroutineScope.launch { appViewModel.drawerState.close() }
+                                                navController.navigate(Screen.CHAT_SCREEN) {
+                                                    popUpTo(navController.graph.startDestinationRoute!!) {
+                                                        saveState = true
+                                                    }
+                                                    launchSingleTop = true
+                                                    restoreState = true
+                                                }
+                                            } else {
+                                                coroutineScope.launch { appViewModel.drawerState.close() }
+                                            }
+                                            appViewModel.startNewChatInGroup(groupName)
+                                        },
                                         onRenameRequest = { index, newName ->
                                             appViewModel.renameConversation(
                                                 index,
@@ -496,6 +515,11 @@ class MainActivity : AppCompatActivity() {
                                         onToggleGroup = { groupKey -> appViewModel.toggleGroupExpanded(groupKey) },
                                         isGroupSectionExpanded = appViewModel.stateHolder.isGroupSectionExpanded.collectAsState().value,
                                         onToggleGroupSection = { appViewModel.toggleGroupSectionExpanded() },
+                                        computers = appViewModel.computers.collectAsState().value,
+                                        groupComputerIds = appViewModel.stateHolder.conversationGroupComputerIds.collectAsState().value,
+                                        onSelectGroupComputer = { groupName, computerId ->
+                                            appViewModel.setConversationGroupComputer(groupName, computerId)
+                                        },
                                         onShareConversation = { index ->
                                             appViewModel.shareConversation(index, isImageGenerationMode)
                                         }

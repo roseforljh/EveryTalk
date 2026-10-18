@@ -29,6 +29,27 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34], application = Application::class)
 class GeminiDirectClientPayloadTest {
     @Test
+    fun `开启代码执行只增加工具声明并保留相同系统指令`() {
+        val request = ChatRequest(
+            messages = listOf(
+                SimpleTextApiMessage(role = "system", content = "按题目需要选择解法"),
+                SimpleTextApiMessage(role = "user", content = "Explain 2 + 2"),
+            ),
+            provider = "Google", channel = "Gemini", apiAddress = "https://generativelanguage.googleapis.com",
+            apiKey = "test-key", model = "gemini-test", enableCodeExecution = false,
+        )
+        val withoutCode = Json.parseToJsonElement(GeminiDirectClient.buildGeminiPayload(request)).jsonObject
+        val withCode = Json.parseToJsonElement(
+            GeminiDirectClient.buildGeminiPayload(request.copy(enableCodeExecution = true)),
+        ).jsonObject
+
+        assertEquals(withoutCode["systemInstruction"], withCode["systemInstruction"])
+        assertTrue(withCode.getValue("systemInstruction").toString().contains("按题目需要选择解法"))
+        assertTrue(withCode.getValue("tools").jsonArray.any { "code_execution" in it.jsonObject })
+        assertFalse(withoutCode["tools"]?.jsonArray.orEmpty().any { "code_execution" in it.jsonObject })
+    }
+
+    @Test
     fun `无原生continuation时保留中立reasoning`() {
         val request = ChatRequest(
             messages = listOf(

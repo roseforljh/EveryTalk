@@ -91,7 +91,7 @@ private val LightColorScheme = lightColorScheme(
     surface = Color.White, // 卡片、对话框表面改为纯白
     onSurface = Color(0xFF000000),
     surfaceVariant = Color.White, // 表面变体改为纯白
-    onSurfaceVariant = Color(0xFF494949),
+    onSurfaceVariant = Color(0xFF49454F),
 
     // 错误状态
     error = Color(0xFFBA1A1A),

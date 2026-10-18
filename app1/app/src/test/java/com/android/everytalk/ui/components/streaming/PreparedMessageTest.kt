@@ -228,4 +228,23 @@ class PreparedMessageTest {
         assertTrue(prepared.formulas.isEmpty())
         assertTrue(prepared.details.isEmpty())
     }
+
+    @Test
+    fun `外壳代码块内嵌带语言代码块时加长外壳栏线避免内容漏出`() {
+        val content = "前文\n\n```text\n## 背景\n\n```ts\nconst a = 1\n```\n\n所以\n```\n\n后文"
+        val prepared = StreamBlockParser.prepareMessage(content, "m", 1L)
+        assertEquals(
+            "前文\n\n````text\n## 背景\n\n```ts\nconst a = 1\n```\n\n所以\n````\n\n后文",
+            prepared.markdown,
+        )
+
+        // 流式中外壳尚未闭合，内部已配平也应先加长开栏
+        assertEquals(
+            "````text\n```ts\na\n```\n所以",
+            promoteNestedFenceMarkers("```text\n```ts\na\n```\n所以"),
+        )
+        // 普通连续代码块不受影响
+        val plain = "```kotlin\na\n```\n说明\n```bash\nb\n```"
+        assertEquals(plain, promoteNestedFenceMarkers(plain))
+    }
 }

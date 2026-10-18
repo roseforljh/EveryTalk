@@ -226,6 +226,61 @@ internal fun unwrapRenderableMarkdownFences(content: String): String {
     return if (changed) output.toString() else content
 }
 
+/**
+ * AI 常在 ```text 外壳里再嵌套 ```ts … ```，CommonMark 会在第一个裸 ``` 处提前关闭外壳，后续内容漏出代码块。
+ * 这里按"带语言的开栏 / 裸闭栏"配对算嵌套深度，把有嵌套的外壳栏线加长到比内部栏线多一位，交给下游正常解析。
+ */
+// ponytail: 只处理顶层（无引用/列表容器、缩进 ≤3）栏线，容器内的嵌套仍按 CommonMark 处理。
+internal fun promoteNestedFenceMarkers(content: String): String {
+    if (!content.contains("```") && !content.contains("~~~")) return content
+    val lines = content.split('\n').toMutableList()
+    var changed = false
+    var index = 0
+    while (index < lines.size) {
+        val marker = topLevelFence(lines[index])?.first
+        if (marker == null) {
+            index++
+            continue
+        }
+        var depth = 0
+        var longest = 0
+        var close = -1
+        var cursor = index + 1
+        while (cursor < lines.size) {
+            val fence = topLevelFence(lines[cursor])
+            if (fence != null && fence.first.first() == marker.first()) {
+                when {
+                    fence.second.isNotEmpty() -> {
+                        depth++
+                        longest = maxOf(longest, fence.first.length)
+                    }
+                    depth > 0 -> depth--
+                    fence.first.length >= marker.length -> {
+                        close = cursor
+                        break
+                    }
+                }
+            }
+            cursor++
+        }
+        // 流式中外壳还没闭合时，只要内部已配平也先加长开栏，避免渲染中途漏出。
+        if (longest > 0 && (close >= 0 || depth == 0)) {
+            val promoted = marker.first().toString().repeat(maxOf(longest, marker.length) + 1)
+            lines[index] = lines[index].replaceFirst(marker, promoted)
+            if (close >= 0) lines[close] = lines[close].replaceFirst(marker, promoted)
+            changed = true
+        }
+        index = if (close >= 0) close + 1 else lines.size
+    }
+    return if (changed) lines.joinToString("\n") else content
+}
+
+private fun topLevelFence(line: String): Pair<String, String>? {
+    if (!hasRenderableMarkdownFenceIndent(line)) return null
+    val match = openingFenceRegex.matchEntire(line.removeSuffix("\r").trim()) ?: return null
+    return match.groupValues[1] to match.groupValues[2].trim()
+}
+
 internal fun hasRenderableMarkdownFenceIndent(line: String): Boolean {
     var spaces = 0
     while (spaces < line.length && spaces < 4 && line[spaces] == ' ') {

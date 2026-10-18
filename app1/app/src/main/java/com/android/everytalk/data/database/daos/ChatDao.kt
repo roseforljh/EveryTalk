@@ -13,6 +13,8 @@ import com.android.everytalk.data.database.entities.ChatSessionEntity
 import com.android.everytalk.data.database.entities.MessageEntity
 import com.android.everytalk.data.database.entities.MessageStorageState
 import com.android.everytalk.data.database.entities.LightweightMessageRow
+import com.android.everytalk.data.database.entities.SyncMessageRow
+import com.android.everytalk.data.database.entities.toSyncEntity
 import com.android.everytalk.data.database.entities.PendingMessageEntity
 import com.android.everytalk.data.database.entities.RawMessageRow
 import com.android.everytalk.data.database.entities.toEntity
@@ -25,8 +27,8 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ChatDao {
-    /** 分页补传既有消息资源，避免一次加载所有历史正文。排除首页缓存副本和生图会话。 */
-    @Query("SELECT * FROM messages WHERE deleted=0 AND sessionId IN (SELECT id FROM chat_sessions WHERE deleted=0 AND isImageGeneration=0 AND id NOT IN ('last_open_chat_v1','last_open_image_generation_v1')) ORDER BY timestamp DESC, uuid LIMIT :limit OFFSET :offset")
+    /** 分页补传既有消息资源，避免一次加载所有历史正文；文字和图片历史共用附件合同。 */
+    @Query("SELECT * FROM messages WHERE deleted=0 AND sessionId IN (SELECT id FROM chat_sessions WHERE deleted=0 AND id NOT IN ('last_open_chat_v1','last_open_image_generation_v1')) ORDER BY timestamp DESC, uuid LIMIT :limit OFFSET :offset")
     suspend fun getResourceSyncMessages(limit: Int, offset: Int): List<MessageEntity>
     /** 旧版本提示词仅在 System 消息中，升级时只读取这一列，不解析附件和工具轨迹。 */
     @Query("SELECT text FROM messages WHERE sessionId = :sessionId AND sender = 'System' AND isPlaceholderName = 0 AND deleted = 0 ORDER BY timestamp DESC LIMIT 1")
@@ -211,7 +213,7 @@ interface ChatDao {
     @Query("SELECT * FROM chat_sessions WHERE deleted = 0 AND id = :sessionId LIMIT 1")
     suspend fun getSession(sessionId: String): ChatSessionEntity?
 
-    @Query("UPDATE chat_sessions SET title = :title, updated_at = MAX(:now, updated_at + 1), sync_status = CASE WHEN isImageGeneration = 0 AND id NOT IN ('last_open_chat_v1', 'last_open_image_generation_v1') THEN 'PENDING' ELSE 'LOCAL_ONLY' END WHERE id = :sessionId AND deleted = 0")
+    @Query("UPDATE chat_sessions SET title = :title, updated_at = MAX(:now, updated_at + 1), sync_status = CASE WHEN id NOT IN ('last_open_chat_v1', 'last_open_image_generation_v1') THEN 'PENDING' ELSE 'LOCAL_ONLY' END WHERE id = :sessionId AND deleted = 0")
     suspend fun updateSessionTitle(sessionId: String, title: String, now: Long = System.currentTimeMillis())
 
     // 旧数据的问题与回复可能共用同一毫秒。相同时间先问题后回复，再按同步 UUID 排序，
@@ -253,11 +255,22 @@ interface ChatDao {
         }
     }
 
-    /** 仅用于文字同步白名单；会话删除只上传会话变更，不能再发送其子消息。 */
-    @Query("SELECT * FROM messages WHERE sync_status = 'PENDING' AND sender IN ('User', 'AI', 'System', 'Tool') AND isPlaceholderName = 0 AND sessionId IN (SELECT id FROM chat_sessions WHERE deleted = 0 AND isImageGeneration = 0 AND id NOT IN ('last_open_chat_v1', 'last_open_image_generation_v1')) ORDER BY timestamp ASC, CASE sender WHEN 'System' THEN 0 WHEN 'User' THEN 1 WHEN 'AI' THEN 2 ELSE 3 END, uuid ASC LIMIT :limit")
-    suspend fun getPendingSyncMessages(limit: Int = Int.MAX_VALUE): List<MessageEntity>
+    /**
+     * 仅读取同步白名单列；会话删除只上传会话变更，不能再发送其子消息。
+     * 本地搜索、附件和工具字段很大，不能在这里使用 SELECT *。
+     */
+    @Query("SELECT id, sessionId, text, contentParts AS contentPartsJson, sender, reasoning, contentStarted, isError, name, timestamp, outputType, executionTrace AS executionTraceJson, executionFinishedAt, enabledToolIds AS enabledToolIdsJson, modelName, providerName, tokenUsage AS tokenUsageJson, contextUsageSnapshot AS contextUsageSnapshotJson, uuid, updated_at, deleted, sync_status, ever_synced, is_incomplete FROM messages WHERE sync_status = 'PENDING' AND sender IN ('User', 'AI', 'System', 'Tool') AND isPlaceholderName = 0 AND sessionId IN (SELECT id FROM chat_sessions WHERE deleted = 0 AND id NOT IN ('last_open_chat_v1', 'last_open_image_generation_v1')) ORDER BY timestamp ASC, CASE sender WHEN 'System' THEN 0 WHEN 'User' THEN 1 WHEN 'AI' THEN 2 ELSE 3 END, uuid ASC LIMIT :limit")
+    suspend fun getPendingSyncMessageRows(limit: Int = Int.MAX_VALUE): List<SyncMessageRow>
 
-    @Query("SELECT * FROM chat_sessions WHERE sync_status = 'PENDING' AND isImageGeneration = 0 AND id NOT IN ('last_open_chat_v1', 'last_open_image_generation_v1') LIMIT :limit")
+    /** 保留旧 DAO 调用方的实体返回类型；真正的 Room 查询仍使用轻量投影。 */
+    suspend fun getPendingSyncMessages(limit: Int = Int.MAX_VALUE): List<MessageEntity> =
+        getPendingSyncMessageRows(limit).map { it.toSyncEntity() }
+
+    /** 上传 ACK 后只读取同步白名单，避免为版本确认加载无关的大字段。 */
+    @Query("SELECT id, sessionId, text, contentParts AS contentPartsJson, sender, reasoning, contentStarted, isError, name, timestamp, outputType, executionTrace AS executionTraceJson, executionFinishedAt, enabledToolIds AS enabledToolIdsJson, modelName, providerName, tokenUsage AS tokenUsageJson, contextUsageSnapshot AS contextUsageSnapshotJson, uuid, updated_at, deleted, sync_status, ever_synced, is_incomplete FROM messages WHERE uuid = :uuid LIMIT 1")
+    suspend fun getSyncMessageByUuid(uuid: String): SyncMessageRow?
+
+    @Query("SELECT * FROM chat_sessions WHERE sync_status = 'PENDING' AND id NOT IN ('last_open_chat_v1', 'last_open_image_generation_v1') LIMIT :limit")
     suspend fun getPendingSyncSessions(limit: Int = Int.MAX_VALUE): List<ChatSessionEntity>
 
     /** session_deleted 已明确拒绝内容：丢弃待上传行，不再反复推送。 */
@@ -282,11 +295,18 @@ interface ChatDao {
     @Query("DELETE FROM messages WHERE uuid = :uuid AND ever_synced = 0")
     suspend fun deleteNeverSyncedMessageByUuid(uuid: String): Int
 
-    @Query("UPDATE messages SET sync_status = 'PENDING' WHERE sessionId IN (SELECT id FROM chat_sessions WHERE isImageGeneration = 0 AND id NOT LIKE 'last_open_%')")
+    @Query("UPDATE messages SET sync_status = 'PENDING' WHERE sessionId NOT LIKE 'last_open_%'")
     suspend fun markAllTextMessagesPending()
 
-    @Query("UPDATE chat_sessions SET sync_status = 'PENDING' WHERE isImageGeneration = 0 AND id NOT LIKE 'last_open_%'")
+    @Query("UPDATE chat_sessions SET sync_status = 'PENDING' WHERE id NOT LIKE 'last_open_%'")
     suspend fun markAllTextSessionsPending()
+
+    /** 旧版本把图片历史留在 LOCAL_ONLY；图片同步上线时只迁移图片会话，不能影响文字保留决定。 */
+    @Query("UPDATE chat_sessions SET sync_status = 'PENDING' WHERE isImageGeneration = 1 AND id NOT LIKE 'last_open_%'")
+    suspend fun markImageSessionsPending()
+
+    @Query("UPDATE messages SET sync_status = 'PENDING' WHERE sessionId IN (SELECT id FROM chat_sessions WHERE isImageGeneration = 1 AND id NOT LIKE 'last_open_%')")
+    suspend fun markImageMessagesPending()
 
     @Query("UPDATE chat_sessions SET sync_status = 'SYNCED' WHERE uuid = :uuid AND updated_at = :version AND sync_status = 'PENDING'")
     suspend fun markSessionSyncedIfVersion(uuid: String, version: Long): Int
@@ -419,7 +439,7 @@ interface ChatDao {
     @Query("DELETE FROM pending_messages")
     suspend fun deleteAllPendingMessages()
 
-    @Query("UPDATE chat_sessions SET deleted = 1, updated_at = :now, sync_status = CASE WHEN isImageGeneration = 0 AND id NOT IN ('last_open_chat_v1', 'last_open_image_generation_v1') THEN 'PENDING' ELSE 'LOCAL_ONLY' END WHERE isImageGeneration = :isImageGen AND deleted = 0")
+    @Query("UPDATE chat_sessions SET deleted = 1, updated_at = :now, sync_status = CASE WHEN id NOT IN ('last_open_chat_v1', 'last_open_image_generation_v1') THEN 'PENDING' ELSE 'LOCAL_ONLY' END WHERE isImageGeneration = :isImageGen AND deleted = 0")
     suspend fun clearAllSessionRows(isImageGen: Boolean, now: Long = System.currentTimeMillis())
 
     @Query("DELETE FROM message_drafts WHERE sessionId IN (SELECT id FROM chat_sessions WHERE isImageGeneration = :isImageGen)")
@@ -437,7 +457,7 @@ interface ChatDao {
         clearAllSessionRows(isImageGen)
     }
 
-    @Query("UPDATE chat_sessions SET deleted = 1, updated_at = :now, sync_status = CASE WHEN isImageGeneration = 0 AND id NOT IN ('last_open_chat_v1', 'last_open_image_generation_v1') THEN 'PENDING' ELSE 'LOCAL_ONLY' END WHERE id = :sessionId AND deleted = 0")
+    @Query("UPDATE chat_sessions SET deleted = 1, updated_at = :now, sync_status = CASE WHEN id NOT IN ('last_open_chat_v1', 'last_open_image_generation_v1') THEN 'PENDING' ELSE 'LOCAL_ONLY' END WHERE id = :sessionId AND deleted = 0")
     suspend fun deleteSessionRow(sessionId: String, now: Long = System.currentTimeMillis())
 
     @Transaction

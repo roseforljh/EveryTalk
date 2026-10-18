@@ -135,6 +135,8 @@ class CodeBlockStreamingTest {
         composeRule.waitForIdle()
         val scroll = requireNotNull(findScroll(hostView.get()))
         composeRule.runOnIdle {
+            assertFalse(scroll.isVerticalScrollBarEnabled)
+            assertFalse(scroll.isHorizontalScrollBarEnabled)
             assertTrue(scroll.scrollY > 0)
             code.value += "\nnew tail"
         }

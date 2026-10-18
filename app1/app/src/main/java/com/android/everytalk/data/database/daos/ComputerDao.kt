@@ -198,6 +198,10 @@ interface ComputerDao {
     @Query("SELECT * FROM computers WHERE id = :computerId LIMIT 1")
     suspend fun getComputer(computerId: String): ComputerEntity?
 
+    /** SSH 连接配置以 host、port、username 作为唯一服务器入口，离线记录也不能重复添加。 */
+    @Query("SELECT * FROM computers WHERE provider = 'SSH' AND status != 'DELETED' AND host = :host AND port = :port AND username = :username LIMIT 1")
+    suspend fun findActiveSshComputer(host: String, port: Int, username: String): ComputerEntity?
+
     @Upsert
     suspend fun upsertComputer(computer: ComputerEntity)
 
@@ -302,8 +306,16 @@ interface ComputerDao {
         lastUsedAt: Long = System.currentTimeMillis(),
     )
 
-    /** Container 配置成功后补齐迁移自旧 Direct 记录的镜像元数据。 */
-    @Query("UPDATE computer_workspaces SET containerImage = :containerImage WHERE computerId = :computerId AND runMode = 'CONTAINER'")
+    /** 工作区默认通过 SSH 访问；只修改模式，不能覆盖并发迁移的会话编号或删除旧文件元数据。 */
+    @Query("UPDATE computer_workspaces SET runMode = 'DIRECT' WHERE id = :workspaceId")
+    suspend fun useSshWorkspaceDefault(workspaceId: String)
+
+    /** 记录按需容器信息供复用和清理，不改变主机目录的状态、默认模式和会话归属。 */
+    @Query("UPDATE computer_workspaces SET containerName = :containerName, containerImage = :containerImage WHERE id = :workspaceId")
+    suspend fun updateWorkspaceContainer(workspaceId: String, containerName: String, containerImage: String?)
+
+    /** Container 配置成功后更新所有已创建容器的镜像元数据。 */
+    @Query("UPDATE computer_workspaces SET containerImage = :containerImage WHERE computerId = :computerId AND containerName IS NOT NULL")
     suspend fun updateContainerWorkspaceImage(computerId: String, containerImage: String)
 
     /**
@@ -314,8 +326,8 @@ interface ComputerDao {
         """
         UPDATE computer_workspaces
         SET runMode = :runMode,
-            containerName = CASE WHEN :runMode = 'CONTAINER' THEN 'everytalk-' || id ELSE NULL END,
-            containerImage = CASE WHEN :runMode = 'CONTAINER' THEN :containerImage ELSE NULL END,
+            containerName = CASE WHEN :runMode = 'CONTAINER' THEN 'everytalk-' || id ELSE containerName END,
+            containerImage = CASE WHEN :runMode = 'CONTAINER' THEN :containerImage ELSE containerImage END,
             status = 'RECOVERING'
         WHERE computerId = :computerId
         """,
@@ -825,9 +837,9 @@ interface ComputerDao {
     @Query("SELECT p.* FROM computer_previews p INNER JOIN computer_workspaces w ON w.id = p.workspaceId WHERE w.computerId = :computerId AND p.visibility = 'PUBLIC' AND p.status = 'ACTIVE' ORDER BY p.createdAt DESC")
     suspend fun getActivePublicPreviewsForComputer(computerId: String): List<ComputerPreviewEntity>
 
-    @Query("UPDATE computers SET status = 'CONFIGURATION_REQUIRED', updatedAt = :updatedAt WHERE runMode = 'CONTAINER' AND status = 'READY' AND (bootstrapVersion IS NULL OR bootstrapVersion != :expectedVersion)")
-    suspend fun markOutdatedContainerConfiguration(
-        expectedVersion: String,
+    /** 升级旧 SSH 服务器的执行默认值；保留容器及镜像，避免丢失历史文件和正在运行的任务。 */
+    @Query("UPDATE computers SET runMode = 'DIRECT', status = CASE WHEN status = 'CONFIGURATION_REQUIRED' THEN 'OFFLINE' ELSE status END, updatedAt = :updatedAt WHERE provider = 'SSH' AND runMode = 'CONTAINER'")
+    suspend fun migrateSshExecutionDefaults(
         updatedAt: Long = System.currentTimeMillis(),
     )
 

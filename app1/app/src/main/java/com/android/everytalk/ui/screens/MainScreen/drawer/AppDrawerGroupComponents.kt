@@ -67,6 +67,8 @@ fun CollapsibleGroupHeader(
     isExpanded: Boolean,
     onToggleExpand: () -> Unit,
     modifier: Modifier = Modifier,
+    onCreateConversation: (() -> Unit)? = null,
+    onSelectServer: (() -> Unit)? = null,
     onRename: ((String) -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
     isPinnedGroup: Boolean = false
@@ -121,7 +123,7 @@ fun CollapsibleGroupHeader(
             )
             
             // 只有非置顶分组才显示菜单按钮
-            if (!isPinnedGroup && (onRename != null || onDelete != null)) {
+            if (!isPinnedGroup && (onCreateConversation != null || onSelectServer != null || onRename != null || onDelete != null)) {
                 Box {
                     IconButton(
                         onClick = { showMenu = true },
@@ -147,6 +149,36 @@ fun CollapsibleGroupHeader(
                         tonalElevation = 0.dp,
                         shadowElevation = AppFloatingCardElevation,
                     ) {
+                        if (onCreateConversation != null) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.drawer_new_conversation)) },
+                                onClick = {
+                                    showMenu = false
+                                    onCreateConversation()
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_plus),
+                                        contentDescription = stringResource(R.string.drawer_new_conversation),
+                                    )
+                                },
+                            )
+                        }
+                        if (onSelectServer != null) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.drawer_group_server)) },
+                                onClick = {
+                                    showMenu = false
+                                    onSelectServer()
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_gpt_terminal),
+                                        contentDescription = stringResource(R.string.drawer_group_server),
+                                    )
+                                },
+                            )
+                        }
                         if (onRename != null) {
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.action_rename)) },

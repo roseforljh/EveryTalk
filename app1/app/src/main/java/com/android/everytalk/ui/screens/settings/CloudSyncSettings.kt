@@ -6,6 +6,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
+import com.android.everytalk.R
 import com.android.everytalk.data.sync.SyncController
 import java.text.DateFormat
 import java.util.Date
@@ -19,57 +21,57 @@ internal fun AccountDataActions(
     val state by controller.state.collectAsState()
     var showResumeConfirm by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (!state.configured) Text("当前版本未配置账号数据服务，本机数据仍可使用。", style = MaterialTheme.typography.bodySmall)
+        if (!state.configured) Text(stringResource(R.string.cloud_sync_unconfigured), style = MaterialTheme.typography.bodySmall)
         if (state.rejectedCount > 0) {
-            Text("${state.rejectedCount} 条未能同步", color = MaterialTheme.colorScheme.error)
+            Text(stringResource(R.string.cloud_sync_rejected_count, state.rejectedCount), color = MaterialTheme.colorScheme.error)
             state.rejectedItems.take(8).forEach { item ->
                 val category = when (item.kind ?: item.entity) {
-                    "mcp_servers" -> "MCP 配置"
-                    "computer_workspaces" -> "远程工作区"
-                    "computers" -> "远程电脑"
-                    "conversation_settings" -> "会话设置"
-                    "api_configs" -> "模型配置"
-                    "voice_configs" -> "语音配置"
-                    "messages" -> "消息"
-                    "sessions" -> "会话"
-                    "memories" -> "长期记忆"
-                    "services" -> if (item.id == "credentials") "账号凭据恢复服务" else "文件与完整历史服务"
-                    else -> "同步项目"
+                    "mcp_servers" -> R.string.cloud_sync_category_mcp
+                    "computer_workspaces" -> R.string.cloud_sync_category_workspace
+                    "computers" -> R.string.cloud_sync_category_computer
+                    "conversation_settings" -> R.string.cloud_sync_category_conversation_settings
+                    "api_configs" -> R.string.cloud_sync_category_model
+                    "voice_configs" -> R.string.cloud_sync_category_voice
+                    "messages" -> R.string.cloud_sync_category_messages
+                    "sessions" -> R.string.cloud_sync_category_sessions
+                    "memories" -> R.string.cloud_sync_category_memories
+                    "services" -> if (item.id == "credentials") R.string.cloud_sync_category_credentials else R.string.cloud_sync_category_history_service
+                    else -> R.string.cloud_sync_category_item
                 }
-                Text("• $category / ${item.id.take(12)}：${item.code}", style = MaterialTheme.typography.bodySmall,
+                Text(stringResource(R.string.cloud_sync_item_label, stringResource(category), item.id.take(12), item.code), style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error)
                 if (item.code == "MESSAGE_PAYLOAD_TOO_LARGE") {
-                    Text("这条消息需要完整历史文件服务补传。本机原文保留；服务可用后会自动补传。",
+                    Text(stringResource(R.string.cloud_sync_message_payload_too_large),
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                 }
                 if (item.code in setOf("ACCOUNT_KEY_NOT_CONFIGURED", "FILE_SERVICE_NOT_CONFIGURED", "SERVER_UPGRADE_REQUIRED", "NOT_FOUND")) {
-                    Text("服务器需要更新并配置账号密钥和文件存储，完成后会自动恢复；本机数据保留。", style = MaterialTheme.typography.bodySmall)
+                    Text(stringResource(R.string.cloud_sync_server_upgrade_required), style = MaterialTheme.typography.bodySmall)
                 }
-                if (item.code == "CREDENTIAL_DECRYPTION_FAILED") Text("这项凭据的云端密文损坏，本机 Key 保留，其他项目继续同步。", style = MaterialTheme.typography.bodySmall)
-                if (item.code == "CREDENTIAL_STORAGE_FAILED") Text("这项凭据暂时无法从本机加密存储读取或写入，其他项目继续同步。", style = MaterialTheme.typography.bodySmall)
+                if (item.code == "CREDENTIAL_DECRYPTION_FAILED") Text(stringResource(R.string.cloud_sync_credential_decryption_failed), style = MaterialTheme.typography.bodySmall)
+                if (item.code == "CREDENTIAL_STORAGE_FAILED") Text(stringResource(R.string.cloud_sync_credential_storage_failed), style = MaterialTheme.typography.bodySmall)
                 if (item.code == "CONTAINS_SECRET") {
-                    val hint = if (item.kind == "conversation_settings") "这个提示词含疑似密钥，没有同步" else "该配置含疑似密钥，没有同步；本机配置保留。"
-                    Text(hint, style = MaterialTheme.typography.bodySmall,
+                    val hint = if (item.kind == "conversation_settings") R.string.cloud_sync_prompt_contains_secret else R.string.cloud_sync_config_contains_secret
+                    Text(stringResource(hint), style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error)
                 }
             }
         }
         Text(
-            state.lastSyncAt?.let { "上次同步：${DateFormat.getDateTimeInstance().format(Date(it))}" }
-                ?: "上次同步：从未成功同步",
+            state.lastSyncAt?.let { stringResource(R.string.cloud_sync_last_sync, DateFormat.getDateTimeInstance().format(Date(it))) }
+                ?: stringResource(R.string.cloud_sync_never_synced),
             style = MaterialTheme.typography.bodySmall,
         )
         if (state.pausedAfterCloudReset) {
-            Text("云端清空后已暂停上传，本机数据保留。", style = MaterialTheme.typography.bodySmall)
-            TextButton(onClick = { showResumeConfirm = true }, enabled = state.configured) { Text("重新上传本机数据") }
+            Text(stringResource(R.string.cloud_sync_cloud_reset_paused), style = MaterialTheme.typography.bodySmall)
+            TextButton(onClick = { showResumeConfirm = true }, enabled = state.configured) { Text(stringResource(R.string.cloud_sync_resume_upload)) }
         }
     }
     if (showResumeConfirm) AlertDialog(
         onDismissRequest = { showResumeConfirm = false },
-        title = { Text("重新上传本机数据？") },
-        text = { Text("本机的文字对话、思考过程、长期记忆、置顶和分组将重新合并到当前账号。") },
-        confirmButton = { TextButton(onClick = { showResumeConfirm = false; onResumeUpload() }) { Text("上传") } },
-        dismissButton = { TextButton(onClick = { showResumeConfirm = false }) { Text("取消") } },
+        title = { Text(stringResource(R.string.cloud_sync_resume_title)) },
+        text = { Text(stringResource(R.string.cloud_sync_resume_description)) },
+        confirmButton = { TextButton(onClick = { showResumeConfirm = false; onResumeUpload() }) { Text(stringResource(R.string.cloud_sync_upload)) } },
+        dismissButton = { TextButton(onClick = { showResumeConfirm = false }) { Text(stringResource(R.string.cloud_sync_cancel)) } },
     )
 }
 
@@ -81,10 +83,10 @@ internal fun SyncEpochNotice(controller: SyncController, onUpload: () -> Unit) {
     Box(Modifier.fillMaxSize().navigationBarsPadding(), contentAlignment = Alignment.BottomCenter) {
         ElevatedCard(Modifier.padding(12.dp).widthIn(max = 480.dp)) {
             Column(Modifier.padding(16.dp)) {
-                Text("云端数据已被清空，是否重新上传本机数据？")
+                Text(stringResource(R.string.cloud_sync_cloud_reset_question))
                 Row {
-                    TextButton(onClick = onUpload) { Text("上传") }
-                    TextButton(onClick = { controller.decideEpoch(false) }) { Text("不上传") }
+                    TextButton(onClick = onUpload) { Text(stringResource(R.string.cloud_sync_upload)) }
+                    TextButton(onClick = { controller.decideEpoch(false) }) { Text(stringResource(R.string.cloud_sync_dont_upload)) }
                 }
             }
         }

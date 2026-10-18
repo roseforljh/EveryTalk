@@ -39,7 +39,7 @@ class MemoryRuntimeTest {
 
     @Test fun `different channels receive bounded memory while raw history never gets the snapshot`() = runBlocking {
         repository.save("用户喜欢中文回答", MemoryCategory.USER_PREFERENCE)
-        repository.setSettings(true, false)
+        repository.setSettings(true)
         var extractionCalls = 0
         val coordinator = MemoryCoordinator(database, scope) { extractionCalls++; """{"memories":[]}""" }
         for (channel in listOf("OpenAI兼容", "Gemini", "Anthropic")) {
@@ -57,17 +57,18 @@ class MemoryRuntimeTest {
             val run = checkNotNull(database.agentDao().getRunByVisibleMessage(input.visibleAssistantMessageId))
             assertEquals(AgentRunStatus.COMPLETED.name, run.status)
             assertFalse(database.agentDao().getEntries(run.id).joinToString { it.payloadJson }.contains("用户喜欢中文回答"))
+            joinBackground()
         }
-        repository.setSettings(false, false)
+        repository.setSettings(false)
         val disabled = coordinator.prepare(input("OpenAI兼容", "再问一次"))
         assertNull(disabled.request.localMemorySnapshot)
         assertFalse(disabled.request.tools.orEmpty().any { (it["function"] as? Map<*, *>)?.get("name") == MemoryTool.NAME })
         joinBackground()
-        assertEquals(0, extractionCalls)
+        assertEquals(3, extractionCalls)
     }
 
     @Test fun `tool requires trusted source and explicit intent then saves updates searches and forgets`() = runBlocking {
-        repository.setSettings(true, false)
+        repository.setSettings(true)
         val tool = MemoryTool(repository)
         var snapshot = snapshot("请记住：我喜欢中文回答")
         val saved = tool.execute(json("save", "用户喜欢中文回答", "我喜欢中文回答"), snapshot).jsonObject
@@ -92,8 +93,8 @@ class MemoryRuntimeTest {
     }
 
     @Test fun `real agent tool cycle writes memory before final answer and next conversation sees it`() = runBlocking {
-        repository.setSettings(true, false)
-        val coordinator = MemoryCoordinator(database, scope)
+        repository.setSettings(true)
+        val coordinator = MemoryCoordinator(database, scope) { """{"memories":[]}""" }
         val input = input("OpenAI兼容", "请记住：我喜欢中文回答")
         var turns = 0
         val loop = AgentLoop(AgentRunStore(database.agentDao()), memoryCoordinator = coordinator,
@@ -137,7 +138,7 @@ class MemoryRuntimeTest {
     }
 
     @Test fun `only completed persisted turns trigger one tool-free extraction`() = runBlocking {
-        repository.setSettings(true, true)
+        repository.setSettings(true)
         var calls = 0
         val coordinator = MemoryCoordinator(database, scope) { request ->
             calls++
@@ -165,7 +166,7 @@ class MemoryRuntimeTest {
     }
 
     @Test fun `clear cancels late extraction write and failed or cancelled runs do not extract`() = runBlocking {
-        repository.setSettings(true, true)
+        repository.setSettings(true)
         val started = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         var calls = 0
@@ -191,7 +192,7 @@ class MemoryRuntimeTest {
 
     @Test fun `conflicting automatic memory preserves old fact and waits disabled for review`() = runBlocking {
         val old = repository.save("用户喜欢中文回答", MemoryCategory.USER_PREFERENCE)
-        repository.setSettings(true, true)
+        repository.setSettings(true)
         val coordinator = MemoryCoordinator(database, scope) { request ->
             assertTrue(request.messages.toString().contains(old.id))
             """{"memories":[{"content":"用户喜欢英文回答","category":"USER_PREFERENCE","evidence":"我喜欢英文回答","conflictsWithId":"${old.id}"}]}"""
@@ -215,8 +216,37 @@ class MemoryRuntimeTest {
         assertTrue(MemoryCoordinator.parseCandidates("""{"memories":[]}""", "中文").isEmpty())
     }
 
+    @Test fun `long memories remain readable in other chats and tool pagination covers full content`() = runBlocking {
+        repository.setSettings(true)
+        val text = "长资料😀\"\n".repeat(1_500) + "这是最后的偏好"
+        val entry = repository.save(text)
+        val prompt = MemoryPromptRenderer.render(repository.state().entries, "最后的偏好", 900)
+        assertTrue(prompt.contains("最后的偏好"))
+        assertTrue(prompt.memoryCharacters() <= 900)
+        val tool = MemoryTool(repository)
+        val snapshot = snapshot("读取全部资料")
+        var offset = 0
+        val restored = StringBuilder()
+        do {
+            val result = tool.execute(buildJsonObject {
+                put("action", "search"); put("id", entry.id); put("offset", offset)
+            }, snapshot).jsonObject
+            assertEquals(JsonPrimitive(true), result["ok"])
+            assertTrue(result.toString().memoryCharacters() <= MemoryPolicy.MAX_SEARCH_CHARACTERS)
+            val row = result.getValue("memories").jsonArray.single().jsonObject
+            restored.append(row.getValue("content").jsonPrimitive.content)
+            val next = row["next_offset"]?.jsonPrimitive?.intOrNull
+            if (next == null) break
+            assertTrue(next > offset)
+            offset = next
+        } while (true)
+        assertEquals(text, restored.toString())
+        val nextChat = MemoryCoordinator(database, scope).prepare(input("Gemini", "最后的偏好"))
+        assertTrue(nextChat.request.localMemorySnapshot?.prompt.orEmpty().contains("最后的偏好"))
+    }
+
     @Test fun `tool errors do not echo untrusted categories`() = runBlocking {
-        repository.setSettings(true, false)
+        repository.setSettings(true)
         val untrusted = "password: test-secret-category"
         val arguments = JsonObject(json("save", "用户喜欢中文回答", "我喜欢中文回答") + ("category" to JsonPrimitive(untrusted)))
         val result = MemoryTool(repository).execute(arguments, snapshot("请记住：我喜欢中文回答")).jsonObject

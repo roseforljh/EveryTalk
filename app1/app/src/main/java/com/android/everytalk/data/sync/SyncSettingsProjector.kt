@@ -37,22 +37,30 @@ internal class SyncSettingsProjector(
 
     /** 在用户删除时保留逐条墓碑；下次联网才发送，不依赖设备当时是否登录。 */
     suspend fun markDeleted(kind: String, key: String) {
+        // computers、MCP 和工作区的业务 ID 可能来自旧版本，不一定是 UUID。
+        // 同步层已经把这些记录统一映射到稳定 UUID；删除时也必须走同一映射，
+        // 否则会在原始 key 下生成一条永远不会匹配远端活动记录的墓碑。
+        val syncKey = when (kind) {
+            "computers", "mcp_servers", "computer_workspaces" -> syncStableSettingKey(kind, key)
+            else -> key
+        }
         val now = System.currentTimeMillis()
-        val old = settings.getUserSetting(kind, key)
+        val old = settings.getUserSetting(kind, syncKey) ?: settings.getUserSetting(kind, key)
         if (old == null) {
             // 服务器已有记录但本机尚未完成投影时，也必须创建墓碑；否则删除后旧记录会再次被拉回。
             settings.upsertUserSettings(listOf(UserSettingEntity(
                 kind = kind,
-                key = key,
+                key = syncKey,
                 value = "{}",
-                uuid = localSyncUuid("user_settings", "$kind:$key"),
+                uuid = localSyncUuid("user_settings", "$kind:$syncKey"),
                 updatedAt = now,
                 deleted = true,
                 syncStatus = SyncStatus.PENDING,
             )))
         } else if (!old.deleted) {
-            settings.upsertUserSettings(listOf(old.copy(value = "{}", deleted = true,
+            settings.upsertUserSettings(listOf(old.copy(key = syncKey, value = "{}", deleted = true,
                 updatedAt = maxOf(now, old.updatedAt + 1), syncStatus = SyncStatus.PENDING)))
+            if (old.key != syncKey) settings.deleteUserSetting(kind, old.key)
         }
     }
 
@@ -130,8 +138,8 @@ internal class SyncSettingsProjector(
         val autoCaptureRaw = settings.getValue("memory_auto_capture_enabled")
         if (enabledRaw == null && autoCaptureRaw == null) return
         val enabled = enabledRaw?.toBooleanStrictOrNull() ?: false
-        val autoCapture = autoCaptureRaw?.toBooleanStrictOrNull() ?: false
-        upsert("memory_switches", "default", buildJsonObject { put("memoryEnabled", enabled); put("autoCaptureEnabled", autoCapture) })
+        // 自动保存与使用记忆共用一个开关；旧字段继续同步，兼容旧客户端。
+        upsert("memory_switches", "default", buildJsonObject { put("memoryEnabled", enabled); put("autoCaptureEnabled", enabled) })
     }
 
     /** 每个文字会话一条记录；本地偏好中的设备状态字段不进入同步。 */
@@ -142,7 +150,7 @@ internal class SyncSettingsProjector(
         val toggles = mapping("conversation_function_toggle_states")
         val models = mapping("conversation_api_config_ids")
         val computerSelections = database.computerDao().getAllSelectionsSnapshot().associate { it.conversationId to it.selectedComputerId }
-        sessions.getAllSessions(false).filterNot { it.deleted || it.isImageGeneration }.forEach { session ->
+        (sessions.getAllSessions(false) + sessions.getAllSessions(true)).filterNot { it.deleted }.forEach { session ->
             val toggle = toggles[session.id]?.jsonObject
             val old = settings.getUserSetting("conversation_settings", session.uuid)
             val oldValue = old?.value?.let { runCatching { syncJson.parseToJsonElement(it).jsonObject }.getOrNull() }
@@ -178,7 +186,6 @@ internal class SyncSettingsProjector(
         }
         groups.forEach { (groupName, localIds, legacy) -> localIds.forEach { rawId ->
             val session = sessionsById[rawId] ?: sessions.getSessionByUuid(rawId) ?: return@forEach
-            if (session.isImageGeneration) return@forEach
             val key = Base64.getUrlEncoder().withoutPadding().encodeToString(groupName.toByteArray()) + "." + session.uuid
             val legacySetting = legacy ?: settings.getUserSetting("conversation_groups", groupName)
             upsert(
@@ -196,8 +203,8 @@ internal class SyncSettingsProjector(
     }
 
     private suspend fun pinnedItems() {
-        val sessionsById = sessions.getAllSessions(false).filterNot { it.deleted }.associateBy { it.id }
-        settings.getPinnedIds(false).forEach { localId -> sessionsById[localId]?.takeUnless { it.isImageGeneration }?.let {
+        val sessionsById = (sessions.getAllSessions(false) + sessions.getAllSessions(true)).filterNot { it.deleted }.associateBy { it.id }
+        (settings.getPinnedIds(false) + settings.getPinnedIds(true)).distinct().forEach { localId -> sessionsById[localId]?.let {
             upsert("pinned_items", it.uuid, buildJsonObject { })
         } }
     }

@@ -1,5 +1,43 @@
 package com.android.everytalk.data.computer
 
+import com.android.everytalk.data.DataClass.ChatRequest
+import com.android.everytalk.data.DataClass.SimpleTextApiMessage
+
+/**
+ * 恢复旧 Run 时也替换应用生成的 SSH 工具定义，并把当前规则作为 system 指令。
+ * 活动任务快照会在发送时降为普通状态文本，不能用它覆盖旧 system 中的容器默认规则。
+ * 只处理已绑定 SSH 工具的请求；用户聊天内容、其他工具和 Cloudflare 请求原样保留。
+ */
+internal fun refreshComputerExecutionPolicy(request: ChatRequest, sessionPrompt: String?): ChatRequest {
+    val context = request.localComputerRequestContext ?: return request
+    val tools = request.tools ?: return request
+    if (tools.none { (it["function"] as? Map<*, *>)?.get("name") == ComputerToolNames.EXEC }) return request
+    if (sessionPrompt == null || !sessionPrompt.contains("<computer-session-state>")) return request
+    val environment = sessionPrompt.substringBefore("<computer-session-state>").trim()
+    if (environment.isEmpty()) return request
+    val policyId = "computer-execution-policy"
+    val generatedHeaders = listOf(
+        "Agent server tools are enabled for this request. The Android app connects to the VPS directly over SSH. ",
+        "Agent server tools connect to the selected VPS directly over SSH. ",
+    )
+    val generatedEnd = "Available tools: ${ComputerToolNames.all.sorted().joinToString(", ")}."
+    val messages = request.messages.filterNot { it.id == policyId }.mapNotNull { message ->
+        if (message !is SimpleTextApiMessage || !message.role.equals("system", ignoreCase = true)) return@mapNotNull message
+        // 只移除具有完整固定首尾的应用环境块，保留同条 system 中的用户规则及全部聊天内容。
+        var content = message.content
+        generatedHeaders.forEach { header ->
+            val start = content.indexOf(header)
+            val end = if (start >= 0) content.indexOf(generatedEnd, start) else -1
+            if (end >= 0) content = content.removeRange(start, end + generatedEnd.length).trim()
+        }
+        if (content.isBlank()) null else if (content == message.content) message else message.copy(content = content)
+    } +
+        SimpleTextApiMessage(id = policyId, role = "system", content = environment)
+    val currentTools = tools.filterNot { (it["function"] as? Map<*, *>)?.get("name") in ComputerToolNames.all } +
+        ComputerToolCatalog.definitions(context.permissionMode)
+    return request.copy(messages = messages, tools = currentTools)
+}
+
 object ComputerToolNames {
     const val LOCAL_FILE_SAVE = "local_file_save"
     const val EXEC = "exec"
@@ -61,37 +99,37 @@ object ComputerToolCatalog {
     ): List<Map<String, Any>> = listOf(
         function("computer_worker_list", "列出当前 Cloudflare Account 的 Workers。", mapOf("page" to integer("页码。", 1, 10000), "per_page" to integer("每页数量。", 1, 1000)), emptyList()),
         function("computer_worker_read", "读取 Worker 模块源码。", mapOf("worker_name" to string("Worker 名称。")), listOf("worker_name")),
-        function("computer_worker_create", "创建或上传 Worker；必须先取得用户确认。", workerWriteProperties(), listOf("worker_name", "script")),
-        function("computer_worker_update", "更新 Worker；必须先取得用户确认。", workerWriteProperties(), listOf("worker_name", "script")),
-        function("computer_worker_deploy", "部署当前 Workspace 中的 Worker；必须先取得用户确认。", workerDeployProperties(), listOf("worker_name")),
+        function("computer_worker_create", "创建或上传 Worker。", workerWriteProperties(), listOf("worker_name", "script")),
+        function("computer_worker_update", "更新 Worker。", workerWriteProperties(), listOf("worker_name", "script")),
+        function("computer_worker_deploy", "部署当前 Workspace 中的 Worker。", workerDeployProperties(), listOf("worker_name")),
         function("computer_worker_status", "查看 Worker 配置和最近部署状态。", mapOf("worker_name" to string("Worker 名称。")), listOf("worker_name")),
         function("computer_worker_logs", "查看 Worker 日志会话摘要。", mapOf("worker_name" to string("Worker 名称。")), listOf("worker_name")),
         function("computer_worker_health", "探测指定 Worker URL 的运行时 HTTP 状态；只返回状态码和耗时。", mapOf("url" to string("Worker 的 HTTPS URL，必须是 workers.dev 或 Cloudflare 域名。")), listOf("url")),
-        function("computer_worker_delete", "删除 Worker；必须先取得用户确认。", mapOf("worker_name" to string("Worker 名称。")), listOf("worker_name")),
+        function("computer_worker_delete", "删除 Worker。", mapOf("worker_name" to string("Worker 名称。")), listOf("worker_name")),
         function("computer_d1_list", "列出 D1 数据库。", emptyMap(), emptyList()),
         function("computer_d1_schema", "查看 D1 数据库结构。", mapOf("database_id" to string("D1 数据库 ID。")), listOf("database_id")),
-        function("computer_d1_query", "执行 D1 查询；写查询必须先取得用户确认。", mapOf("database_id" to string("D1 数据库 ID。"), "sql" to string("SQL 查询。")), listOf("database_id", "sql")),
-        function("computer_d1_migration", "执行 D1 migration；必须先取得用户确认且相同内容不会重复执行。", mapOf("database_id" to string("D1 数据库 ID。"), "sql" to string("Migration SQL。")), listOf("database_id", "sql")),
+        function("computer_d1_query", "执行 D1 查询。", mapOf("database_id" to string("D1 数据库 ID。"), "sql" to string("SQL 查询。")), listOf("database_id", "sql")),
+        function("computer_d1_migration", "执行 D1 migration，相同内容不会重复执行。", mapOf("database_id" to string("D1 数据库 ID。"), "sql" to string("Migration SQL。")), listOf("database_id", "sql")),
         function("computer_kv_list_namespaces", "列出 KV Namespace。", emptyMap(), emptyList()),
         function("computer_kv_list_keys", "列出 KV Key。", mapOf("namespace_id" to string("Namespace ID。"), "cursor" to string("下一页游标。"), "limit" to integer("每页数量。", 10, 1000)), listOf("namespace_id")),
         function("computer_kv_get", "读取 KV Value。", mapOf("namespace_id" to string("Namespace ID。"), "key" to string("Key。")), listOf("namespace_id", "key")),
-        function("computer_kv_put", "写入 KV Value；必须先取得用户确认。", mapOf("namespace_id" to string("Namespace ID。"), "key" to string("Key。"), "value" to string("Value。")), listOf("namespace_id", "key", "value")),
-        function("computer_kv_delete", "删除 KV Key；必须先取得用户确认。", mapOf("namespace_id" to string("Namespace ID。"), "key" to string("Key。")), listOf("namespace_id", "key")),
+        function("computer_kv_put", "写入 KV Value。", mapOf("namespace_id" to string("Namespace ID。"), "key" to string("Key。"), "value" to string("Value。")), listOf("namespace_id", "key", "value")),
+        function("computer_kv_delete", "删除 KV Key。", mapOf("namespace_id" to string("Namespace ID。"), "key" to string("Key。")), listOf("namespace_id", "key")),
         function("computer_r2_list_buckets", "列出 R2 Bucket。", emptyMap(), emptyList()),
         function("computer_r2_list_objects", "列出 R2 对象。", mapOf("bucket" to string("Bucket 名称。"), "cursor" to string("下一页游标。"), "per_page" to integer("每页数量。", 1, 1000)), listOf("bucket")),
         function("computer_r2_get_metadata", "查看 R2 对象元数据。", mapOf("bucket" to string("Bucket 名称。"), "key" to string("对象 Key。")), listOf("bucket", "key")),
-        function("computer_r2_upload", "上传当前 Workspace 文件到 R2；必须先取得用户确认。", mapOf("bucket" to string("Bucket 名称。"), "key" to string("对象 Key。"), "path" to string("当前 Workspace 内的相对文件路径。")), listOf("bucket", "key", "path")),
-        function("computer_r2_delete", "删除 R2 对象；必须先取得用户确认。", mapOf("bucket" to string("Bucket 名称。"), "key" to string("对象 Key。")), listOf("bucket", "key")),
+        function("computer_r2_upload", "上传当前 Workspace 文件到 R2。", mapOf("bucket" to string("Bucket 名称。"), "key" to string("对象 Key。"), "path" to string("当前 Workspace 内的相对文件路径。")), listOf("bucket", "key", "path")),
+        function("computer_r2_delete", "删除 R2 对象。", mapOf("bucket" to string("Bucket 名称。"), "key" to string("对象 Key。")), listOf("bucket", "key")),
         function("computer_durable_objects_list", "列出 Durable Objects Namespace。", emptyMap(), emptyList()),
         function("computer_durable_objects_list_objects", "查看指定 Durable Objects Namespace 的实例列表。", mapOf("namespace_id" to string("Namespace ID。"), "cursor" to string("下一页游标。"), "limit" to integer("每页数量。", 10, 1000)), listOf("namespace_id")),
         function("computer_queues_list", "列出 Queues。", emptyMap(), emptyList()),
         function("computer_queues_get", "查看 Queue 配置和状态。", mapOf("queue_id" to string("Queue ID。")), listOf("queue_id")),
         function("computer_queues_metrics", "查看 Queue 指标。", mapOf("queue_id" to string("Queue ID。")), listOf("queue_id")),
         function("computer_queues_peek", "预览 Queue 消息；不会租赁或删除消息。", mapOf("queue_id" to string("Queue ID。"), "batch_size" to mapOf("type" to "integer", "description" to "最多预览的消息数。")), listOf("queue_id")),
-        function("computer_queues_create", "创建 Queue；必须先取得用户确认。", mapOf("name" to string("Queue 名称。")), listOf("name")),
-        function("computer_queues_delete", "删除 Queue；必须先取得用户确认。", mapOf("queue_id" to string("Queue ID。")), listOf("queue_id")),
+        function("computer_queues_create", "创建 Queue。", mapOf("name" to string("Queue 名称。")), listOf("name")),
+        function("computer_queues_delete", "删除 Queue。", mapOf("queue_id" to string("Queue ID。")), listOf("queue_id")),
         function("computer_cron_list", "查看 Worker Cron 触发器。", mapOf("worker_name" to string("Worker 名称。")), listOf("worker_name")),
-        function("computer_cron_update", "修改 Worker Cron 触发器；必须先读取旧值并取得用户确认。", mapOf("worker_name" to string("Worker 名称。"), "schedules" to mapOf("type" to "array", "items" to mapOf("type" to "string"))), listOf("worker_name", "schedules")),
+        function("computer_cron_update", "修改 Worker Cron 触发器，先读取旧值。", mapOf("worker_name" to string("Worker 名称。"), "schedules" to mapOf("type" to "array", "items" to mapOf("type" to "string"))), listOf("worker_name", "schedules")),
         function("computer_cron_trigger", "立即触发 Cron；当前 Cloudflare 官方 API 未提供该操作，调用会返回明确的不支持错误。", mapOf("worker_name" to string("Worker 名称。")), listOf("worker_name")),
     ).filter { definition ->
         // 工具定义的名称位于 function.name；读取外层 name 会让功能开关失效，
@@ -161,8 +199,8 @@ object ComputerToolCatalog {
                 put(
                     "target",
                     enumStringWithDefault(
-                        description = "Execution location. Defaults to the isolated Container.",
-                        default = "container",
+                        description = "Execution location. Defaults to SSH on the host. Choose container only for an operation that needs isolation, such as running untrusted code.",
+                        default = "host",
                         "container",
                         "host",
                     ),
@@ -195,9 +233,9 @@ object ComputerToolCatalog {
         ),
         function(
             name = ComputerToolNames.READ_FILE,
-            description = "Read one page of a file inside the current /workspace.",
+            description = "Read one page of a file in the current SSH working directory.",
             properties = mapOf(
-                "path" to string("Relative path or /workspace path."),
+                "path" to string("Relative path in the current SSH file-tool directory."),
                 "offset" to integer("Byte offset.", 0, Long.MAX_VALUE),
                 "limit" to integer("Maximum bytes to return.", 1, 1_048_576),
                 "encoding" to enumString("utf8", "base64"),
@@ -206,9 +244,9 @@ object ComputerToolCatalog {
         ),
         function(
             name = ComputerToolNames.WRITE_FILE,
-            description = "Write a UTF-8 or base64 file inside the current /workspace.",
+            description = "Write a UTF-8 or base64 file in the current SSH working directory.",
             properties = mapOf(
-                "path" to string("Relative path or /workspace path."),
+                "path" to string("Relative path in the current SSH file-tool directory."),
                 "content" to string("UTF-8 text or base64 data."),
                 "encoding" to enumString("utf8", "base64"),
                 "mode" to enumString("overwrite", "append"),
@@ -220,7 +258,7 @@ object ComputerToolCatalog {
             name = ComputerToolNames.EDIT,
             description = "Edit one file with one or more precise text replacements. Every oldText must be unique in the original file, and edits must not overlap.",
             properties = mapOf(
-                "path" to string("Relative path or /workspace path."),
+                "path" to string("Relative path in the current SSH file-tool directory."),
                 "edits" to mapOf(
                     "type" to "array",
                     "description" to "Targeted replacements matched against the original file.",
@@ -240,7 +278,7 @@ object ComputerToolCatalog {
         ),
         function(
             name = ComputerToolNames.TERMINAL,
-            description = "Open and interact with a PTY terminal for the current /workspace.",
+            description = "Open and interact with a PTY terminal on the SSH host in the current working directory.",
             properties = mapOf(
                 "action" to enumString("open", "write", "read", "resize", "close"),
                 "terminal_id" to string("Terminal ID returned by open."),
@@ -253,33 +291,33 @@ object ComputerToolCatalog {
         ),
         function(
             name = ComputerToolNames.UPLOAD,
-            description = "Upload a local conversation attachment into the current /workspace.",
+            description = "Upload a local conversation attachment into the current SSH working directory.",
             properties = mapOf(
                 "attachment_id" to string("Local attachment ID from the current conversation."),
-                "destination_path" to string("Destination inside /workspace."),
+                "destination_path" to string("Relative destination in the current SSH file-tool directory."),
                 "overwrite" to boolean("Allow replacing an existing file."),
             ),
             required = listOf("attachment_id", "destination_path"),
         ),
         function(
             name = ComputerToolNames.DOWNLOAD,
-            description = "Download a file from /workspace as a local EveryTalk attachment.",
+            description = "Download a file from the current SSH working directory as a local EveryTalk attachment.",
             properties = mapOf(
-                "source_path" to string("Source path inside /workspace."),
+                "source_path" to string("Relative source path in the current SSH file-tool directory."),
                 "suggested_name" to string("Optional local file name."),
             ),
             required = listOf("source_path"),
         ),
         function(
             name = ComputerToolNames.OPEN_PORT,
-            description = "Open an HTTP or HTTPS service. Use target=container for services created in /workspace and target=host for services already running on the VPS.",
+            description = "Open an HTTP or HTTPS service on the SSH host by default. Choose target=container only for a service explicitly started in a sandbox.",
             properties = buildMap {
                 put("port", integer("Service port on the VPS or Workspace Container.", 1, 65_535))
                 put(
                     "target",
                     enumStringWithDefault(
-                        description = "Service location. Defaults to the Workspace Container.",
-                        default = "container",
+                        description = "Service location. Defaults to the SSH host.",
+                        default = "host",
                         "container",
                         "host",
                     ),
@@ -329,9 +367,9 @@ object ComputerToolCatalog {
             ComputerPermissionMode.FULL ->
                 "Valid operations execute without an approval prompt."
         }
-        return "Run a command on the user's selected server. Use target=container for code, scripts, builds, tests, package installs, and file-producing work. " +
-            "Use target=host only to inspect or manage the VPS itself. $approvalText Combine related read-only diagnostics and cap output. " +
-            "For basic VPS configuration, prefer one host call: hostname; uname -a; cat /etc/os-release; nproc; free -m; df -h."
+        return "Run a command directly on the user's selected server over SSH (target=host by default). " +
+            "Choose target=container only when this specific operation needs isolation, such as testing untrusted code; it does not change later calls. " +
+            approvalText
     }
 
     private fun string(description: String): Map<String, Any> = mapOf(

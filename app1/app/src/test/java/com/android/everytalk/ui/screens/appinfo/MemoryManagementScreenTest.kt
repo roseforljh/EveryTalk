@@ -35,7 +35,7 @@ class MemoryManagementScreenTest {
     }
     @After fun close() { database.close() }
 
-    @Test fun `application management entry navigates to memory switches and back`() {
+    @Test fun `global switch enables automatic capture and removed controls stay absent`() {
         compose.setContent {
             val nav = rememberNavController()
             MaterialTheme {
@@ -51,66 +51,65 @@ class MemoryManagementScreenTest {
         compose.onNodeWithText("记忆管理").performScrollTo().performClick()
         await("memory_enabled")
         compose.onNodeWithTag("memory_enabled").assertIsOff().performClick()
-        compose.waitUntil(5_000) { runBlocking { repository.settings().enabled } }
-        compose.onNodeWithTag("memory_auto").assertIsEnabled().assertIsOff()
+        compose.waitUntil(5_000) { runBlocking { repository.settings().autoCaptureEnabled } }
+        compose.onNodeWithTag("memory_auto").assertDoesNotExist()
+        compose.onNodeWithTag("memory_capacity").assertDoesNotExist()
+        compose.onNodeWithText("清空全部记忆").assertDoesNotExist()
+        compose.onNodeWithText("添加记忆").assertDoesNotExist()
+        compose.waitForIdle()
         compose.onNodeWithTag("memory_enabled").performClick()
-        compose.waitUntil(5_000) { !runBlocking { repository.settings().enabled } }
-        compose.onNodeWithTag("memory_auto").assertIsNotEnabled()
+        compose.waitUntil(5_000) { !runBlocking { repository.settings().autoCaptureEnabled } }
         compose.onNodeWithContentDescription("返回").performClick()
         compose.onNodeWithText("应用管理").assertExists()
     }
 
-    @Test fun `manual add search edit disable and delete all update persistent state`() {
+    @Test fun `shared text can be edited saved and deleted through the same editor`() {
+        runBlocking { repository.save("原来的资料") }
         page()
-        compose.onNodeWithText("添加记忆").performScrollTo().performClick()
-        compose.onNodeWithTag("memory_editor").performTextInput("请优先使用中文")
-        compose.onNodeWithTag("memory_save").performClick()
-        compose.waitUntil(5_000) { runBlocking { repository.state().entries.size == 1 } }
-        val id = runBlocking { repository.state().entries.single().id }
-        awaitCount(1)
-        compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasTestTag("memory_content_$id"))
-        compose.onNodeWithTag("memory_search").performScrollTo().performTextInput("没有命中")
-        compose.onNodeWithText("没有匹配的记忆").assertExists()
-        compose.onNodeWithTag("memory_search").performTextClearance()
-        compose.onNodeWithText("编辑").performScrollTo().performClick()
-        compose.onNodeWithTag("memory_editor").performTextReplacement("先给结论，再解释")
-        compose.onNodeWithTag("memory_save").performClick()
-        compose.waitUntil(5_000) { runBlocking { repository.state().entries.single().content == "先给结论，再解释" } }
-        compose.onNodeWithTag("memory_entry_$id").performScrollTo().performClick()
-        compose.waitUntil(5_000) { !runBlocking { repository.state().entries.single().enabled } }
-        compose.onNodeWithText("删除记忆").performScrollTo().performClick()
-        compose.onNodeWithText("取消").performClick()
-        assertEquals(1, runBlocking { repository.state().entries.size })
-        compose.onNodeWithText("删除记忆").performClick()
-        compose.onNodeWithTag("memory_confirm_delete").performClick()
+        awaitText("原来的资料")
+        compose.onNodeWithTag("memory_editor").performScrollTo().performTextReplacement("先给结论，再解释")
+        save()
+        compose.waitUntil(5_000) { runBlocking { repository.state().document == "先给结论，再解释" } }
+        awaitText("先给结论，再解释")
+        compose.onNodeWithTag("memory_editor").performScrollTo().performTextClearance()
+        save()
         compose.waitUntil(5_000) { runBlocking { repository.state().entries.isEmpty() } }
     }
 
-    @Test fun `clear requires confirmation and invalid input keeps editor and old entries`() {
+    @Test fun `AI changes update pristine editor without overwriting a manual draft`() {
+        page()
+        runBlocking { MemoryRepository(database).save("AI 新保存的共享记忆") }
+        awaitText("AI 新保存的共享记忆")
+        compose.onNodeWithTag("memory_editor").performScrollTo().performTextReplacement("正在手动修改")
+        runBlocking { MemoryRepository(database).save("编辑期间新增的共享记忆") }
+        compose.waitForIdle()
+        compose.onNodeWithTag("memory_editor").assertTextContains("正在手动修改")
+        save()
+        compose.waitUntil(5_000) {
+            runBlocking { repository.state().entries.map { it.content }.toSet() == setOf("正在手动修改", "编辑期间新增的共享记忆") }
+        }
+        compose.waitForIdle()
+        compose.onNodeWithTag("memory_editor").assertTextContains("编辑期间新增的共享记忆", substring = true)
+    }
+
+    @Test fun `failed validation keeps draft and persistent memories intact`() {
         runBlocking { repository.save("已有的可靠资料") }
         page()
-        compose.onNodeWithText("清空全部记忆").performScrollTo().performClick()
-        compose.onNodeWithText("取消").performClick()
-        assertEquals(1, runBlocking { repository.state().entries.size })
-        compose.onNodeWithText("添加记忆").performClick()
-        compose.onNodeWithTag("memory_editor").performTextInput("密码：123456")
-        compose.onNodeWithTag("memory_save").performClick()
-        compose.waitUntil(5_000) { compose.onAllNodesWithText("不能保存密钥、令牌、密码、验证码或银行卡等敏感内容").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithTag("memory_editor").assertExists()
-        assertEquals(1, runBlocking { repository.state().entries.size })
-        compose.onNodeWithText("取消").performClick()
-        compose.onNodeWithText("清空全部记忆").performClick()
-        compose.onNodeWithTag("memory_confirm_delete").performClick()
-        compose.waitUntil(5_000) { runBlocking { repository.state().entries.isEmpty() } }
-        awaitCount(0)
-        compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("还没有记忆。可在这里添加，或在聊天中明确要求 AI 记住。"))
-        compose.onNodeWithText("还没有记忆。可在这里添加，或在聊天中明确要求 AI 记住。").assertExists()
+        awaitText("已有的可靠资料")
+        compose.onNodeWithTag("memory_editor").performScrollTo().performTextReplacement("密码：123456")
+        save()
+        await("memory_error")
+        compose.onNodeWithTag("memory_editor").assertTextContains("密码：123456")
+        assertEquals("已有的可靠资料", runBlocking { repository.state().document })
     }
 
     private fun page() {
         compose.setContent { MaterialTheme { MemoryManagementScreen(onBack = {}, repository = repository) } }
-        await("memory_enabled")
+        await("memory_editor")
     }
+    private fun save() { compose.onNodeWithTag("memory_save").performScrollTo().performClick() }
     private fun await(tag: String) { compose.waitUntil(5_000) { compose.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty() } }
-    private fun awaitCount(count: Int) { compose.waitUntil(5_000) { compose.onAllNodes(hasText("$count / 100", substring = true)).fetchSemanticsNodes().isNotEmpty() } }
+    private fun awaitText(text: String) {
+        compose.waitUntil(5_000) { compose.onAllNodes(hasTestTag("memory_editor") and hasText(text, substring = true)).fetchSemanticsNodes().isNotEmpty() }
+    }
 }

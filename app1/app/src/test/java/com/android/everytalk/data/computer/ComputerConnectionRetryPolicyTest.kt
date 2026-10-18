@@ -17,7 +17,7 @@ class ComputerConnectionRetryPolicyTest {
     }
 
     @Test
-    fun `v8 Container 使用轻量升级且 Direct 不受影响`() {
+    fun `旧容器可按需轻量升级且SSH默认模式不要求升级`() {
         val container = computer(
             runMode = ComputerRunMode.CONTAINER,
             bootstrapVersion = "8",
@@ -32,7 +32,7 @@ class ComputerConnectionRetryPolicyTest {
         assertFalse(container.copy(bootstrapVersion = null).needsContainerRuntimeUpgrade())
         assertFalse(container.copy(capabilities = ComputerCapabilities(dockerAvailable = false)).canUseRuntimeOnlyUpgrade())
         assertFalse(container.copy(runMode = ComputerRunMode.DIRECT).needsContainerRuntimeUpgrade())
-        assertFalse(container.copy(runMode = ComputerRunMode.DIRECT).canUseRuntimeOnlyUpgrade())
+        assertTrue(container.copy(runMode = ComputerRunMode.DIRECT).canUseRuntimeOnlyUpgrade())
         assertEquals(false, container.copy(bootstrapVersion = COMPUTER_BOOTSTRAP_VERSION).needsContainerRuntimeUpgrade())
     }
 

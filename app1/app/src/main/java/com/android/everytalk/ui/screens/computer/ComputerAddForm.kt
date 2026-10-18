@@ -29,8 +29,6 @@ internal data class ComputerAddFormState(
     val privateKey: String = "",
     val privateKeyPassphrase: String = "",
     val sudoPassword: String = "",
-    /** 默认启用更安全的沙箱；低配服务器可在添加时关闭并直接使用 SSH。 */
-    val sandboxEnabled: Boolean = true,
     val provider: ComputerProvider = ComputerProvider.SSH,
     val cloudflareAuthorized: Boolean = false,
     val cloudflareIdentity: String? = null,
@@ -67,7 +65,8 @@ internal data class ComputerAddFormState(
                 port = requireNotNull(port.toIntOrNull()),
                 username = username,
                 credential = credential,
-                runMode = if (sandboxEnabled) ComputerRunMode.CONTAINER else ComputerRunMode.DIRECT,
+                // 服务器记录只描述 SSH 连接。是否进入沙箱由执行请求在运行时决定。
+                runMode = ComputerRunMode.DIRECT,
             ),
             sudoPassword = sudoPassword.takeIf { username.trim() != "root" && it.isNotEmpty() }?.toCharArray(),
         )
@@ -93,7 +92,8 @@ internal data class ComputerAddFormState(
                 host = host,
                 port = requireNotNull(port.toIntOrNull()),
                 username = username,
-                runMode = if (sandboxEnabled) ComputerRunMode.CONTAINER else ComputerRunMode.DIRECT,
+                // 编辑也保持服务器级别的 SSH 连接语义，不能在这里切换执行沙箱。
+                runMode = ComputerRunMode.DIRECT,
                 credential = credential,
             ),
             sudoPassword = sudoPassword.takeIf { username.trim() != "root" && it.isNotEmpty() }?.toCharArray(),
@@ -112,7 +112,6 @@ internal fun Computer.toEditFormState(): ComputerAddFormState = ComputerAddFormS
     port = port.toString(),
     username = username,
     authKind = authKind,
-    sandboxEnabled = runMode == ComputerRunMode.CONTAINER,
 )
 
 internal data class PreparedComputerAdd(
