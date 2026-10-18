@@ -46,7 +46,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.SpanStyle
@@ -60,29 +59,18 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
-import coil3.compose.AsyncImage
 import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.ui.components.dialog.AppDialogShape
 import com.android.everytalk.ui.components.dialog.appDialogBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogContainerColor
 import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.components.dialog.appDialogSubtextColor
-import com.android.everytalk.util.web.linkFaviconInitial
-import com.android.everytalk.util.web.linkFaviconUrl
 
 internal val WebSourcesDialogEdgeGap = 8.dp
 internal val WebSourcesDialogUrlMaxWidth = 360.dp
 internal val WebSourcesDialogPreviewMaxWidth = WebSourcesDialogUrlMaxWidth
 internal const val WebSourcesDialogUrlMaxLines = 1
 internal const val WebSourcesDialogSnippetMaxLines = 2
-
-private fun sourceFaviconUrl(href: String): String {
-    return linkFaviconUrl(href)
-}
-
-private fun sourceInitial(source: WebSearchResult): String {
-    return linkFaviconInitial(source.href, fallback = source.title)
-}
 
 @Composable
 fun AnimatedWebSourcesDialog(
@@ -286,22 +274,9 @@ private fun SourceFavicon(source: WebSearchResult) {
             .background(MaterialTheme.colorScheme.surfaceVariant),
         contentAlignment = Alignment.Center
     ) {
-        Text(
-            text = sourceInitial(source),
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+        WebsiteIcon(
+            href = source.href,
+            modifier = Modifier.size(24.dp),
         )
-        val faviconUrl = sourceFaviconUrl(source.href)
-        if (faviconUrl.isNotBlank()) {
-            AsyncImage(
-                model = faviconUrl,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .size(iconSize)
-                    .clip(CircleShape)
-            )
-        }
     }
 }

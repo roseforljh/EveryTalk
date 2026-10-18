@@ -40,7 +40,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalUriHandler
@@ -53,7 +52,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
 import com.android.everytalk.R
 import com.android.everytalk.data.network.TOOL_CALL_WRITING_STATUS
 import com.android.everytalk.data.DataClass.ExecutionStep
@@ -63,7 +61,7 @@ import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.statecontroller.CONTEXT_COMPRESSION_FAILURE_PREFIX
 import com.android.everytalk.statecontroller.CONTEXT_COMPRESSION_RUNNING_STATUS
 import com.android.everytalk.statecontroller.AGENT_LOOP_CONTINUING_STATUS
-import com.android.everytalk.util.web.linkFaviconUrl
+import com.android.everytalk.ui.components.WebsiteIcon
 import com.android.everytalk.util.web.linkHost
 import com.android.everytalk.util.locale.localizeUiMessage
 
@@ -929,23 +927,11 @@ private fun WebsiteCapsule(
                     .background(if (flatDarkStyle) Color.Transparent else MaterialTheme.colorScheme.surface),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_globe),
-                    contentDescription = null,
+                WebsiteIcon(
+                    href = source.href,
                     tint = TimelineWebGreen,
-                    modifier = Modifier.size(14.dp),
+                    modifier = Modifier.size(18.dp),
                 )
-                val faviconUrl = linkFaviconUrl(source.href)
-                if (faviconUrl.isNotBlank()) {
-                    AsyncImage(
-                        model = faviconUrl,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .size(18.dp)
-                            .clip(CircleShape),
-                    )
-                }
             }
             Text(
                 text = host,

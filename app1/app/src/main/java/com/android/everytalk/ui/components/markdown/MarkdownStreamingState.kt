@@ -134,8 +134,6 @@ import com.mikepenz.markdown.model.markdownInlineContent
 import com.mikepenz.markdown.model.markdownPadding
 import com.mikepenz.markdown.model.parseMarkdown
 import com.mikepenz.markdown.model.rememberStreamingMarkdownState
-import com.android.everytalk.util.web.linkFaviconInitial
-import com.android.everytalk.util.web.linkFaviconUrl
 import com.android.everytalk.util.web.linkHost
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -155,7 +153,6 @@ import org.koin.compose.koinInject
 
 data class MarkdownLinkLogoRequest(
     val host: String,
-    val faviconUrl: String,
 )
 
 data class MarkdownLinkLogoIndex(

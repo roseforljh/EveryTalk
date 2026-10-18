@@ -295,7 +295,7 @@ class MarkdownEngineOwnershipTest {
         assertTrue(adapter.contains("markdownLinkLogoRequests("))
         assertTrue(adapter.contains("markdownLinkLogoInlineContent("))
         assertTrue(adapter.contains("createPreparedMessageMarkdownAnnotator("))
-        assertTrue(adapter.contains("linkFaviconUrl("))
+        assertTrue(adapter.contains("WebsiteIcon("))
         assertTrue(adapter.contains("val padding = markdownPadding("))
         assertTrue(adapter.contains("block = ChatMarkdownTextStyle.SPACING_PARAGRAPH_DP.dp"))
         assertTrue(adapter.contains("list = ChatMarkdownTextStyle.LIST_EDGE_SPACING_DP.dp"))

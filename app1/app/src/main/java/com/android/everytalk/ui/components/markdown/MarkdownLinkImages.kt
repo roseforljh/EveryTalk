@@ -53,7 +53,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
@@ -81,6 +80,7 @@ import androidx.compose.ui.semantics.semantics
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.ui.components.ChatMarkdownTextStyle
 import com.android.everytalk.ui.components.EveryTalkLoadingIndicator
+import com.android.everytalk.ui.components.WebsiteIcon
 import com.android.everytalk.ui.components.content.CodeBlockCard
 import com.android.everytalk.ui.components.math.MathBlock
 import com.android.everytalk.ui.components.math.MathFormulaErrorKind
@@ -102,9 +102,6 @@ import com.android.everytalk.ui.components.streaming.INLINE_FORMULA_SCHEME
 import com.android.everytalk.ui.components.streaming.PreparedMarkdownDocument
 import com.android.everytalk.ui.components.streaming.PreparedMessage
 import coil3.compose.AsyncImagePainter
-import coil3.compose.rememberAsyncImagePainter
-import coil3.request.ImageRequest
-import coil3.size.Size as CoilSize
 import com.mikepenz.markdown.coil3.Coil3ImageTransformerImpl
 import com.mikepenz.markdown.annotator.annotatorSettings
 import com.mikepenz.markdown.annotator.buildMarkdownAnnotatedString
@@ -136,8 +133,6 @@ import com.mikepenz.markdown.model.markdownInlineContent
 import com.mikepenz.markdown.model.markdownPadding
 import com.mikepenz.markdown.model.parseMarkdown
 import com.mikepenz.markdown.model.rememberStreamingMarkdownState
-import com.android.everytalk.util.web.linkFaviconInitial
-import com.android.everytalk.util.web.linkFaviconUrl
 import com.android.everytalk.util.web.linkHost
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -186,7 +181,6 @@ internal fun markdownLinkLogoIndex(
                 host,
                 MarkdownLinkLogoRequest(
                     host = host,
-                    faviconUrl = linkFaviconUrl(destination),
                 ),
             )
         }
@@ -425,18 +419,6 @@ internal fun MarkdownLinkLogo(
     request: MarkdownLinkLogoRequest,
     modifier: Modifier = Modifier,
 ) {
-    val context = LocalContext.current
-    val iconSizePx = with(LocalDensity.current) {
-        MARKDOWN_LINK_LOGO_SIZE_DP.dp.roundToPx().coerceAtLeast(1)
-    }
-    val imageRequest = remember(context, request.faviconUrl, iconSizePx) {
-        ImageRequest.Builder(context)
-            .data(request.faviconUrl)
-            .size(CoilSize(iconSizePx, iconSizePx))
-            .build()
-    }
-    val painter = rememberAsyncImagePainter(model = imageRequest)
-    val painterState = painter.state.collectAsState().value
     val logoDescription = stringResource(R.string.link_logo, request.host)
     Box(
         modifier = Modifier
@@ -450,31 +432,10 @@ internal fun MarkdownLinkLogo(
             },
         contentAlignment = Alignment.Center,
     ) {
-        when (painterState) {
-            is AsyncImagePainter.State.Empty,
-            is AsyncImagePainter.State.Loading -> {
-                EveryTalkLoadingIndicator(
-                    size = 10.dp,
-                    strokeWidth = 1.dp,
-                    contentDescription = stringResource(R.string.link_logo_loading),
-                )
-            }
-            is AsyncImagePainter.State.Error -> {
-                Text(
-                    text = linkFaviconInitial("https://${request.host}"),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            is AsyncImagePainter.State.Success -> {
-                Image(
-                    painter = painter,
-                    contentDescription = stringResource(R.string.link_source, request.host),
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
-                )
-            }
-        }
+        WebsiteIcon(
+            href = "https://${request.host}",
+            modifier = Modifier.fillMaxSize(),
+        )
     }
 }
 

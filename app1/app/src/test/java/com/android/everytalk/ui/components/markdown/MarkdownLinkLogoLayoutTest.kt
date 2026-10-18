@@ -2,6 +2,9 @@ package com.android.everytalk.ui.components.markdown
 
 import android.app.Application
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -37,6 +40,78 @@ import org.robolectric.annotation.Config
 class MarkdownLinkLogoLayoutTest {
     @get:Rule
     val composeRule = createComposeRule()
+
+    @Test
+    fun `内置网站和未知网站在深浅主题下直接显示且没有加载动画`() {
+        val host = mutableStateOf("github.com")
+        val dark = mutableStateOf(false)
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        composeRule.setContent {
+            MaterialTheme(colorScheme = if (dark.value) darkColorScheme() else lightColorScheme()) {
+                MarkdownLinkLogo(MarkdownLinkLogoRequest(host.value), Modifier.size(18.dp))
+            }
+        }
+        // 遍历每个内置资源，既验证同步解码，也覆盖未知域名的地球回退。
+        for (isDark in listOf(false, true)) {
+            for (site in listOf(
+                "github.com", "gitlab.com", "stackoverflow.com", "wikipedia.org", "x.com",
+                "youtube.com", "reddit.com", "discord.com", "bilibili.com", "facebook.com",
+                "instagram.com", "linkedin.com", "tiktok.com", "chatgpt.com", "claude.ai",
+                "deepseek.com", "huggingface.co", "cloudflare.com", "vercel.com", "figma.com",
+                "linear.app", "notion.so", "slack.com", "salesforce.com", "box.com", "dropbox.com",
+                "google.com", "mail.google.com", "calendar.google.com", "drive.google.com", "unknown.example",
+                "midjourney.com",
+                "firefly.adobe.com",
+                "stability.ai",
+                "civitai.com",
+                "ideogram.ai",
+                "recraft.ai",
+                "runwayml.com",
+                "klingai.com",
+                "jimeng.jianying.com",
+                "lumalabs.ai",
+                "bfl.ai",
+                "gemini.google.com",
+                "perplexity.ai",
+                "grok.com",
+                "qwen.ai",
+                "doubao.com",
+                "kimi.com",
+                "modelscope.cn",
+                "ollama.com",
+                "microsoft.com",
+                "apple.com",
+                "baidu.com",
+                "bing.com",
+                "aws.amazon.com",
+                "azure.com",
+                "minimax.io",
+                "zhihu.com",
+                "weibo.com",
+                "weixin.qq.com",
+                "npmjs.com",
+                "docker.com",
+                "python.org",
+                "react.dev",
+                "nodejs.org",
+                "typescriptlang.org",
+                "supabase.com",
+                "firebase.google.com",
+                "pinterest.com",
+                "telegram.org",
+                "medium.com",
+            )) {
+                composeRule.runOnIdle {
+                    host.value = site
+                    dark.value = isDark
+                }
+                composeRule.onNodeWithContentDescription(context.getString(R.string.link_logo, site))
+                    .fetchSemanticsNode("")
+                composeRule.onNodeWithContentDescription(context.getString(R.string.link_logo_loading))
+                    .assertDoesNotExist()
+            }
+        }
+    }
 
     @Test
     fun `缺失索引在后台计算且旧正文任务不能覆盖新正文`() {
@@ -128,7 +203,6 @@ class MarkdownLinkLogoLayoutTest {
         val content = "https://x.com"
         val request = MarkdownLinkLogoRequest(
             host = "x.com",
-            faviconUrl = "https://www.google.com/s2/favicons?domain=x.com&sz=64",
         )
         val logoDescription = ApplicationProvider.getApplicationContext<Application>()
             .getString(R.string.link_logo, request.host)

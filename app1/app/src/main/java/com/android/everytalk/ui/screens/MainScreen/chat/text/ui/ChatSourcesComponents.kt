@@ -48,7 +48,6 @@ import android.os.SystemClock
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.*
@@ -86,6 +85,7 @@ import com.android.everytalk.ui.theme.chatColors
 import com.android.everytalk.ui.components.ChatMarkdownTextStyle
 import com.android.everytalk.ui.components.FullScreenCodeViewerDialog
 import com.android.everytalk.ui.components.WebMarkdownSourcesExtractor
+import com.android.everytalk.ui.components.WebsiteIcon
 import com.android.everytalk.ui.components.everyTalkLoadingElapsedText
 import com.android.everytalk.ui.components.dialog.AppDialogShape
 import com.android.everytalk.ui.components.dialog.appDialogBorderColor
@@ -110,23 +110,12 @@ import com.android.everytalk.ui.topanchor.mapChatItemsToTopAnchorItems
 import com.android.everytalk.ui.topanchor.resolveActiveTopAnchorTurn
 import com.android.everytalk.ui.topanchor.resolveTopAnchorResponseTargetId
 import com.android.everytalk.util.message.prepareTextForExternalTransfer
-import com.android.everytalk.util.web.linkFaviconInitial
-import com.android.everytalk.util.web.linkFaviconUrl
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import coil3.compose.AsyncImage
-
-private fun pageSourceFaviconUrl(href: String): String {
-    return linkFaviconUrl(href)
-}
-
-private fun pageSourceInitial(source: WebSearchResult): String {
-    return linkFaviconInitial(source.href, fallback = source.title)
-}
 
 @Composable
 internal fun PageSourcesButton(
@@ -192,23 +181,10 @@ private fun PageSourceIconStack(
                     .background(if (isDarkTheme) Color.Transparent else MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = pageSourceInitial(source),
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                WebsiteIcon(
+                    href = source.href,
+                    modifier = Modifier.size(18.dp),
                 )
-                val faviconUrl = pageSourceFaviconUrl(source.href)
-                if (faviconUrl.isNotBlank()) {
-                    AsyncImage(
-                        model = faviconUrl,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .size(iconSize)
-                            .clip(CircleShape)
-                    )
-                }
             }
         }
     }

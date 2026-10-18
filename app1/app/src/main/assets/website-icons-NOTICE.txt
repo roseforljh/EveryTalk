@@ -1,0 +1,98 @@
+网站链接内置图标
+
+来源：QoneAgent/apps/desktop/src/assets/codex-icons（Codex 提取资源）、website-icons（Tabler），及其已安装的 @lobehub/icons-static-svg@1.95.1。
+为 Android 同步显示，将原 SVG 等比例渲染为 96×96 透明 PNG；单色图标随应用主题着色。地球图标复用本项目从 ChatGPT 提取的 ic_globe。
+
+Codex 资源：github、figma、gmail、google-calendar、google-drive、linear、notion、salesforce、slack、box、dropbox、reddit。
+Tabler 资源：x、youtube、discord、facebook、instagram、linkedin、tiktok、gitlab、stackoverflow、wikipedia。
+LobeHub 资源：cloudflare、bilibili、huggingface、claude、deepseek、google、vercel、openai。
+
+Tabler 许可证：
+MIT License
+
+Copyright (c) 2020-2026 Paweł Kuna
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+LobeHub 许可证（同仓库 @lobehub/icons 包保留的许可证）：
+MIT License
+
+Copyright (c) 2023 LobeHub
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+补充图标（沿用上述 LobeHub / Tabler 许可证）：
+midjourney: QoneAgent/node_modules/.bun/@lobehub+icons-static-svg@1.95.1/node_modules/@lobehub/icons-static-svg/icons/midjourney.svg
+adobefirefly: QoneAgent/node_modules/.bun/@lobehub+icons-static-svg@1.95.1/node_modules/@lobehub/icons-static-svg/icons/adobefirefly-color.svg
+stability: QoneAgent/node_modules/.bun/@lobehub+icons-static-svg@1.95.1/node_modules/@lobehub/icons-static-svg/icons/stability-color.svg
+civitai: QoneAgent/node_modules/.bun/@lobehub+icons-static-svg@1.95.1/node_modules/@lobehub/icons-static-svg/icons/civitai-color.svg
+ideogram: QoneAgent/node_modules/.bun/@lobehub+icons-static-svg@1.95.1/node_modules/@lobehub/icons-static-svg/icons/ideogram.svg
+recraft: QoneAgent/node_modules/.bun/@lobehub+icons-static-svg@1.95.1/node_modules/@lobehub/icons-static-svg/icons/recraft.svg
+runway: QoneAgent/node_modules/.bun/@lobehub+icons-static-svg@1.95.1/node_modules/@lobehub/icons-static-svg/icons/runway.svg
+kling: QoneAgent/node_modules/.bun/@lobehub+icons-static-svg@1.95.1/node_modules/@lobehub/icons-static-svg/icons/kling-color.svg
+jimeng: QoneAgent/node_modules/.bun/@lobehub+icons-static-svg@1.95.1/node_modules/@lobehub/icons-static-svg/icons/jimeng-color.svg
+luma: QoneAgent/node_modules/.bun/@lobehub+icons-static-svg@1.95.1/node_modules/@lobehub/icons-static-svg/icons/luma-color.svg
+flux: QoneAgent/node_modules/.bun/@lobehub+icons-static-svg@1.95.1/node_modules/@lobehub/icons-static-svg/icons/flux.svg
+gemini: QoneAgent/node_modules/.bun/@lobehub+icons-static-svg@1.95.1/node_modules/@lobehub/icons-static-svg/icons/gemini-color.svg
+perplexity: QoneAgent/node_modules/.bun/@lobehub+icons-static-svg@1.95.1/node_modules/@lobehub/icons-static-svg/icons/perplexity-color.svg
+grok: QoneAgent/node_modules/.bun/@lobehub+icons-static-svg@1.95.1/node_modules/@lobehub/icons-static-svg/icons/grok.svg
+qwen: QoneAgent/node_modules/.bun/@lobehub+icons-static-svg@1.95.1/node_modules/@lobehub/icons-static-svg/icons/qwen-color.svg
+doubao: QoneAgent/node_modules/.bun/@lobehub+icons-static-svg@1.95.1/node_modules/@lobehub/icons-static-svg/icons/doubao-color.svg
+kimi: QoneAgent/node_modules/.bun/@lobehub+icons-static-svg@1.95.1/node_modules/@lobehub/icons-static-svg/icons/kimi-color.svg
+modelscope: QoneAgent/node_modules/.bun/@lobehub+icons-static-svg@1.95.1/node_modules/@lobehub/icons-static-svg/icons/modelscope-color.svg
+ollama: QoneAgent/node_modules/.bun/@lobehub+icons-static-svg@1.95.1/node_modules/@lobehub/icons-static-svg/icons/ollama.svg
+microsoft: QoneAgent/node_modules/.bun/@lobehub+icons-static-svg@1.95.1/node_modules/@lobehub/icons-static-svg/icons/microsoft-color.svg
+apple: QoneAgent/node_modules/.bun/@lobehub+icons-static-svg@1.95.1/node_modules/@lobehub/icons-static-svg/icons/apple.svg
+baidu: QoneAgent/node_modules/.bun/@lobehub+icons-static-svg@1.95.1/node_modules/@lobehub/icons-static-svg/icons/baidu-color.svg
+bing: QoneAgent/node_modules/.bun/@lobehub+icons-static-svg@1.95.1/node_modules/@lobehub/icons-static-svg/icons/bing-color.svg
+aws: QoneAgent/node_modules/.bun/@lobehub+icons-static-svg@1.95.1/node_modules/@lobehub/icons-static-svg/icons/aws-color.svg
+azure: QoneAgent/node_modules/.bun/@lobehub+icons-static-svg@1.95.1/node_modules/@lobehub/icons-static-svg/icons/azure-color.svg
+minimax: QoneAgent/node_modules/.bun/@lobehub+icons-static-svg@1.95.1/node_modules/@lobehub/icons-static-svg/icons/minimax-color.svg
+zhihu: QoneAgent/node_modules/.bun/@tabler+icons@3.48.0/node_modules/@tabler/icons/icons/outline/brand-zhihu.svg
+weibo: QoneAgent/node_modules/.bun/@tabler+icons@3.48.0/node_modules/@tabler/icons/icons/outline/brand-weibo.svg
+wechat: QoneAgent/node_modules/.bun/@tabler+icons@3.48.0/node_modules/@tabler/icons/icons/outline/brand-wechat.svg
+npm: QoneAgent/node_modules/.bun/@tabler+icons@3.48.0/node_modules/@tabler/icons/icons/outline/brand-npm.svg
+docker: QoneAgent/node_modules/.bun/@tabler+icons@3.48.0/node_modules/@tabler/icons/icons/outline/brand-docker.svg
+python: QoneAgent/node_modules/.bun/@tabler+icons@3.48.0/node_modules/@tabler/icons/icons/outline/brand-python.svg
+react: QoneAgent/node_modules/.bun/@tabler+icons@3.48.0/node_modules/@tabler/icons/icons/outline/brand-react.svg
+nodejs: QoneAgent/node_modules/.bun/@tabler+icons@3.48.0/node_modules/@tabler/icons/icons/outline/brand-nodejs.svg
+typescript: QoneAgent/node_modules/.bun/@tabler+icons@3.48.0/node_modules/@tabler/icons/icons/outline/brand-typescript.svg
+supabase: QoneAgent/node_modules/.bun/@tabler+icons@3.48.0/node_modules/@tabler/icons/icons/outline/brand-supabase.svg
+firebase: QoneAgent/node_modules/.bun/@tabler+icons@3.48.0/node_modules/@tabler/icons/icons/outline/brand-firebase.svg
+pinterest: QoneAgent/node_modules/.bun/@tabler+icons@3.48.0/node_modules/@tabler/icons/icons/outline/brand-pinterest.svg
+telegram: QoneAgent/node_modules/.bun/@tabler+icons@3.48.0/node_modules/@tabler/icons/icons/outline/brand-telegram.svg
+medium: QoneAgent/node_modules/.bun/@tabler+icons@3.48.0/node_modules/@tabler/icons/icons/outline/brand-medium.svg

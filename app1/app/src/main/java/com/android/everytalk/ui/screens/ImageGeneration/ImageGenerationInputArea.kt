@@ -41,7 +41,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.BasicTextField
+import com.android.everytalk.ui.components.LinkStyledTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.ui.res.painterResource
@@ -683,7 +683,7 @@ fun ImageGenerationInputArea(
                             inputModifier
                         }
 
-                        BasicTextField(
+                        LinkStyledTextField(
                             readOnly = isRestoringMessage,
                             value = localText,
                             onValueChange = { newText -> localText = newText },
