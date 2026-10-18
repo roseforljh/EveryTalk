@@ -14,6 +14,7 @@ import com.android.everytalk.data.DataClass.ExecutionStepType
 import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.ui.screens.MainScreen.chat.core.OrderedAiOutputSegment
 import com.android.everytalk.ui.screens.MainScreen.chat.core.orderedAiOutputSegments
+import com.android.everytalk.ui.screens.MainScreen.chat.core.executionTraceForProcessDisplay
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -142,6 +143,31 @@ class ThinkingExecutionTimelineGroupingTest {
             listOf(0),
             segments.filterIsInstance<OrderedAiOutputSegment.Process>().map { it.detailStartIndex },
         )
+    }
+
+    @Test
+    fun `编写工具提前归组当前阶段旁白且工具到达后顺序不变`() {
+        val previousAnswer = ExecutionTraceEvent.Content("上一阶段的回答")
+        val boundary = ExecutionTraceEvent.UserMessageBoundary("follow-up")
+        val tool = ExecutionTraceEvent.Tool(toolStep("1", "read_file"))
+        val commentary = ExecutionTraceEvent.Content("接下来修改配置")
+        val trace = listOf(previousAnswer, boundary, tool, commentary)
+
+        val writingSegments = orderedAiOutputSegments(trace, toolCallWriting = true)
+        assertEquals(previousAnswer.text, (writingSegments[0] as OrderedAiOutputSegment.Content).text)
+        assertEquals("follow-up", (writingSegments[1] as OrderedAiOutputSegment.UserMessageBoundary).messageId)
+        val writing = writingSegments[2] as OrderedAiOutputSegment.Process
+        assertEquals(listOf(tool, commentary), writing.events)
+        assertEquals(writing.events, executionTraceForProcessDisplay(trace, toolCallWriting = true))
+
+        // 实际工具事件接替临时状态；旁白继续留在原位置，最后的正式回答独立显示。
+        val nextTool = ExecutionTraceEvent.Tool(toolStep("2", "edit_file"))
+        val completedSegments = orderedAiOutputSegments(
+            trace + nextTool + ExecutionTraceEvent.Content("修改完成"),
+        )
+        val completed = completedSegments[2] as OrderedAiOutputSegment.Process
+        assertEquals(writing.events + nextTool, completed.events)
+        assertEquals("修改完成", (completedSegments.last() as OrderedAiOutputSegment.Content).text)
     }
 
     @Test

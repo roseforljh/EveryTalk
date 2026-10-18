@@ -20,6 +20,7 @@ import com.android.everytalk.data.database.entities.ComputerExecutionEntity
 import com.android.everytalk.data.database.entities.toApiConfig
 import com.android.everytalk.data.database.entities.toMessage
 import com.android.everytalk.data.computer.ComputerRequestContext
+import com.android.everytalk.data.computer.targetContexts
 import com.android.everytalk.data.computer.ComputerToolRequestHasher
 import com.android.everytalk.data.network.AppStreamEvent
 import com.android.everytalk.data.network.ApiClient
@@ -1276,7 +1277,9 @@ class AgentRunCoordinator(
         execution: ComputerExecutionEntity,
         computerContext: ComputerRequestContext?,
     ): Boolean {
-        val context = computerContext ?: return false
+        val context = computerContext?.targetContexts()?.singleOrNull {
+            it.computerId == execution.computerId && it.workspaceId == execution.workspaceId
+        } ?: return false
         val startedEntry = agentDao.getEntries(run.id).lastOrNull { entry ->
             entry.kind == AgentEntryKind.TOOL_EXECUTION_STARTED.name &&
                 entry.toolCallId?.let { rawToolCallId ->

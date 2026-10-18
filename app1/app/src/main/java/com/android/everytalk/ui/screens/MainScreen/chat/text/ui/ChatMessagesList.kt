@@ -79,6 +79,7 @@ import com.android.everytalk.ui.screens.BubbleMain.Main.MessageContextMenu
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
 import com.android.everytalk.ui.screens.MainScreen.chat.core.PlaceholderRole
 import com.android.everytalk.ui.screens.MainScreen.chat.core.executionTraceForProcessDisplay
+import com.android.everytalk.data.network.TOOL_CALL_WRITING_STATUS
 import com.android.everytalk.ui.screens.MainScreen.chat.models.sortModelConfigs
 import com.android.everytalk.ui.screens.MainScreen.chat.text.state.ChatScrollStateManager
 import com.android.everytalk.ui.theme.ChatDimensions
@@ -112,8 +113,6 @@ import com.android.everytalk.ui.topanchor.resolveActiveTopAnchorTurn
 import com.android.everytalk.ui.topanchor.resolveTopAnchorResponseTargetId
 import com.android.everytalk.util.locale.localizeUiMessage
 import com.android.everytalk.util.message.prepareTextForExternalTransfer
-import com.android.everytalk.util.web.linkFaviconInitial
-import com.android.everytalk.util.web.linkFaviconUrl
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -699,11 +698,15 @@ fun ChatMessagesList(
                                     .filterIsInstance<ExecutionTraceEvent.Tool>()
                                     .map { it.step }
                             }
-                            val detailTraceProvider = remember(item.messageId, item.events, viewModel) {
+                            val detailTraceProvider = remember(item.messageId, item.events, item.processIsActive, viewModel) {
                                 {
-                                    viewModel.getMessageById(item.messageId)
-                                        ?.executionTrace
-                                        ?.let(::executionTraceForProcessDisplay)
+                                    viewModel.getMessageById(item.messageId)?.let { message ->
+                                        executionTraceForProcessDisplay(
+                                            trace = message.executionTrace,
+                                            toolCallWriting = item.processIsActive &&
+                                                message.executionStatus == TOOL_CALL_WRITING_STATUS,
+                                        )
+                                    }
                                         ?: item.events
                                 }
                             }

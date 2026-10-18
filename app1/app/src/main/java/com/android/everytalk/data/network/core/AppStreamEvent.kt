@@ -189,6 +189,9 @@ sealed class AppStreamEvent {
         val status: String?,
         val toolCallId: String? = null,
         val executionId: String? = null,
+        val computerId: String? = null,
+        val isError: Boolean? = null,
+        val resultPreview: String? = null,
     ) : AppStreamEvent()
 
     @Serializable

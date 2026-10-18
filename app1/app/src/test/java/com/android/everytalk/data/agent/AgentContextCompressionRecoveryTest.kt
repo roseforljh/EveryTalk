@@ -904,6 +904,62 @@ class AgentContextCompressionRecoveryTest {
         }
     }
 
+    @Test
+    fun `旧消息摘要迁入账本后关闭数据库重开仍不会回灌全文`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val databaseName = "compression-upgrade-${java.util.UUID.randomUUID()}.db"
+        database.close()
+        database = Room.databaseBuilder(context, AppDatabase::class.java, databaseName)
+            .allowMainThreadQueries().build()
+        store = AgentRunStore(database.agentDao())
+        try {
+            val sessionId = "legacy-upgrade"
+            seedSession(sessionId)
+            val base = loopRequest(sessionId).let { input ->
+                input.copy(request = input.request.copy(contextManagement = input.request.contextManagement?.copy(
+                    compactThresholdTokens = 7_000,
+                    restoredState = com.android.everytalk.data.DataClass.ContextCompressionState(
+                        configId = "config-1", provider = "OpenAI", channel = "OpenAI兼容", model = "test-model",
+                        summary = "已经确认的旧需求与结论",
+                        summarizedThroughMessageId = "old-assistant",
+                        summarizedPrefixFingerprint = "旧版本指纹",
+                        windowId = "legacy-window",
+                    ),
+                )))
+            }
+            val sent = mutableListOf<ChatRequest>()
+            val transport = ModelTurnTransport { turn ->
+                sent += turn.request
+                flowOf(AppStreamEvent.Content("继续处理"), AppStreamEvent.Finish("stop"))
+            }
+            AgentLoop(runStore = store, modelTransport = transport).run(base).toList()
+            assertEquals("已经确认的旧需求与结论", store.latestCompaction(sessionId)?.summary)
+
+            database.close()
+            database = Room.databaseBuilder(context, AppDatabase::class.java, databaseName)
+                .allowMainThreadQueries().build()
+            store = AgentRunStore(database.agentDao())
+            // 后续版本只需读取新账本，不再依赖旧消息上的恢复字段。
+            val reopened = base.copy(
+                visibleAssistantMessageId = "assistant-after-reopen",
+                request = base.request.copy(contextManagement = base.request.contextManagement?.copy(restoredState = null)),
+            )
+            AgentLoop(runStore = store, modelTransport = transport).run(reopened).toList()
+            assertEquals(2, sent.size)
+            sent.forEach { request ->
+                assertTrue(request.messages.none { it.id == "old-user" || it.id == "old-assistant" })
+                assertTrue(request.messages.any {
+                    it is SimpleTextApiMessage && it.content.contains("已经确认的旧需求与结论")
+                })
+                assertEquals("latest-user", request.messages.last().id)
+            }
+            assertEquals(1, store.compactions(sessionId).size)
+        } finally {
+            database.close()
+            context.deleteDatabase(databaseName)
+        }
+    }
+
     private fun manualCompactionRequest(messages: List<SimpleTextApiMessage>): ChatRequest = ChatRequest(
         messages = messages,
         provider = "OpenAI",

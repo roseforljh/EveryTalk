@@ -244,7 +244,11 @@ class ComputerConnectionService : Service() {
             context = this,
             computerSessionStateProvider = { requestContext ->
                 requestContext?.let { context ->
-                    computerRepository.getComputerSessionState(context.workspaceId)?.toPrompt()
+                    (context.selectedTargets.map { it.computerId to it.workspaceId }
+                        .ifEmpty { listOf(context.computerId to context.workspaceId) })
+                        .map { (computerId, workspaceId) ->
+                            "服务器 ID=$computerId\n${computerRepository.getComputerSessionState(workspaceId)?.toPrompt().orEmpty()}"
+                        }.joinToString("\n\n")
                 }
             },
         )

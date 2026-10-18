@@ -65,6 +65,8 @@ import com.android.everytalk.ui.components.dialog.appDialogContainerColor
 import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.ChatInputArea
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.ChatMessagesList
+import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.AgentTaskOverlay
+import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.buildAgentTaskItems
 import com.android.everytalk.ui.components.content.LocalStickyHeaderTop
 import com.android.everytalk.ui.components.image.buildImagePreviewSelection
 import com.android.everytalk.ui.screens.MainScreen.chat.dialog.SystemPromptDialog
@@ -124,6 +126,44 @@ fun ChatScreen(
     val isMcpEnabled by viewModel.stateHolder._isMcpEnabledForNextRequest.collectAsState()
     val isLoadingHistoryData by viewModel.isLoadingHistoryData.collectAsState()
     val conversationId by viewModel.currentConversationId.collectAsState()
+    val observedTaskRun by viewModel.currentTaskRun.collectAsState()
+    val taskRun = observedTaskRun?.takeIf { it.sessionId == conversationId }
+    val taskApprovals by viewModel.pendingComputerAgentApprovals.collectAsState()
+    val taskInterventions by viewModel.pendingInterventions.collectAsState()
+    // 快照只在 Run 切换时读取，流式文本更新不会反复解码整份请求。
+    val taskTargetsSnapshot by produceState<Pair<String, List<com.android.everytalk.data.computer.ComputerTargetBinding>>?>(null, taskRun?.id) {
+        value = null
+        val run = taskRun ?: return@produceState
+        value = withContext(Dispatchers.IO) {
+            val store = com.android.everytalk.data.agent.AgentRunStore(
+                com.android.everytalk.data.database.AppDatabase.getDatabase(context).agentDao(),
+            )
+            try {
+                run.id to store.decodeRequestSnapshot(run)?.computerRequestContext?.selectedTargets.orEmpty()
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                // 快照不可读时保留原聊天审批入口，不能因任务面板加载失败丢失待确认操作。
+                android.util.Log.w("AgentTasks", "无法读取任务目标快照", error)
+                run.id to emptyList()
+            }
+        }
+    }
+    val taskTargets = taskTargetsSnapshot?.takeIf { it.first == taskRun?.id }?.second.orEmpty()
+    val currentTaskApprovals = taskApprovals.filter { it.runId == taskRun?.id }
+    val taskItems = if (taskRun == null || taskTargets.size < 2) emptyList() else buildAgentTaskItems(
+        status = taskRun.status,
+        message = messages.firstOrNull { it.id == taskRun.visibleAssistantMessageId },
+        targets = taskTargets,
+        approvals = currentTaskApprovals,
+        waitingComputerIds = taskInterventions.filter {
+            it.runId == taskRun.id && it.state in setOf(
+                com.android.everytalk.data.agent.SuspensionState.WAITING_USER,
+                com.android.everytalk.data.agent.SuspensionState.WAITING_USER_REENTRY,
+                com.android.everytalk.data.agent.SuspensionState.USER_DECISION_REQUIRED,
+            )
+        }.mapNotNull { it.parameters["computer_id"] }.toSet(),
+    )
     val pendingHostCommand by viewModel.pendingComputerHostCommand.collectAsState()
     val pendingAgentEnableApproval by viewModel.pendingAgentEnableApproval.collectAsState()
     val pendingMcpEnableApproval by viewModel.pendingMcpEnableApproval.collectAsState()
@@ -711,7 +751,7 @@ fun ChatScreen(
                 viewModel = viewModel,
                 onShowVoiceInput = { navController.navigate(Screen.VOICE_INPUT_SCREEN) },
                 onHeightChange = { height -> inputAreaHeightPx = height },
-                hostCommandConfirmationRequest = currentHostCommand,
+                hostCommandConfirmationRequest = currentHostCommand.takeIf { taskTargets.size < 2 },
                 agentEnableApprovalRequest = pendingAgentEnableApproval,
                 mcpEnableApprovalRequest = pendingMcpEnableApproval,
                 skillSecretApprovalRequest = pendingSkillSecretApproval,
@@ -732,6 +772,18 @@ fun ChatScreen(
                 bottomPadding = inputAreaHeightDp + 12.dp,
                 suppressed = suppressScrollButtonForHostCard,
             )
+            taskRun?.let { run ->
+                AgentTaskOverlay(
+                    sessionKey = "$conversationId:${run.id}",
+                    tasks = taskItems,
+                    approvals = currentTaskApprovals,
+                    topAvoidance = sourcesDialogTopAvoidance,
+                    bottomAvoidance = inputAreaHeightDp + 72.dp,
+                    onApproval = { pending, decision, onHandled ->
+                        viewModel.apiHandler.respondToAgentApproval(pending.runId, pending.approvalRequestId, decision, onHandled)
+                    },
+                )
+            }
             }
 
             // 浮动顶栏 - 覆盖在内容上方

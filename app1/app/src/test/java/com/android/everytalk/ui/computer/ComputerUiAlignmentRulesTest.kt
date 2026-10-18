@@ -78,7 +78,7 @@ class ComputerUiAlignmentRulesTest {
     }
 
     @Test
-    fun `服务器选择浮层使用自适应紧凑名称卡且隐藏连接信息`() {
+    fun `服务器选择浮层使用固定宽度名称卡且隐藏连接信息`() {
         val source = sourceFile("ui/screens/MainScreen/chat/text/ui/ChatInputPanels.kt")
             .readText(Charsets.UTF_8)
             .substringAfter("internal fun ComputerSelectionCard(")
@@ -87,9 +87,12 @@ class ComputerUiAlignmentRulesTest {
         assertFalse("选择浮层不应再显示标题", source.contains("agent_server_picker_title"))
         assertFalse("选择浮层不应再显示说明", source.contains("agent_server_picker_description"))
         assertFalse(source.contains("computers.chunked(3)"))
-        assertTrue(source.contains(".horizontalScroll(rememberScrollState())"))
+        assertTrue(source.contains("FlowRow("))
+        assertTrue(source.contains(".heightIn(max = 180.dp)"))
+        assertTrue(source.contains(".verticalScroll(rememberScrollState())"))
+        assertFalse(source.contains(".horizontalScroll("))
         assertTrue(source.contains(".wrapContentWidth()"))
-        assertTrue(source.contains(".widthIn(min = 72.dp, max = 220.dp)"))
+        assertTrue(source.contains(".width(92.dp)"))
         assertTrue(source.contains("Modifier.weight(1f, fill = false)"))
         assertTrue(source.contains("softWrap = false"))
         assertTrue(source.contains(".height(48.dp)"))
@@ -366,7 +369,7 @@ class ComputerUiAlignmentRulesTest {
             .substringAfter("val scrollStateManager = rememberChatScrollStateManager")
             .substringBefore("LaunchedEffect(scrollSessionKey, historyLoadGeneration)")
         val confirmationIndex = inputSource.indexOf("ComputerHostCommandConfirmationCard(")
-        val inputFieldIndex = inputSource.indexOf("BasicTextField(", confirmationIndex)
+        val inputFieldIndex = inputSource.indexOf("LinkStyledTextField(", confirmationIndex)
 
         assertTrue(confirmationIndex >= 0)
         assertTrue(inputFieldIndex > confirmationIndex)

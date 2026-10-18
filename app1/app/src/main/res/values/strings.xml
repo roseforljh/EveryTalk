@@ -2077,4 +2077,22 @@
     <string name="ui_message_image_compress_failed">Could not compress image</string>
     <string name="ui_message_image_album_create_failed">Could not create gallery file</string>
     <string name="ui_message_image_album_write_failed">Could not write gallery file</string>
+    <string name="agent_servers_tag">Agent · %1$d servers</string>
+    <string name="agent_tasks">Tasks</string>
+    <string name="agent_tasks_open">Open tasks, %1$d servers</string>
+    <string name="agent_tasks_close">Close tasks</string>
+    <string name="agent_task_main">Main task</string>
+    <string name="agent_task_waiting">Waiting</string>
+    <string name="agent_task_running">Running</string>
+    <string name="agent_task_reviewing">Reviewing results</string>
+    <string name="agent_task_approval">Awaiting approval</string>
+    <string name="agent_task_completed">Completed</string>
+    <string name="agent_task_failed">Failed</string>
+    <string name="agent_task_stopped">Stopped</string>
+    <string name="agent_task_empty">No tools have run on this server yet.</string>
+    <string name="agent_task_planning">Preparing the next step…</string>
+    <string name="agent_task_analyzing">Analyzing</string>
+    <string name="agent_task_unused">Not used</string>
+    <string name="agent_task_reject">Reject</string>
+    <string name="agent_task_allow">Allow once</string>
 </resources>

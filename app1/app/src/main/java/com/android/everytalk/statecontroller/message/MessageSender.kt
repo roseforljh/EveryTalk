@@ -325,6 +325,7 @@ internal fun appendComputerTools(
     cloudflare: Boolean = false,
     cloudflareWorkerWriteEnabled: Boolean = true,
     cloudflareResourceToolsEnabled: Boolean = true,
+    requestContext: com.android.everytalk.data.computer.ComputerRequestContext? = null,
 ): List<Map<String, Any>> {
     if (!enabled) return tools
     val conflicts = tools.mapNotNull(::extractToolName).filter { existingName ->
@@ -334,6 +335,11 @@ internal fun appendComputerTools(
         throw ComputerException(
             ComputerErrorCodes.TOOL_NAME_CONFLICT,
             "Agent 工具名与现有工具冲突：${conflicts.distinct().joinToString()}",
+        )
+    }
+    if (!requestContext?.selectedTargets.isNullOrEmpty()) {
+        return tools + com.android.everytalk.data.computer.multiComputerToolDefinitions(
+            requireNotNull(requestContext), cloudflareWorkerWriteEnabled, cloudflareResourceToolsEnabled,
         )
     }
     return tools + if (cloudflare) ComputerToolCatalog.cloudflareDefinitions(

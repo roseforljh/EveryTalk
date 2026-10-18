@@ -534,6 +534,39 @@ class ThinkingUiScrollComposeTest {
     }
 
     @Test
+    fun `正在编写只在旁白下方显示一次且不占用顶部标题`() {
+        composeRule.mainClock.autoAdvance = false
+        composeRule.setContent {
+            MaterialTheme {
+                ReasoningToggleAndContent(
+                    currentMessageId = "writing-after-commentary",
+                    displayedReasoningText = "",
+                    executionTrace = listOf(ExecutionTraceEvent.Content("接下来编辑配置文件。")),
+                    activityStatusText = TOOL_CALL_WRITING_STATUS,
+                    isReasoningStreaming = false,
+                    isReasoningComplete = true,
+                    replyIsStreaming = true,
+                    messageIsError = false,
+                    mainContentHasStarted = false,
+                    reasoningTextColor = Color.Black,
+                    reasoningToggleDotColor = Color.Black,
+                    onVisibilityChanged = {},
+                )
+            }
+        }
+        composeRule.mainClock.advanceTimeBy(1_000L)
+        composeRule.waitForIdle()
+
+        val commentary = composeRule.onNodeWithTag("reasoning-chain-commentary").fetchSemanticsNode()
+        val writing = composeRule.onNodeWithTag("reasoning-chain-live-status", useUnmergedTree = true)
+            .assertTextEquals("正在编写")
+            .assertIsDisplayed()
+            .fetchSemanticsNode()
+        assertTrue("编写状态必须排在旁白之后", writing.boundsInRoot.top >= commentary.boundsInRoot.bottom)
+        assertEquals(1, composeRule.onAllNodesWithText("正在编写", useUnmergedTree = true).fetchSemanticsNodes().size)
+    }
+
+    @Test
     fun `没有真实过程事件时只显示实时工具状态`() {
         composeRule.mainClock.autoAdvance = false
         composeRule.setContent {

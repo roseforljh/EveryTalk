@@ -2047,4 +2047,22 @@
     <string name="agent_answer_add_attachment">添加附件</string>
     <string name="agent_answer_send">发送回答</string>
     <string name="agent_answer_submit_failed">回答未被接收，请重试</string>
+    <string name="agent_servers_tag">Agent · %1$d 台</string>
+    <string name="agent_tasks">任务</string>
+    <string name="agent_tasks_open">查看任务，共 %1$d 台服务器</string>
+    <string name="agent_tasks_close">关闭任务</string>
+    <string name="agent_task_main">主任务</string>
+    <string name="agent_task_waiting">等待执行</string>
+    <string name="agent_task_running">执行中</string>
+    <string name="agent_task_reviewing">等待后续安排</string>
+    <string name="agent_task_approval">等待确认</string>
+    <string name="agent_task_completed">已完成</string>
+    <string name="agent_task_failed">失败</string>
+    <string name="agent_task_stopped">已停止</string>
+    <string name="agent_task_empty">这台服务器还没有执行记录。</string>
+    <string name="agent_task_planning">正在准备下一步…</string>
+    <string name="agent_task_analyzing">分析中</string>
+    <string name="agent_task_unused">未执行</string>
+    <string name="agent_task_reject">拒绝</string>
+    <string name="agent_task_allow">允许本次</string>
 </resources>

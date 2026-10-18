@@ -52,6 +52,40 @@ import org.robolectric.annotation.Config
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [34], application = android.app.Application::class)
 class AgentParallelToolExecutionTest {
+    @Test
+    fun `不同服务器的只读命令真正并发且使用各自Workspace`() = runBlocking {
+        val session = "multi-server-parallel"
+        seedSession(session)
+        val bothStarted = CompletableDeferred<Unit>()
+        val active = AtomicInteger()
+        val observed = java.util.concurrent.ConcurrentHashMap<String, String>()
+        var turn = 0
+        val loop = AgentLoop(runStore = store, toolRuntime = AgentToolRuntime(executorProvider = {
+            { _, _, id, target, status ->
+                observed[id] = requireNotNull(target).workspaceId
+                if (active.incrementAndGet() == 2) bothStarted.complete(Unit)
+                withTimeout(5_000) { bothStarted.await() }
+                status(null)
+                AppToolExecutionResult(JsonPrimitive("ok"))
+            }
+        }, approvalProvider = { null }), modelTransport = ModelTurnTransport {
+            if (++turn == 1) flowOf(
+                AppStreamEvent.ToolCall("one", ComputerToolNames.READ_FILE, buildJsonObject {
+                    put("computer_id", "a"); put("path", "README.md")
+                }),
+                AppStreamEvent.ToolCall("two", ComputerToolNames.READ_FILE, buildJsonObject {
+                    put("computer_id", "b"); put("path", "README.md")
+                }), AppStreamEvent.Finish("tool_calls"))
+            else flowOf(AppStreamEvent.Content("完成"), AppStreamEvent.Finish("stop"))
+        })
+        val context = ComputerRequestContext(session, "a", "wa", permissionMode = ComputerPermissionMode.FULL, selectedTargets = listOf(
+            com.android.everytalk.data.computer.ComputerTargetBinding("a", "wa", "A"),
+            com.android.everytalk.data.computer.ComputerTargetBinding("b", "wb", "B")))
+        val events = loop.run(loopRequest(session, context)).toList()
+        assertEquals(mapOf("one" to "wa", "two" to "wb"), observed)
+        assertTrue(bothStarted.isCompleted)
+        assertTrue(events.filterIsInstance<AppStreamEvent.ExecutionStatusUpdate>().any { it.computerId == "b" })
+    }
     private lateinit var database: AppDatabase
     private lateinit var store: AgentRunStore
 

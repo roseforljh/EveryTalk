@@ -1,6 +1,7 @@
 package com.android.everytalk.data.agent
 
 import com.android.everytalk.data.computer.ComputerRequestContext
+import com.android.everytalk.data.computer.resolveComputerToolContext
 import com.android.everytalk.data.computer.ComputerToolApprovalPhase
 import com.android.everytalk.data.computer.ComputerToolApprovalProvider
 import com.android.everytalk.data.computer.ComputerToolApprovalRequest
@@ -42,7 +43,7 @@ class AgentToolRuntime(
             prepared.name,
             prepared.arguments,
             prepared.id,
-            computerContext,
+            resolveComputerToolContext(prepared.name, prepared.arguments, computerContext),
             phase,
         )
     }
@@ -58,7 +59,7 @@ class AgentToolRuntime(
         if (runId != null && skillRuntimeTools?.handles(preparedCall.name) == true) {
             return try {
                 val name = skillRuntimeTools.displayName(preparedCall, runId) ?: preparedCall.name
-                emit(AppStreamEvent.ExecutionStatusUpdate("正在读取技能：$name"))
+                emit(AppStreamEvent.ExecutionStatusUpdate("正在读取技能：$name", toolCallId = preparedCall.id))
                 val raw = skillRuntimeTools.execute(preparedCall, runId)
                 val bounded = boundModelToolResult(
                     result = raw,
@@ -80,7 +81,7 @@ class AgentToolRuntime(
                     isError = true,
                 )
             } finally {
-                emit(AppStreamEvent.ExecutionStatusUpdate(null))
+                emit(AppStreamEvent.ExecutionStatusUpdate(null, toolCallId = preparedCall.id))
             }
         }
         val executor = executorProvider()
@@ -95,8 +96,11 @@ class AgentToolRuntime(
                 preparedCall.name,
                 preparedCall.arguments,
                 preparedCall.id,
-                computerContext,
-            ) { status -> emit(AppStreamEvent.ExecutionStatusUpdate(status)) }
+                resolveComputerToolContext(preparedCall.name, preparedCall.arguments, computerContext),
+            ) { status ->
+                // 执行器的状态回调只表示进度，完成事实由外层返回结果后统一发出。
+                if (!status.isNullOrBlank()) emit(AppStreamEvent.ExecutionStatusUpdate(status, toolCallId = preparedCall.id))
+            }
             val raw = execution.content
             execution.attachments.forEach { emit(AppStreamEvent.LocalFileArtifact(it)) }
             computerExecutionCompletedEvent(raw, preparedCall.id)?.let { emit(it) }

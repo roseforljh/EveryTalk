@@ -239,6 +239,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     internal val computerManager = ComputerManager(
         context = application.applicationContext,
         scope = viewModelScope,
+        additionalComputerIds = { id -> stateHolder.conversationFunctionToggleStates.value[id]?.additionalComputerIds.orEmpty() },
         attachmentsForConversation = { conversationId ->
             if (stateHolder._currentConversationId.value != conversationId) {
                 emptyList()
@@ -283,7 +284,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     },
                      scope = viewModelScope,
                      onConversationIdMigrated = { oldId, newId ->
-                         computerManager.migrateConversationId(oldId, newId)
+                         computerManager.migrateConversationId(oldId, newId) { sourceId, targetId ->
+                             // 选择可能在历史设置迁移之后才落库；与主目标共用迁移锁，接走这段间隙的附加目标。
+                             stateHolder.conversationFunctionToggleStates.update { current ->
+                                 val pending = current[sourceId]
+                                 if (pending == null) current else (current - sourceId) + (targetId to pending)
+                             }
+                         }
+                         persistenceManager.saveConversationFunctionToggleStates(stateHolder.conversationFunctionToggleStates.value)
                          pendingMessageController.migrateConversationId(oldId, newId)
                      },
                      deleteConversationWorkspaces = { conversationId ->
@@ -514,6 +522,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 toolsWithoutRequest,
                 enabled = true,
                 permissionMode = prepared.permissionMode,
+                requestContext = prepared.context,
                 cloudflare = prepared.provider == com.android.everytalk.data.computer.ComputerProvider.CLOUDFLARE,
                 cloudflareWorkerWriteEnabled = computerManager.cloudflareWorkerWriteEnabled,
                 cloudflareResourceToolsEnabled = computerManager.cloudflareResourceToolsEnabled,
@@ -795,6 +804,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         get() = stateHolder._isAgentPreparing.asStateFlow()
     val computers get() = computerManager.computers
     val computerSelections get() = computerManager.selections
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val currentTaskRun = currentConversationId.flatMapLatest { id ->
+        com.android.everytalk.data.database.AppDatabase.getDatabase(getApplication())
+            .agentDao().observeLatestTaskRun(id)
+    }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000), null)
     val pendingComputerAgentApprovals = apiHandler.pendingAgentApprovals
     val pendingInterventions = apiHandler.pendingInterventions
 

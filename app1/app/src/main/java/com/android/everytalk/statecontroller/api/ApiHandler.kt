@@ -794,6 +794,7 @@ class ApiHandler(
         runId: String,
         approvalRequestId: String,
         decision: AgentApprovalDecision,
+        onHandled: () -> Unit = {},
     ) {
         viewModelScope.launch(Dispatchers.IO) {
             var decisionSaved = false
@@ -872,6 +873,8 @@ class ApiHandler(
                 withContext(Dispatchers.Main.immediate) {
                     stateHolder.showSnackbar("处理 Agent 决定失败，请重试")
                 }
+            } finally {
+                withContext(kotlinx.coroutines.NonCancellable + Dispatchers.Main.immediate) { onHandled() }
             }
         }
     }

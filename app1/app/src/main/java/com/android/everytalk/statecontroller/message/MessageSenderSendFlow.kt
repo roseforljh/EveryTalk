@@ -735,6 +735,7 @@ internal fun MessageSender.sendMessageInternal(
                     )
                     appendComputerTools(
                         tools = toolsWithLocalBash,
+                        requestContext = preparedComputerRequest?.context,
                         enabled = preparedComputerRequest != null && !preparedComputerRequest.localOnly,
                         permissionMode = preparedComputerRequest?.permissionMode
                             ?: com.android.everytalk.data.computer.ComputerPermissionMode.MANUAL,
@@ -749,14 +750,11 @@ internal fun MessageSender.sendMessageInternal(
                     maxOutputTokens = currentConfig.maxTokens,
                     maxContextTokens = currentConfig.modelParameters.maxContextTokens,
                 )
-                // 普通文本的历史与压缩检查点完全由 AgentLoop/Room 管理，旧消息字段只服务图片链路。
-                val restoredCompressionState = if (isImageGeneration) {
-                    historyUiMessages.asReversed()
-                        .mapNotNull(UiMessage::contextCompressionState)
-                        .firstOrNull { it.matchesConfig(currentConfig) }
-                } else {
-                    null
-                }
+                // 升级前的摘要保存在 AI 消息中，文本链路也必须交给 AgentLoop 接续，
+                // 否则首次覆盖更新会在新账本为空时重新发送已压缩的完整历史。
+                val restoredCompressionState = historyUiMessages.asReversed()
+                    .mapNotNull(UiMessage::contextCompressionState)
+                    .firstOrNull { it.matchesConfig(currentConfig) }
                 // 文本会在 AgentLoop 按同一真实请求的 Room 快照校准；旧气泡可能把展开前估算
                 // 与展开后实测配在一起。这里不能再用它裁附件或估预算，图片链路仍沿用原逻辑。
                 val calibrationSnapshot = if (isImageGeneration) {
@@ -869,7 +867,10 @@ internal fun MessageSender.sendMessageInternal(
                     } ?: messagesWithCurrentAttachments
                     // 文本请求由统一 AgentLoop 管理完整历史、原子工具组和压缩检查点。
                     // 图片请求不进入 AgentLoop，只沿用现有上下文窗口裁剪。
-                    val compressionApplication = AutoContextCompressionApplication(messagesForContextControl)
+                    val compressionApplication = AutoContextCompressionApplication(
+                        messagesForContextControl,
+                        state = restoredCompressionState,
+                    )
                     val fittedMessages = if (isImageGeneration) {
                         trimMessagesToContextWindow(
                             messages = compressionApplication.messages,

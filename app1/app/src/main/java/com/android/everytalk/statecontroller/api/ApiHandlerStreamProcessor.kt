@@ -208,6 +208,7 @@ internal fun executionStepForToolCall(
         detail = agentTarget.takeIf { type == ExecutionStepType.Agent && it.isNotBlank() },
         reasoningBefore = reasoningBefore,
         fileChange = executionFileChange(toolName, event.argumentsObj),
+        computerId = (event.argumentsObj["computer_id"] as? kotlinx.serialization.json.JsonPrimitive)?.content,
     )
 }
 
@@ -221,6 +222,10 @@ internal fun mergeExecutionStep(
         val previous = this[index]
         this[index] = incoming.copy(
             completed = previous.completed,
+            started = previous.started || incoming.started,
+            isError = previous.isError || incoming.isError,
+            computerId = previous.computerId ?: incoming.computerId,
+            resultPreview = previous.resultPreview ?: incoming.resultPreview,
             executionId = previous.executionId ?: incoming.executionId,
             // 同一 ToolCall 可能被兼容服务重复发送，首次归档的顺序快照不能被后续空片段覆盖。
             reasoningBefore = previous.reasoningBefore ?: incoming.reasoningBefore,
@@ -319,6 +324,10 @@ private fun List<ExecutionTraceEvent>.mergeToolStep(
         this[index] = previous.copy(
             step = step.copy(
                 completed = previous.step.completed,
+                started = previous.step.started || step.started,
+                isError = previous.step.isError || step.isError,
+                computerId = previous.step.computerId ?: step.computerId,
+                resultPreview = previous.step.resultPreview ?: step.resultPreview,
                 executionId = previous.step.executionId ?: step.executionId,
             ),
         )
@@ -433,10 +442,13 @@ internal fun reduceExecutionTrace(
         step = executionStepForToolCall(event),
         nowMillis = nowMillis,
     )
-    is AppStreamEvent.ExecutionStatusUpdate -> if (event.status.isNullOrBlank()) {
-        trace.completeTool(event.toolCallId, event.executionId, nowMillis)
-    } else {
-        trace
+    is AppStreamEvent.ExecutionStatusUpdate -> {
+        val updated = trace.map { item ->
+            if (item is ExecutionTraceEvent.Tool && item.step.id == event.toolCallId) {
+                item.copy(step = updateExecutionStepStatus(item.step, event))
+            } else item
+        }
+        if (event.status.isNullOrBlank()) updated.completeTool(event.toolCallId, event.executionId, nowMillis) else updated
     }
     is AppStreamEvent.Finish,
     is AppStreamEvent.StreamEnd,
@@ -496,12 +508,10 @@ internal fun applyExecutionStatusEventToMessage(
     event: AppStreamEvent.ExecutionStatusUpdate,
 ): Message {
     // 本地接力也有稳定的工具调用 ID，但没有远端 Execution ID；空状态同样是该工具的完成事实。
-    val stepsWithResult = if (!event.toolCallId.isNullOrBlank() &&
-        (event.status.isNullOrBlank() || !event.executionId.isNullOrBlank())
-    ) {
+    val stepsWithResult = if (!event.toolCallId.isNullOrBlank()) {
         message.executionSteps.map { step ->
             if (step.id == event.toolCallId) {
-                step.copy(completed = true, executionId = event.executionId ?: step.executionId)
+                updateExecutionStepStatus(step, event)
             } else {
                 step
             }
@@ -531,6 +541,17 @@ internal fun applyExecutionStatusEventToMessage(
         executionTrace = reduceExecutionTrace(message.executionTrace, event),
     )
 }
+
+/** 开始、进度和完成共用同一归约规则，实时消息与历史执行链保持一致。 */
+private fun updateExecutionStepStatus(step: ExecutionStep, event: AppStreamEvent.ExecutionStatusUpdate): ExecutionStep =
+    step.copy(
+        started = true,
+        completed = step.completed || event.status.isNullOrBlank() || !event.executionId.isNullOrBlank(),
+        executionId = event.executionId ?: step.executionId,
+        computerId = event.computerId ?: step.computerId,
+        isError = event.isError ?: step.isError,
+        resultPreview = event.resultPreview ?: step.resultPreview,
+    )
 
 /** 新一轮思考开始时移除上一轮工具等待文案，完整 reasoning 继续由流式状态累积。 */
 internal fun applyActiveReasoningChunk(currentMessage: Message, reasoningChunk: String): Message {

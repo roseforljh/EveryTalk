@@ -15,6 +15,8 @@ import com.android.everytalk.data.DataClass.modelParameterProtocol
 import com.android.everytalk.data.DataClass.ProviderTurnContinuation
 import com.android.everytalk.data.computer.ComputerErrorCodes
 import com.android.everytalk.data.computer.ComputerRequestContext
+import com.android.everytalk.data.computer.resolveComputerToolContext
+import com.android.everytalk.data.computer.targetContexts
 import com.android.everytalk.data.computer.ComputerToolApprovalPhase
 import com.android.everytalk.data.computer.ComputerToolApprovalRequest
 import com.android.everytalk.data.computer.ComputerToolCallSafety
@@ -154,6 +156,7 @@ class AgentLoop(
             }
             memoryCoordinator?.bind(checkNotNull(run).id, input.request.localMemorySnapshot)
             pauseController.bind(checkNotNull(run).id, input.visibleAssistantMessageId)
+            runStore.restoreLegacyCompaction(input.sessionId, input.request)
             var transcript = runStore.expandTranscript(input.sessionId, input.request.messages)
             if (input.existingRun != null) transcript = runStore.appendRunTranscript(checkNotNull(run).id, transcript)
             transcript = com.android.everytalk.data.memory.MemoryPromptRenderer.forHistory(transcript)
@@ -1314,11 +1317,19 @@ class AgentLoop(
         val parallelCalls = mutableListOf<AgentContentBlock.ToolCall>()
         val parallelPreflightFailures = mutableMapOf<String, AgentContentBlock.ToolResult>()
         val finalizedResults = linkedMapOf<String, AgentContentBlock.ToolResult>()
-        // Pi 规则：批次中只要有一个 sequential Tool，整批都必须串行。
-        // Computer 和 Agent Gate 会接触共享资源或暂停 Run，因此都属于 sequential Tool。
+        // 同一服务器的命令保持原顺序。多目标中只有不同服务器的只读检查可并发，
+        // 写入、审批和显式 sequential 工具继续采用原串行恢复流程。
+        val computerCalls = calls.filter { it.name in ComputerToolNames.allProviders }
+        val parallelComputerTargets = computerCalls.map { call ->
+            (call.arguments["computer_id"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+        }
+        val independentComputers = computerContext?.selectedTargets?.size?.let { it > 1 } == true &&
+            parallelComputerTargets.none { it == null } &&
+            parallelComputerTargets.distinct().size == computerCalls.size &&
+            computerCalls.all { it.name in ComputerToolNames.all && ComputerToolCallSafety.isReadOnly(it.name, it.arguments) }
         val executeWholeBatchSequentially = calls.any { call ->
             toolExecutionModes[call.name] == "sequential" ||
-                call.name in ComputerToolNames.allProviders ||
+                (call.name in ComputerToolNames.allProviders && !independentComputers) ||
                 call.name in AgentControlToolNames.all
         }
 
@@ -1422,10 +1433,10 @@ class AgentLoop(
             if (agentRequest != null) {
                 flushParallelCalls()
                 if (agentRequest is AgentPauseRequest.ProtectedSecret &&
-                    agentRequest.targetId != null &&
-                    contextualComputerContext?.let { context ->
-                        agentRequest.targetId != context.computerId && agentRequest.targetId != context.workspaceId
-                    } != false
+                    ((agentRequest.targetId == null && contextualComputerContext?.selectedTargets?.size?.let { it > 1 } == true) ||
+                    (agentRequest.targetId != null && contextualComputerContext?.targetContexts()?.none { context ->
+                        agentRequest.targetId == context.computerId || agentRequest.targetId == context.workspaceId
+                    } != false))
                 ) {
                     val currentContext = contextualComputerContext
                     val result = AgentContentBlock.ToolResult(
@@ -1433,7 +1444,7 @@ class AgentLoop(
                         toolName = call.name,
                         content = kotlinx.serialization.json.JsonPrimitive(
                             currentContext?.let {
-                                "Secret 目标不匹配。当前允许的 target_id 是 computer_id=${it.computerId} 或 workspace_id=${it.workspaceId}；请重新使用其中一个，不要传 Container 名称。"
+                                "Secret 目标不匹配。允许的 target_id：${it.targetContexts().joinToString { target -> "computer_id=${target.computerId} 或 workspace_id=${target.workspaceId}" }}；请明确指定其中一个。"
                             } ?: "当前运行没有可用的服务器 Workspace 上下文，无法安全写入 Secret；请先选择服务器和 Workspace。",
                         ),
                         isError = true,
@@ -1471,6 +1482,11 @@ class AgentLoop(
                     val requestHash = java.security.MessageDigest.getInstance("SHA-256")
                         .digest("${call.name}|${call.arguments}".toByteArray(Charsets.UTF_8))
                         .joinToString("") { "%02x".format(it) }
+                    val capabilityContext = if (agentRequest is AgentPauseRequest.ProtectedSecret) {
+                        contextualComputerContext?.targetContexts()?.singleOrNull {
+                            agentRequest.targetId == null || agentRequest.targetId == it.computerId || agentRequest.targetId == it.workspaceId
+                        }
+                    } else contextualComputerContext
                     val ticket = broker.suspend(
                         run = run,
                         capabilityRequest = capabilityRequest,
@@ -1480,7 +1496,7 @@ class AgentLoop(
                         executionSlot = call.id,
                         requestHash = requestHash,
                         requestSource = "MODEL_HINT",
-                        targetBindingRef = contextualComputerContext?.let { "computer:${it.computerId}:workspace:${it.workspaceId}" }
+                        targetBindingRef = capabilityContext?.let { "computer:${it.computerId}:workspace:${it.workspaceId}" }
                             ?: "current-run-resource",
                         bindingGeneration = 0,
                         executionGeneration = 0,
@@ -1576,17 +1592,18 @@ class AgentLoop(
                 ?.takeIf { result.requiresCloudflareResourceSelection() }
             if (result.requiresCloudflareReauthorization() || resourceTarget != null) {
                 val broker = interventionBroker
-                if (broker != null && contextualComputerContext != null) {
+                val resourceContext = resolveComputerToolContext(call.name, call.arguments, contextualComputerContext)
+                if (broker != null && resourceContext != null) {
                     val ticket = broker.suspend(
                         run = run,
                         capabilityRequest = CapabilityRequest(
                             requestedCapability = if (resourceTarget == null) "cloudflare.reauthorize" else "cloudflare.resource.select",
                             reasonSafe = if (resourceTarget == null) "Cloudflare 授权已失效，需要重新登录后继续当前工具调用"
                                 else "当前工具需要选择 Cloudflare 资源，选择后仍须重新确认写操作",
-                            userVisibleContext = "目标 Cloudflare Computer：${contextualComputerContext.computerId}",
+                            userVisibleContext = "目标 Cloudflare Computer：${resourceContext.computerId}",
                             parameters = mapOf(
-                                "computer_id" to contextualComputerContext.computerId,
-                                "workspace_id" to contextualComputerContext.workspaceId,
+                                "computer_id" to resourceContext.computerId,
+                                "workspace_id" to resourceContext.workspaceId,
                                 "tool_name" to call.name,
                                 "authorization_id" to (result.content as kotlinx.serialization.json.JsonObject).getValue("authorization_id").jsonPrimitive.content,
                                 "previous_generation" to result.content.getValue("authorization_generation").jsonPrimitive.content,
@@ -1605,7 +1622,7 @@ class AgentLoop(
                             .digest("cloudflare-reauthorize|${call.id}|${call.arguments}".toByteArray(Charsets.UTF_8))
                             .joinToString("") { "%02x".format(it) },
                         requestSource = "EXECUTOR_PROVEN",
-                        targetBindingRef = "computer:${contextualComputerContext.computerId}:workspace:${contextualComputerContext.workspaceId}",
+                        targetBindingRef = "computer:${resourceContext.computerId}:workspace:${resourceContext.workspaceId}",
                         bindingGeneration = 0,
                         executionGeneration = 0,
                     )
@@ -1813,6 +1830,11 @@ class AgentLoop(
         runId: String,
         emit: suspend (AppStreamEvent) -> Unit,
     ): AgentContentBlock.ToolResult {
+        val target = runCatching { resolveComputerToolContext(call.name, call.arguments, computerContext) }.getOrNull()
+        emit(AppStreamEvent.ExecutionStatusUpdate(
+            status = "正在执行工具", toolCallId = call.id,
+            computerId = target?.computerId.takeIf { call.name in ComputerToolNames.allProviders },
+        ))
         lifecycleSink(
             AgentLifecycleEvent(
                 phase = AgentLifecyclePhase.TOOL_EXECUTION_START,
@@ -1852,6 +1874,12 @@ class AgentLoop(
                     isError = result.isError,
                 ),
             )
+            emit(AppStreamEvent.ExecutionStatusUpdate(
+                status = null, toolCallId = call.id,
+                computerId = target?.computerId.takeIf { call.name in ComputerToolNames.allProviders },
+                isError = result.isError,
+                resultPreview = result.content.toString().take(4_000),
+            ))
             result
         } catch (error: CancellationException) {
             withContext(NonCancellable) {

@@ -425,6 +425,16 @@ data class UpdateComputerRequest(
 )
 
 @Serializable
+data class ComputerTargetBinding(
+    val computerId: String,
+    val workspaceId: String,
+    val displayName: String,
+    val permissionMode: ComputerPermissionMode = ComputerPermissionMode.MANUAL,
+    val provider: ComputerProvider = ComputerProvider.SSH,
+    val cloudflareBinding: CloudflareRequestBinding? = null,
+)
+
+@Serializable
 data class ComputerRequestContext(
     val conversationId: String,
     val computerId: String,
@@ -438,6 +448,8 @@ data class ComputerRequestContext(
      * 旧快照缺少此字段时不能推断为当前账号，必须重新发起请求。
      */
     val cloudflareBinding: CloudflareRequestBinding? = null,
+    /** 多选目标在发送时冻结，运行期间修改选择不会把已有命令转发到其他服务器。旧快照仍按单机处理。 */
+    val selectedTargets: List<ComputerTargetBinding> = emptyList(),
     /** 只在当前工具调用内有效，禁止写进请求快照。 */
     @Transient val approvedToolCallId: String? = null,
     /** 仅由已批准的 Agent 审批记录恢复，模型参数无法设置此字段。 */

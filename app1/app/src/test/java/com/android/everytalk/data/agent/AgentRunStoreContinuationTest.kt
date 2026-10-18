@@ -90,6 +90,36 @@ class AgentRunStoreContinuationTest {
     }
 
     @Test
+    fun `覆盖更新改变提示和工具时只清输出缓存并持久保留原生压缩`() = runBlocking {
+        val nativeRequest = request.copy(channel = "Codex")
+        val continuation = ProviderTurnContinuation(
+            protocol = ModelParameterProtocol.CODEX,
+            payloadJson = "[{\"type\":\"message\",\"text\":\"旧输出\"}]",
+            assistantMessageId = "assistant:request-1",
+            compactedContextJson = "[{\"type\":\"compaction\",\"encrypted_content\":\"opaque\"}]",
+            compactedThroughMessageId = "assistant:request-1",
+        )
+        var saved = state(Json.encodeToString(ProviderTurnContinuation.serializer(), continuation))
+            .copy(protocol = ModelParameterProtocol.CODEX.name)
+        coEvery { dao.getContinuationState(any(), any(), any(), any(), any(), any()) } answers { saved }
+        coEvery { dao.upsertContinuationState(any()) } answers { saved = firstArg() }
+
+        val restored = store.loadContinuation("session-1", "config-1", nativeRequest, "updated-system", "updated-tools", null)
+        assertEquals(continuation.copy(payloadJson = "[]"), restored)
+        assertEquals("updated-system", saved.systemPromptFingerprint)
+        assertEquals("updated-tools", saved.toolSchemaFingerprint)
+        // 再创建 Store 模拟进程重建，不能只保留在当前内存对象里。
+        assertEquals(restored, AgentRunStore(dao).loadContinuation(
+            "session-1", "config-1", nativeRequest, "updated-system", "updated-tools", null,
+        ))
+        coVerify(exactly = 0) { dao.deleteContinuationState(any()) }
+
+        // 本地摘要边界发生变化时仍丢弃旧原生状态，不能套用到另一份上下文。
+        assertNull(store.loadContinuation("session-1", "config-1", nativeRequest, "updated-system", "updated-tools", "new-compaction"))
+        coVerify(exactly = 1) { dao.deleteContinuationState("state-1") }
+    }
+
+    @Test
     fun `continuation找不到所属完整Assistant时删除`() = runBlocking {
         coEvery { dao.getContinuationState(any(), any(), any(), any(), any(), any()) } returns state()
         coEvery { dao.hasFinalAssistantForRequest("request-1") } returns false

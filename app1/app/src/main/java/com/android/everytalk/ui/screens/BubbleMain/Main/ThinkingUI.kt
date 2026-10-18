@@ -2,8 +2,6 @@ package com.android.everytalk.ui.screens.BubbleMain.Main
 
 import androidx.compose.ui.res.painterResource
 
-import com.android.everytalk.data.network.TOOL_CALL_WRITING_STATUS
-
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -362,8 +360,7 @@ internal fun ReasoningToggleAndContent(
         executionTrace.filterIsInstance<ExecutionTraceEvent.Tool>().map { it.step }
     }
     val executionChainTitle = when {
-        processIsActive && activityStatusText == TOOL_CALL_WRITING_STATUS ->
-            stringResource(R.string.thinking_writing)
+        // 标题只概括整个执行区，具体的“正在编写”由过程末尾的状态行展示，不能越过旁白。
         processIsActive && elapsedText != null ->
             stringResource(R.string.thinking_processing_duration, elapsedText)
         processIsActive -> stringResource(R.string.computer_action_working).trimEnd('…')
@@ -1109,7 +1106,7 @@ private fun ReasoningBottomSheet(
 
 /** 每段思考在自己的时间线节点内渲染，避免工具与整段文本被拆成两个区域。 */
 @Composable
-private fun ReasoningMarkdownBlock(
+internal fun ReasoningMarkdownBlock(
     text: String,
     index: Int,
     tagPrefix: String = "reasoning-sheet",

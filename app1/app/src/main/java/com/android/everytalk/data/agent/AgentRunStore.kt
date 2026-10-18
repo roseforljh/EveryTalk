@@ -35,6 +35,8 @@ import com.android.everytalk.data.DataClass.toApiText
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.network.TokenUsage
 import com.android.everytalk.data.computer.ComputerRequestContext
+import com.android.everytalk.data.computer.resolveComputerToolContext
+import com.android.everytalk.data.computer.targetContexts
 import com.android.everytalk.data.computer.CloudflareRequestBinding
 import com.android.everytalk.data.computer.ComputerExecutionStatus
 import com.android.everytalk.data.computer.ComputerToolApprovalRequest
@@ -473,10 +475,17 @@ class AgentRunStore(
     ): Boolean {
         val run = dao.getRun(runId) ?: return false
         val snapshot = decodeRequestSnapshot(run) ?: return false
-        val context = snapshot.computerRequestContext ?: return false
+        val rootContext = snapshot.computerRequestContext ?: return false
+        val suspension = dao.getSuspension(suspensionId) ?: return false
+        val targetId = (json.parseToJsonElement(suspension.parametersJson) as? JsonObject)
+            ?.get("computer_id")?.jsonPrimitive?.content ?: rootContext.computerId
+        val context = rootContext.targetContexts().singleOrNull { it.computerId == targetId } ?: return false
         if (context.computerId.isBlank() || context.workspaceId.isBlank()) return false
         val updatedSnapshot = snapshot.copy(
-            computerRequestContext = context.copy(cloudflareBinding = binding),
+            computerRequestContext = if (rootContext.selectedTargets.isEmpty()) context.copy(cloudflareBinding = binding)
+                else rootContext.copy(selectedTargets = rootContext.selectedTargets.map { target ->
+                    if (target.computerId == targetId) target.copy(cloudflareBinding = binding) else target
+                }, cloudflareBinding = if (rootContext.computerId == targetId) binding else rootContext.cloudflareBinding),
         )
         val encoded = json.encodeToString(AgentRequestSnapshot.serializer(), updatedSnapshot)
         val newChunks = agentRequestSnapshotChunks(run.id, encoded)
@@ -932,10 +941,11 @@ class AgentRunStore(
             }
             .mapNotNull(AgentEntryEntity::toolCallId)
             .toSet()
-        val context = decodeRequestSnapshot(dao.getRun(runId) ?: return null)?.computerRequestContext
+        val rootContext = decodeRequestSnapshot(dao.getRun(runId) ?: return null)?.computerRequestContext
 
         for (call in calls) {
             if (call.id in completedIds || call.id !in startedIds) continue
+            val context = resolveComputerToolContext(call.name, call.arguments, rootContext)
             if (call.name in ComputerToolNames.all && context != null) {
                 val execution = computerDao.getExecutionByToolCallId(
                     ComputerToolRequestHasher.toolCallKey(call.id, context),
@@ -1054,12 +1064,20 @@ class AgentRunStore(
                     entry.kind == AgentEntryKind.ASSISTANT.name &&
                         entry.status == AgentEntryStatus.FINAL.name &&
                         decodeAssistantToolCalls(entry).any { call ->
-                            runCatching { ComputerToolRequestHasher.toolCallKey(call.id, context) }.getOrNull() == execution.toolCallId
+                            runCatching {
+                                resolveComputerToolContext(call.name, call.arguments, context)?.let { target ->
+                                    ComputerToolRequestHasher.toolCallKey(call.id, target)
+                                }
+                            }.getOrNull() == execution.toolCallId
                         }
                 } ?: return@firstNotNullOfOrNull null
                 val calls = decodeAssistantToolCalls(callEntry)
                 val call = calls.firstOrNull { toolCall ->
-                    runCatching { ComputerToolRequestHasher.toolCallKey(toolCall.id, context) }.getOrNull() == execution.toolCallId
+                    runCatching {
+                        resolveComputerToolContext(toolCall.name, toolCall.arguments, context)?.let { target ->
+                            ComputerToolRequestHasher.toolCallKey(toolCall.id, target)
+                        }
+                    }.getOrNull() == execution.toolCallId
                 } ?: return@firstNotNullOfOrNull null
                 val alreadyHandled = entries.any { entry ->
                     entry.toolCallId == call.id && (
@@ -1073,7 +1091,7 @@ class AgentRunStore(
                     requestId = callEntry.requestId ?: return@firstNotNullOfOrNull null,
                     call = call,
                     pendingCalls = calls.dropWhile { it.id != call.id },
-                    context = context,
+                    context = resolveComputerToolContext(call.name, call.arguments, context) ?: return@firstNotNullOfOrNull null,
                 )
             } ?: continue
             if (!ComputerToolCallSafety.requiresUnknownApproval(
@@ -1183,10 +1201,7 @@ class AgentRunStore(
             request.apiAddress.orEmpty(),
             request.model,
         ) ?: return null
-        if (state.systemPromptFingerprint != systemPromptFingerprint ||
-            state.toolSchemaFingerprint != toolSchemaFingerprint ||
-            state.summarizedThroughItemId != compactionId
-        ) {
+        if (state.summarizedThroughItemId != compactionId) {
             dao.deleteContinuationState(state.id)
             return null
         }
@@ -1207,7 +1222,67 @@ class AgentRunStore(
             dao.deleteContinuationState(state.id)
             return null
         }
+        if (state.systemPromptFingerprint != systemPromptFingerprint ||
+            state.toolSchemaFingerprint != toolSchemaFingerprint
+        ) {
+            // 系统提示和工具定义属于当前请求，变化时只能丢弃旧轮的原生输出缓存。
+            // 原生压缩项是会话历史；覆盖更新、Skill 变更后仍须保留，否则会回灌全文。
+            // 协议、配置、模型和端点已由上面的查询隔离，压缩边界仍由适配器核验。
+            val compacted = continuation.takeIf {
+                !it.compactedContextJson.isNullOrBlank() && !it.compactedThroughMessageId.isNullOrBlank()
+            }?.copy(payloadJson = "[]")
+            if (compacted == null) {
+                dao.deleteContinuationState(state.id)
+                return null
+            }
+            dao.upsertContinuationState(state.copy(
+                systemPromptFingerprint = systemPromptFingerprint,
+                toolSchemaFingerprint = toolSchemaFingerprint,
+                opaqueStateJson = json.encodeToString(ProviderTurnContinuation.serializer(), compacted),
+            ))
+            return compacted
+        }
         return continuation
+    }
+
+    /**
+     * 将旧版 AI 消息上的摘要接入持久化 Agent 账本，只在尚无新检查点时执行。
+     * 输入边界属于可见消息，先展开其覆盖前缀，再保存内部消息 ID，避免工具历史重新回灌。
+     * 边界已被编辑删除、摘要为空或版本不识别时不迁移，也不覆盖已有的新摘要。
+     */
+    suspend fun restoreLegacyCompaction(sessionId: String, request: ChatRequest) {
+        val management = request.contextManagement ?: return
+        val state = management.restoredState ?: return
+        if (state.schemaVersion != com.android.everytalk.data.DataClass.CONTEXT_COMPRESSION_STATE_SCHEMA_VERSION ||
+            state.configId != management.configId
+        ) return
+        val summary = state.summary?.takeIf(String::isNotBlank) ?: return
+        val boundary = request.messages.indexOfFirst { it.id == state.summarizedThroughMessageId }
+        if (boundary < 0 || dao.getCompactions(sessionId).isNotEmpty()) return
+        val prefix = expandTranscript(sessionId, request.messages.take(boundary + 1))
+            .filterNot { it.role.equals("system", true) }
+        val throughId = prefix.lastOrNull()?.id ?: return
+        val metadata = buildJsonObject {
+            put("summary_role", "system")
+            put("source_prefix_ids", JsonArray(prefix.map { JsonPrimitive(it.id) }))
+            put("retained_ids", JsonArray(request.messages.drop(boundary + 1)
+                .filterNot { it.role.equals("system", true) }.map { JsonPrimitive(it.id) }))
+        }
+        dao.upsertCompaction(AgentCompactionEntryEntity(
+            id = "legacy:$sessionId:${state.windowId}",
+            sessionId = sessionId,
+            configIdSnapshot = state.configId,
+            summary = summary,
+            summarizedThroughItemId = throughId,
+            // 旧指纹算法与 Agent 不同，使用已覆盖消息 ID 恢复，不伪造全文匹配。
+            prefixFingerprint = "",
+            retainedTailJson = metadata.toString(),
+            tokensBefore = state.estimatedTokensBefore,
+            estimatedTokensAfter = state.estimatedTokensAfter,
+            summaryRequestId = null,
+            status = AgentCompactionStatus.COMPLETED.name,
+            createdAt = state.createdAtEpochMillis,
+        ))
     }
 
     /**
@@ -1328,6 +1403,8 @@ class AgentRunStore(
         }
 
         val entries = dao.getEntries(runId)
+        val startedIds = entries.filter { it.kind == AgentEntryKind.TOOL_EXECUTION_STARTED.name }
+            .mapNotNullTo(hashSetOf()) { it.toolCallId }
         val finalizedAssistantRequests = entries.asSequence()
             .filter { entry ->
                 entry.kind == AgentEntryKind.ASSISTANT.name && entry.status == AgentEntryStatus.FINAL.name
@@ -1359,7 +1436,7 @@ class AgentRunStore(
                             is AgentContentBlock.Text -> appendContent(block.text, entry.createdAt)
                             is AgentContentBlock.ToolCall -> add(
                                 ExecutionTraceEvent.Tool(
-                                    step = block.toExecutionStep(completed = false),
+                                    step = block.toExecutionStep(completed = false).copy(started = block.id in startedIds),
                                     startedAtMillis = entry.createdAt,
                                 )
                             )
@@ -1379,6 +1456,9 @@ class AgentRunStore(
                         this[index] = tool.copy(
                             step = tool.step.copy(
                                 completed = true,
+                                started = true,
+                                isError = decodeToolResultEntry(entry)?.isError == true,
+                                resultPreview = decodeToolResultEntry(entry)?.content?.toString()?.take(4_000),
                                 fileChange = tool.step.fileChange.takeUnless { failed },
                             ),
                             finishedAtMillis = entry.finalizedAt ?: entry.createdAt,
@@ -1960,6 +2040,7 @@ private fun AgentContentBlock.ToolCall.toExecutionStep(completed: Boolean): Exec
         completed = completed,
         reasoningBefore = "",
         fileChange = executionFileChange(name, arguments),
+        computerId = (arguments["computer_id"] as? JsonPrimitive)?.content,
     )
 }
 

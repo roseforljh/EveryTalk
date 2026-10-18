@@ -1304,8 +1304,9 @@ class MessageItemsControllerStatusTest {
         val writing = writingItems.filterIsInstance<ChatListItem.AiMessageProcessSegment>().single()
         assertEquals(TOOL_CALL_WRITING_STATUS, writing.activityStatusText)
         assertTrue(writing.processIsActive)
-        assertTrue(writing.events.isEmpty())
-        assertEquals(null, writing.executionStartedAtMillis)
+        // 参数尚未拼完也已确定要调用工具，旁白应先进入执行区，状态随后显示。
+        assertEquals(listOf(ExecutionTraceEvent.Content("先检查环境。")), writing.events)
+        assertTrue(writingItems.none { it is ChatListItem.AiMessageContentSegment })
 
         controller.stateHolder._isTextApiCalling.value = false
         controller.stateHolder._currentTextStreamingAiMessageId.value = null

@@ -40,7 +40,6 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
@@ -281,7 +280,7 @@ internal fun FunctionPanelRow(
     }
 }
 
-/** 长按 Agent 后显示的会话级服务器单选卡片。 */
+/** 会话级服务器选择卡片；多选时立即提交每次选择，并至少保留一台服务器。 */
 @Composable
 internal fun ComputerSelectionCard(
     computers: List<Computer>,
@@ -289,7 +288,10 @@ internal fun ComputerSelectionCard(
     onSelect: (Computer) -> Unit,
     onUnavailable: (Computer) -> Unit,
     onAddComputer: () -> Unit = {},
+    selectedComputerIds: Set<String> = setOfNotNull(selectedComputerId),
+    onSelectionChanged: ((List<String>) -> Unit)? = null,
 ) {
+    var draftSelection by remember(selectedComputerIds) { mutableStateOf(selectedComputerIds.toList()) }
     val accentColorIndexes = remember(computers.map { it.id }) {
         computerCardAccentColorIndexes(computers)
     }
@@ -297,7 +299,8 @@ internal fun ComputerSelectionCard(
         modifier = Modifier
             .wrapContentWidth()
             .widthIn(max = 320.dp)
-            .heightIn(max = 380.dp)
+            // 只设高度上限；服务器区域在剩余空间内滚动。
+            .heightIn(max = 180.dp)
             // 给弹层右侧和底部留一层柔和阴影，避免它贴在聊天内容上时边界不清楚。
             .shadow(
                 elevation = 12.dp,
@@ -305,10 +308,10 @@ internal fun ComputerSelectionCard(
                 ambientColor = Color.Black.copy(alpha = 0.20f),
                 spotColor = Color.Black.copy(alpha = 0.26f),
             )
-            .verticalScroll(rememberScrollState())
             .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
         if (computers.isEmpty()) {
             Text(
                 text = stringResource(R.string.agent_server_picker_empty),
@@ -320,27 +323,20 @@ internal fun ComputerSelectionCard(
                 Text(stringResource(R.string.computer_audit_added))
             }
         } else {
-            // 名称卡片横向排列并按内容自适应宽度，服务器较多时可以横向滑动查看。
-            Row(
-                modifier = Modifier
-                    .horizontalScroll(rememberScrollState())
-                    .wrapContentWidth(),
+            // 每行固定放三个服务器；超出三行后仅在卡片内上下滚动。
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 computers.forEach { computer ->
                     val isReady = computer.status == ComputerStatus.READY
-                    val isSelected = selectedComputerId == computer.id
+                    val isSelected = computer.id in draftSelection
                     val accentColor = ComputerCardAccentPalette[accentColorIndexes.getValue(computer.id)]
                     val shape = RoundedCornerShape(percent = 50)
-                    val selectedDescription = if (isSelected) {
-                        stringResource(R.string.state_selected)
-                    } else {
-                        null
-                    }
                     Box(
                         modifier = Modifier
-                            .wrapContentWidth()
-                            .widthIn(min = 72.dp, max = 220.dp)
+                            .width(92.dp)
                             .height(48.dp)
                             .background(
                                 color = if (isSelected) {
@@ -350,20 +346,24 @@ internal fun ComputerSelectionCard(
                                 },
                                 shape = shape,
                             )
-                            .then(if (isSelected) Modifier.border(1.dp, accentColor, shape) else Modifier)
-                            .then(
-                                if (selectedDescription != null) {
-                                    Modifier.semantics {
-                                        contentDescription = selectedDescription
-                                    }
-                                } else {
-                                    Modifier
-                                },
-                            )
                             .clip(shape)
                             .combinedClickable(
                                 onClick = {
-                                    if (isReady) onSelect(computer) else onUnavailable(computer)
+                                    if (!isReady) onUnavailable(computer)
+                                    else if (onSelectionChanged == null) onSelect(computer)
+                                    else {
+                                        val nextSelection = if (isSelected && draftSelection.size == 1) {
+                                            draftSelection
+                                        } else if (isSelected) {
+                                            draftSelection - computer.id
+                                        } else {
+                                            draftSelection + computer.id
+                                        }
+                                        if (nextSelection != draftSelection) {
+                                            onSelectionChanged(nextSelection)
+                                            draftSelection = nextSelection
+                                        }
+                                    }
                                 },
                                 onLongClick = onAddComputer,
                             )
@@ -371,7 +371,7 @@ internal fun ComputerSelectionCard(
                         contentAlignment = Alignment.CenterStart,
                     ) {
                         Row(
-                            modifier = Modifier.wrapContentWidth(),
+                            modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Icon(
@@ -384,17 +384,7 @@ internal fun ComputerSelectionCard(
                             Text(
                                 text = computer.displayName,
                                 // 窄胶囊只放单行，超出部分省略号截断。
-                                modifier = Modifier.weight(1f, fill = false)
-                                    .wrapContentWidth()
-                                    .then(
-                                        if (selectedDescription != null) {
-                                            Modifier.semantics {
-                                                contentDescription = selectedDescription
-                                            }
-                                        } else {
-                                            Modifier
-                                        },
-                                    ),
+                                modifier = Modifier.weight(1f),
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Medium,
                                 color = if (isReady) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -402,19 +392,11 @@ internal fun ComputerSelectionCard(
                                 softWrap = false,
                                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                             )
-                            if (isSelected) {
-                                Spacer(Modifier.width(6.dp))
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_check),
-                                    contentDescription = stringResource(R.string.state_selected),
-                                    tint = accentColor,
-                                    modifier = Modifier.size(16.dp),
-                                )
-                            }
                         }
                     }
                 }
             }
+        }
         }
     }
 }

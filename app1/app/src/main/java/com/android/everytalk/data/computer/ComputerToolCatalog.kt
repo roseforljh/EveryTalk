@@ -34,7 +34,8 @@ internal fun refreshComputerExecutionPolicy(request: ChatRequest, sessionPrompt:
     } +
         SimpleTextApiMessage(id = policyId, role = "system", content = environment)
     val currentTools = tools.filterNot { (it["function"] as? Map<*, *>)?.get("name") in ComputerToolNames.all } +
-        ComputerToolCatalog.definitions(context.permissionMode)
+        if (context.selectedTargets.isEmpty()) ComputerToolCatalog.definitions(context.permissionMode)
+        else multiComputerToolDefinitions(context).filter { (it["function"] as? Map<*, *>)?.get("name") in ComputerToolNames.all }
     return request.copy(messages = messages, tools = currentTools)
 }
 

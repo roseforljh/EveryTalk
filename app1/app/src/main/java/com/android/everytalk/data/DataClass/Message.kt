@@ -70,6 +70,12 @@ data class ExecutionStep(
     val reasoningBefore: String? = null,
     /** write_file / edit 的改动内容；其它工具和旧消息为 null。 */
     val fileChange: ExecutionFileChange? = null,
+    /** 多服务器过程使用稳定 ID 分组，显示名称从本轮冻结目标读取。 */
+    val computerId: String? = null,
+    val started: Boolean = false,
+    val isError: Boolean = false,
+    /** 只保留有限长度的工具结果供抽屉展开查看，完整结果仍由原工具结果存储负责。 */
+    val resultPreview: String? = null,
 )
 
 /** 用户消息正文中的有序内容。Skill 引用保持原位置并携带冻结版本。 */

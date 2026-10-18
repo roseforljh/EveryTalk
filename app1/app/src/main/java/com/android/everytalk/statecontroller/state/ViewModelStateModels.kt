@@ -37,6 +37,8 @@ data class ConversationFunctionToggleState(
     val codeExecutionEnabled: Boolean = false,
     val mcpEnabled: Boolean = false,
     val agentEnabled: Boolean = false,
+    /** 主服务器仍由原选择表保存；附加目标随会话设置一起持久化和迁移。 */
+    val additionalComputerIds: List<String> = emptyList(),
     /** 删除服务器或工作区后保留会话状态，避免下次开启 Agent 时静默创建空工作区。 */
     val agentResourceState: AgentResourceState? = null,
     /** 只读恢复线索。远端文件未删除时告诉用户旧文件仍在哪里。 */

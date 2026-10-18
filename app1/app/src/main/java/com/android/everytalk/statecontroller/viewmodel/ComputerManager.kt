@@ -24,6 +24,9 @@ import com.android.everytalk.data.computer.ComputerToolApprovalPhase
 import com.android.everytalk.data.computer.ComputerToolApprovalRequest
 import com.android.everytalk.data.computer.ComputerRepository
 import com.android.everytalk.data.computer.ComputerRequestContext
+import com.android.everytalk.data.computer.ComputerTargetBinding
+import com.android.everytalk.data.computer.resolveComputerToolContext
+import com.android.everytalk.data.computer.targetContexts
 import com.android.everytalk.data.database.entities.toModel
 import com.android.everytalk.data.computer.ComputerStatus
 import com.android.everytalk.data.computer.ComputerToolExecutor
@@ -207,6 +210,7 @@ class ComputerManager(
     private val scope: CoroutineScope,
     attachmentsForConversation: (String) -> List<SelectedMediaItem>,
     onDownloaded: suspend (String, String, SelectedMediaItem.GenericFile) -> Unit,
+    private val additionalComputerIds: (String) -> List<String> = { emptyList() },
 ) : AutoCloseable {
     private val appContext = context.applicationContext
 
@@ -595,43 +599,67 @@ class ComputerManager(
                     localOnly = true,
                 )
             }
-            // 未授权 Cloudflare 仍保留目标快照，让工具边界发出结构化重新登录干预。
-            if (computer.status != ComputerStatus.READY &&
-                !(computer.provider == ComputerProvider.CLOUDFLARE && computer.status == ComputerStatus.AUTHORIZATION_REQUIRED)) {
-                throw ComputerException(
-                    ComputerErrorCodes.COMPUTER_NOT_READY,
-                    "当前服务器不可用，请长按 Agent 改选或修复服务器",
-                    action = "SELECT_COMPUTER",
+            suspend fun prepareTarget(computer: Computer): PreparedComputerRequest {
+                // 未授权 Cloudflare 仍保留目标快照，让工具边界发出结构化重新登录干预。
+                if (computer.status != ComputerStatus.READY &&
+                    !(computer.provider == ComputerProvider.CLOUDFLARE && computer.status == ComputerStatus.AUTHORIZATION_REQUIRED)) {
+                    throw ComputerException(
+                        ComputerErrorCodes.COMPUTER_NOT_READY,
+                        "当前服务器不可用，请长按 Agent 改选或修复服务器",
+                        action = "SELECT_COMPUTER",
+                    )
+                }
+                val workspace = if (computer.provider == ComputerProvider.CLOUDFLARE) {
+                    workspaceManager.getOrCreateAppLocal(
+                        computer.id,
+                        currentConversationId,
+                        java.io.File(appContext.filesDir, "agent-workspaces"),
+                    )
+                } else {
+                    workspaceManager.getOrCreateLocal(computer.id, currentConversationId)
+                }
+                val requestContext = ComputerRequestContext(
+                    conversationId = currentConversationId,
+                    computerId = computer.id,
+                    workspaceId = workspace.id,
+                    permissionMode = computer.permissionMode,
+                    cloudflareBinding = if (computer.provider == ComputerProvider.CLOUDFLARE) {
+                        val config = repository.dao().getCloudflareConfig(computer.id)
+                            ?: throw ComputerException("PROVIDER_CONFIG_NOT_FOUND", "Cloudflare 配置不存在")
+                        val authorization = repository.dao().getCloudflareAuthorization(config.authorizationId)
+                            ?: throw ComputerException("AUTHORIZATION_REQUIRED", "Cloudflare 授权记录不存在")
+                        CloudflareRequestBinding(config.accountId, config.authorizationId, authorization.generation)
+                    } else null,
                 )
-            }
-            val workspace = if (computer.provider == ComputerProvider.CLOUDFLARE) {
-                workspaceManager.getOrCreateAppLocal(
-                    computer.id,
-                    currentConversationId,
-                    java.io.File(appContext.filesDir, "agent-workspaces"),
+                if (computer.provider == ComputerProvider.SSH) prepareComputer(computer, requestContext)
+                return PreparedComputerRequest(
+                    context = requestContext,
+                    environmentPrompt = buildComputerEnvironmentPrompt(computer, workspace),
+                    permissionMode = computer.permissionMode,
+                    provider = computer.provider,
                 )
-            } else {
-                workspaceManager.getOrCreateLocal(computer.id, currentConversationId)
+                }
+            val targetIds = (listOf(computer.id) + additionalComputerIds(currentConversationId)).distinct()
+            val prepared = targetIds.map { id ->
+                val target = repository.getComputer(id)
+                    ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "已选择的服务器不存在，请重新选择")
+                target to prepareTarget(target)
             }
-            val requestContext = ComputerRequestContext(
-                conversationId = currentConversationId,
-                computerId = computer.id,
-                workspaceId = workspace.id,
-                permissionMode = computer.permissionMode,
-                cloudflareBinding = if (computer.provider == ComputerProvider.CLOUDFLARE) {
-                    val config = repository.dao().getCloudflareConfig(computer.id)
-                        ?: throw ComputerException("PROVIDER_CONFIG_NOT_FOUND", "Cloudflare 配置不存在")
-                    val authorization = repository.dao().getCloudflareAuthorization(config.authorizationId)
-                        ?: throw ComputerException("AUTHORIZATION_REQUIRED", "Cloudflare 授权记录不存在")
-                    CloudflareRequestBinding(config.accountId, config.authorizationId, authorization.generation)
-                } else null,
-            )
-            if (computer.provider == ComputerProvider.SSH) prepareComputer(computer, requestContext)
-            PreparedComputerRequest(
-                context = requestContext,
-                environmentPrompt = buildComputerEnvironmentPrompt(computer, workspace),
-                permissionMode = computer.permissionMode,
-                provider = computer.provider,
+            val primary = prepared.first().second
+            if (prepared.size == 1) return@withCurrentId primary
+            primary.copy(
+                context = primary.context.copy(selectedTargets = prepared.map { (target, request) ->
+                    ComputerTargetBinding(target.id, request.context.workspaceId, target.displayName,
+                        target.permissionMode, target.provider, request.context.cloudflareBinding)
+                }),
+                environmentPrompt = buildString {
+                    appendLine("当前会话选中了多台服务器。每次服务器工具调用都必须指定 computer_id，只能操作下列已选择的目标。")
+                    appendLine("按用户提示词决定实际操作范围，不要自动广播命令；互不依赖的只读检查可以同轮调用，有依赖或写入的步骤按顺序执行。最终用自然语言说明各台服务器的情况。")
+                    prepared.forEach { (target, request) ->
+                        appendLine("服务器 ID=${target.id}，名称=${kotlinx.serialization.json.JsonPrimitive(target.displayName)}：")
+                        appendLine(request.environmentPrompt)
+                    }
+                },
             )
         }
     }
@@ -678,11 +706,29 @@ class ComputerManager(
 
     /** 服务器选择只更新本地映射；Workspace 在后台预热或首次发送时创建。 */
     suspend fun selectComputer(conversationId: String, computerId: String, agentEnabled: Boolean) {
+        selectComputers(conversationId, listOf(computerId), agentEnabled)
+    }
+
+    /** 先校验整组本地记录，再更新主目标；后台预热互不依赖，不阻塞选择器关闭。 */
+    suspend fun selectComputers(
+        conversationId: String,
+        computerIds: List<String>,
+        agentEnabled: Boolean,
+        onSelected: (String) -> Unit = {},
+    ) {
+        require(computerIds.isNotEmpty()) { "请至少选择一台服务器" }
+        computerIds.forEach { id ->
+            val computer = repository.getComputer(id)
+            if (computer?.status != ComputerStatus.READY) {
+                throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "已选择的服务器不可用，请重新选择")
+            }
+        }
         val selectedConversationId = conversationIds.withCurrentId(conversationId) { currentConversationId ->
-            repository.selectComputer(currentConversationId, computerId)
+            repository.selectComputer(currentConversationId, computerIds.first())
+            onSelected(currentConversationId)
             currentConversationId
         }
-        if (agentEnabled) prewarmWorkspace(computerId, selectedConversationId)
+        if (agentEnabled) computerIds.distinct().forEach { prewarmWorkspace(it, selectedConversationId) }
     }
 
     private fun prewarmWorkspace(computerId: String, conversationId: String) {
@@ -785,6 +831,11 @@ class ComputerManager(
     /** 每轮刷新环境与权限说明，让恢复的旧请求和压缩摘要也服从当前 SSH 默认规则。 */
     suspend fun computerSessionState(requestContext: ComputerRequestContext?): String? {
         requestContext ?: return null
+        if (requestContext.selectedTargets.isNotEmpty()) {
+            return requestContext.targetContexts().map { target ->
+                "服务器 ID=${target.computerId}\n${computerSessionState(target).orEmpty()}"
+            }.joinToString("\n\n")
+        }
         val state = repository.getComputerSessionState(requestContext.workspaceId) ?: return null
         val computer = repository.getComputer(requestContext.computerId) ?: return state.toPrompt()
         val workspace = repository.getWorkspace(requestContext.workspaceId) ?: return state.toPrompt()
@@ -828,12 +879,17 @@ class ComputerManager(
         context: ComputerRequestContext,
     ): ComputerToolApprovalRequest? = cloudflareProvider.approvalRequest(toolName, arguments, toolCallId, context)
 
-    suspend fun migrateConversationId(sourceConversationId: String, targetConversationId: String) {
+    suspend fun migrateConversationId(
+        sourceConversationId: String,
+        targetConversationId: String,
+        onMigrated: (String, String) -> Unit = { _, _ -> },
+    ) {
         if (sourceConversationId.isBlank() || targetConversationId.isBlank() || sourceConversationId == targetConversationId) {
             return
         }
         conversationIds.migrate(sourceConversationId, targetConversationId) { sourceId, targetId ->
             repository.migrateConversationId(sourceId, targetId)
+            onMigrated(sourceId, targetId)
         }
     }
 

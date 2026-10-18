@@ -580,6 +580,7 @@ import java.util.UUID
         enableAgentAfterSelection: Boolean = false,
         onReady: (() -> Unit)? = null,
         onFailure: (() -> Unit)? = null,
+        selectedComputerIds: List<String> = listOf(computerId),
     ) {
         // 先捕获目标会话。后续工作在 IO 线程执行，不能在那里重新读取“当前会话”。
         val conversationId = stateHolder._currentConversationId.value
@@ -597,16 +598,19 @@ import java.util.UUID
         stateHolder._isAgentPreparing.value = false
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                computerManager.selectComputer(conversationId, computerId, shouldPrepareWorkspace)
-                if (stateHolder.agentActionGeneration.get() != generation) return@launch
-                stateHolder.conversationFunctionToggleStates.update { current ->
-                    val state = current[conversationId] ?: ConversationFunctionToggleState()
-                    current + (conversationId to state.copy(
+                val targetIds = (listOf(computerId) + selectedComputerIds).distinct()
+                computerManager.selectComputers(conversationId, targetIds, shouldPrepareWorkspace) { selectedConversationId ->
+                    stateHolder.conversationFunctionToggleStates.update { current ->
+                    val state = current[selectedConversationId] ?: ConversationFunctionToggleState()
+                    current + (selectedConversationId to state.copy(
+                        additionalComputerIds = targetIds.drop(1),
                         agentResourceState = null,
                         detachedComputerName = null,
                         detachedWorkspacePath = null,
                     ))
+                    }
                 }
+                if (stateHolder.agentActionGeneration.get() != generation) return@launch
                 persistenceManager.saveConversationFunctionToggleStates(
                     stateHolder.conversationFunctionToggleStates.value,
                 )
@@ -884,7 +888,8 @@ import java.util.UUID
     ) {
         val deleted = computerManager.deleteWorkspace(workspaceId, deleteRemoteFiles)
         // 一个会话可能在多台服务器上各有 Workspace。删除非当前服务器的旧 Workspace 不影响当前 Agent。
-        val affectsCurrentBinding = computerManager.selections.value[deleted.conversationId] == deleted.computerId
+        val affectsCurrentBinding = computerManager.selections.value[deleted.conversationId] == deleted.computerId ||
+            deleted.computerId in stateHolder.conversationFunctionToggleStates.value[deleted.conversationId]?.additionalComputerIds.orEmpty()
         if (affectsCurrentBinding) {
             val computerName = computerManager.computers.value
                 .firstOrNull { it.id == deleted.computerId }
@@ -921,7 +926,9 @@ import java.util.UUID
             .associate { workspace -> workspace.conversationId to workspace.hostPath }
         val affectedConversationIds = computerManager.selections.value
             .filterValues { selectedComputerId -> selectedComputerId == computerId }
-            .keys
+            .keys + stateHolder.conversationFunctionToggleStates.value.filterValues {
+                computerId in it.additionalComputerIds
+            }.keys
         val result = computerManager.deleteComputer(computerId, cleanupContainers, deleteRemoteFiles)
         // 分组默认值只保存 Computer ID。服务器删除后清掉失效引用，避免之后新建会话反复尝试已不存在的服务器。
         val updatedGroupComputerIds = stateHolder.conversationGroupComputerIds.value
@@ -936,6 +943,7 @@ import java.util.UUID
                     affectedConversationIds.forEach { conversationId ->
                         val state = this[conversationId] ?: ConversationFunctionToggleState()
                         this[conversationId] = state.copy(
+                            additionalComputerIds = state.additionalComputerIds - computerId,
                             agentEnabled = false,
                             agentResourceState = AgentResourceState.SERVER_DELETED,
                             detachedComputerName = computerName,

@@ -249,7 +249,10 @@ internal fun executionTraceForDisplay(trace: List<ExecutionTraceEvent>): List<Ex
  * 仍然是正式回答。按用户边界分阶段计算，避免把上一阶段的正文误放进执行区。
  * 向用户提问的工具不算执行步骤：提问前的 Content 是给用户看的回复，不能折叠进执行区。
  */
-private fun executionNarrativeContentIndexes(trace: List<ExecutionTraceEvent>): Set<Int> = buildSet {
+private fun executionNarrativeContentIndexes(
+    trace: List<ExecutionTraceEvent>,
+    toolCallWriting: Boolean = false,
+): Set<Int> = buildSet {
     fun markPhase(startIndex: Int, endIndex: Int) {
         var lastToolIndex = -1
         for (index in startIndex until endIndex) {
@@ -272,11 +275,21 @@ private fun executionNarrativeContentIndexes(trace: List<ExecutionTraceEvent>): 
         }
     }
     markPhase(phaseStart, trace.size)
+    // 参数增量已经证明当前阶段还要调用工具，不必等完整 Tool 事件才把旁白归入执行区。
+    // 只处理最后一个用户边界之后的文本，停止后不保留虚构的工具步骤。
+    if (toolCallWriting) {
+        for (index in phaseStart until trace.size) {
+            if (trace[index] is ExecutionTraceEvent.Content) add(index)
+        }
+    }
 }
 
 /** 只返回详情抽屉需要的执行事件，正式回答正文不会进入执行详情。 */
-internal fun executionTraceForProcessDisplay(trace: List<ExecutionTraceEvent>): List<ExecutionTraceEvent> {
-    val narrativeIndexes = executionNarrativeContentIndexes(trace)
+internal fun executionTraceForProcessDisplay(
+    trace: List<ExecutionTraceEvent>,
+    toolCallWriting: Boolean = false,
+): List<ExecutionTraceEvent> {
+    val narrativeIndexes = executionNarrativeContentIndexes(trace, toolCallWriting)
     return trace.mapIndexedNotNull { index, event ->
         when {
             event is ExecutionTraceEvent.Reasoning || event is ExecutionTraceEvent.Tool -> event
@@ -287,9 +300,12 @@ internal fun executionTraceForProcessDisplay(trace: List<ExecutionTraceEvent>): 
 }
 
 /** 相邻正文合并，相邻思考和工具合并；每个事件只处理一次，避免长工具链反复复制列表。 */
-internal fun orderedAiOutputSegments(trace: List<ExecutionTraceEvent>): List<OrderedAiOutputSegment> {
+internal fun orderedAiOutputSegments(
+    trace: List<ExecutionTraceEvent>,
+    toolCallWriting: Boolean = false,
+): List<OrderedAiOutputSegment> {
     val displayTrace = executionTraceForDisplay(trace)
-    val narrativeContentIndexes = executionNarrativeContentIndexes(displayTrace)
+    val narrativeContentIndexes = executionNarrativeContentIndexes(displayTrace, toolCallWriting)
     val result = mutableListOf<OrderedAiOutputSegment>()
     var content = StringBuilder()
     var processEvents = mutableListOf<ExecutionTraceEvent>()

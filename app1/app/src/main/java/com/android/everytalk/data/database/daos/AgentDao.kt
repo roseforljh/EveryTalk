@@ -651,6 +651,10 @@ interface AgentDao {
     @Query("SELECT * FROM agent_runs WHERE sessionId = :sessionId ORDER BY createdAt ASC")
     suspend fun getRunsForSession(sessionId: String): List<AgentRunEntity>
 
+    /** 只观察当前会话最新的可见任务，结束后仍能打开过程；手动压缩不覆盖任务入口。 */
+    @Query("SELECT * FROM agent_runs WHERE sessionId = :sessionId AND (terminalReason IS NULL OR terminalReason != 'MANUAL_COMPACTION') ORDER BY createdAt DESC LIMIT 1")
+    fun observeLatestTaskRun(sessionId: String): Flow<AgentRunEntity?>
+
     @Query(
         """
         SELECT * FROM agent_runs

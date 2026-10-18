@@ -39,7 +39,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.text.BasicTextField
+import com.android.everytalk.ui.components.LinkStyledTextField
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.res.painterResource
@@ -148,6 +148,7 @@ private data class PendingAgentAction(
     val confirmedWorkspaceRecreation: Boolean = false,
     val onCompleted: (() -> Unit)? = null,
     val onFailed: (() -> Unit)? = null,
+    val selectedComputers: List<Computer> = listOf(computer),
 )
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -261,6 +262,9 @@ fun ChatInputArea(
     val detachedComputerName = conversationFunctionStates[currentConversationId]?.detachedComputerName
     val detachedWorkspacePath = conversationFunctionStates[currentConversationId]?.detachedWorkspacePath
     val selectedComputerId = computerSelections[currentConversationId]
+    val selectedComputerIds = (listOfNotNull(selectedComputerId) +
+        conversationFunctionStates[currentConversationId]?.additionalComputerIds.orEmpty()).toSet()
+    var pendingDisclosureComputer by remember { mutableStateOf<Computer?>(null) }
     val disclosureStore = remember(context) { ComputerDisclosureStore(context) }
     var pendingAgentAction by remember { mutableStateOf<PendingAgentAction?>(null) }
     var pendingAgentDisclosures by remember { mutableStateOf<Set<ComputerDisclosureKind>>(emptySet()) }
@@ -345,6 +349,7 @@ fun ChatInputArea(
                 enableAgentAfterSelection = action.enableAgentAfterSelection,
                 onReady = action.onCompleted,
                 onFailure = action.onFailed,
+                selectedComputerIds = action.selectedComputers.map { it.id },
             )
         } else {
             val enabled = viewModel.setAgentEnabled(
@@ -386,15 +391,15 @@ fun ChatInputArea(
             pendingWorkspaceRecreationAction = action
             return
         }
-        val missing = if (action.requiresDisclosure) {
-            disclosureStore.missingFor(action.computer)
-        } else {
-            emptySet()
+        val disclosureTarget = action.selectedComputers.firstOrNull {
+            action.requiresDisclosure && disclosureStore.missingFor(it).isNotEmpty()
         }
+        val missing = disclosureTarget?.let(disclosureStore::missingFor).orEmpty()
         if (missing.isEmpty()) {
             executeAgentAction(action)
         } else {
             pendingAgentAction = action
+            pendingDisclosureComputer = disclosureTarget
             pendingAgentDisclosures = missing
         }
     }
@@ -999,6 +1004,7 @@ fun ChatInputArea(
                             requestAgentAction(
                                 PendingAgentAction(
                                     computer = computer,
+                                    selectedComputers = computers.filter { it.id in selectedComputerIds },
                                     conversationId = currentConversationId,
                                     selectComputer = false,
                                     enableAgentAfterSelection = true,
@@ -1009,7 +1015,11 @@ fun ChatInputArea(
                     }
                 }
 
-                fun selectComputer(computer: Computer) {
+                fun selectComputers(
+                    selected: List<Computer>,
+                    keepSelectionPopupOpen: Boolean = false,
+                ) {
+                    val computer = selected.firstOrNull() ?: return
                     if (computer.status != ComputerStatus.READY) {
                         val status = context.getString(computerStatusLabelRes(computer))
                         onShowSnackbar(context.getString(R.string.agent_server_cannot_select, status))
@@ -1017,10 +1027,11 @@ fun ChatInputArea(
                     }
                     val enableAfterSelection = enableAgentAfterComputerSelection
                     val approval = pendingApprovalForComputerSelection
-                    showComputerSelectionPopup = false
+                    if (!keepSelectionPopupOpen) showComputerSelectionPopup = false
                     requestAgentAction(
                         PendingAgentAction(
                             computer = computer,
+                            selectedComputers = selected,
                             conversationId = currentConversationId,
                             selectComputer = true,
                             enableAgentAfterSelection = enableAfterSelection,
@@ -1356,8 +1367,19 @@ fun ChatInputArea(
                                 ComputerSelectionCard(
                                     computers = computers,
                                     selectedComputerId = selectedComputerId,
-                                    onSelect = ::selectComputer,
-                                    onUnavailable = ::selectComputer,
+                                    selectedComputerIds = selectedComputerIds,
+                                    onSelect = { selectComputers(listOf(it)) },
+                                    // 多选模式下点击不可用服务器只提示状态，不能走旧的单选提交路径。
+                                    onUnavailable = {
+                                        val status = context.getString(computerStatusLabelRes(it))
+                                        onShowSnackbar(context.getString(R.string.agent_server_cannot_select, status))
+                                    },
+                                    onSelectionChanged = { ids ->
+                                        selectComputers(
+                                            selected = ids.mapNotNull { id -> computers.firstOrNull { it.id == id } },
+                                            keepSelectionPopupOpen = true,
+                                        )
+                                    },
                                     onAddComputer = {
                                         showComputerSelectionPopup = false
                                         pendingApprovalForComputerSelection = null
@@ -1414,7 +1436,7 @@ fun ChatInputArea(
                             inputModifier
                         }
 
-                        BasicTextField(
+                        LinkStyledTextField(
                             readOnly = isRestoringMessage,
                             value = localTextFieldValue,
                             onValueChange = { newValue ->
@@ -1525,7 +1547,9 @@ fun ChatInputArea(
                                             if (isAgentEnabled) {
                                                 ActiveFunctionTag(
                                                     iconRes = R.drawable.ic_gpt_terminal,
-                                                    label = stringResource(R.string.chat_input_agent),
+                                                    label = if (selectedComputerIds.size > 1) {
+                                                        stringResource(R.string.agent_servers_tag, selectedComputerIds.size)
+                                                    } else stringResource(R.string.chat_input_agent),
                                                     tint = ChatAgentColor,
                                                     lightBackground = Color(0xFFE0F2F1),
                                                     closeContentDescription = stringResource(R.string.chat_input_close_agent),
@@ -1674,20 +1698,22 @@ fun ChatInputArea(
     )
 
     AgentDisclosureDialog(
-        computer = pendingAgentAction?.computer,
+        computer = pendingDisclosureComputer,
         disclosures = pendingAgentDisclosures,
         onConfirm = {
             val action = pendingAgentAction
             if (action != null) {
-                disclosureStore.accept(action.computer, pendingAgentDisclosures)
+                pendingDisclosureComputer?.let { disclosureStore.accept(it, pendingAgentDisclosures) }
+                pendingDisclosureComputer = null
                 pendingAgentAction = null
                 pendingAgentDisclosures = emptySet()
-                executeAgentAction(action)
+                requestAgentAction(action)
             }
         },
         onDismiss = {
             if (pendingAgentAction?.onCompleted != null) pendingApprovalForComputerSelection = null
             pendingAgentAction = null
+            pendingDisclosureComputer = null
             pendingAgentDisclosures = emptySet()
         },
     )
@@ -1816,6 +1842,7 @@ fun ChatInputArea(
                             requestAgentAction(
                                 PendingAgentAction(
                                     computer = selectedComputer,
+                                    selectedComputers = computers.filter { it.id in selectedComputerIds },
                                     conversationId = currentConversationId,
                                     selectComputer = false,
                                     enableAgentAfterSelection = true,

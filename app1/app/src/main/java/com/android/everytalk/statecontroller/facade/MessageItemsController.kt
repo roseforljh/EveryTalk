@@ -817,10 +817,13 @@ open class MessageItemsController(
         reasoningComplete: Boolean,
         allowLazyStaticRender: Boolean,
     ): List<ChatListItem> {
-        val segments = orderedAiOutputSegments(message.executionTrace).toMutableList()
         val replyIsStreaming = state is com.android.everytalk.ui.state.AiBubbleState.Connecting ||
             state is com.android.everytalk.ui.state.AiBubbleState.Reasoning ||
             state is com.android.everytalk.ui.state.AiBubbleState.Streaming
+        val segments = orderedAiOutputSegments(
+            trace = message.executionTrace,
+            toolCallWriting = replyIsStreaming && message.executionStatus == TOOL_CALL_WRITING_STATUS,
+        ).toMutableList()
         // 编写阶段还没有完整工具记录。追加临时过程段，后续真实工具沿用同一列表位置；
         // 不把未执行的操作写入历史，停止或失败后也不会残留“正在编写”。
         if (replyIsStreaming && message.executionStatus == TOOL_CALL_WRITING_STATUS &&
@@ -855,7 +858,7 @@ open class MessageItemsController(
         // 这里先把各个有序过程段规范化，再合并成一个列表项；过程事件仍按原顺序
         // 保留，因此执行区内部的步骤时间线和底部详情抽屉不会丢失信息。
         val processItems = buildList {
-            // 旁白在展示层会被转成 Reasoning，因此不能再从 segments 的首项判断首字耗时。
+            // 旁白会归入 Process，因此不能从 segments 的首项判断首字耗时。
             // 只看原始轨迹的首个 Content，保留请求开始到首字出现的等待时间。
             val firstContentStartedAt = (message.executionTrace.firstOrNull() as? ExecutionTraceEvent.Content)
                 ?.startedAtMillis
