@@ -23,6 +23,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -39,6 +40,7 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -64,14 +66,22 @@ private fun diffPalette(): DiffPalette =
         DiffPalette(added = Color(0xFF16A34A), removed = Color(0xFFDC2626), edited = Color(0xFFCA8A04))
     }
 
-/** 输入框上方的改动胶囊：只读最近一条 AI 回复的工具步骤，流式正文变化不会触发重算 diff。 */
+/** 只读正在执行的回复；不能回退到最后一条历史消息，否则结束后提示会一直留在输入框上方。 */
 @Composable
-internal fun FileChangesCapsule(messages: List<Message>, modifier: Modifier = Modifier) {
-    val steps by remember(messages) {
-        derivedStateOf { messages.lastOrNull { it.sender == Sender.AI }?.toolSteps().orEmpty() }
+internal fun FileChangesCapsule(
+    messages: List<Message>,
+    activeMessageId: String?,
+    isRunning: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val steps by remember(messages, activeMessageId, isRunning) {
+        derivedStateOf {
+            if (isRunning) messages.firstOrNull { it.id == activeMessageId && it.sender == Sender.AI }?.toolSteps().orEmpty()
+            else emptyList()
+        }
     }
     val changes = remember(steps) { fileChangeSummaries(steps) }
-    var showSheet by remember { mutableStateOf(false) }
+    var showSheet by remember(activeMessageId, isRunning) { mutableStateOf(false) }
 
     AnimatedVisibility(
         visible = changes.isNotEmpty(),
@@ -109,6 +119,77 @@ internal fun FileChangesCapsule(messages: List<Message>, modifier: Modifier = Mo
     }
 }
 
+/**
+ * 回复末尾的持久总结，仅属于传入消息。复用已保存的改动和现有差异弹层，历史回复不依赖当前任务。
+ * 多文件默认显示三项，展开后由聊天列表滚动，避免在气泡里再嵌套一个滚动列表。
+ */
+@Composable
+internal fun MessageFileChangesSummary(message: Message, isRunning: Boolean, modifier: Modifier = Modifier) {
+    val steps = message.toolSteps()
+    // 执行中的工具参数只是计划；结束卡片只能把已成功返回的步骤当作完成改动。
+    val changes = remember(steps) { fileChangeSummaries(steps.filter { it.completed && !it.isError }) }
+    if (isRunning || message.isError || changes.isEmpty()) return
+    var expanded by remember(message.id) { mutableStateOf(false) }
+    var showSheet by remember(message.id) { mutableStateOf(false) }
+    var selectedPath by remember(message.id) { mutableStateOf<String?>(null) }
+    val single = changes.singleOrNull()
+    val title = if (single != null) stringResource(R.string.file_changes_single, single.path.replace('\\', '/').substringAfterLast('/'))
+        else pluralStringResource(R.plurals.file_changes_count, changes.size, changes.size)
+    val reviewLabel = stringResource(R.string.file_changes_view)
+
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+        modifier = modifier.fillMaxWidth().padding(top = 8.dp, bottom = 6.dp),
+    ) {
+        Column {
+            Row(
+                modifier = Modifier.fillMaxWidth().clickable(role = Role.Button, onClickLabel = reviewLabel) {
+                    selectedPath = single?.path
+                    showSheet = true
+                }.padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(painterResource(R.drawable.ic_gpt_file_document), null, Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(title, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    ChangeCounts(changes.sumOf { it.additions }, changes.sumOf { it.deletions })
+                }
+                TextButton(onClick = { selectedPath = single?.path; showSheet = true }) { Text(reviewLabel) }
+            }
+            if (single == null) {
+                changes.take(if (expanded) changes.size else 3).forEach { change ->
+                    val path = change.path.replace('\\', '/')
+                    Row(
+                        modifier = Modifier.fillMaxWidth().clickable(role = Role.Button, onClickLabel = "$reviewLabel：${change.path}") {
+                            selectedPath = change.path
+                            showSheet = true
+                        }.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(path.substringAfterLast('/'), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            path.substringBeforeLast('/', "").takeIf { it.isNotEmpty() }?.let { directory ->
+                                Text(directory, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1, overflow = TextOverflow.StartEllipsis)
+                            }
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        ChangeCounts(change.additions, change.deletions)
+                    }
+                }
+                if (changes.size > 3) TextButton(onClick = { expanded = !expanded }) {
+                    Text(if (expanded) stringResource(R.string.file_changes_collapse)
+                        else stringResource(R.string.file_changes_more, changes.size - 3))
+                }
+            }
+        }
+    }
+    if (showSheet) FileChangesSheet(changes, { showSheet = false }, selectedPath)
+}
+
 @Composable
 private fun ChangeCounts(additions: Int, deletions: Int) {
     val palette = diffPalette()
@@ -121,7 +202,7 @@ private fun ChangeCounts(additions: Int, deletions: Int) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun FileChangesSheet(changes: List<FileChangeSummary>, onDismissRequest: () -> Unit) {
+private fun FileChangesSheet(changes: List<FileChangeSummary>, onDismissRequest: () -> Unit, initialPath: String? = null) {
     // 只有一个文件时直接展开，多个文件默认收起，避免长 diff 把列表挤出屏幕。
     val expanded = remember { mutableStateMapOf<String, Boolean>() }
     AppModalBottomSheet(
@@ -150,7 +231,7 @@ private fun FileChangesSheet(changes: List<FileChangeSummary>, onDismissRequest:
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             changes.forEach { change ->
-                val isExpanded = expanded[change.path] ?: (changes.size == 1)
+                val isExpanded = expanded[change.path] ?: (changes.size == 1 || change.path == initialPath)
                 FileChangeCard(
                     change = change,
                     expanded = isExpanded,

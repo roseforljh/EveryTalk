@@ -320,7 +320,8 @@ internal fun ReasoningToggleAndContent(
         isReasoningStreaming = isReasoningStreaming,
     )
     var userExpanded by remember(currentMessageId) { mutableStateOf(false) }
-    val forceExpanded = processIsActive || replyIsStreaming
+    // 正文首字出现就收起过程区，不必等待整条回复结束；收起后仍允许手动查看。
+    val forceExpanded = (processIsActive || replyIsStreaming) && !mainContentHasStarted
     val executionChainExpanded = forceExpanded || userExpanded
     var nowMillis by remember(currentMessageId) { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(forceExpanded, currentMessageId) {
@@ -350,6 +351,18 @@ internal fun ReasoningToggleAndContent(
             executionTrace = executionTrace,
         )
     }
+    // 临时状态只替换已有标签的文字，不额外插入一行；结束后标签恢复操作数量。
+    // 没有工具记录时使用顶部标题，避免等待、分析和编写阶段反复增删状态行。
+    val hasToolGroups = sections.any { it is ExecutionProcessSection.ToolGroup }
+    val activeStatusText = if (processIsActive) {
+        localizedExecutionStatusText(activityStatusText) ?: stringResource(
+            when {
+                isReasoningStreaming -> R.string.thinking_receiving
+                hasToolGroups -> R.string.computer_action_working
+                else -> R.string.thinking_waiting_first_response
+            },
+        )
+    } else null
     val elapsedMillis = executionStartedAtMillis?.let { startedAt ->
         val endedAt = executionFinishedAtMillis ?: nowMillis.takeIf { processIsActive }
         endedAt?.minus(startedAt)?.coerceAtLeast(0L)
@@ -360,7 +373,7 @@ internal fun ReasoningToggleAndContent(
         executionTrace.filterIsInstance<ExecutionTraceEvent.Tool>().map { it.step }
     }
     val executionChainTitle = when {
-        // 标题只概括整个执行区，具体的“正在编写”由过程末尾的状态行展示，不能越过旁白。
+        processIsActive && !hasToolGroups -> requireNotNull(activeStatusText)
         processIsActive && elapsedText != null ->
             stringResource(R.string.thinking_processing_duration, elapsedText)
         processIsActive -> stringResource(R.string.computer_action_working).trimEnd('…')
@@ -416,7 +429,11 @@ internal fun ReasoningToggleAndContent(
                         textColor = reasoningTextColor,
                         iconColor = reasoningToggleDotColor,
                         onClick = {
-                            if (!forceExpanded) userExpanded = !userExpanded
+                            if (sections.isEmpty() && processIsActive) {
+                                openReasoningSheet()
+                            } else if (!forceExpanded) {
+                                userExpanded = !userExpanded
+                            }
                         },
                     )
                     AnimatedVisibility(
@@ -434,6 +451,7 @@ internal fun ReasoningToggleAndContent(
                             expansionNamespace = currentMessageId,
                             sections = sections,
                             activityStatusText = activityStatusText,
+                            activeStatusText = activeStatusText,
                             active = processIsActive,
                             reasoningActive = isReasoningStreaming,
                             messageIsError = messageIsError,
@@ -489,7 +507,6 @@ private fun ExecutionChainHeader(
     )
     Row(
         modifier = modifier
-            .fillMaxWidth()
             .testTag("reasoning-inline-status")
             .semantics(mergeDescendants = true) {
                 contentDescription = text
@@ -510,6 +527,7 @@ private fun ExecutionChainHeader(
                 textColor = textColor,
                 useSmallStyle = false,
                 modifier = Modifier
+                    .weight(1f, fill = false)
                     .testTag("reasoning-inline-status-text"),
             )
         } else {
@@ -521,6 +539,7 @@ private fun ExecutionChainHeader(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
+                    .weight(1f, fill = false)
                     .testTag("reasoning-inline-status-text"),
             )
         }
@@ -535,7 +554,6 @@ private fun ExecutionChainHeader(
                 .size(18.dp)
                 .graphicsLayer { rotationZ = arrowRotation },
         )
-        Spacer(Modifier.weight(1f, fill = false))
     }
 }
 
@@ -544,22 +562,14 @@ private fun ExecutionProcessContent(
     expansionNamespace: String,
     sections: List<ExecutionProcessSection>,
     activityStatusText: String?,
+    activeStatusText: String?,
     active: Boolean,
     reasoningActive: Boolean,
     messageIsError: Boolean,
     onOpenDetails: () -> Unit,
     onInteractiveExpansionChanged: (key: String, expanded: Boolean) -> Unit,
 ) {
-    val hasPendingTool = sections.any { section ->
-        section is ExecutionProcessSection.ToolGroup && section.entries.any { !it.step.completed }
-    }
-    val hasSpecificActivity = !activityStatusText.isNullOrBlank() &&
-        !isGenericExecutionStatus(activityStatusText)
-    val showStandaloneStatus = active && !hasPendingTool && (
-        sections.isEmpty() ||
-            sections.lastOrNull() !is ExecutionProcessSection.Narrative ||
-            hasSpecificActivity
-        )
+    val latestToolGroupIndex = sections.indexOfLast { it is ExecutionProcessSection.ToolGroup }
     val activeNarrativeIndex = if (
         reasoningActive && sections.lastOrNull() is ExecutionProcessSection.Narrative
     ) {
@@ -596,7 +606,8 @@ private fun ExecutionProcessContent(
                     ExecutionToolGroup(
                         expansionNamespace = expansionNamespace,
                         group = section,
-                        active = active && section.entries.any { !it.step.completed },
+                        active = active && sectionIndex == latestToolGroupIndex,
+                        activeStatusText = activeStatusText.takeIf { sectionIndex == latestToolGroupIndex },
                         groupIndex = sectionIndex,
                         onOpenDetails = onOpenDetails,
                         onInteractiveExpansionChanged = onInteractiveExpansionChanged,
@@ -605,29 +616,7 @@ private fun ExecutionProcessContent(
             }
         }
 
-        if (showStandaloneStatus) {
-            val status = localizedExecutionStatusText(activityStatusText)
-                ?: stringResource(R.string.thinking_waiting_first_response)
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("reasoning-chain-summary-${sections.size}")
-                    .clickable(
-                        indication = null,
-                        interactionSource = remember { MutableInteractionSource() },
-                        onClick = onOpenDetails,
-                    ),
-            ) {
-                ScanningHighlightText(
-                    text = status,
-                    textColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    useSmallStyle = false,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("reasoning-chain-live-status"),
-                )
-            }
-        } else if (messageIsError) {
+        if (messageIsError) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -784,6 +773,7 @@ private fun ExecutionToolGroup(
     expansionNamespace: String,
     group: ExecutionProcessSection.ToolGroup,
     active: Boolean,
+    activeStatusText: String?,
     groupIndex: Int,
     onOpenDetails: () -> Unit,
     onInteractiveExpansionChanged: (key: String, expanded: Boolean) -> Unit,
@@ -802,12 +792,13 @@ private fun ExecutionToolGroup(
         animationSpec = tween(EXECUTION_ARROW_ROTATION_MS, easing = FastOutSlowInEasing),
         label = "executionGroupArrow",
     )
-    val summary = executionToolGroupSummary(group.entries)
+    val summary = activeStatusText ?: executionToolGroupSummary(group.entries)
 
     Column(modifier = Modifier.fillMaxWidth()) {
+        // 只给箭头保留固定宽度，其余空间全部交给文字；短标签按内容收缩，
+        // 长标签到达气泡内容边界后省略，不能再用弹性空白分走一半文字宽度。
         Row(
             modifier = Modifier
-                .fillMaxWidth()
                 .testTag("reasoning-chain-summary-$groupIndex")
                 .clickable(
                     indication = null,
@@ -823,6 +814,7 @@ private fun ExecutionToolGroup(
                     textColor = MaterialTheme.colorScheme.onSurfaceVariant,
                     useSmallStyle = false,
                     modifier = Modifier
+                        .weight(1f, fill = false)
                         .testTag("reasoning-chain-summary-scanning"),
                 )
             } else {
@@ -833,6 +825,7 @@ private fun ExecutionToolGroup(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier
+                        .weight(1f, fill = false)
                         .testTag("reasoning-chain-summary-static"),
                 )
             }
@@ -847,7 +840,6 @@ private fun ExecutionToolGroup(
                     .size(18.dp)
                     .graphicsLayer { rotationZ = arrowRotation },
             )
-            Spacer(Modifier.weight(1f, fill = false))
         }
         AnimatedVisibility(
             visible = expanded,

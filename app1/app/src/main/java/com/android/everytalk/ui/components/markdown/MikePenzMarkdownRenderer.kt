@@ -57,6 +57,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
+import com.android.everytalk.ui.theme.chatColors
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.Placeholder
@@ -448,6 +449,9 @@ fun MikePenzMarkdownRenderer(
                 preparedMarkdownDocument = preparedMarkdownDocument,
             )
             val linkLogoRequests = linkLogoIndex.requests
+            val messageFiles = LocalMessageFileAttachments.current
+            val messageFileLinkColor = MaterialTheme.chatColors.loadingIndicator
+            val fileInlineContent = remember(messageFiles) { messageFileInlineContent(messageFiles) }
             val linkLogoDefinitions = linkLogoIndex.definitions
             val linkLogoInlineContent = remember(linkLogoRequests) {
                 markdownLinkLogoInlineContent(linkLogoRequests)
@@ -455,23 +459,23 @@ fun MikePenzMarkdownRenderer(
             val markdownInlineContentMap = remember(
                 inlineContentMap,
                 linkLogoInlineContent,
+                fileInlineContent,
             ) {
-                inlineContentMap + linkLogoInlineContent
+                inlineContentMap + linkLogoInlineContent + fileInlineContent
             }
             val annotator = remember(
                 renderFormulaMessage,
                 linkLogoRequests,
                 linkLogoDefinitions,
+                messageFiles,
+                messageFileLinkColor,
             ) {
                 createPreparedMessageMarkdownAnnotator(
                     preparedMessage = renderFormulaMessage,
                     linkLogoHosts = linkLogoRequests.mapTo(linkedSetOf()) { it.host },
                     linkLogoDefinitions = linkLogoDefinitions,
-                )
-            }
-            val logoFreeAnnotator = remember(renderFormulaMessage) {
-                createPreparedMessageMarkdownAnnotator(
-                    preparedMessage = renderFormulaMessage,
+                    messageFiles = messageFiles,
+                    messageFileLinkColor = messageFileLinkColor,
                 )
             }
             val currentPreparedMessage = rememberUpdatedState(visiblePreparedMessage)
@@ -480,9 +484,6 @@ fun MikePenzMarkdownRenderer(
             val currentFormulaFontSizePx = rememberUpdatedState(formulaFontSizePx)
             val currentInlineContentMap = rememberUpdatedState(markdownInlineContentMap)
             val currentAnnotator = rememberUpdatedState(annotator)
-            val currentLogoFreeAnnotator = rememberUpdatedState(logoFreeAnnotator)
-            val currentLinkLogoRequests = rememberUpdatedState(linkLogoRequests)
-            val currentLinkLogoDefinitions = rememberUpdatedState(linkLogoDefinitions)
     val currentBodyStyle = rememberUpdatedState(bodyStyle)
     val currentSender = rememberUpdatedState(sender)
     val currentIsStreaming = rememberUpdatedState(isStreaming)
@@ -517,46 +518,26 @@ fun MikePenzMarkdownRenderer(
                         ),
                         navigation = footnoteNavigation,
                     ) { targetModifier ->
-                        val linkLogoRequest = markdownSingleAutolinkLogoRequest(
+                        // 所有链接共用行内图标，长网址续行不再为独立图标列留空。
+                        val paragraphStyle = markdownParagraphStyle(
                             content = model.content,
                             node = model.node,
-                            definitions = currentLinkLogoDefinitions.value,
-                            requests = currentLinkLogoRequests.value,
+                            baseStyle = model.typography.paragraph,
                         )
-                        if (linkLogoRequest == null) {
-                            val paragraphStyle = markdownParagraphStyle(
+                        MarkdownParagraph(
+                            annotatorSettings = markdownAnnotatorSettingsWithRegularStrongWeight(),
+                            content = model.content,
+                            node = model.node,
+                            modifier = targetModifier,
+                            style = inlineFormulaAwareParagraphStyle(
                                 content = model.content,
                                 node = model.node,
-                                baseStyle = model.typography.paragraph,
-                            )
-                            MarkdownParagraph(
-                                annotatorSettings = markdownAnnotatorSettingsWithRegularStrongWeight(),
-                                content = model.content,
-                                node = model.node,
-                                modifier = targetModifier,
-                                style = inlineFormulaAwareParagraphStyle(
-                                    content = model.content,
-                                    node = model.node,
-                                    baseStyle = paragraphStyle,
-                                    preparedMessage = currentFormulaMessage.value,
-                                    formulaStates = currentFormulaStates.value,
-                                    formulaFontSizePx = currentFormulaFontSizePx.value,
-                                ),
-                            )
-                        } else {
-                            MarkdownSingleAutolinkLogoParagraph(
-                                content = model.content,
-                                node = model.node,
-                                style = markdownParagraphStyle(
-                                    content = model.content,
-                                    node = model.node,
-                                    baseStyle = model.typography.paragraph,
-                                ),
-                                request = linkLogoRequest,
-                                logoFreeAnnotator = currentLogoFreeAnnotator.value,
-                                modifier = targetModifier,
-                            )
-                        }
+                                baseStyle = paragraphStyle,
+                                preparedMessage = currentFormulaMessage.value,
+                                formulaStates = currentFormulaStates.value,
+                                formulaFontSizePx = currentFormulaFontSizePx.value,
+                            ),
+                        )
                     }
                 },
                 orderedList = { model ->

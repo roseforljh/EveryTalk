@@ -8,6 +8,8 @@ import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
@@ -16,7 +18,13 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.AnchoredDraggableDefaults
+import androidx.compose.foundation.gestures.AnchoredDraggableState
+import androidx.compose.foundation.gestures.DraggableAnchors
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.anchoredDraggable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -35,12 +43,20 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -48,6 +64,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.android.everytalk.R
@@ -58,9 +75,11 @@ import com.android.everytalk.data.computer.ComputerToolApprovalRequest
 import com.android.everytalk.data.computer.PendingComputerToolApproval
 import com.android.everytalk.data.computer.hostConfirmationRequest
 import com.android.everytalk.ui.screens.BubbleMain.Main.ReasoningMarkdownBlock
+import com.android.everytalk.ui.components.floatingEdgeGradient
+import kotlin.math.roundToInt
 
 /**
- * 任务入口位于聊天可用区域的右侧中部，底部完整让给 Composer、队列和返回底部按钮。
+ * 任务入口默认收在聊天区域右侧中部，只露出小把手；左滑唤出、右滑收起，底部留给输入框和队列。
  * 抽屉通过独立模态窗口覆盖页面，滑入、退出完成后再移除窗口，避免关闭时动画被截断。
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -75,34 +94,77 @@ internal fun AgentTaskOverlay(
 ) {
     if (tasks.size < 2) return
     var open by rememberSaveable(sessionKey) { mutableStateOf(false) }
+    // false 收在边缘，true 展开。原生拖动状态负责速度、吸附及动画打断，避免松手后才突然出现。
+    val entryTravelPx = with(LocalDensity.current) { 64.dp.toPx() }
+    val entryDragState = remember(sessionKey, entryTravelPx) {
+        AnchoredDraggableState(false, DraggableAnchors {
+            false at 0f
+            true at -entryTravelPx
+        })
+    }
+    val entryProgress = (-entryDragState.requireOffset() / entryTravelPx).coerceIn(0f, 1f)
     var selectedId by rememberSaveable(sessionKey) { mutableStateOf<String?>(null) }
     val selected = tasks.firstOrNull { it.computerId == selectedId } ?: tasks.first()
     val taskStateHolder = rememberSaveableStateHolder()
     val transition = remember(sessionKey) { MutableTransitionState(false) }
     transition.targetState = open
     val needsAttention = tasks.any { it.phase == AgentTaskPhase.APPROVAL }
+    val openDescription = stringResource(R.string.agent_tasks_open, tasks.size)
     val entryColor by animateColorAsState(
-        if (needsAttention) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
+        ChatAgentColor.copy(alpha = if (needsAttention) 0.18f else 0.10f)
+            .compositeOver(MaterialTheme.colorScheme.surface),
         tween(220), label = "task-entry-color",
     )
-    Box(Modifier.fillMaxSize().padding(top = topAvoidance, bottom = bottomAvoidance)) {
+    val entryFling = AnchoredDraggableDefaults.flingBehavior(
+        state = entryDragState,
+        positionalThreshold = { distance -> distance / 2f },
+        animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessLow),
+    )
+    val entryDrag = Modifier.anchoredDraggable(
+        state = entryDragState, orientation = Orientation.Horizontal,
+        reverseDirection = false, flingBehavior = entryFling,
+    )
+    Box(Modifier.fillMaxSize().padding(top = topAvoidance, bottom = bottomAvoidance).clipToBounds()) {
+        // 仅此 112dp 高的边缘区域排除系统返回手势，其余右侧边缘仍保持系统行为。
+        // 手势节点始终保留，拖到端点后反向移动也不会因为控件移除而中断。
+        Box(Modifier.align(Alignment.CenterEnd).width(24.dp).height(112.dp)
+            .systemGestureExclusion().then(entryDrag).semantics {
+                if (entryProgress == 0f) {
+                    contentDescription = openDescription
+                    role = Role.Button
+                    onClick { open = true; true }
+                }
+            }.testTag("agent-task-edge")) {
+            // 可见把手贴住右边缘，手势区域仍保持较大尺寸，方便找到并向左滑出入口。
+            if (entryProgress < 1f) {
+                Box(Modifier.align(Alignment.CenterEnd).size(width = 6.dp, height = 40.dp)
+                    .graphicsLayer { alpha = 1f - entryProgress }
+                    .clip(RoundedCornerShape(topStart = 8.dp, bottomStart = 8.dp))
+                    .background(ChatAgentColor).testTag("agent-task-handle"))
+            }
+        }
+        // 保留同一个按钮随手指移出/移入边界；位置与透明度共用进度，不再分两段播放进出动画。
         Surface(
             onClick = { open = true },
-            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 12.dp).size(52.dp).testTag("agent-task-entry"),
+            enabled = entryProgress == 1f,
+            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 12.dp)
+                .offset { IntOffset((entryTravelPx + entryDragState.requireOffset()).coerceIn(0f, entryTravelPx).roundToInt(), 0) }
+                .size(52.dp).graphicsLayer { alpha = entryProgress }
+                .then(entryDrag).testTag("agent-task-entry"),
             shape = RoundedCornerShape(22.dp),
             color = entryColor,
-            contentColor = MaterialTheme.colorScheme.onSurface,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
-            shadowElevation = 6.dp,
+            contentColor = ChatAgentColor,
+            border = BorderStroke(1.dp, ChatAgentColor.copy(alpha = 0.24f)),
+            shadowElevation = 2.dp,
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(Icons.Outlined.AccountTree,
-                    contentDescription = stringResource(R.string.agent_tasks_open, tasks.size - 1),
+                    contentDescription = openDescription,
                     modifier = Modifier.size(23.dp))
                 Badge(Modifier.align(Alignment.TopEnd).padding(3.dp),
                     containerColor = if (needsAttention) MaterialTheme.colorScheme.tertiary else ChatAgentColor,
                     contentColor = Color.White) {
-                    Text((tasks.size - 1).toString(), style = MaterialTheme.typography.labelSmall)
+                    Text(tasks.size.toString(), style = MaterialTheme.typography.labelSmall)
                 }
             }
         }
@@ -125,34 +187,44 @@ internal fun AgentTaskOverlay(
                     ModalDrawerSheet(
                         modifier = Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures { } }.testTag("agent-task-drawer"),
                         drawerShape = RoundedCornerShape(topStart = 32.dp, bottomStart = 32.dp),
-                        drawerContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                        drawerContainerColor = MaterialTheme.colorScheme.surface,
                         windowInsets = WindowInsets(0),
                     ) {
-                        Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 10.dp, top = 12.dp, bottom = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically) {
-                            Text(stringResource(R.string.agent_tasks), style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                            IconButton(onClick = { open = false }) {
-                                Icon(painterResource(R.drawable.ic_close), stringResource(R.string.agent_tasks_close), Modifier.size(22.dp))
+                        val density = LocalDensity.current
+                        var headerHeightPx by remember { mutableIntStateOf(0) }
+                        val headerHeight = with(density) { headerHeightPx.toDp() }
+                        Box(Modifier.fillMaxSize()) {
+                            AnimatedContent(
+                                targetState = selected.computerId,
+                                modifier = Modifier.fillMaxSize(),
+                                transitionSpec = { (fadeIn(tween(170)) + slideInHorizontally(tween(220)) { it / 14 }) togetherWith fadeOut(tween(100)) },
+                                label = "task-switch",
+                            ) { computerId ->
+                                val task = tasks.firstOrNull { it.computerId == computerId } ?: tasks.first()
+                                taskStateHolder.SaveableStateProvider(computerId) {
+                                    TaskProcess(task, approvals.filter { it.request.context.computerId == computerId },
+                                        headerHeight, onApproval)
+                                }
                             }
-                        }
-                        // 切换栏固定，只有下面的过程列表滚动；每个任务独立保存滚动和展开状态。
-                        LazyRow(Modifier.fillMaxWidth().testTag("agent-task-tabs"),
-                            contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            items(tasks, key = { it.computerId ?: "main" }) { task ->
-                                TaskTab(task, task.computerId == selected.computerId) { selectedId = task.computerId }
-                            }
-                        }
-                        Spacer(Modifier.height(16.dp))
-                        AnimatedContent(
-                            targetState = selected.computerId,
-                            modifier = Modifier.weight(1f).fillMaxWidth(),
-                            transitionSpec = { (fadeIn(tween(170)) + slideInHorizontally(tween(220)) { it / 14 }) togetherWith fadeOut(tween(100)) },
-                            label = "task-switch",
-                        ) { computerId ->
-                            val task = tasks.firstOrNull { it.computerId == computerId } ?: tasks.first()
-                            taskStateHolder.SaveableStateProvider(computerId ?: "main") {
-                                TaskProcess(task, approvals.filter { it.request.context.computerId == computerId }, onApproval)
+                            // 复用公共渐变顶栏：标题和切换栏固定，过程从下方滑过并渐隐。
+                            // 按实际高度留出列表首屏空间，适配字体缩放，避免第一条记录被顶栏遮住。
+                            Column(Modifier.fillMaxWidth().onSizeChanged { headerHeightPx = it.height }
+                                .floatingEdgeGradient(MaterialTheme.colorScheme.surface, fromTop = true)
+                                .testTag("agent-task-header").padding(bottom = 24.dp)) {
+                                Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 10.dp, top = 12.dp, bottom = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically) {
+                                    Text(stringResource(R.string.agent_tasks), style = MaterialTheme.typography.titleLarge,
+                                        fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                                    IconButton(onClick = { open = false }) {
+                                        Icon(painterResource(R.drawable.ic_close), stringResource(R.string.agent_tasks_close), Modifier.size(22.dp))
+                                    }
+                                }
+                                LazyRow(Modifier.fillMaxWidth().testTag("agent-task-tabs"),
+                                    contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    items(tasks, key = { it.computerId }) { task ->
+                                        TaskTab(task, task.computerId == selected.computerId) { selectedId = task.computerId }
+                                    }
+                                }
                             }
                         }
                     }
@@ -168,12 +240,12 @@ private fun TaskTab(task: AgentTaskItem, active: Boolean, onClick: () -> Unit) {
         else MaterialTheme.colorScheme.surfaceContainerHigh, tween(200), label = "task-tab-color")
     Surface(onClick = onClick, shape = RoundedCornerShape(50), color = background,
         modifier = Modifier.heightIn(min = 48.dp).semantics { selected = active }
-            .testTag("agent-task-tab-${task.computerId ?: "main"}"),
+            .testTag("agent-task-tab-${task.computerId}"),
         border = if (active) BorderStroke(1.dp, ChatAgentColor.copy(alpha = 0.55f)) else null) {
         Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TaskStatusDot(task.phase)
-            Text(if (task.computerId == null) stringResource(R.string.agent_task_main) else task.name,
+            Text(task.name,
                 style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.widthIn(max = 130.dp))
         }
@@ -210,14 +282,15 @@ private fun taskPhaseText(phase: AgentTaskPhase): String = stringResource(when (
 private fun TaskProcess(
     task: AgentTaskItem,
     approvals: List<PendingComputerToolApproval>,
+    topContentPadding: Dp,
     onApproval: (PendingComputerToolApproval, AgentApprovalDecision, () -> Unit) -> Unit,
 ) {
-    LazyColumn(Modifier.fillMaxSize().testTag("agent-task-process-${task.computerId ?: "main"}"),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
+    LazyColumn(Modifier.fillMaxSize().testTag("agent-task-process-${task.computerId}"),
+        contentPadding = PaddingValues(start = 16.dp, top = topContentPadding, end = 16.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             Column(Modifier.padding(horizontal = 6.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(if (task.computerId == null) stringResource(R.string.agent_task_main) else task.name,
+                Text(task.name,
                     style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TaskStatusDot(task.phase)
@@ -230,7 +303,7 @@ private fun TaskProcess(
             TaskApprovalCard(pending, onApproval)
         }
         if (task.trace.isEmpty()) item {
-            Text(stringResource(if (task.computerId == null) R.string.agent_task_planning else R.string.agent_task_empty),
+            Text(stringResource(R.string.agent_task_empty),
                 modifier = Modifier.padding(6.dp), style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }

@@ -128,7 +128,7 @@ class PendingMessageInteractionTest {
         val click = input.substringAfter("val onSendClick: () -> Unit").substringBefore("val inputBackgroundColor")
         assertTrue(input.contains("val hasContent = localText.isNotBlank()"))
         assertTrue(input.contains("val buttonState = primaryAction"))
-        assertTrue(click.contains("onPauseStreaming()"))
+        assertTrue(click.contains("onPauseStreaming(controlledMessageId)"))
         assertTrue(click.contains("onResumeStreaming()"))
         assertTrue(click.contains("viewModel.forceStopPendingPause(controlledMessageId)"))
         assertTrue(click.contains("viewModel.stopUncontrolledRun(controlledMessageId)"))

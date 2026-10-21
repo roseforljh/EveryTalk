@@ -1,6 +1,7 @@
 import { authConfig, syncBaseUrl } from "./auth";
 import { isObject, isPermanentSyncFailure } from "./sync-core";
 import { SyncStore } from "./sync-store";
+import type { DownloadPreferences } from './file-downloads';
 import { syncKey, type AuthSession, type JsonObject, type PendingChange, type PullResponse, type PushResponse, type StoredRecord, type SyncEntity } from "./types";
 
 const VERSION = "0.2.0";
@@ -171,6 +172,9 @@ export class SyncClient {
   }
 
   async retryRejected(): Promise<void> { await this.requireStore().retryRejected(); }
+
+  async downloadPreferences(): Promise<DownloadPreferences | undefined> { return this.requireStore().downloadPreferences(); }
+  async saveDownloadPreferences(value: DownloadPreferences): Promise<void> { await this.requireStore().saveDownloadPreferences(value); }
 
   /** 资源和密钥请求共用账号、退出取消和协议头，不另建无保护的网络入口。 */
   async cloudJson(session: AuthSession, path: string, body?: unknown, headers?: HeadersInit, refreshSession?: () => Promise<AuthSession>): Promise<unknown> {

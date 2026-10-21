@@ -365,6 +365,10 @@ ksp {
         // SSH、SFTP、PTY 与端口转发全部在 Android 本地完成，凭据不经过项目方服务器。
         implementation(libs.sshj)
         implementation(libs.bouncycastle.provider)
+        // bcpkix 以版本区间引用 bcutil，解析区间要联网拉各仓库版本列表，镜像抽风就整个构建失败；钉成固定版本。
+        constraints {
+            implementation("org.bouncycastle:bcutil-jdk18on") { version { strictly(libs.versions.bouncyCastle.get()) } }
+        }
 
         // SLF4J - Ktor logging 的间接依赖,必须保留
         implementation(libs.slf4j.nop)

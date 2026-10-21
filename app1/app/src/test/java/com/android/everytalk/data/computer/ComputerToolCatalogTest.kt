@@ -7,6 +7,38 @@ import org.junit.Test
 
 class ComputerToolCatalogTest {
     @Test
+    fun `连续刷新请求仍保留两台服务器的身份和跨机工具`() {
+        val targets = listOf(
+            ComputerTargetBinding("a", "wa", "24", ComputerPermissionMode.FULL),
+            ComputerTargetBinding("b", "wb", "34", ComputerPermissionMode.FULL),
+        )
+        var request = com.android.everytalk.data.DataClass.ChatRequest(
+            messages = emptyList(), provider = "OpenAI", channel = "OpenAI",
+            apiAddress = "https://example.com", apiKey = "", model = "test",
+            tools = ComputerToolCatalog.definitions(),
+            localComputerRequestContext = ComputerRequestContext("session", "a", "wa", selectedTargets = targets),
+        )
+        repeat(3) { round ->
+            val prompt = buildMultiComputerSessionPrompt(targets.map { target ->
+                target to "environment ${target.workspaceId}\n<computer-session-state>round $round</computer-session-state>"
+            })
+            request = refreshComputerExecutionPolicy(request, prompt)
+            val policy = request.messages.filter { it.id == "computer-execution-policy" }.single()
+                as com.android.everytalk.data.DataClass.SimpleTextApiMessage
+            assertTrue(policy.content.contains("名称=\"24\""))
+            assertTrue(policy.content.contains("名称=\"34\""))
+            assertTrue(policy.content.contains("environment wa"))
+            assertTrue(policy.content.contains("environment wb"))
+            assertFalse(policy.content.contains("round"))
+            listOf(ComputerToolNames.EXEC, ComputerToolNames.DOWNLOAD, ComputerToolNames.UPLOAD).forEach { name ->
+                val function = request.tools!!.map { it["function"] as Map<*, *> }.single { it["name"] == name }
+                val properties = (function["parameters"] as Map<*, *>)["properties"] as Map<*, *>
+                assertEquals(listOf("a", "b"), (properties["computer_id"] as Map<*, *>)["enum"])
+            }
+        }
+    }
+
+    @Test
     fun `恢复旧请求时刷新默认工具和system规则但保留用户历史与其他工具`() {
         val user = com.android.everytalk.data.DataClass.SimpleTextApiMessage(role = "user", content = "之前沙箱里有文件，请继续处理")
         val externalTool = mapOf<String, Any>("type" to "function", "function" to mapOf("name" to "external_tool"))

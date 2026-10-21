@@ -8,15 +8,11 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredWidth
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
@@ -108,7 +104,6 @@ import com.mikepenz.markdown.annotator.buildMarkdownAnnotatedString
 import com.mikepenz.markdown.compose.Markdown
 import com.mikepenz.markdown.compose.MarkdownElement
 import com.mikepenz.markdown.compose.LocalMarkdownDimens
-import com.mikepenz.markdown.compose.LocalMarkdownAnnotator
 import com.mikepenz.markdown.compose.components.MarkdownComponentModel
 import com.mikepenz.markdown.compose.components.MarkdownComponents
 import com.mikepenz.markdown.compose.components.markdownComponents
@@ -116,7 +111,6 @@ import com.mikepenz.markdown.compose.elements.MarkdownCodeBlock
 import com.mikepenz.markdown.compose.elements.MarkdownCodeFence
 import com.mikepenz.markdown.compose.elements.MarkdownDivider
 import com.mikepenz.markdown.compose.elements.MarkdownHeader
-import com.mikepenz.markdown.compose.elements.MarkdownParagraph
 import com.mikepenz.markdown.compose.elements.MarkdownTableHeader
 import com.mikepenz.markdown.compose.elements.MarkdownTableRow
 import com.mikepenz.markdown.compose.elements.LocalTableRowIndex
@@ -124,7 +118,6 @@ import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
 import com.mikepenz.markdown.model.ImageTransformer
 import com.mikepenz.markdown.model.ImageWidth
-import com.mikepenz.markdown.model.MarkdownAnnotator
 import com.mikepenz.markdown.model.PlaceholderConfig
 import com.mikepenz.markdown.model.State
 import com.mikepenz.markdown.model.StreamingMarkdownState
@@ -144,7 +137,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.intellij.markdown.IElementType
 import org.intellij.markdown.MarkdownElementTypes
-import org.intellij.markdown.MarkdownTokenTypes
 import org.intellij.markdown.ast.ASTNode
 import org.intellij.markdown.ast.findChildOfType
 import org.intellij.markdown.flavours.gfm.GFMElementTypes
@@ -340,64 +332,6 @@ internal fun rememberMarkdownLinkLogoIndex(
         }
     }
     return result.value
-}
-
-internal fun markdownSingleAutolinkLogoRequest(
-    content: String,
-    node: ASTNode,
-    definitions: Map<String, String>,
-    requests: List<MarkdownLinkLogoRequest>,
-): MarkdownLinkLogoRequest? {
-    if (node.type != MarkdownElementTypes.PARAGRAPH) return null
-
-    val significantChildren = node.children.filterNot { child ->
-        child.type == MarkdownTokenTypes.WHITE_SPACE || child.type == MarkdownTokenTypes.EOL
-    }
-    val autolink = significantChildren.singleOrNull { child ->
-        child.type == MarkdownElementTypes.AUTOLINK ||
-            child.type == GFMTokenTypes.GFM_AUTOLINK
-    } ?: return null
-    val paragraphText = node.safeTextInNode(content)?.trim() ?: return null
-    val autolinkText = autolink.safeTextInNode(content)?.trim() ?: return null
-    if (paragraphText != autolinkText) return null
-    val host = autolink.markdownLinkLogoDestination(content, definitions)
-        ?.let(::linkHost)
-        ?.takeIf { it.isNotBlank() }
-        ?: return null
-    return requests.firstOrNull { it.host == host }
-}
-
-@Composable
-internal fun MarkdownSingleAutolinkLogoParagraph(
-    content: String,
-    node: ASTNode,
-    style: TextStyle,
-    request: MarkdownLinkLogoRequest,
-    logoFreeAnnotator: MarkdownAnnotator,
-    modifier: Modifier = Modifier,
-) {
-    Row(
-        modifier = modifier.wrapContentWidth(align = Alignment.Start),
-        verticalAlignment = Alignment.Top,
-    ) {
-        MarkdownLinkLogo(
-            request = request,
-            modifier = Modifier.size(MARKDOWN_LINK_LOGO_SIZE_DP.dp),
-        )
-        Spacer(modifier = Modifier.size(MARKDOWN_LINK_LOGO_GAP_DP.dp))
-        Box {
-            CompositionLocalProvider(
-                LocalMarkdownAnnotator provides logoFreeAnnotator,
-            ) {
-                MarkdownParagraph(
-                    annotatorSettings = markdownAnnotatorSettingsWithRegularStrongWeight(),
-                    content = content,
-                    node = node,
-                    style = style,
-                )
-            }
-        }
-    }
 }
 
 internal fun markdownLinkLogoInlineContent(

@@ -116,7 +116,9 @@ sealed class SelectedMediaItem : IMediaItem {
         override val id: String,
         val displayName: String,
         override val mimeType: String,
-        val filePath: String? = null
+        val filePath: String? = null,
+        /** 本机已交付副本的位置，仅用于文件管理器定位；不从模型文本解析本地路径。 */
+        val savedDownloadPath: String? = null,
     ) : SelectedMediaItem()
 
     @Serializable

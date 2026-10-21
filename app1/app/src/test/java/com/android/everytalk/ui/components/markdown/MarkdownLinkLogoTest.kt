@@ -9,14 +9,43 @@ import com.mikepenz.markdown.annotator.DefaultAnnotatorSettings
 import com.mikepenz.markdown.annotator.buildMarkdownAnnotatedString
 import com.mikepenz.markdown.model.State
 import com.mikepenz.markdown.model.parseMarkdown
-import org.intellij.markdown.MarkdownElementTypes
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MarkdownLinkLogoTest {
+
+    @Test
+    fun `中文紧邻的多个网址都保留链接样式和独立图标`() {
+        val urls = listOf(
+            "https://github.com/CYBERVERSE-Research/skyline-speeder",
+            "https://github.com/Kylin010/tcpfit",
+            "http://example.com/path",
+        )
+        val content = "${urls[0]} 帮我看看这个项目和${urls[1]} 谁更牛逼，另见${urls[2]}"
+        val index = markdownLinkLogoIndex(content)
+        val rendered = content.buildMarkdownAnnotatedString(
+            style = TextStyle.Default,
+            flavour = EveryTalkMarkdownFlavourDescriptor,
+            annotatorSettings = DefaultAnnotatorSettings(
+                linkTextSpanStyle = TextLinkStyles(style = SpanStyle()),
+                codeSpanStyle = SpanStyle(),
+                annotator = createPreparedMessageMarkdownAnnotator(
+                    PreparedMessage(content, emptyMap(), false, 1L),
+                    linkLogoHosts = index.requests.map { it.host }.toSet(),
+                ),
+            ).withRegularMarkdownStrongWeight(),
+        )
+
+        assertEquals(listOf("github.com", "example.com"), index.requests.map { it.host })
+        assertEquals(3, rendered.getStringAnnotations("androidx.compose.foundation.text.inlineContent", 0, rendered.length).size)
+        assertEquals(3, rendered.text.count { it == '↗' })
+        assertEquals(urls, rendered.getLinkAnnotations(0, rendered.length)
+            .map { (it.item as androidx.compose.ui.text.LinkAnnotation.Url).url }.distinct())
+        assertTrue(rendered.text.contains("帮我看看这个项目和"))
+    }
+
 
     @Test
     fun `静态分块渲染复用消息级链接索引`() {
@@ -108,47 +137,13 @@ class MarkdownLinkLogoTest {
             ),
         )
 
-        assertTrue(rendered.text.startsWith("example.com"))
-        assertEquals(2, rendered.text.windowed("example.com".length).count { it == "example.com" })
+        assertTrue(rendered.text.startsWith("\uFFFC\u2060"))
+        assertEquals(1, rendered.text.windowed("example.com".length).count { it == "example.com" })
+        assertEquals(1, rendered.getStringAnnotations("androidx.compose.foundation.text.inlineContent", 0, rendered.length).size)
     }
 
     @Test
-    fun `单独自动链接段落使用外置 Logo 布局`() {
-        val content = "https://x.com/i/status/2080141498658762797"
-        val state = parseMarkdown(content, lookupLinks = true) as State.Success
-        val paragraph = state.node.children.single { it.type == MarkdownElementTypes.PARAGRAPH }
-        val index = markdownLinkLogoIndex(content)
-
-        assertEquals(
-            "x.com",
-            markdownSingleAutolinkLogoRequest(
-                content = content,
-                node = paragraph,
-                definitions = index.definitions,
-                requests = index.requests,
-            )?.host,
-        )
-    }
-
-    @Test
-    fun `带前后文字的自动链接继续使用原行内布局`() {
-        val content = "来源：https://x.com/i/status/2080141498658762797"
-        val state = parseMarkdown(content, lookupLinks = true) as State.Success
-        val paragraph = state.node.children.single { it.type == MarkdownElementTypes.PARAGRAPH }
-        val index = markdownLinkLogoIndex(content)
-
-        assertNull(
-            markdownSingleAutolinkLogoRequest(
-                content = content,
-                node = paragraph,
-                definitions = index.definitions,
-                requests = index.requests,
-            ),
-        )
-    }
-
-    @Test
-    fun `外置 Logo 布局不修改链接文本`() {
+    fun `未启用图标的渲染不修改链接文本`() {
         val content = "https://x.com/i/status/2080141498658762797"
         val rendered = content.buildMarkdownAnnotatedString(
             style = TextStyle.Default,

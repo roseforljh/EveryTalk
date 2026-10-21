@@ -5,6 +5,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -47,7 +48,9 @@ class ContextCompressionStatusComposeTest {
         composeRule.onNodeWithTag("reasoning-inline-status").performClick()
         composeRule.mainClock.advanceTimeBy(250L)
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("reasoning-chain-summary-0").performClick()
+        if (composeRule.onAllNodesWithTag("reasoning-sheet-surface").fetchSemanticsNodes().isEmpty()) {
+            composeRule.onNodeWithTag("reasoning-chain-summary-0").performClick()
+        }
     }
 
     @Test

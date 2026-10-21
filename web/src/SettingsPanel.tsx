@@ -5,6 +5,7 @@ import { Plus, X, Check, ChevronRight } from 'lucide-react'
 import { isObject } from './sync-core'
 import { modelProtocol } from './model'
 import type { JsonObject, StoredRecord } from './types'
+import type { useFileDownloads } from './use-file-downloads'
 
 export const settingNames: Record<string, string> = {
   api_configs: '模型配置', selected_models: '默认模型', web_search_configs: '联网搜索', voice_configs: '语音配置',
@@ -16,11 +17,13 @@ interface Props {
   saveSetting: (kind: string, key: string, value: JsonObject, existing?: StoredRecord, deleted?: boolean) => Promise<void>
   saveMemory: (content: string, existing?: StoredRecord, deleted?: boolean) => Promise<void>
   error: string; reportError: (message: string) => void
+  downloads: ReturnType<typeof useFileDownloads>
+  initialTab: 'models' | 'files'
 }
 
 /** 模型使用常规表单，其余安卓配置保留完整 JSON 字段；未知字段不会被表单覆盖丢失。 */
-export function SettingsPanel({ records, onClose, saveSetting, saveMemory, error, reportError }: Props) {
-  const [tab, setTab] = useState<'models' | 'search' | 'memory' | 'advanced'>('models')
+export function SettingsPanel({ records, onClose, saveSetting, saveMemory, error, reportError, downloads, initialTab }: Props) {
+  const [tab, setTab] = useState<'models' | 'search' | 'memory' | 'advanced' | 'files'>(initialTab)
   const [editing, setEditing] = useState<StoredRecord | null | undefined>(undefined)
   const [kind, setKind] = useState('web_search_configs')
   const [entryKey, setEntryKey] = useState('default')
@@ -62,11 +65,27 @@ export function SettingsPanel({ records, onClose, saveSetting, saveMemory, error
   return <div className="et-modal-backdrop" onClick={event => { if (event.target === event.currentTarget && !busy) onClose() }}>
     <section role="dialog" aria-modal="true" aria-labelledby="settings-title" className="et-settings" onKeyDown={event => { if (event.key === 'Escape' && !busy) onClose() }}>
       <header><div><p className="et-eyebrow">工作区</p><h2 id="settings-title">设置</h2></div><button aria-label="关闭设置" disabled={busy} onClick={onClose}><X size={19} /></button></header>
-      <nav className="et-tabs">{([['models', '模型'], ['search', '联网搜索'], ['memory', '记忆'], ['advanced', '同步配置']] as const).map(([id, label]) => <button key={id} className={tab === id ? 'selected' : ''} onClick={() => { setTab(id); setEditing(undefined) }}>{label}</button>)}</nav>
+      <nav className="et-tabs">{([['models', '模型'], ['search', '联网搜索'], ['memory', '记忆'], ['advanced', '同步配置'], ['files', '文件保存']] as const).map(([id, label]) => <button key={id} className={tab === id ? 'selected' : ''} onClick={() => { setTab(id); setEditing(undefined) }}>{label}</button>)}</nav>
       <div className="et-settings-body">
         {error && <p role="alert" className="et-notice et-error">{error}</p>}
         {saved && <p role="status" className="et-muted et-inline"><Check size={14} />已保存，联网后自动同步至安卓端</p>}
-        {editing === undefined && <>
+        {tab === 'files' && <>
+          <h3>AI 文件自动保存</h3>
+          <p className="et-muted">安卓端固定保存到“下载/App/AppTalk”。网页端选择一次目录后，会自动保存此后生成并同步收到的 AI 附件；历史附件仍可点击保存。</p>
+          <p className="et-muted">目录仅对此浏览器和当前账号生效。需要保持网页打开；重新打开后会补收，权限失效时请恢复授权。同名文件会编号保留。</p>
+          <p>当前目录：{downloads.preferences?.directory.name || '未选择'}</p>
+          {!downloads.supported && <p role="status" className="et-muted">当前浏览器不支持指定目录，请使用桌面版 Chrome 或 Edge。你仍可点击聊天附件，保存到浏览器下载位置。</p>}
+          <div className="et-inline">
+            <button className="et-outline" disabled={!downloads.supported} onClick={() => void downloads.choose()}>{downloads.preferences ? '更换目录' : '选择保存目录'}</button>
+            {downloads.preferences && downloads.supported && <>
+              <button className="et-outline" onClick={() => void downloads.authorize()}>恢复授权</button>
+              <button className="et-outline" aria-pressed={downloads.preferences.enabled} onClick={() => void downloads.toggle()}>{downloads.preferences.enabled ? '暂停自动保存' : '开启自动保存'}</button>
+            </>}
+          </div>
+          {downloads.status && <p role="status" className="et-muted">{downloads.status}</p>}
+          {downloads.error && <p role="alert" className="et-notice et-error">{downloads.error}</p>}
+        </>}
+        {editing === undefined && tab !== 'files' && <>
           <div className="et-settings-intro"><p className="et-muted">{tab === 'models' ? '使用安卓端同步的模型，也可以在这里添加。' : tab === 'search' ? '配置后可在当前对话开启联网搜索，密钥只用于当前搜索请求。' : tab === 'memory' ? '记忆随账号同步；启用的记忆可用于聊天上下文。' : '保留全部协议字段。MCP、技能和电脑配置会同步，浏览器暂不执行。'}</p><button className="et-outline" onClick={() => edit(null)}><Plus size={14} />新增</button></div>
           {tab === 'models' && models.map(record => { const value = isObject(record.payload.value) ? record.payload.value : {}; return <button className="et-setting-row" key={record.id} onClick={() => edit(record)}><div><strong>{String(value.name || value.model || '未命名模型')}</strong><small>{String(value.model || '')} · {String(value.address || '')}</small></div><ChevronRight size={16} /></button> })}
           {tab === 'search' && searchConfigs.map(record => { const value = isObject(record.payload.value) ? record.payload.value : {}; return <button className="et-setting-row" key={record.id} onClick={() => edit(record)}><div><strong>{String(value.providerId || record.payload.key || '搜索服务')}</strong><small>API Key 已加密保存</small></div><ChevronRight size={16} /></button> })}

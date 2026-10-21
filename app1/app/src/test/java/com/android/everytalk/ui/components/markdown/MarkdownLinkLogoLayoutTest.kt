@@ -9,19 +9,21 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
-import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.android.everytalk.R
 import com.android.everytalk.ui.components.streaming.PreparedMessage
 import com.mikepenz.markdown.compose.Markdown
-import com.mikepenz.markdown.compose.components.markdownComponents
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
 import com.mikepenz.markdown.model.markdownPadding
+import com.mikepenz.markdown.model.markdownInlineContent
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertEquals
 import androidx.compose.runtime.SideEffect
@@ -34,6 +36,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [34], application = Application::class)
@@ -199,62 +202,39 @@ class MarkdownLinkLogoLayoutTest {
     }
 
     @Test
-    fun `单独自动链接的 Logo 与链接处于同一行`() {
-        val content = "https://x.com"
-        val request = MarkdownLinkLogoRequest(
-            host = "x.com",
-        )
-        val logoDescription = ApplicationProvider.getApplicationContext<Application>()
-            .getString(R.string.link_logo, request.host)
-        val logoFreeAnnotator = createPreparedMessageMarkdownAnnotator(
-            preparedMessage = PreparedMessage(
-                markdown = content,
-                formulas = emptyMap(),
-                hasPendingFormula = false,
-                contentVersion = 1L,
-            ),
-        )
-        val components = markdownComponents(
-            paragraph = { model ->
-                MarkdownSingleAutolinkLogoParagraph(
-                    content = model.content,
-                    node = model.node,
-                    style = model.typography.paragraph,
-                    request = request,
-                    logoFreeAnnotator = logoFreeAnnotator,
-                    modifier = Modifier.testTag("single-autolink-row"),
-                )
-            },
-        )
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    fun `长网址续行不缩进且中文后的图标始终紧贴链接开头`() {
+        val firstUrl = "https://github.com/CYBERVERSE-Research/skyline-speeder"
+        val secondUrl = "https://github.com/Kylin010/tcpfit"
+        val content = mutableStateOf(firstUrl)
+        val width = mutableStateOf(220.dp)
+        val fontSize = mutableStateOf(16.sp)
 
         composeRule.setContent {
             MaterialTheme {
-                val bodyStyle = MaterialTheme.typography.bodyLarge
-                val typography = markdownTypography(
-                    h1 = bodyStyle,
-                    h2 = bodyStyle,
-                    h3 = bodyStyle,
-                    h4 = bodyStyle,
-                    h5 = bodyStyle,
-                    h6 = bodyStyle,
-                    text = bodyStyle,
-                    quote = bodyStyle,
-                    paragraph = bodyStyle,
-                    ordered = bodyStyle,
-                    bullet = bodyStyle,
-                    list = bodyStyle,
-                    table = bodyStyle,
-                    inlineCode = bodyStyle,
-                    textLink = androidx.compose.ui.text.TextLinkStyles(),
-                )
+                val bodyStyle = MaterialTheme.typography.bodyLarge.copy(fontSize = fontSize.value)
+                val index = markdownLinkLogoIndex(content.value)
                 Markdown(
-                    content,
-                    colors = markdownColor(
-                        inlineCodeBackground = androidx.compose.ui.graphics.Color.Transparent,
-                        tableBackground = androidx.compose.ui.graphics.Color.Transparent,
+                    content.value,
+                    colors = markdownColor(),
+                    typography = markdownTypography(
+                        h1 = bodyStyle,
+                        h2 = bodyStyle,
+                        h3 = bodyStyle,
+                        h4 = bodyStyle,
+                        h5 = bodyStyle,
+                        h6 = bodyStyle,
+                        text = bodyStyle,
+                        quote = bodyStyle,
+                        paragraph = bodyStyle,
+                        ordered = bodyStyle,
+                        bullet = bodyStyle,
+                        list = bodyStyle,
+                        table = bodyStyle,
+                        inlineCode = bodyStyle,
+                        textLink = androidx.compose.ui.text.TextLinkStyles(),
                     ),
-                    typography = typography,
-                    modifier = Modifier.width(320.dp),
+                    modifier = Modifier.width(width.value),
                     padding = markdownPadding(
                         block = 0.dp,
                         list = 0.dp,
@@ -262,31 +242,52 @@ class MarkdownLinkLogoLayoutTest {
                         listItemBottom = 0.dp,
                         listIndent = 0.dp,
                     ),
-                    annotator = logoFreeAnnotator,
-                    components = components,
+                    annotator = createPreparedMessageMarkdownAnnotator(
+                        PreparedMessage(content.value, emptyMap(), false, 1L),
+                        linkLogoHosts = index.requests.map { it.host }.toSet(),
+                    ),
+                    inlineContent = markdownInlineContent(markdownLinkLogoInlineContent(index.requests)),
+                    flavour = EveryTalkMarkdownFlavourDescriptor,
                     lookupLinks = true,
                     immediate = true,
                 )
             }
         }
-        composeRule.waitForIdle()
 
-        val logoNode = composeRule
-            .onNodeWithContentDescription(logoDescription)
-            .fetchSemanticsNode("")
-        val linkNode = composeRule
-            .onNodeWithText(content, substring = true)
-            .fetchSemanticsNode("")
-        val rowBounds = composeRule
-            .onNodeWithTag("single-autolink-row")
-            .fetchSemanticsNode("")
-            .boundsInRoot
-        val logoBounds = logoNode.boundsInRoot
-        val linkBounds = linkNode.boundsInRoot
-
-        assertTrue(rowBounds.width < 320f)
-        assertTrue(logoBounds.top < linkBounds.bottom)
-        assertTrue(kotlin.math.abs(logoBounds.top - linkBounds.top) < 32f)
-        assertTrue(logoBounds.left < linkBounds.left)
+        // 用实际文字布局覆盖单独网址、中文混排及同域名的多个图标。
+        for (text in listOf(firstUrl, "帮我看看这个项目和$secondUrl", "$firstUrl 帮我看看这个项目和$secondUrl 谁更牛逼")) {
+            for (availableWidth in listOf(220.dp, 280.dp, 320.dp)) {
+                for (size in listOf(16.sp, 24.sp)) {
+                    composeRule.runOnIdle {
+                        content.value = text
+                        width.value = availableWidth
+                        fontSize.value = size
+                    }
+                    val results = mutableListOf<TextLayoutResult>()
+                    composeRule.onNodeWithText("https://github.com", substring = true)
+                        .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(results) }
+                    val layout = results.single()
+                    val rendered = layout.layoutInput.text
+                    val icons = rendered.getStringAnnotations(
+                        "androidx.compose.foundation.text.inlineContent", 0, rendered.length,
+                    )
+                    val case = "$text / $availableWidth / $size"
+                    assertEquals(case, if (text.contains(firstUrl) && text.contains(secondUrl)) 2 else 1, icons.size)
+                    assertTrue(case, layout.lineCount > 1)
+                    if (text == firstUrl) {
+                        // 后续行从段落左边开始，不能继续给首行的小图标预留一列。
+                        assertEquals(case, 0f, layout.getLineLeft(1), 1f)
+                    }
+                    icons.forEachIndexed { index, icon ->
+                        val rect = requireNotNull(layout.placeholderRects[index])
+                        val urlStart = icon.end + 1 // 图标后有一个零宽防断行符。
+                        assertTrue(case, rendered.text.startsWith("https://", urlStart))
+                        val line = layout.getLineForOffset(urlStart)
+                        assertTrue("图标与网址必须在同一行：$case", rect.center.y in layout.getLineTop(line)..layout.getLineBottom(line))
+                        assertEquals("图标必须紧贴网址：$case", rect.right, layout.getBoundingBox(urlStart).left, 1f)
+                    }
+                }
+            }
+        }
     }
 }

@@ -4,6 +4,8 @@
     tools:ignore="ExtraText"> <!-- 这个 tools:ignore="ExtraText" 通常与IDE lint关于额外文本的警告有关 -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 仅 Android 8/9 写入公共下载目录需要此权限；新系统使用 MediaStore。 -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.CAMERA" />

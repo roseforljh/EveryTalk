@@ -149,6 +149,9 @@ import org.intellij.markdown.ast.findChildOfType
 import org.intellij.markdown.flavours.gfm.GFMElementTypes
 import org.intellij.markdown.flavours.gfm.GFMFlavourDescriptor
 import org.intellij.markdown.flavours.gfm.GFMTokenTypes
+import org.intellij.markdown.flavours.gfm.lexer._GFMLexer
+import org.intellij.markdown.lexer.GeneratedLexer
+import org.intellij.markdown.lexer.MarkdownLexer
 import org.intellij.markdown.flavours.gfm.StrikeThroughParser
 import org.intellij.markdown.parser.sequentialparsers.EmphasisLikeParser
 import org.intellij.markdown.parser.sequentialparsers.SequentialParser
@@ -160,6 +163,35 @@ import org.koin.compose.koinInject
 /** EveryTalk 已接管公式，并仅允许双波浪号触发删除线。 */
 @Suppress("DEPRECATION")
 internal object EveryTalkMarkdownFlavourDescriptor : GFMFlavourDescriptor() {
+    override fun createInlinesLexer(): MarkdownLexer {
+        val delegate = _GFMLexer()
+        return MarkdownLexer(object : GeneratedLexer by delegate {
+            private var source: CharSequence = ""
+            private var sourceEnd: Int = 0
+
+            override fun reset(buffer: CharSequence, start: Int, end: Int, initialState: Int) {
+                source = buffer
+                sourceEnd = end
+                delegate.reset(buffer, start, end, initialState)
+            }
+
+            override fun advance(): IElementType? {
+                val type = delegate.advance()
+                if (type == MarkdownTokenTypes.TEXT) {
+                    // GFM 会把“项目和https”吞成普通文字，导致后面的冒号和路径无法组成链接。
+                    // 只切开非 ASCII 文字后的协议头，保留原文及节点偏移；URL 的实际范围、
+                    // 标点和代码语境继续由原解析器处理，不再另写一套链接识别与渲染。
+                    val tokenText = source.subSequence(delegate.tokenStart, minOf(delegate.tokenEnd + 3, sourceEnd))
+                    val linkStart = adjacentMarkdownUrlPattern.find(tokenText)?.range?.first
+                    if (linkStart != null && delegate.tokenStart + linkStart < delegate.tokenEnd) {
+                        delegate.yypushback(delegate.tokenEnd - delegate.tokenStart - linkStart)
+                    }
+                }
+                return type
+            }
+        })
+    }
+
     private val parsers: List<SequentialParser> = buildList {
         super.sequentialParserManager.getParserSequence().forEach { parser ->
             when (parser) {
@@ -181,6 +213,8 @@ internal object EveryTalkMarkdownFlavourDescriptor : GFMFlavourDescriptor() {
         get() = parserManager
 }
 
+private val adjacentMarkdownUrlPattern = Regex("(?<=[^\\x00-\\x7F])https?://", RegexOption.IGNORE_CASE)
+
 internal val contentAddressPattern = Regex("^[0-9a-f]{64}$")
 internal val footnoteDefinitionUriPattern =
     Regex("""^everytalk-footnote-definition:(\d+):(\d+)$""")
@@ -200,6 +234,4 @@ internal const val MARKDOWN_IMAGE_ERROR_HEIGHT_DP = 32f
 internal const val MARKDOWN_TABLE_EDGE_SHADOW_WIDTH_DP = 20f
 internal const val MARKDOWN_LINK_LOGO_SCHEME = "everytalk-link-logo:"
 internal const val MARKDOWN_LINK_LOGO_SIZE_EM = 0.9f
-internal const val MARKDOWN_LINK_LOGO_SIZE_DP = 16f
-internal const val MARKDOWN_LINK_LOGO_GAP_DP = 4f
 internal val MARKDOWN_IMAGE_ERROR_INTRINSIC_SIZE = Size(-1f, -1f)

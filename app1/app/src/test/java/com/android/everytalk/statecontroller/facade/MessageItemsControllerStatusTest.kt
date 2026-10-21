@@ -1321,7 +1321,7 @@ class MessageItemsControllerStatusTest {
     }
 
     @Test
-    fun `流式正文继续输出时执行区保持展开但过程已非活动状态`() {
+    fun `流式正文开始输出时执行区结束强制展开`() {
         val controller = MessageItemsControllerTestAccess.newController()
         val messageId = "ordered-output-streaming"
         controller.stateHolder.messages.add(
@@ -1348,8 +1348,8 @@ class MessageItemsControllerStatusTest {
         val processItems = controller.chatListItemsForTest()
             .filterIsInstance<ChatListItem.AiMessageProcessSegment>()
 
-        // 回复仍在流式输出时保持合并执行区展开，过程活动状态单独判断。
-        assertEquals(listOf(true), processItems.map { it.replyIsStreaming })
+        // 正文仍在流式输出，前面的过程也应立即收起。
+        assertEquals(listOf(false), processItems.map { it.replyIsStreaming })
         assertEquals(listOf(false), processItems.map { it.processIsActive })
     }
 

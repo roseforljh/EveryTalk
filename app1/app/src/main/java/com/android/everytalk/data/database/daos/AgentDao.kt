@@ -655,6 +655,10 @@ interface AgentDao {
     @Query("SELECT * FROM agent_runs WHERE sessionId = :sessionId AND (terminalReason IS NULL OR terminalReason != 'MANUAL_COMPACTION') ORDER BY createdAt DESC LIMIT 1")
     fun observeLatestTaskRun(sessionId: String): Flow<AgentRunEntity?>
 
+    /** 候选任务按新到旧读取，普通后续聊天不能遮掉之前可查看的多服务器任务。 */
+    @Query("SELECT * FROM agent_runs WHERE sessionId = :sessionId AND (terminalReason IS NULL OR terminalReason != 'MANUAL_COMPACTION') ORDER BY createdAt DESC, id DESC")
+    fun observeTaskRuns(sessionId: String): Flow<List<AgentRunEntity>>
+
     @Query(
         """
         SELECT * FROM agent_runs
@@ -1116,10 +1120,12 @@ interface AgentDao {
         run: AgentRunEntity,
         snapshotChunks: List<AgentRunSnapshotChunkEntity>,
         reason: String,
+        taskTargetsEntry: AgentEntryEntity? = null,
     ) {
         cancelSupersededApprovalRunsForSession(run.sessionId, reason, run.createdAt)
         deleteTerminalRunSnapshotChunks()
         upsertRun(run)
+        if (taskTargetsEntry != null) upsertEntry(taskTargetsEntry)
         deleteRunSnapshotChunks(run.id)
         if (snapshotChunks.isNotEmpty()) upsertRunSnapshotChunks(snapshotChunks)
     }

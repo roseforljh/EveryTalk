@@ -181,19 +181,7 @@ fun OptimizedSelectedItemPreview(
     val (icon, text) = remember(mediaItem, audioLabel) {
         when (mediaItem) {
             is SelectedMediaItem.GenericFile -> {
-                val iconRes = when (mediaItem.mimeType) {
-                    "application/pdf" -> R.drawable.ic_gpt_file_pdf
-                    "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document" -> R.drawable.ic_gpt_file_document
-                    "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" -> R.drawable.ic_gpt_file_spreedsheet
-                    "application/vnd.ms-powerpoint", "application/vnd.openxmlformats-officedocument.presentationml.presentation" -> R.drawable.ic_gpt_file_powerpoint
-                    "application/zip", "application/x-rar-compressed" -> R.drawable.ic_gpt_file_zip
-                    else -> when {
-                        mediaItem.mimeType.startsWith("video/") -> R.drawable.ic_gpt_file_video
-                        mediaItem.mimeType.startsWith("audio/") -> R.drawable.ic_gpt_file_audio
-                        mediaItem.mimeType.startsWith("image/") -> R.drawable.ic_gpt_file_image
-                        else -> R.drawable.ic_paperclip
-                    }
-                }
+                val iconRes = com.android.everytalk.ui.components.attachmentFileIcon(mediaItem.mimeType, mediaItem.displayName)
                 iconRes to mediaItem.displayName
             }
             is SelectedMediaItem.Audio -> R.drawable.ic_gpt_file_audio to audioLabel

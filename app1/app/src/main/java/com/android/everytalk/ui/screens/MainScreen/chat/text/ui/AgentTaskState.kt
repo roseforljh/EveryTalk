@@ -4,7 +4,7 @@ import com.android.everytalk.data.DataClass.ExecutionStep
 import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.agent.AgentRunStatus
-import com.android.everytalk.data.computer.ComputerTargetBinding
+import com.android.everytalk.data.agent.AgentTaskTarget
 import com.android.everytalk.data.computer.PendingComputerToolApproval
 
 internal enum class AgentTaskPhase {
@@ -12,8 +12,8 @@ internal enum class AgentTaskPhase {
 }
 
 internal data class AgentTaskItem(
-    /** null 是主任务；服务器直接使用稳定 ID，切换标签不会改变执行目标。 */
-    val computerId: String?,
+    /** 抽屉只展示服务器子任务，直接使用稳定 ID，切换标签不会改变执行目标。 */
+    val computerId: String,
     val name: String,
     val phase: AgentTaskPhase,
     val trace: List<ExecutionTraceEvent>,
@@ -26,24 +26,17 @@ internal data class AgentTaskItem(
 internal fun buildAgentTaskItems(
     status: String,
     message: Message?,
-    targets: List<ComputerTargetBinding>,
+    targets: List<AgentTaskTarget>,
     approvals: List<PendingComputerToolApproval>,
     waitingComputerIds: Set<String> = emptySet(),
+    fallbackTrace: List<ExecutionTraceEvent> = emptyList(),
 ): List<AgentTaskItem> {
     val terminal = status in setOf(AgentRunStatus.COMPLETED.name, AgentRunStatus.FAILED.name,
         AgentRunStatus.CANCELLED.name, AgentRunStatus.INTERRUPTED.name)
     val trace = message?.executionTrace.orEmpty().ifEmpty {
         message?.executionSteps.orEmpty().map { ExecutionTraceEvent.Tool(it) }
-    }
-    val mainPhase = when (status) {
-        AgentRunStatus.COMPLETED.name -> AgentTaskPhase.COMPLETED
-        AgentRunStatus.FAILED.name -> AgentTaskPhase.FAILED
-        AgentRunStatus.CANCELLED.name, AgentRunStatus.INTERRUPTED.name -> AgentTaskPhase.STOPPED
-        AgentRunStatus.WAITING_APPROVAL.name -> AgentTaskPhase.APPROVAL
-        AgentRunStatus.WAITING_REMOTE_EXECUTION.name, AgentRunStatus.EXECUTING_TOOL.name -> AgentTaskPhase.RUNNING
-        else -> AgentTaskPhase.PLANNING
-    }
-    return listOf(AgentTaskItem(null, "", mainPhase, trace)) + targets.map { target ->
+    }.ifEmpty { fallbackTrace }
+    return targets.map { target ->
         val serverTrace = trace.filterIsInstance<ExecutionTraceEvent.Tool>().filter { event ->
             event.step.computerId == target.computerId || targets.size == 1 && event.step.computerId == null
         }

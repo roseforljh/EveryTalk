@@ -130,8 +130,8 @@ fun ChatScreen(
     val taskRun = observedTaskRun?.takeIf { it.sessionId == conversationId }
     val taskApprovals by viewModel.pendingComputerAgentApprovals.collectAsState()
     val taskInterventions by viewModel.pendingInterventions.collectAsState()
-    // 快照只在 Run 切换时读取，流式文本更新不会反复解码整份请求。
-    val taskTargetsSnapshot by produceState<Pair<String, List<com.android.everytalk.data.computer.ComputerTargetBinding>>?>(null, taskRun?.id) {
+    // 展示记录只在 Run 切换时读取；已结束任务不再依赖完整请求快照。
+    val taskTargetsSnapshot by produceState<Pair<String, List<com.android.everytalk.data.agent.AgentTaskTarget>>?>(null, taskRun?.id) {
         value = null
         val run = taskRun ?: return@produceState
         value = withContext(Dispatchers.IO) {
@@ -139,7 +139,13 @@ fun ChatScreen(
                 com.android.everytalk.data.database.AppDatabase.getDatabase(context).agentDao(),
             )
             try {
-                run.id to store.decodeRequestSnapshot(run)?.computerRequestContext?.selectedTargets.orEmpty()
+                val database = com.android.everytalk.data.database.AppDatabase.getDatabase(context)
+                run.id to store.taskTargets(run).map { target ->
+                    // 旧任务只有服务器 ID 时用本机记录补名称，不能据此更改历史执行目标。
+                    if (target.displayName != target.computerId) target else target.copy(
+                        displayName = database.computerDao().getComputer(target.computerId)?.displayName ?: target.displayName,
+                    )
+                }
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -150,11 +156,34 @@ fun ChatScreen(
         }
     }
     val taskTargets = taskTargetsSnapshot?.takeIf { it.first == taskRun?.id }?.second.orEmpty()
+    val taskMessage = messages.firstOrNull { it.id == taskRun?.visibleAssistantMessageId }
+    val needsTaskTrace = taskMessage?.executionTrace.isNullOrEmpty() && taskMessage?.executionSteps.isNullOrEmpty()
+    // 历史消息可能尚未分页加载，抽屉仍直接从任务账本恢复过程；实时记录始终优先。
+    val storedTaskTrace by produceState<Pair<String, List<com.android.everytalk.data.DataClass.ExecutionTraceEvent>>?>(
+        null, taskRun?.id, taskRun?.status, needsTaskTrace,
+    ) {
+        value = null
+        val run = taskRun?.takeIf { needsTaskTrace } ?: return@produceState
+        value = withContext(Dispatchers.IO) {
+            try {
+                val store = com.android.everytalk.data.agent.AgentRunStore(
+                    com.android.everytalk.data.database.AppDatabase.getDatabase(context).agentDao(),
+                )
+                run.id to store.executionTrace(run.id)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                android.util.Log.w("AgentTasks", "无法读取任务执行记录", error)
+                run.id to emptyList()
+            }
+        }
+    }
     val currentTaskApprovals = taskApprovals.filter { it.runId == taskRun?.id }
     val taskItems = if (taskRun == null || taskTargets.size < 2) emptyList() else buildAgentTaskItems(
         status = taskRun.status,
-        message = messages.firstOrNull { it.id == taskRun.visibleAssistantMessageId },
+        message = taskMessage,
         targets = taskTargets,
+        fallbackTrace = storedTaskTrace?.takeIf { it.first == taskRun.id }?.second.orEmpty(),
         approvals = currentTaskApprovals,
         waitingComputerIds = taskInterventions.filter {
             it.runId == taskRun.id && it.state in setOf(
@@ -751,7 +780,10 @@ fun ChatScreen(
                 viewModel = viewModel,
                 onShowVoiceInput = { navController.navigate(Screen.VOICE_INPUT_SCREEN) },
                 onHeightChange = { height -> inputAreaHeightPx = height },
-                hostCommandConfirmationRequest = currentHostCommand.takeIf { taskTargets.size < 2 },
+                // 历史多服务器面板可以常驻，但只能接管同一 Run 的审批，不能遮住新任务的确认卡。
+                hostCommandConfirmationRequest = currentHostCommand.takeUnless { request ->
+                    taskTargets.size > 1 && request?.context?.runId == taskRun?.id
+                },
                 agentEnableApprovalRequest = pendingAgentEnableApproval,
                 mcpEnableApprovalRequest = pendingMcpEnableApproval,
                 skillSecretApprovalRequest = pendingSkillSecretApproval,

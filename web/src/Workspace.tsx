@@ -8,6 +8,9 @@ import { ThemeToggle } from '@/components/ui/ThemeProvider'
 import { SettingsPanel } from './SettingsPanel'
 import { authClient, authenticatedFetch } from './auth'
 import { useWorkspaceSync } from './use-workspace-sync'
+import { useFileDownloads } from './use-file-downloads'
+import { MessageFileLink, MessageFileText, messageFileParts } from './MessageFileLink'
+import { attachmentDownloadKey, safeDownloadName } from './file-downloads'
 import { generate, generateImage, imageRequest, modelRequest, type ModelAttachment, type ModelResult } from './model'
 import { downloadResource, readHistory, uploadResource } from './resources'
 import { isObject } from './sync-core'
@@ -88,7 +91,7 @@ export function Workspace({ session, onSignOut }: { session: AuthSession; onSign
   const [files, setFiles] = useState<File[]>([])
   const [query, setQuery] = useState('')
   const [mobile, setMobile] = useState(false)
-  const [settings, setSettings] = useState(false)
+  const [settings, setSettings] = useState<'models' | 'files'>()
   const [menu, setMenu] = useState(false)
   const [rename, setRename] = useState(false)
   const [title, setTitle] = useState('')
@@ -104,6 +107,7 @@ export function Workspace({ session, onSignOut }: { session: AuthSession; onSign
   const voiceBase = useRef('')
   const [history, setHistory] = useState<{ id: string; value: JsonObject }>()
   const [copied, setCopied] = useState('')
+  const [fileSharing, setFileSharing] = useState(false)
   const messagesEnd = useRef<HTMLDivElement>(null)
   const input = useRef<HTMLTextAreaElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
@@ -142,6 +146,7 @@ export function Workspace({ session, onSignOut }: { session: AuthSession; onSign
   const name = str(session.user.user_metadata?.everytalk_name, str(session.user.user_metadata?.full_name, session.user.email?.split('@')[0] ?? 'EveryTalk 用户'))
 
   useEffect(() => () => { controller.current?.abort(); recognition.current?.stop(); window.speechSynthesis?.cancel() }, [])
+  useEffect(() => { setFileSharing(typeof navigator.share === 'function' && typeof navigator.canShare === 'function') }, [])
   useEffect(() => { messagesEnd.current?.scrollIntoView({ block: 'end', behavior: 'instant' }) }, [messages.length, streaming?.text, activeId])
   useEffect(() => { setRename(false); setMenu(false); setHistory(undefined) }, [activeId])
 
@@ -159,6 +164,7 @@ export function Workspace({ session, onSignOut }: { session: AuthSession; onSign
     sessionRef.current = renewed
     return renewed
   }, [sessionRef])
+  const downloads = useFileDownloads(ready ? imageClient : undefined, records, session, refreshSession)
   const toggleVoiceInput = (): void => {
     if (listening) { recognition.current?.stop(); return }
     const current = getSpeechRecognition(window)
@@ -221,7 +227,7 @@ export function Workspace({ session, onSignOut }: { session: AuthSession; onSign
   const reply = async (chat: StoredRecord, context: StoredRecord[], filesForModel: File[] = []): Promise<void> => {
     const current = currentRuntime()
     const chosen = selectedModel
-    if (!chosen) { setSettings(true); throw new Error('消息已保存。请添加或同步模型后，点击「继续生成」') }
+    if (!chosen) { setSettings('models'); throw new Error('消息已保存。请添加或同步模型后，点击「继续生成」') }
     if (!navigator.onLine) throw new Error('消息已离线保存，联网后可继续生成回复')
     const state = await current.client.snapshot()
     await current.crypto.unlock(current.client, sessionRef.current, state.secretsEpoch ?? 0, refreshSession)
@@ -310,6 +316,11 @@ export function Workspace({ session, onSignOut }: { session: AuthSession; onSign
       if (current.alive) setHistory({ id: attachment.id, value })
       return
     }
+    if (downloads.preferences && downloads.supported) {
+      await downloads.authorize()
+      if (await downloads.save(attachment)) return
+      throw new Error('保存目录已变化，请重新点击附件')
+    }
     const bytes = await downloadResource(current.client, sessionRef.current, records, attachment, refreshSession)
     if (!current.alive) return
     // 使用下载链接，HTML/SVG 等主动内容不会在本站上下文执行。
@@ -320,6 +331,28 @@ export function Workspace({ session, onSignOut }: { session: AuthSession; onSign
   const exportLocal = () => {
     const url = URL.createObjectURL(new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), records }, null, 2)], { type: 'application/json' }))
     const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'everytalk-web-backup.json'; anchor.click(); window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
+  const shareFile = async (attachment: StoredRecord): Promise<void> => {
+    const current = currentRuntime()
+    const savedPath = downloads.savedPaths[attachmentDownloadKey(attachment)]
+    let file: File
+    if (savedPath && downloads.preferences) {
+      // 已保存的文件优先交给系统，不为打开本地文件再次请求服务器。
+      const directory = downloads.preferences.directory
+      if (await directory.requestPermission({ mode: 'readwrite' }) !== 'granted') throw new Error('请先恢复本地保存目录的访问权限')
+      const handle = await directory.getFileHandle(savedPath.substring(savedPath.lastIndexOf('/') + 1))
+      file = await handle.getFile()
+    } else {
+      const bytes = await downloadResource(current.client, sessionRef.current, records, attachment, refreshSession)
+      file = new File([bytes], safeDownloadName(attachment.payload.name), { type: str(attachment.payload.mime, 'application/octet-stream') })
+    }
+    if (!current.alive) return
+    if (!navigator.canShare?.({ files: [file] })) throw new Error('当前浏览器不能分享此类文件，请先保存后使用系统打开')
+    try { await navigator.share({ files: [file], title: file.name }) }
+    catch (value) {
+      if (value instanceof DOMException && value.name === 'AbortError') return
+      throw new Error('系统未允许此次文件分享，请保存后从本地打开')
+    }
   }
   const removeSession = async () => {
     if (!active) return
@@ -339,11 +372,12 @@ export function Workspace({ session, onSignOut }: { session: AuthSession; onSign
       {groups.length > 0 && <select className="et-group-filter" aria-label="筛选分组" value={groupFilter} onChange={e => setGroupFilter(e.target.value)}><option value="">全部对话</option>{groups.map(g => <option key={g}>{g}</option>)}</select>}
       <div className="et-sidebar-label">对话<span>{sessions.length}</span></div>
       <nav className="et-sessions">{filteredSessions.map(item => <button key={item.id} className={`et-session ${item.id === activeId ? 'active' : ''}`} onClick={() => { setSelected(item.id); setMobile(false) }}><MessageSquare size={14} /><span>{str(item.payload.title, '未命名对话') || '未命名对话'}</span>{pinned.has(item.id) && <Pin size={12} />}</button>)}{!filteredSessions.length && <p className="et-empty-list">{query ? '没有匹配的对话' : ready ? '创建对话，或等待安卓端同步' : '正在读取对话…'}</p>}</nav>
-      <div className="et-sidebar-bottom"><button className="et-settings-button" onClick={() => setSettings(true)}><Settings size={16} />模型与设置</button><div className="et-account"><span className="et-avatar">{name.slice(0, 1).toUpperCase()}</span><div><strong>{name}</strong><small>{session.user.email}</small></div><button aria-label="退出登录" title="退出当前浏览器" onClick={() => void onSignOut()}><LogOut size={15} /></button></div></div>
+      <div className="et-sidebar-bottom"><button className="et-settings-button" onClick={() => setSettings('models')}><Settings size={16} />模型与设置</button><div className="et-account"><span className="et-avatar">{name.slice(0, 1).toUpperCase()}</span><div><strong>{name}</strong><small>{session.user.email}</small></div><button aria-label="退出登录" title="退出当前浏览器" onClick={() => void onSignOut()}><LogOut size={15} /></button></div></div>
     </aside>
     <section className="et-chat">
       <header className="et-chat-header"><div className="et-header-title"><button className="et-mobile-only" aria-label="打开导航" onClick={() => setMobile(true)}><Menu size={19} /></button>{rename ? <form onSubmit={e => { e.preventDefault(); if (active) void run(async () => { await currentRuntime().client.saveLocal('sessions', active.id, { ...active.payload, title: title.trim() || '未命名对话', clientModifiedAt: updated(active) }); await changed(); setRename(false) }) }}><input autoFocus aria-label="会话标题" value={title} onChange={e => setTitle(e.target.value)} onKeyDown={e => { if (e.key === 'Escape') setRename(false) }} /><button aria-label="保存标题"><Check size={16} /></button></form> : <h1>{str(active?.payload.title, 'EveryTalk') || '未命名对话'}</h1>}</div><div className="et-header-actions"><button className="et-sync-status" onClick={() => void refresh()} title="立即同步"><RefreshCw size={13} className={sync.status === '同步中' ? 'et-spin' : ''} /><span>{sync.status}</span>{snapshot.pendingCount > 0 && <small>{snapshot.pendingCount}</small>}</button><ThemeToggle />{active && <div className="et-menu-wrap"><button aria-label="会话操作" onClick={() => setMenu(!menu)}><MoreHorizontal size={19} /></button>{menu && <div className="et-menu"><button onClick={() => { setTitle(str(active.payload.title)); setRename(true); setMenu(false) }}>重命名</button><button onClick={() => void run(async () => { await saveSetting('pinned_items', active.id, {}, setting('pinned_items', active.id), pinned.has(active.id)); setMenu(false) })}>{pinned.has(active.id) ? '取消置顶' : '置顶会话'}</button><form onSubmit={e => { e.preventDefault(); void run(async () => { if (!group.trim()) return; const encoded = btoa(unescape(encodeURIComponent(group.trim()))).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_'); await saveSetting('group_members', `${encoded}.${active.id}`, { groupName: group.trim(), conversationId: active.id }); setGroup(''); setMenu(false) }) }}><input aria-label="分组名称" placeholder="添加到分组" value={group} onChange={e => setGroup(e.target.value)} /><button>添加</button></form><button className="et-danger" disabled={busy} onClick={() => void run(removeSession)}><Trash2 size={13} />删除会话</button></div>}</div>}</div></header>
       {sync.error && <div className="et-banner" role="alert"><span>{sync.error}</span><button aria-label="关闭提示" onClick={() => setError('')}><X size={15} /></button></div>}
+      {downloads.error && <div className="et-banner" role="alert"><span>{downloads.error}</span><button onClick={() => setSettings('files')}>文件保存设置</button></div>}
       {snapshot.pausedEpoch !== undefined && <div className="et-banner"><span>云端数据已被清空，同步已暂停以防旧数据重新上传。本地数据仍保留，请先导出备份。</span><button onClick={exportLocal}>导出备份</button></div>}
       {snapshot.rejected > 0 && <div className="et-banner"><span>{snapshot.rejected} 条记录被服务端拒绝，原内容仍在本机。{snapshot.rejected > snapshot.retryableRejected ? `其中 ${snapshot.rejected - snapshot.retryableRejected} 条需重新编辑后才能上传。` : ''}</span>{snapshot.retryableRejected > 0 && <button onClick={() => void run(async () => { await currentRuntime().client.retryRejected(); await refresh() })}>重试</button>}</div>}
       <div className="et-conversation"><div className="et-messages">
@@ -351,15 +385,19 @@ export function Workspace({ session, onSignOut }: { session: AuthSession; onSign
         {messages.map(message => {
           const attachments = records.filter(r => r.entity === 'attachments' && !r.deleted && r.payload.messageId === message.id && (!r.payload.chunkCount || r.payload.chunkIndex === 0))
           const searchResults = readSearchResults(message.payload.webSearchResults)
-          return <article key={message.id} className={`et-message ${message.payload.sender === 'User' ? 'from-user' : 'from-assistant'}`}><div className="et-message-meta"><span>{message.payload.sender === 'User' ? '你' : str(message.payload.modelName, 'EveryTalk')}</span><time>{new Date(Number(message.payload.timestamp)).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</time></div>{Boolean(message.payload.reasoning) && <details className="et-reasoning"><summary>思考过程</summary><p>{str(message.payload.reasoning)}</p></details>}<div className="et-message-text">{str(message.payload.text)}</div>{searchResults.length > 0 && <div className="et-search-results"><strong>联网来源</strong>{searchResults.map(item => <a key={item.url} href={item.url} target="_blank" rel="noreferrer">{item.title}</a>)}</div>}{attachments.length > 0 && <div className="et-attachments">{attachments.map(attachment => <div key={attachment.id} className="et-attachment-item">{str(attachment.payload.kind) === 'image' && imageClient && <div className="et-image-preview"><SyncedImage attachment={attachment} records={records} client={imageClient} session={sessionRef.current} refreshSession={refreshSession} /></div>}<button onClick={() => void run(() => download(attachment))}><FileDown size={15} />{str(attachment.payload.role) === 'message_archive' ? '完整历史' : str(attachment.payload.name, '附件')}</button></div>)}</div>}<div className="et-message-tools"><button aria-label="复制消息" title="复制消息" onClick={() => void run(async () => { await navigator.clipboard.writeText(str(message.payload.text)); setCopied(message.id); window.setTimeout(() => setCopied(''), 1500) })}>{copied === message.id ? <Check size={13} /> : <Copy size={13} />}</button>{message.payload.sender !== 'User' && <button aria-label={speakingMessage === message.id ? '停止朗读' : '朗读消息'} title={speakingMessage === message.id ? '停止朗读' : '浏览器朗读'} onClick={() => readAloud(message.id, str(message.payload.text))}><Volume2 size={13} /></button>}{message.payload.sender === 'User' && <button onClick={() => { setDraft(str(message.payload.text)); input.current?.focus() }}>引用到输入框</button>}</div></article>
+          const fileParts = messageFileParts(str(message.payload.text), attachments)
+          const referencedIds = new Set(fileParts.flatMap(part => part.attachment ? [part.attachment.id] : []))
+          const remainingAttachments = attachments.filter(attachment => !referencedIds.has(attachment.id))
+          const renderFile = (attachment: StoredRecord, label?: string) => <MessageFileLink attachment={attachment} label={label} savedPath={downloads.savedPaths[attachmentDownloadKey(attachment)]} onSave={() => download(attachment)} onShare={fileSharing ? () => shareFile(attachment) : undefined} />
+          return <article key={message.id} className={`et-message ${message.payload.sender === 'User' ? 'from-user' : 'from-assistant'}`}><div className="et-message-meta"><span>{message.payload.sender === 'User' ? '你' : str(message.payload.modelName, 'EveryTalk')}</span><time>{new Date(Number(message.payload.timestamp)).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</time></div>{Boolean(message.payload.reasoning) && <details className="et-reasoning"><summary>思考过程</summary><p>{str(message.payload.reasoning)}</p></details>}<div className="et-message-text"><MessageFileText parts={fileParts} renderFile={renderFile} /></div>{searchResults.length > 0 && <div className="et-search-results"><strong>联网来源</strong>{searchResults.map(item => <a key={item.url} href={item.url} target="_blank" rel="noreferrer">{item.title}</a>)}</div>}{remainingAttachments.length > 0 && <div className="et-attachments">{remainingAttachments.map(attachment => <div key={attachment.id} className="et-attachment-item">{str(attachment.payload.kind) === 'image' && imageClient && <div className="et-image-preview"><SyncedImage attachment={attachment} records={records} client={imageClient} session={sessionRef.current} refreshSession={refreshSession} /></div>}{attachment.payload.role === 'message_archive' ? <button onClick={() => void run(() => download(attachment))}><FileDown size={15} />完整历史</button> : renderFile(attachment)}</div>)}</div>}<div className="et-message-tools"><button aria-label="复制消息" title="复制消息" onClick={() => void run(async () => { await navigator.clipboard.writeText(str(message.payload.text)); setCopied(message.id); window.setTimeout(() => setCopied(''), 1500) })}>{copied === message.id ? <Check size={13} /> : <Copy size={13} />}</button>{message.payload.sender !== 'User' && <button aria-label={speakingMessage === message.id ? '停止朗读' : '朗读消息'} title={speakingMessage === message.id ? '停止朗读' : '浏览器朗读'} onClick={() => readAloud(message.id, str(message.payload.text))}><Volume2 size={13} /></button>}{message.payload.sender === 'User' && <button onClick={() => { setDraft(str(message.payload.text)); input.current?.focus() }}>引用到输入框</button>}</div></article>
         })}
         {streaming?.sessionId === activeId && <article className="et-message from-assistant" aria-live="polite"><div className="et-message-meta"><span>{modelLabel}</span><span className="et-generating">正在回复</span></div>{streaming.reasoning && <details className="et-reasoning"><summary>思考过程</summary><p>{streaming.reasoning}</p></details>}<div className="et-message-text">{streaming.text || <span className="et-thinking">···</span>}</div></article>}
         {active && messages.length > 0 && !busy && <div className="et-continue"><button onClick={() => void continueReply()}><RefreshCw size={12} />{messages[messages.length - 1]?.payload.sender === 'User' ? '继续生成' : '重新生成'}</button></div>}
         <div ref={messagesEnd} />
       </div></div>
-      <div className="et-composer-area"><div className="et-composer">{files.length > 0 && <div className="et-draft-files">{files.map((file, index) => <span key={`${file.name}:${index}`}>{file.name}<button aria-label={`移除 ${file.name}`} onClick={() => setFiles(items => items.filter((_, i) => i !== index))}><X size={12} /></button></span>)}</div>}<textarea ref={input} value={draft} disabled={!ready || listening} aria-label="消息内容" rows={2} placeholder={imageMode ? '描述你想生成的图片…' : ready ? '发送消息，继续你的思考…' : '正在打开工作区…'} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send() } }} /><div className="et-composer-toolbar"><div className="et-composer-left"><input ref={fileInput} type="file" multiple className="et-hidden" onChange={e => { setFiles(items => [...items, ...Array.from(e.target.files ?? [])].slice(0, 5)); e.target.value = '' }} /><button aria-label="添加附件" title="附件同步至安卓端，每个不超过 64 MiB" disabled={!ready || busy} onClick={() => fileInput.current?.click()}><Paperclip size={17} /></button><button aria-label={listening ? '停止语音输入' : '语音输入'} title={listening ? '停止语音输入' : '浏览器语音输入'} disabled={!ready || busy} aria-pressed={listening} className={listening ? 'is-active' : ''} onClick={toggleVoiceInput}><Mic size={17} /></button><button aria-label={webSearchEnabled ? '关闭联网搜索' : '开启联网搜索'} title={webSearchEnabled ? '关闭联网搜索' : '开启联网搜索'} disabled={!ready || busy || !activeId || imageMode} aria-pressed={webSearchEnabled} className={webSearchEnabled ? 'is-active' : ''} onClick={() => void run(toggleWebSearch)}><Search size={16} /></button><div className="et-model-select"><select aria-label="聊天模型" disabled={busy} value={str(selectedModel?.payload.key)} onChange={e => void run(() => chooseModel(e.target.value))}><option value="" disabled>{imageMode ? '选择图片模型' : '选择聊天模型'}</option>{models.map(m => <option key={m.id} value={str(m.payload.key)}>{str(valueOf(m).name, str(valueOf(m).model))}</option>)}</select><ChevronDown size={12} /></div>{!models.length && <button className="et-add-model" onClick={() => setSettings(true)}>添加模型</button>}</div>{busy ? <button className="et-send" aria-label="停止生成" onClick={() => controller.current?.abort()}><Square size={13} fill="currentColor" /></button> : <button className="et-send" disabled={!ready || (!draft.trim() && !files.length)} aria-label={imageMode ? '生成图片' : '发送消息'} onClick={() => void send()}><ArrowUp size={18} /></button>}</div></div><div className="et-composer-foot"><span>Enter 发送 · Shift + Enter 换行</span><span title={snapshot.lastSyncAt ? new Date(snapshot.lastSyncAt).toLocaleString('zh-CN') : '等待首次同步'}>{snapshot.pendingCount ? `${snapshot.pendingCount} 条待同步` : imageMode ? '图片结果会同步至安卓端' : webSearchEnabled ? '联网搜索已开启' : '与安卓端同步'}</span></div></div>
+      <div className="et-composer-area"><div className="et-composer">{files.length > 0 && <div className="et-draft-files">{files.map((file, index) => <span key={`${file.name}:${index}`}>{file.name}<button aria-label={`移除 ${file.name}`} onClick={() => setFiles(items => items.filter((_, i) => i !== index))}><X size={12} /></button></span>)}</div>}<textarea ref={input} value={draft} disabled={!ready || listening} aria-label="消息内容" rows={2} placeholder={imageMode ? '描述你想生成的图片…' : ready ? '发送消息，继续你的思考…' : '正在打开工作区…'} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send() } }} /><div className="et-composer-toolbar"><div className="et-composer-left"><input ref={fileInput} type="file" multiple className="et-hidden" onChange={e => { setFiles(items => [...items, ...Array.from(e.target.files ?? [])].slice(0, 5)); e.target.value = '' }} /><button aria-label="添加附件" title="附件同步至安卓端，每个不超过 64 MiB" disabled={!ready || busy} onClick={() => fileInput.current?.click()}><Paperclip size={17} /></button><button aria-label={listening ? '停止语音输入' : '语音输入'} title={listening ? '停止语音输入' : '浏览器语音输入'} disabled={!ready || busy} aria-pressed={listening} className={listening ? 'is-active' : ''} onClick={toggleVoiceInput}><Mic size={17} /></button><button aria-label={webSearchEnabled ? '关闭联网搜索' : '开启联网搜索'} title={webSearchEnabled ? '关闭联网搜索' : '开启联网搜索'} disabled={!ready || busy || !activeId || imageMode} aria-pressed={webSearchEnabled} className={webSearchEnabled ? 'is-active' : ''} onClick={() => void run(toggleWebSearch)}><Search size={16} /></button><div className="et-model-select"><select aria-label="聊天模型" disabled={busy} value={str(selectedModel?.payload.key)} onChange={e => void run(() => chooseModel(e.target.value))}><option value="" disabled>{imageMode ? '选择图片模型' : '选择聊天模型'}</option>{models.map(m => <option key={m.id} value={str(m.payload.key)}>{str(valueOf(m).name, str(valueOf(m).model))}</option>)}</select><ChevronDown size={12} /></div>{!models.length && <button className="et-add-model" onClick={() => setSettings('models')}>添加模型</button>}</div>{busy ? <button className="et-send" aria-label="停止生成" onClick={() => controller.current?.abort()}><Square size={13} fill="currentColor" /></button> : <button className="et-send" disabled={!ready || (!draft.trim() && !files.length)} aria-label={imageMode ? '生成图片' : '发送消息'} onClick={() => void send()}><ArrowUp size={18} /></button>}</div></div><div className="et-composer-foot"><span>Enter 发送 · Shift + Enter 换行</span><span title={snapshot.lastSyncAt ? new Date(snapshot.lastSyncAt).toLocaleString('zh-CN') : '等待首次同步'}>{snapshot.pendingCount ? `${snapshot.pendingCount} 条待同步` : imageMode ? '图片结果会同步至安卓端' : webSearchEnabled ? '联网搜索已开启' : '与安卓端同步'}</span></div></div>
     </section>
-    {settings && <SettingsPanel records={records} onClose={() => setSettings(false)} saveSetting={saveSetting} saveMemory={saveMemory} error={sync.error} reportError={setError} />}
+    {settings && <SettingsPanel records={records} onClose={() => setSettings(undefined)} saveSetting={saveSetting} saveMemory={saveMemory} error={sync.error} reportError={setError} downloads={downloads} initialTab={settings} />}
     {history && <div className="et-modal-backdrop"><section role="dialog" aria-modal="true" aria-label="完整历史" className="et-settings"><header><h2>完整历史</h2><button aria-label="关闭历史" onClick={() => setHistory(undefined)}><X size={18} /></button></header><div className="et-settings-body"><p className="et-muted">归档已完成解密和摘要校验。以下内容仅供查看。</p><pre className="et-history">{JSON.stringify(history.value, null, 2)}</pre></div></section></div>}
   </main>
 }

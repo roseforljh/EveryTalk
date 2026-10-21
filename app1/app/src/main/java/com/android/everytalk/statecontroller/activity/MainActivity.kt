@@ -13,6 +13,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -234,6 +235,13 @@ class MainActivity : AppCompatActivity() {
                             application
                         )
                     )
+                    val downloadPermission by appViewModel.computerManager.downloadPermissionRequest.collectAsState()
+                    val downloadPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+                        appViewModel.computerManager.downloadPermissionRequest.value?.complete(granted)
+                    }
+                    LaunchedEffect(downloadPermission) {
+                        if (downloadPermission != null) downloadPermissionLauncher.launch(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                    }
                     val authState by appViewModel.authRepository.state.collectAsState()
                     val subscriptionLocked = remember(authState) {
                         appViewModel.featureGate.isLocked(Feature.MEMBERSHIP)

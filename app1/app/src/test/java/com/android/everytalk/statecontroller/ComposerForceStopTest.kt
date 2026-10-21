@@ -16,7 +16,7 @@ class ComposerForceStopTest {
     private val snapshots = MutableStateFlow(mapOf(
         "ai-1" to AgentRunControlSnapshot("run-1", "ai-1", AgentRunControlState.PAUSE_REQUESTED),
     ))
-    private val holder = mockk<ViewModelStateHolder> {
+    private val holder = mockk<ViewModelStateHolder>(relaxed = true) {
         every { _currentTextStreamingAiMessageId } returns visibleId
         every { _isRemoteCancellationPending } returns stopping
         every { _isTextApiCalling } returns running
@@ -38,14 +38,44 @@ class ComposerForceStopTest {
     }
 
     @Test
-    fun `已经安全暂停运行中或完成时旧加载按钮不能强停`() {
-        listOf(AgentRunControlState.PAUSED, AgentRunControlState.RUNNING).forEach { state ->
-            snapshots.value = mapOf("ai-1" to AgentRunControlSnapshot("run-1", "ai-1", state))
-            viewModel.forceStopPendingPause("ai-1")
-        }
+    fun `运行中或完成时旧加载按钮不能强停`() {
+        snapshots.value = mapOf("ai-1" to AgentRunControlSnapshot("run-1", "ai-1", AgentRunControlState.RUNNING))
+        viewModel.forceStopPendingPause("ai-1")
         snapshots.value = emptyMap()
         viewModel.forceStopPendingPause("ai-1")
         verify(exactly = 0) { handler.cancelCurrentApiJob(any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun `界面尚未重组时连续点击暂停仍只请求一次暂停并执行一次强停`() {
+        snapshots.value = mapOf("ai-1" to AgentRunControlSnapshot("run-1", "ai-1", AgentRunControlState.RUNNING))
+        every { handler.requestPauseCurrentAgent("ai-1") } answers {
+            snapshots.value = mapOf("ai-1" to AgentRunControlSnapshot("run-1", "ai-1", AgentRunControlState.PAUSE_REQUESTED))
+            true
+        }
+        every { handler.cancelCurrentApiJob(any(), any(), any(), any()) } answers { stopping.value = true }
+
+        // 重复执行同一帧捕获的暂停回调，不依赖 Compose 重组把它替换成强停回调。
+        repeat(3) { viewModel.pauseStreaming("ai-1") }
+
+        verify(exactly = 1) { handler.requestPauseCurrentAgent("ai-1") }
+        verify(exactly = 1) { handler.cancelCurrentApiJob(any(), false, false, true) }
+        verify(exactly = 0) { handler.resumePausedAgent(any()) }
+    }
+
+    @Test
+    fun `强停点击到达时已经进入安全暂停也必须停止`() {
+        snapshots.value = mapOf("ai-1" to AgentRunControlSnapshot("run-1", "ai-1", AgentRunControlState.PAUSED))
+        viewModel.forceStopPendingPause("ai-1")
+        verify(exactly = 1) { handler.cancelCurrentApiJob(any(), false, false, true) }
+    }
+
+    @Test
+    fun `旧暂停回调到达已暂停任务时终止而不是恢复`() {
+        snapshots.value = mapOf("ai-1" to AgentRunControlSnapshot("run-1", "ai-1", AgentRunControlState.PAUSED))
+        viewModel.pauseStreaming("ai-1")
+        verify(exactly = 1) { handler.cancelCurrentApiJob(any(), false, false, true) }
+        verify(exactly = 0) { handler.resumePausedAgent(any()) }
     }
 
     @Test
@@ -76,6 +106,9 @@ class ComposerForceStopTest {
         snapshots.value = mapOf("ai-2" to AgentRunControlSnapshot("run-2", "ai-2", AgentRunControlState.PAUSE_REQUESTED))
         viewModel.forceStopPendingPause("ai-1")
         viewModel.forceStopPendingPause(null)
+        viewModel.pauseStreaming("ai-1")
+        viewModel.pauseStreaming(null)
         verify(exactly = 0) { handler.cancelCurrentApiJob(any(), any(), any(), any()) }
+        verify(exactly = 0) { handler.requestPauseCurrentAgent(any()) }
     }
 }

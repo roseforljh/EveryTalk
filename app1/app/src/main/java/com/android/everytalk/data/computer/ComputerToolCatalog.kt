@@ -292,7 +292,7 @@ object ComputerToolCatalog {
         ),
         function(
             name = ComputerToolNames.UPLOAD,
-            description = "Upload a local conversation attachment into the current SSH working directory.",
+            description = "Upload a conversation attachment into the selected SSH server's file-tool directory. Accepts attachment_id returned by download from another selected server in this conversation; no session switch or server-to-server SSH credentials are needed.",
             properties = mapOf(
                 "attachment_id" to string("Local attachment ID from the current conversation."),
                 "destination_path" to string("Relative destination in the current SSH file-tool directory."),
@@ -302,7 +302,7 @@ object ComputerToolCatalog {
         ),
         function(
             name = ComputerToolNames.DOWNLOAD,
-            description = "Download a file from the current SSH working directory as a local EveryTalk attachment.",
+            description = "把服务器生成的交付文件发送到客户端：自动保存到手机 Download/App/AppTalk，并添加聊天附件。创建用户需要的文件后必须调用此工具，不能只返回服务器路径；成功后在介绍文件的正文位置使用 [文件名](返回的file_link)，让用户直接点击。跨服务器传输时可将返回的 attachment_id 交给另一服务器的 upload。",
             properties = mapOf(
                 "source_path" to string("Relative source path in the current SSH file-tool directory."),
                 "suggested_name" to string("Optional local file name."),

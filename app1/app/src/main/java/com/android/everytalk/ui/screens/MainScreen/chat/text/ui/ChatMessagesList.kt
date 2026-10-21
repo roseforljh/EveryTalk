@@ -317,6 +317,9 @@ fun ChatMessagesList(
     val conversationTotalTokens by remember(viewModel) {
         derivedStateOf { totalConversationTokenUsage(viewModel.messages) }
     }
+    val latestAiMessageId by remember(viewModel) {
+        derivedStateOf { viewModel.messages.lastOrNull { it.sender == com.android.everytalk.data.DataClass.Sender.AI }?.id }
+    }
     val density = LocalDensity.current
     val windowHeightDp = with(density) { LocalWindowInfo.current.containerSize.height.toDp().value }
     val pinnedUserBubbleMaxHeightPx = with(density) {
@@ -897,6 +900,7 @@ fun ChatMessagesList(
                             AiMessageFooterItem(
                                 message = item.message,
                                 conversationTotalTokens = conversationTotalTokens,
+                                isLatestAiMessage = item.message.id == latestAiMessageId,
                                 viewModel = viewModel,
                                 scrollStateManager = scrollStateManager,
                             )

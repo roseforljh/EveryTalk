@@ -807,6 +807,13 @@ class SyncEngineTest {
         assertEquals(2, b.settingsDao().getPinnedIds(false).size)
     }
 
+    @Test fun `同步不能删掉分组里尚未落库的新建会话`() = runBlocking {
+        val a = device(); val s = seed(a); val api = FakeSyncApi()
+        a.settingsDao().insertConversationGroups(listOf(ConversationGroupEntity("Work", listOf(s.id, "chat_draft"))))
+        run(a, api)
+        assertTrue("chat_draft" in a.settingsDao().getConversationGroups().single().conversationIds)
+    }
+
     @Test fun `已有消息补充思考和统计不覆盖正文且文字片段不带工具命令`() = runBlocking {
         val a = device(); val b = device(); val s = seed(a); val api = FakeSyncApi()
         val old = a.chatDao().getMessageByUuid(message("local-0", s).uuid)!!

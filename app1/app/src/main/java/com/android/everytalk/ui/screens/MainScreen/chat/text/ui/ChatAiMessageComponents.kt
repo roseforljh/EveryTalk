@@ -402,19 +402,21 @@ fun AiMessageItem(
                 }
 
                 if (effectiveRenderBlocks.isNotEmpty()) {
-                    UnifiedMarkdownRenderer(
-                        preparedMessage = preparedMessage,
-                        sender = displayMessage.sender,
-                        isStreaming = shouldPreferStreamingContent,
-                        onCodePreviewRequested = { lang, code ->
-                            previewLanguage = lang
-                            previewCode = code
-                        },
-                        onCodeCopied = {
-                            viewModel.showSnackbar(codeCopiedMessage)
-                        },
-                        onImageClick = onImageClick,
-                    )
+                    com.android.everytalk.ui.components.markdown.MessageFileAttachmentScope(message.attachments) {
+                        UnifiedMarkdownRenderer(
+                            preparedMessage = preparedMessage,
+                            sender = displayMessage.sender,
+                            isStreaming = shouldPreferStreamingContent,
+                            onCodePreviewRequested = { lang, code ->
+                                previewLanguage = lang
+                                previewCode = code
+                            },
+                            onCodeCopied = {
+                                viewModel.showSnackbar(codeCopiedMessage)
+                            },
+                            onImageClick = onImageClick,
+                        )
+                    }
                 }
                 }
             }
@@ -429,6 +431,7 @@ fun AiMessageFooterItem(
     viewModel: AppViewModel,
     scrollStateManager: ChatScrollStateManager,
     onShowOptions: (Message) -> Unit = {},
+    isLatestAiMessage: Boolean = false,
 ) {
     var showPopupMenu by remember { mutableStateOf(false) }
     var showContextUsage by remember(message.id) { mutableStateOf(false) }
@@ -439,17 +442,21 @@ fun AiMessageFooterItem(
     val availableModels by viewModel.apiConfigs.collectAsState()
     val selectedModel by viewModel.selectedApiConfig.collectAsState()
     val compactingContext by viewModel.isCompactingContext.collectAsState()
+    val activeMessageId by viewModel.currentTextStreamingAiMessageId.collectAsState()
+    val chatRunState by viewModel.chatRunState.collectAsState()
     val liveContextWindowTokens = remember(
         message.contextUsageSnapshot?.configId,
         message.modelName,
         message.providerName,
         availableModels,
         selectedModel?.id,
+        isLatestAiMessage,
     ) {
+        // 只有最新回复代表下一次请求的占用；历史回复的用量属于当时的模型，按它自己的窗口算。
         resolveLiveContextWindowTokens(
             message = message,
             configs = availableModels,
-            activeConfigId = selectedModel?.id,
+            activeConfigId = selectedModel?.id?.takeIf { isLatestAiMessage },
         )
     }
 
@@ -458,10 +465,17 @@ fun AiMessageFooterItem(
             .fillMaxWidth()
             .padding(start = ChatDimensions.HORIZONTAL_PADDING)
     ) {
-        if (message.attachments.isNotEmpty()) {
-            // AI 产物沿用用户附件的打开方式；放在消息页脚只显示一次。
+        val remainingAttachments = remember(message.attachments, message.text, message.executionTrace) {
+            val body = message.text + "\n" + message.executionTrace
+                .filterIsInstance<com.android.everytalk.data.DataClass.ExecutionTraceEvent.Content>().joinToString("\n") { it.text }
+            val inlineIds = com.android.everytalk.ui.components.markdown.inlineMessageFileIds(
+                body, message.attachments.filterIsInstance<com.android.everytalk.models.SelectedMediaItem.GenericFile>())
+            message.attachments.filterNot { it.id in inlineIds }
+        }
+        if (remainingAttachments.isNotEmpty()) {
+            // 仅兜底展示正文未引用的附件；旧消息或中断回复中的文件仍可访问。
             AttachmentsContent(
-                attachments = message.attachments,
+                attachments = remainingAttachments,
                 onAttachmentClick = {},
                 maxWidth = ChatDimensions.USER_BUBBLE_WIDTH_RATIO.let { ratio ->
                     with(androidx.compose.ui.platform.LocalDensity.current) {
@@ -477,6 +491,10 @@ fun AiMessageFooterItem(
                 isAiGenerated = true,
             )
         }
+        // Footer 在有搜索结果时可能提前出现，必须按当前回复状态控制总结，避免运行中重复展示。
+        MessageFileChangesSummary(message = message,
+            isRunning = activeMessageId == message.id && chatRunState != com.android.everytalk.statecontroller.ChatRunState.Idle,
+            modifier = Modifier.padding(end = ChatDimensions.HORIZONTAL_PADDING))
         Row(
             modifier = Modifier.padding(top = 2.dp),
             horizontalArrangement = Arrangement.Start,

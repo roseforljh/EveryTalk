@@ -4,7 +4,6 @@ import androidx.compose.ui.res.painterResource
 import androidx.annotation.DrawableRes
 import com.android.everytalk.statecontroller.*
 
-import android.content.Intent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.*
 import androidx.compose.animation.fadeIn
@@ -476,7 +475,6 @@ fun AttachmentsContent(
     val currentOnImageClick by rememberUpdatedState(onImageClick)
     val currentOnLongPress by rememberUpdatedState(onLongPress)
     var previewUrlInternal by remember(message.id) { mutableStateOf<String?>(null) }
-    val fallbackAttachmentName = stringResource(R.string.attachment_generic_fallback)
 
     // 附件区域也跟随相同的最大宽度限制
     val screenDp = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.width.toDp() }
@@ -665,51 +663,7 @@ fun AttachmentsContent(
 
         nonImageAttachments.forEach { attachment ->
             when (attachment) {
-                is SelectedMediaItem.GenericFile -> {
-                    var itemGlobalPosition by remember(attachment.id) { mutableStateOf(Offset.Zero) }
-                    Row(
-                        modifier = Modifier
-                            .widthIn(max = attachmentsAppliedMax)
-                            .padding(vertical = 4.dp)
-                            .background(bubbleColor, RoundedCornerShape(12.dp))
-                            .clip(RoundedCornerShape(12.dp))
-                            .onGloballyPositioned { itemGlobalPosition = it.localToRoot(Offset.Zero) }
-                            .pointerInput(message.id, attachment.uri) {
-                                detectTapGestures(
-                                    onTap = {
-                                        val intent = Intent(Intent.ACTION_VIEW).apply {
-                                            setDataAndType(attachment.uri, attachment.mimeType)
-                                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                        }
-                                        context.startActivity(intent)
-                                    },
-                                    onLongPress = { localOffset ->
-                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                        currentOnLongPress(currentMessage, itemGlobalPosition + localOffset)
-                                    }
-                                )
-                            }
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        val attachmentIcon = getIconForMimeType(attachment.mimeType)
-                        Icon(
-                            painter = painterResource(attachmentIcon),
-                            contentDescription = stringResource(R.string.attachment_generic),
-                            modifier = Modifier.size(24.dp),
-                            // GPT 演示文稿图标包含原始配色，避免统一染色把内部标记盖成实心块。
-                            tint = if (attachmentIcon == R.drawable.ic_gpt_file_powerpoint) Color.Unspecified else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = attachment.displayName.ifBlank {
-                                attachment.uri.pathSegments.lastOrNull().orEmpty().ifBlank { fallbackAttachmentName }
-                            },
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
+                is SelectedMediaItem.GenericFile -> com.android.everytalk.ui.components.MessageFileLink(attachment, attachmentsAppliedMax)
                 is SelectedMediaItem.Audio -> {
                     var itemGlobalPosition by remember(attachment.id) { mutableStateOf(Offset.Zero) }
                     Row(
@@ -791,23 +745,6 @@ private fun ThreeDotsLoadingAnimation(
                     .size(10.dp)
                     .background(dotColor.copy(alpha = animatedAlpha), RoundedCornerShape(50))
             )
-        }
-    }
-}
-
-@Composable
-private fun getIconForMimeType(mimeType: String?): Int {
-    return when (mimeType) {
-        "application/pdf" -> R.drawable.ic_gpt_file_pdf
-        "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document" -> R.drawable.ic_gpt_file_document
-        "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" -> R.drawable.ic_gpt_file_spreedsheet
-        "application/vnd.ms-powerpoint", "application/vnd.openxmlformats-officedocument.presentationml.presentation" -> R.drawable.ic_gpt_file_powerpoint
-        "application/zip", "application/x-rar-compressed" -> R.drawable.ic_gpt_file_zip
-        else -> when {
-            mimeType?.startsWith("video/") == true -> R.drawable.ic_gpt_file_video
-            mimeType?.startsWith("audio/") == true -> R.drawable.ic_gpt_file_audio
-            mimeType?.startsWith("image/") == true -> R.drawable.ic_gpt_file_image
-            else -> R.drawable.ic_paperclip
         }
     }
 }

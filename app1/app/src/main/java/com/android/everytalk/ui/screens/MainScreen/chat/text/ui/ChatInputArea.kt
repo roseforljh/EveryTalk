@@ -167,7 +167,7 @@ fun ChatInputArea(
     onToggleWebSearch: () -> Unit,
     isCodeExecutionEnabled: Boolean = false,
     onToggleCodeExecution: () -> Unit = {},
-    onPauseStreaming: () -> Unit,
+    onPauseStreaming: (String?) -> Unit,
     onResumeStreaming: () -> Unit,
     focusRequester: FocusRequester,
     selectedApiConfig: ApiConfig? = null,
@@ -785,7 +785,7 @@ fun ChatInputArea(
             } else if (primaryAction == ComposerPrimaryAction.FORCE_STOP) {
                 viewModel.forceStopPendingPause(controlledMessageId)
             } else if (primaryAction == ComposerPrimaryAction.PAUSE) {
-                onPauseStreaming()
+                onPauseStreaming(controlledMessageId)
             } else if (primaryAction == ComposerPrimaryAction.RESUME) {
                 onResumeStreaming()
             } else if (composerMode is ComposerMode.EditingPending) {
@@ -937,7 +937,11 @@ fun ChatInputArea(
                     )
                 }
 
-                FileChangesCapsule(messages = viewModel.stateHolder.messages)
+                FileChangesCapsule(
+                    messages = viewModel.stateHolder.messages,
+                    activeMessageId = controlledMessageId,
+                    isRunning = chatRunState != ChatRunState.Idle,
+                )
 
                 PendingMessageQueue(
                     messages = pendingMessages,
@@ -1547,9 +1551,7 @@ fun ChatInputArea(
                                             if (isAgentEnabled) {
                                                 ActiveFunctionTag(
                                                     iconRes = R.drawable.ic_gpt_terminal,
-                                                    label = if (selectedComputerIds.size > 1) {
-                                                        stringResource(R.string.agent_servers_tag, selectedComputerIds.size)
-                                                    } else stringResource(R.string.chat_input_agent),
+                                                    label = stringResource(R.string.chat_input_agent),
                                                     tint = ChatAgentColor,
                                                     lightBackground = Color(0xFFE0F2F1),
                                                     closeContentDescription = stringResource(R.string.chat_input_close_agent),

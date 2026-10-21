@@ -1043,10 +1043,13 @@ class ComputerToolExecutor(
         }
         return buildJsonObject {
             put("attachment_id", downloaded.attachment.id)
+            put("file_link", "everytalk-file:${downloaded.attachment.id}")
             put("name", downloaded.attachment.displayName)
             put("mime", downloaded.attachment.mimeType)
             put("size", downloaded.transfer.bytes)
             put("sha256", downloaded.transfer.sha256)
+            put("saved_path", downloaded.savedDownload.path)
+            put("saved_name", downloaded.savedDownload.name)
         }
     }
 
@@ -1160,7 +1163,7 @@ class ComputerToolExecutor(
         ComputerToolNames.EDIT -> "edit 已修改文件"
         ComputerToolNames.TERMINAL -> "terminal 操作已完成"
         ComputerToolNames.UPLOAD -> "upload 已完成"
-        ComputerToolNames.DOWNLOAD -> "download 已保存本地附件"
+        ComputerToolNames.DOWNLOAD -> "download 已保存到下载/App/AppTalk，并添加聊天附件"
         ComputerToolNames.OPEN_PORT -> "open_port 已创建 Preview"
         else -> "Computer Tool 已完成"
     }

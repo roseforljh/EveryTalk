@@ -960,6 +960,80 @@ class AgentContextCompressionRecoveryTest {
         }
     }
 
+    @Test
+    fun `大窗口模型压缩后切换到小窗口模型只发送压缩后上下文`() = runBlocking {
+        val sessionId = "switch-model-after-compaction"
+        seedSession(sessionId)
+        val mainRequests = mutableListOf<List<com.android.everytalk.data.DataClass.AbstractApiMessage>>()
+        val loop = AgentLoop(
+            runStore = store,
+            modelTransport = ModelTurnTransport { turn ->
+                val isSummary = turn.request.messages.firstOrNull()?.let {
+                    it is SimpleTextApiMessage && it.content == com.android.everytalk.data.network.SystemPromptModules.historySummary
+                } == true
+                if (!isSummary) mainRequests += turn.request.messages
+                if (isSummary && turn.request.model == "config-B") return@ModelTurnTransport flowOf(AppStreamEvent.Error(message = "relay rejected", code = "bad_request", type = "provider_error"), AppStreamEvent.Finish("error"))
+                flowOf(
+                    AppStreamEvent.Content(if (isSummary) "## 摘要\n早期内容已压缩" else "好的"),
+                    AppStreamEvent.Finish("stop"),
+                )
+            },
+        )
+        val history = buildList {
+            repeat(10) { index ->
+                add(SimpleTextApiMessage(id = "u$index", role = "user", content = "旧需求$index".repeat(1_500)))
+                add(SimpleTextApiMessage(id = "a$index", role = "assistant", content = "旧结论$index".repeat(1_500)))
+            }
+        }
+        fun request(configId: String, window: Int, messages: List<SimpleTextApiMessage>, userId: String, aiId: String) = AgentLoopRequest(
+            request = ChatRequest(
+                messages = messages,
+                provider = "OpenAI",
+                channel = "OpenAI兼容",
+                apiAddress = "https://neo.example.test",
+                apiKey = "test-key",
+                model = configId,
+                contextManagement = RequestContextManagement(
+                    configId = configId,
+                    maxContextTokens = window,
+                    reservedOutputTokens = 512,
+                    compactThresholdTokens = window * 40L / 100L,
+                    autoCompressionEnabled = true,
+                ),
+            ),
+            sessionId = sessionId,
+            userMessageId = userId,
+            visibleAssistantMessageId = aiId,
+            tokenLimits = ModelTokenLimits(maxOutputTokens = 512, maxContextTokens = window),
+        )
+        val fullTokens = RequestTokenEstimator.estimate(history, null).totalInputTokens
+        val windowA = (fullTokens * 2).toInt()
+        val windowB = (fullTokens / 4).toInt()
+
+        // 模型 A：先正常回答（不自动压缩），再像界面「立即压缩」那样从库里历史手动压缩。
+        val turnA = history + SimpleTextApiMessage(id = "uA", role = "user", content = "A 继续")
+        loop.run(request("config-A", windowA * 10, turnA, "uA", "aiA")).toList()
+        val dbHistory = listOf(SimpleTextApiMessage(id = "sys", role = "system", content = "系统提示")) + turnA +
+            SimpleTextApiMessage(id = "aiA", role = "assistant", content = "好的")
+        val manual = request("config-A", windowA, dbHistory, "x", "y").request
+        val outcome = loop.compactNow(sessionId, manual.copy(messages = store.expandTranscript(sessionId, dbHistory)), ModelTokenLimits(512, windowA))
+        assertTrue("manual=$outcome", outcome is ManualCompactionOutcome.Compacted)
+        assertNotNull("A 应生成压缩检查点", store.latestCompaction(sessionId))
+
+        // 切换到模型 B：UI 历史仍是完整可见消息，加上 A 的回复气泡和新问题。
+        mainRequests.clear()
+        val turnB = turnA + SimpleTextApiMessage(id = "aiA", role = "assistant", content = "好的") +
+            SimpleTextApiMessage(id = "uB", role = "user", content = "B 继续")
+        val events = loop.run(request("config-B", windowB, turnB, "uB", "aiB")).toList()
+
+        val sent = mainRequests.first()
+        val sentTokens = RequestTokenEstimator.estimate(sent, null).totalInputTokens
+        assertTrue(
+            "B 收到 ${sentTokens} tokens（全量 ${fullTokens}），ids=${sent.map { it.id }}，events=${events.filterIsInstance<AppStreamEvent.ExecutionStatusUpdate>().map { it.status }}",
+            sent.any { it.id.startsWith("agent-compaction:") } && sent.none { it.id == "u0" },
+        )
+    }
+
     private fun manualCompactionRequest(messages: List<SimpleTextApiMessage>): ChatRequest = ChatRequest(
         messages = messages,
         provider = "OpenAI",

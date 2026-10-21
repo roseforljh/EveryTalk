@@ -280,21 +280,25 @@ internal fun StaticAiMarkdownNodeItem(
                         },
                     )
             ) {
-                UnifiedMarkdownNodesRenderer(
-                    preparedMessage = item.preparedMessage,
-                    preparedMarkdownDocument = item.preparedMarkdownDocument,
-                    nodes = item.nodes,
-                    sender = item.message.sender,
-                    onCodePreviewRequested = { language, code ->
-                        previewLanguage = language
-                        previewCode = code
-                    },
-                    onCodeCopied = {
-                        viewModel.showSnackbar(codeCopiedMessage)
-                    },
-                    onImageClick = onImageClick,
-                    footnoteNavigationState = footnoteNavigationState,
-                )
+                // 完成回复和历史回复走分段入口，必须与流式正文共享原消息附件。
+                // 否则页脚已去重隐藏文件，正文却只剩普通文件名，两个入口都会消失。
+                com.android.everytalk.ui.components.markdown.MessageFileAttachmentScope(item.message.attachments) {
+                    UnifiedMarkdownNodesRenderer(
+                        preparedMessage = item.preparedMessage,
+                        preparedMarkdownDocument = item.preparedMarkdownDocument,
+                        nodes = item.nodes,
+                        sender = item.message.sender,
+                        onCodePreviewRequested = { language, code ->
+                            previewLanguage = language
+                            previewCode = code
+                        },
+                        onCodeCopied = {
+                            viewModel.showSnackbar(codeCopiedMessage)
+                        },
+                        onImageClick = onImageClick,
+                        footnoteNavigationState = footnoteNavigationState,
+                    )
+                }
             }
         }
     }

@@ -918,6 +918,8 @@ internal fun MessageSender.sendMessageInternal(
                     contextWindowTokens = tokenLimits.maxContextTokens.toLong(),
                     inputCalibrationTokens = inputTokenCalibration,
                 )
+                // 文本请求在 AgentLoop 才套用压缩检查点，这里的估算是未压缩全文，只供请求参数使用；
+                // 不写进气泡，否则准备或压缩期间圆环会显示全文占用，中途失败还会被保存下来。
                 logApiMessages("finalMessages", finalApiMessages)
 
                 if (finalApiMessages.isEmpty() || finalApiMessages.lastOrNull()?.role != "user") {
@@ -944,7 +946,6 @@ internal fun MessageSender.sendMessageInternal(
                         providerName = currentConfig.provider,
                         isImageGeneration = false,
                         afterUserMessageId = newUserMessageForUi.id,
-                        contextUsageSnapshot = contextUsageSnapshot,
                         contextCompressionState = activeCompressionState,
                     )
                 }
@@ -952,7 +953,6 @@ internal fun MessageSender.sendMessageInternal(
                     apiHandler.updatePreparedStreamingStatus(
                         messageId = checkNotNull(preCreatedAiMessageId),
                         status = null,
-                        contextUsageSnapshot = contextUsageSnapshot,
                         contextCompressionState = activeCompressionState,
                     )
                 }
@@ -1114,7 +1114,6 @@ internal fun MessageSender.sendMessageInternal(
                     mimeType = mimeType,
                     isImageGeneration = isImageGeneration,
                     preCreatedAiMessageId = preCreatedAiMessageId,
-                    contextUsageSnapshot = if (isImageGeneration) null else contextUsageSnapshot,
                     onRequestFinished = ::notifyTurnFinished,
                 )
                 handedToApi.set(true)

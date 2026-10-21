@@ -51,4 +51,36 @@ class MultiComputerRoutingTest {
             """{"conversationId":"s","computerId":"a","workspaceId":"wa"}""")
         assertEquals(legacy, resolveComputerToolContext(ComputerToolNames.EXEC, buildJsonObject {}, legacy))
     }
+
+    @Test fun `多机全权限目录保留直接执行说明和服务器名称映射`() {
+        val full = context.copy(selectedTargets = context.selectedTargets.map { it.copy(permissionMode = ComputerPermissionMode.FULL) })
+        val exec = multiComputerToolDefinitions(full).map { it["function"] as Map<*, *> }
+            .single { it["name"] == ComputerToolNames.EXEC }
+        assertTrue((exec["description"] as String).contains("without an approval prompt"))
+        val properties = (exec["parameters"] as Map<*, *>)["properties"] as Map<*, *>
+        val target = properties["computer_id"] as Map<*, *>
+        assertEquals(listOf("a", "b"), target["enum"])
+        assertTrue((target["description"] as String).contains("a=\"A\""))
+        assertTrue((target["description"] as String).contains("b=\"B\""))
+        assertFalse("ask_user_approval" in properties)
+    }
+
+    @Test fun `首次发送和每轮刷新均在状态块之前提供全部环境`() {
+        val prompts = context.selectedTargets.map { target -> target to
+            "${target.workspaceId} environment\n<computer-session-state>${target.computerId} running</computer-session-state>" }
+        val prompt = buildMultiComputerSessionPrompt(prompts)
+        val environment = prompt.substringBefore("<computer-session-state>")
+        val states = prompt.substringAfter("<computer-session-state>")
+        assertTrue(environment.contains("wa environment"))
+        assertTrue(environment.contains("wb environment"))
+        assertTrue(environment.contains("无需切换会话"))
+        assertTrue(environment.contains("attachment_id"))
+        assertTrue(states.contains("a running"))
+        assertTrue(states.contains("b running"))
+        assertEquals(1, Regex("<computer-session-state>").findAll(prompt).count())
+        val initial = buildMultiComputerSessionPrompt(prompts.map { (target, text) ->
+            target to text.substringBefore("<computer-session-state>").trim()
+        })
+        assertEquals(initial.trim(), environment.trim())
+    }
 }

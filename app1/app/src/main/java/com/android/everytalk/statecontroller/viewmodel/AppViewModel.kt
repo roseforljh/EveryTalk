@@ -241,12 +241,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         scope = viewModelScope,
         additionalComputerIds = { id -> stateHolder.conversationFunctionToggleStates.value[id]?.additionalComputerIds.orEmpty() },
         attachmentsForConversation = { conversationId ->
-            if (stateHolder._currentConversationId.value != conversationId) {
-                emptyList()
-            } else {
-                stateHolder.messages
-                    .flatMap(Message::attachments)
+            // 工具始终读取所属会话。用户切换页面后，跨机中转仍能读取已落库的源文件，
+            // 当前页面中的新下载附件则优先从主线程快照获取，避免等待异步历史保存。
+            val visibleAttachments = withContext(Dispatchers.Main.immediate) {
+                if (stateHolder._currentConversationId.value == conversationId) {
+                    stateHolder.messages.flatMap(Message::attachments)
+                } else null
             }
+            visibleAttachments ?: com.android.everytalk.data.database.AppDatabase.getDatabase(application)
+                .chatDao().getMessagesForSession(conversationId).flatMap { it.attachments }
         },
         onDownloaded = { conversationId, runId, attachment ->
             // 工具结果属于固定 AgentRun；当前流式 ID 可能已经切到另一条消息或另一会话。
@@ -806,8 +809,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val computerSelections get() = computerManager.selections
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     val currentTaskRun = currentConversationId.flatMapLatest { id ->
-        com.android.everytalk.data.database.AppDatabase.getDatabase(getApplication())
-            .agentDao().observeLatestTaskRun(id)
+        val dao = com.android.everytalk.data.database.AppDatabase.getDatabase(getApplication()).agentDao()
+        dao.observeTaskRuns(id).map { runs ->
+            withContext(Dispatchers.IO) {
+                val store = com.android.everytalk.data.agent.AgentRunStore(dao)
+                runs.firstOrNull { run -> store.taskTargets(run).size > 1 }
+            }
+        }
     }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000), null)
     val pendingComputerAgentApprovals = apiHandler.pendingAgentApprovals
     val pendingInterventions = apiHandler.pendingInterventions
@@ -1164,6 +1172,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         )
                         savedAttachment = attachment
                         kotlinx.serialization.json.buildJsonObject {
+                            put("attachment_id", kotlinx.serialization.json.JsonPrimitive(attachment.id))
+                            put("file_link", kotlinx.serialization.json.JsonPrimitive("everytalk-file:${attachment.id}"))
                             put("ok", kotlinx.serialization.json.JsonPrimitive(true)); put("persisted", kotlinx.serialization.json.JsonPrimitive(true)); put("path", kotlinx.serialization.json.JsonPrimitive("Workspace/${saved.path}"))
                             put("bytes", kotlinx.serialization.json.JsonPrimitive(saved.bytes)); put("sha256", kotlinx.serialization.json.JsonPrimitive(saved.sha256))
                         }

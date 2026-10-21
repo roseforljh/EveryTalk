@@ -791,16 +791,36 @@ internal fun createPreparedMessageMarkdownAnnotator(
     preparedMessage: PreparedMessage,
     linkLogoHosts: Set<String> = emptySet(),
     linkLogoDefinitions: Map<String, String> = emptyMap(),
+    messageFiles: List<com.android.everytalk.models.SelectedMediaItem.GenericFile> = emptyList(),
+    messageFileLinkColor: Color = Color.Unspecified,
 ): MarkdownAnnotator = markdownAnnotator { content, child ->
+    val fileMentions = messageFileMentions(content, child, messageFiles, linkLogoDefinitions)
+    if (fileMentions != null) {
+        val (text, mentions) = fileMentions
+        var offset = 0
+        for (mention in mentions) {
+            append(text.substring(offset, mention.start))
+            appendInlineContent(messageFileInlineKey(mention.file), "\uFFFC")
+            append('\u2060')
+            // 文件是可执行的打开入口，不能继承普通正文的灰阶链接样式。
+            pushLink(LinkAnnotation.Url(MESSAGE_FILE_SCHEME + mention.file.id, TextLinkStyles(SpanStyle(
+                color = messageFileLinkColor, fontWeight = FontWeight.SemiBold, textDecoration = TextDecoration.Underline))))
+            append(mention.label)
+            pop()
+            offset = mention.end
+        }
+        append(text.substring(offset))
+        return@markdownAnnotator true
+    }
     val linkLogoDestination = child.markdownLinkLogoDestination(content, linkLogoDefinitions)
     val linkLogoHost = linkLogoDestination
         ?.let(::linkHost)
         ?.takeIf { it in linkLogoHosts }
     if (linkLogoHost != null) {
-        appendInlineContent(
-            markdownLinkLogoKey(linkLogoHost),
-            linkLogoHost,
-        )
+        // 单字符替代文本只占一个图标位置，避免复制时重复插入整段域名。
+        // WORD JOINER 将图标与链接开头连在一起；网址内部仍可自然换行。
+        appendInlineContent(markdownLinkLogoKey(linkLogoHost), "\uFFFC")
+        append('\u2060')
     }
 
     val link = child.inlineImageDestination(content)

@@ -1182,6 +1182,10 @@
         <item quantity="other">%1$d files changed</item>
     </plurals>
     <string name="file_changes_title">File changes</string>
+    <string name="file_changes_single">Changed %1$s</string>
+    <string name="file_changes_view">View changes</string>
+    <string name="file_changes_more">Show %1$d more files</string>
+    <string name="file_changes_collapse">Collapse files</string>
     <string name="file_change_written">Written</string>
     <string name="file_change_edited">Edited</string>
     <plurals name="thinking_remaining_sources">

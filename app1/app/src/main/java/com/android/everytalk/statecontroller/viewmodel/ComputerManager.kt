@@ -25,6 +25,7 @@ import com.android.everytalk.data.computer.ComputerToolApprovalRequest
 import com.android.everytalk.data.computer.ComputerRepository
 import com.android.everytalk.data.computer.ComputerRequestContext
 import com.android.everytalk.data.computer.ComputerTargetBinding
+import com.android.everytalk.data.computer.buildMultiComputerSessionPrompt
 import com.android.everytalk.data.computer.resolveComputerToolContext
 import com.android.everytalk.data.computer.targetContexts
 import com.android.everytalk.data.database.entities.toModel
@@ -208,11 +209,26 @@ internal fun requireSelectedReadyComputer(
 class ComputerManager(
     context: Context,
     private val scope: CoroutineScope,
-    attachmentsForConversation: (String) -> List<SelectedMediaItem>,
+    attachmentsForConversation: suspend (String) -> List<SelectedMediaItem>,
     onDownloaded: suspend (String, String, SelectedMediaItem.GenericFile) -> Unit,
     private val additionalComputerIds: (String) -> List<String> = { emptyList() },
 ) : AutoCloseable {
     private val appContext = context.applicationContext
+
+    /** 仅旧版安卓首次交付文件时请求系统存储权限；状态留在 ViewModel，旋转屏幕不会丢失等待者。 */
+    val downloadPermissionRequest = MutableStateFlow<CompletableDeferred<Boolean>?>(null)
+    private val downloadPermissionMutex = Mutex()
+
+    private suspend fun ensureDownloadPermission() {
+        downloadPermissionMutex.withLock {
+            if (!com.android.everytalk.data.computer.ComputerDownloadStore.needsPermission(appContext)) return@withLock
+            val decision = CompletableDeferred<Boolean>()
+            downloadPermissionRequest.value = decision
+            try {
+                check(decision.await()) { "未获得存储权限，文件未保存；请在应用权限中允许存储后重试" }
+            } finally { downloadPermissionRequest.value = null }
+        }
+    }
 
     /** 选择器只调用本地固定的列表工具；不接受模型提供的 URL、工具名或 Account 覆盖。 */
     suspend fun cloudflareResourceOptions(pending: com.android.everytalk.data.agent.PendingIntervention): List<com.android.everytalk.data.computer.ResourceOption> {
@@ -359,6 +375,7 @@ class ComputerManager(
         context = context.applicationContext,
         attachmentsForConversation = attachmentsForConversation,
         onDownloaded = onDownloaded,
+        beforeDownload = ::ensureDownloadPermission,
     )
     private val previewConfirmationMutex = Mutex()
     private val hostCommandConfirmationMutex = Mutex()
@@ -593,7 +610,7 @@ class ComputerManager(
                         workspaceId = localWorkspaceId(currentConversationId),
                         permissionMode = ComputerPermissionMode.MANUAL,
                     ),
-                    environmentPrompt = "当前使用 EveryTalk 内置本地 Workspace。local_bash 在临时内存快照中执行，文件变化不会自动保存；用户要求附件时必须使用 local_file_save，获得保存成功结果后才能说附件已发送。不能访问系统文件或网络。",
+                    environmentPrompt = "当前使用 EveryTalk 内置本地 Workspace。local_bash 在临时内存快照中执行，文件变化不会自动保存；用户要求附件时必须使用 local_file_save，获得保存成功结果后才能说附件已发送。在介绍文件的正文位置使用 [文件名](返回的file_link) 提供可点击链接。不能访问系统文件或网络。",
                     permissionMode = ComputerPermissionMode.MANUAL,
                     provider = ComputerProvider.SSH,
                     localOnly = true,
@@ -638,7 +655,7 @@ class ComputerManager(
                     permissionMode = computer.permissionMode,
                     provider = computer.provider,
                 )
-                }
+            }
             val targetIds = (listOf(computer.id) + additionalComputerIds(currentConversationId)).distinct()
             val prepared = targetIds.map { id ->
                 val target = repository.getComputer(id)
@@ -647,19 +664,13 @@ class ComputerManager(
             }
             val primary = prepared.first().second
             if (prepared.size == 1) return@withCurrentId primary
+            val bindings = prepared.map { (target, request) ->
+                ComputerTargetBinding(target.id, request.context.workspaceId, target.displayName,
+                    target.permissionMode, target.provider, request.context.cloudflareBinding)
+            }
             primary.copy(
-                context = primary.context.copy(selectedTargets = prepared.map { (target, request) ->
-                    ComputerTargetBinding(target.id, request.context.workspaceId, target.displayName,
-                        target.permissionMode, target.provider, request.context.cloudflareBinding)
-                }),
-                environmentPrompt = buildString {
-                    appendLine("当前会话选中了多台服务器。每次服务器工具调用都必须指定 computer_id，只能操作下列已选择的目标。")
-                    appendLine("按用户提示词决定实际操作范围，不要自动广播命令；互不依赖的只读检查可以同轮调用，有依赖或写入的步骤按顺序执行。最终用自然语言说明各台服务器的情况。")
-                    prepared.forEach { (target, request) ->
-                        appendLine("服务器 ID=${target.id}，名称=${kotlinx.serialization.json.JsonPrimitive(target.displayName)}：")
-                        appendLine(request.environmentPrompt)
-                    }
-                },
+                context = primary.context.copy(selectedTargets = bindings),
+                environmentPrompt = buildMultiComputerSessionPrompt(bindings.zip(prepared.map { it.second.environmentPrompt })),
             )
         }
     }
@@ -832,9 +843,8 @@ class ComputerManager(
     suspend fun computerSessionState(requestContext: ComputerRequestContext?): String? {
         requestContext ?: return null
         if (requestContext.selectedTargets.isNotEmpty()) {
-            return requestContext.targetContexts().map { target ->
-                "服务器 ID=${target.computerId}\n${computerSessionState(target).orEmpty()}"
-            }.joinToString("\n\n")
+            val prompts = requestContext.targetContexts().map { target -> computerSessionState(target).orEmpty() }
+            return buildMultiComputerSessionPrompt(requestContext.selectedTargets.zip(prompts))
         }
         val state = repository.getComputerSessionState(requestContext.workspaceId) ?: return null
         val computer = repository.getComputer(requestContext.computerId) ?: return state.toPrompt()
@@ -1129,6 +1139,7 @@ class ComputerManager(
         clearRequestPreparations()
         publicPreviewDecision?.complete(false)
         hostCommandDecision?.complete(false)
+        downloadPermissionRequest.value?.complete(false)
         toolExecutor.close()
         previewManager.close()
         runCatching { connectivityManager?.unregisterNetworkCallback(networkCallback) }
@@ -1169,11 +1180,13 @@ internal fun buildComputerEnvironmentPrompt(computer: Computer, workspace: Compu
         ComputerPermissionMode.FULL -> "All valid Agent operations execute directly without a user approval prompt."
     }
     if (computer.provider == ComputerProvider.CLOUDFLARE) return "当前目标是 Cloudflare Computer，工具操作当前 Account 的资源。" +
-        "本地 just-bash 使用私有 Workspace 内存快照；local_file_save 保存文件并返回附件。$permissionInstruction"
+        "本地 just-bash 使用私有 Workspace 内存快照；local_file_save 保存文件并返回附件。在介绍文件的正文位置使用 [文件名](返回的file_link) 提供可点击链接。$permissionInstruction"
     return "Agent server tools connect to the selected VPS directly over SSH. " +
         "exec defaults to target=host; choose target=container when isolation is needed. The app prepares it on demand; later calls still default to host. " +
         "These current environment facts supersede earlier container defaults in conversation history. " +
-        "download returns attachment_id when a file is attached. " +
+        "用户需要的交付文件生成后必须调用 download，不能仅返回服务器路径。" +
+        "download 自动保存到手机 Download/App/AppTalk，并返回 saved_path、attachment_id 和 file_link；只有成功后才能告知用户已保存。" +
+        "在介绍每个交付文件的正文位置使用 Markdown 链接 [文件名](file_link的实际值)，不要只写路径或把所有文件堆到回复末尾。" +
         "$permissionInstruction " +
         "File, terminal, upload and download paths are relative to ${workspace.hostPath}. exec starts in the SSH user's home; set cwd as needed. " +
         "Architecture: $architecture. Available tools: ${ComputerToolNames.all.sorted().joinToString(", ")}."

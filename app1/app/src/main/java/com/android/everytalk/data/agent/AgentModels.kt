@@ -74,6 +74,8 @@ const val AGENT_INTERNAL_ERROR_TYPE = "agent_internal"
 class AgentSteeringCancellation : CancellationException("agent steering requested")
 
 enum class AgentEntryKind {
+    /** 任务面板的服务器名称快照；不参与执行和模型上下文，不随恢复快照清理。 */
+    TASK_TARGETS,
     ASSISTANT,
     /** 本轮已发送的临时状态，作为下一轮的不可变历史前缀。 */
     RUNTIME_CONTEXT,
@@ -87,6 +89,10 @@ enum class AgentEntryKind {
     /** 当前任务的最小执行真相，只用于内部上下文投影，不进入可见聊天记录。 */
     EXECUTION_CHECKPOINT,
 }
+
+/** 历史任务只需保存服务器 ID 和名称，不能把权限、凭据或 Workspace 当成查看入口的依赖。 */
+@Serializable
+data class AgentTaskTarget(val computerId: String, val displayName: String)
 
 /**
  * 抵抗多次压缩造成的当前任务漂移。

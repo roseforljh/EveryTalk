@@ -1175,6 +1175,10 @@
         <item quantity="other">%1$d 个文件已更改</item>
     </plurals>
     <string name="file_changes_title">文件改动</string>
+    <string name="file_changes_single">已更改 %1$s</string>
+    <string name="file_changes_view">查看变更</string>
+    <string name="file_changes_more">再显示 %1$d 个文件</string>
+    <string name="file_changes_collapse">收起文件</string>
     <string name="file_change_written">已写入</string>
     <string name="file_change_edited">已编辑</string>
     <plurals name="thinking_remaining_sources">

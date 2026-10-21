@@ -1,5 +1,6 @@
 import { isPermanentSyncFailure, logicalKey, mergeRemote, pendingChange } from "./sync-core";
 import { syncKey, type PendingChange, type PullResponse, type PushResult, type StoredRecord, type SyncState } from "./types";
+import type { DownloadPreferences } from './file-downloads';
 
 const TABLES = ["records", "pending", "meta"];
 
@@ -61,6 +62,20 @@ export class SyncStore {
       const table = tx.objectStore("meta");
       const old = await read(table.get("state")) as { value: SyncState } | undefined;
       table.put({ key: "state", value: { cursor: 0, ...old?.value, ...patch } });
+    });
+  }
+
+  /** 目录句柄与下载回执只保存在账号本地 meta 表，不加入同步队列或云端备份。 */
+  async downloadPreferences(): Promise<DownloadPreferences | undefined> {
+    return this.transaction('readonly', async tx => {
+      const row = await read(tx.objectStore('meta').get('file-downloads')) as { value: DownloadPreferences } | undefined;
+      return row?.value;
+    });
+  }
+
+  async saveDownloadPreferences(value: DownloadPreferences): Promise<void> {
+    await this.transaction('readwrite', async tx => {
+      await read(tx.objectStore('meta').put({ key: 'file-downloads', value }));
     });
   }
 

@@ -66,6 +66,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import kotlinx.serialization.encodeToString
 import kotlinx.coroutines.sync.withLock
 import android.util.Log
 
@@ -159,6 +160,15 @@ class AgentRunStore(
             run = run,
             snapshotChunks = agentRequestSnapshotChunks(run.id, encodedSnapshot),
             reason = AgentTerminalReasons.SUPERSEDED_BY_NEW_RUN,
+            // 与 Run 同事务保存轻量展示信息。完整请求完成后可以清理，查看入口仍能冷启动恢复。
+            taskTargetsEntry = snapshot.computerRequestContext?.selectedTargets
+                ?.takeIf { it.size > 1 }?.map { AgentTaskTarget(it.computerId, it.displayName) }
+                ?.let { targets -> AgentEntryEntity(
+                    id = "task-targets:${run.id}", runId = run.id, sequence = 0,
+                    kind = AgentEntryKind.TASK_TARGETS.name, requestId = null, toolCallId = null,
+                    payloadJson = json.encodeToString(targets), status = AgentEntryStatus.FINAL.name,
+                    createdAt = now, finalizedAt = now,
+                ) },
         )
         snapshotCache[run.id] = snapshot
         request.initialExecutionCheckpoint(now)?.let { checkpoint ->
@@ -168,6 +178,33 @@ class AgentRunStore(
     }
 
     suspend fun getRun(runId: String): AgentRunEntity? = dao.getRun(runId)
+
+    /**
+     * 查看任务使用持久化展示记录，不依赖会被终态清理的请求快照。
+     * 老版本没有展示记录时，先读尚存快照，再从实际 ToolCall 恢复已操作的服务器；
+     * 不使用当前会话的选服设置，避免把后来选择的服务器误认为旧任务的目标。
+     */
+    suspend fun taskTargets(run: AgentRunEntity): List<AgentTaskTarget> {
+        val entries = dao.getEntries(run.id)
+        entries.firstOrNull { it.kind == AgentEntryKind.TASK_TARGETS.name }?.let { entry ->
+            try {
+                return json.decodeFromString<List<AgentTaskTarget>>(entry.payloadJson)
+            } catch (error: IllegalArgumentException) {
+                // 展示记录损坏时继续读取旧格式，不能中断整个会话的任务观察流。
+                Log.w(AGENT_RUN_STORE_TAG, "无法读取任务展示记录: runId=${run.id}", error)
+            }
+        }
+        val context = if (!run.requestSnapshotJson.isNullOrBlank() ||
+            dao.getRunSnapshotChunkPage(run.id, -1, 1).isNotEmpty()
+        ) decodeRequestSnapshot(run)?.computerRequestContext else null
+        val frozenTargets = context?.selectedTargets.orEmpty().map { AgentTaskTarget(it.computerId, it.displayName) }
+        if (frozenTargets.isNotEmpty()) return frozenTargets
+        return entries.filter { it.kind == AgentEntryKind.ASSISTANT.name }
+            .flatMap { decodeAssistantToolCalls(it) }
+            .filter { it.name in ComputerToolNames.allProviders }
+            .mapNotNull { call -> (call.arguments["computer_id"] as? JsonPrimitive)?.takeIf { it.isString }?.content }
+            .distinct().map { AgentTaskTarget(it, it) }
+    }
 
     suspend fun getRunByVisibleMessage(messageId: String): AgentRunEntity? =
         dao.getRunByVisibleMessage(messageId)

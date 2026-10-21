@@ -3,6 +3,7 @@ package com.android.everytalk.ui.screens.BubbleMain.Main
 import android.app.Application
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
@@ -26,8 +27,12 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipe
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.core.app.ApplicationProvider
 import com.android.everytalk.data.DataClass.ExecutionStep
@@ -48,6 +53,7 @@ import org.koin.core.context.startKoin
 import org.koin.core.context.stopKoin
 import org.koin.dsl.module
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [34], application = Application::class, qualifiers = "zh-rCN")
@@ -95,8 +101,9 @@ class ThinkingUiScrollComposeTest {
     }
 
     @Test
-    fun `多段过程在整条回复流式结束后统一收起`() {
+    fun `正文开始流式输出时过程收起且允许手动查看`() {
         val replyStreaming = mutableStateOf(true)
+        val contentStarted = mutableStateOf(false)
         composeRule.setContent {
             MaterialTheme {
                 ReasoningToggleAndContent(
@@ -107,7 +114,7 @@ class ThinkingUiScrollComposeTest {
                     isReasoningComplete = true,
                     replyIsStreaming = replyStreaming.value,
                     messageIsError = false,
-                    mainContentHasStarted = true,
+                    mainContentHasStarted = contentStarted.value,
                     reasoningTextColor = Color.Black,
                     reasoningToggleDotColor = Color.Black,
                     onVisibilityChanged = {},
@@ -118,7 +125,7 @@ class ThinkingUiScrollComposeTest {
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("reasoning-chain-summaries").fetchSemanticsNode("")
 
-        composeRule.runOnIdle { replyStreaming.value = false }
+        composeRule.runOnIdle { contentStarted.value = true }
         composeRule.waitUntil(timeoutMillis = 2_000L) {
             composeRule.onAllNodesWithTag("reasoning-chain-summaries")
                 .fetchSemanticsNodes()
@@ -133,6 +140,14 @@ class ThinkingUiScrollComposeTest {
                 "heights=${remainingNodes.map { it.boundsInRoot.height }}",
             remainingNodes.isEmpty(),
         )
+        assertTrue("折叠必须发生在回复结束之前", replyStreaming.value)
+        composeRule.onNodeWithTag("reasoning-inline-status").performClick()
+        composeRule.onNodeWithTag("reasoning-chain-summaries").assertIsDisplayed()
+        composeRule.onNodeWithTag("reasoning-inline-status").performClick()
+        composeRule.waitUntil(2_000L) {
+            composeRule.onAllNodesWithTag("reasoning-chain-summaries").fetchSemanticsNodes().isEmpty()
+        }
+        composeRule.runOnIdle { replyStreaming.value = false }
     }
 
     @Test
@@ -314,6 +329,7 @@ class ThinkingUiScrollComposeTest {
                 ReasoningToggleAndContent(
                     currentMessageId = "latest-server-commands",
                     displayedReasoningText = "",
+                    activityStatusText = "正在执行",
                     executionTrace = trace,
                     isReasoningStreaming = true,
                     isReasoningComplete = false,
@@ -328,7 +344,8 @@ class ThinkingUiScrollComposeTest {
 
         composeRule.mainClock.advanceTimeBy(500L)
         composeRule.waitForIdle()
-        composeRule.onNodeWithText("执行了 5 项服务器操作").fetchSemanticsNode("")
+        composeRule.onNodeWithTag("reasoning-chain-summary-scanning", useUnmergedTree = true)
+            .assertTextEquals("正在执行")
         assertTrue(
             composeRule.onAllNodesWithText("运行 Agent · command-4").fetchSemanticsNodes().isEmpty(),
         )
@@ -453,8 +470,8 @@ class ThinkingUiScrollComposeTest {
         assertTrue(composeRule.onAllNodesWithText("等待首个响应").fetchSemanticsNodes().isNotEmpty())
 
         composeRule.onNodeWithTag("reasoning-process-container").fetchSemanticsNode("")
-        // 状态文字在可点击行内，默认语义树会合并到父节点；查原始节点并核对实际可见文字。
-        composeRule.onNodeWithTag("reasoning-chain-live-status", useUnmergedTree = true)
+        // 等待状态复用顶部标签，不再单独占用一行。
+        composeRule.onNodeWithTag("reasoning-inline-status-text", useUnmergedTree = true)
             .assertTextEquals("等待首个响应")
             .assertIsDisplayed()
         assertTrue(
@@ -506,6 +523,146 @@ class ThinkingUiScrollComposeTest {
     }
 
     @Test
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    fun `操作标签短文本自适应且用满气泡可用宽度后才省略`() {
+        composeRule.mainClock.autoAdvance = false
+        val status = mutableStateOf("执行中")
+        val streaming = mutableStateOf(true)
+        composeRule.setContent {
+            MaterialTheme {
+                ReasoningToggleAndContent(
+                    modifier = Modifier.width(320.dp),
+                    currentMessageId = "tool-label-width",
+                    displayedReasoningText = "",
+                    activityStatusText = status.value,
+                    executionSteps = listOf(ExecutionStep(
+                        id = "width-tool", type = ExecutionStepType.Agent,
+                        title = "执行服务器命令", completed = true,
+                    )),
+                    isReasoningStreaming = false,
+                    isReasoningComplete = true,
+                    replyIsStreaming = streaming.value,
+                    mainContentHasStarted = true,
+                    messageIsError = false,
+                    reasoningTextColor = Color.Black,
+                    reasoningToggleDotColor = Color.Black,
+                    onVisibilityChanged = {},
+                )
+            }
+        }
+        composeRule.mainClock.advanceTimeBy(500L)
+        composeRule.onNodeWithTag("reasoning-inline-status").performClick()
+        composeRule.mainClock.advanceTimeBy(500L)
+        composeRule.waitForIdle()
+        val availableBounds = composeRule.onNodeWithTag("reasoning-chain-summaries").fetchSemanticsNode().boundsInRoot
+        var shortWidth = 0f
+        for ((text, shouldEllipsize) in listOf(
+            "执行中" to false,
+            "正在运行，已用时 00:25" to false,
+            "正在运行，正在检查网络接口、路由和DNS，等待服务器返回完整的检查结果" to true,
+        )) {
+            composeRule.runOnIdle { status.value = text }
+            composeRule.mainClock.advanceTimeBy(100L)
+            composeRule.waitForIdle()
+            val label = composeRule.onNodeWithTag("reasoning-chain-summary-scanning", useUnmergedTree = true)
+            val layouts = mutableListOf<TextLayoutResult>()
+            label.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+            val layout = layouts.single()
+            assertEquals("必须保持单行", 1, layout.lineCount)
+            assertEquals("只能在达到最大宽度时省略：$text", shouldEllipsize, layout.isLineEllipsized(0))
+            val bounds = composeRule.onNodeWithTag("reasoning-chain-summary-0").fetchSemanticsNode().boundsInRoot
+            assertTrue("标签不能超出气泡", bounds.left >= availableBounds.left && bounds.right <= availableBounds.right + 1f)
+            if (text == "执行中") shortWidth = bounds.width
+            if (shouldEllipsize) {
+                val textBounds = label.fetchSemanticsNode().boundsInRoot
+                assertEquals("超长标签应使用全部可用宽度", availableBounds.right, bounds.right, 1f)
+                assertTrue("短标签必须按内容收缩", shortWidth < bounds.width)
+                assertTrue("文字不能只得到一半宽度", textBounds.width > availableBounds.width * 0.75f)
+            }
+        }
+        composeRule.runOnIdle { streaming.value = false }
+        composeRule.mainClock.advanceTimeBy(500L)
+        composeRule.waitForIdle()
+        val completedBounds = composeRule.onNodeWithTag("reasoning-chain-summary-0").fetchSemanticsNode().boundsInRoot
+        assertTrue("完成后的操作数量标签也应自适应", completedBounds.width < availableBounds.width)
+    }
+
+    @Test
+    fun `分析编辑执行和完成在最新工具标签原位切换且高度保持不变`() {
+        composeRule.mainClock.autoAdvance = false
+        val status = mutableStateOf<String?>("正在分析")
+        val streaming = mutableStateOf(true)
+        val pending = mutableStateOf(false)
+        composeRule.setContent {
+            MaterialTheme {
+                ReasoningToggleAndContent(
+                    modifier = Modifier.width(240.dp),
+                    currentMessageId = "stable-tool-status",
+                    displayedReasoningText = "继续检查配置",
+                    activityStatusText = status.value,
+                    executionTrace = listOf(
+                        ExecutionTraceEvent.Tool(ExecutionStep(
+                            id = "old-tool", type = ExecutionStepType.Agent,
+                            title = "执行服务器命令", completed = true,
+                        )),
+                        ExecutionTraceEvent.Reasoning("继续检查配置"),
+                        ExecutionTraceEvent.Tool(ExecutionStep(
+                            id = "current-tool", type = ExecutionStepType.Agent,
+                            title = "编辑配置", labels = listOf("edit_file"), completed = !pending.value,
+                        )),
+                    ),
+                    isReasoningStreaming = false,
+                    isReasoningComplete = true,
+                    replyIsStreaming = streaming.value,
+                    mainContentHasStarted = true,
+                    messageIsError = false,
+                    reasoningTextColor = Color.Black,
+                    reasoningToggleDotColor = Color.Black,
+                    onVisibilityChanged = {},
+                )
+            }
+        }
+        composeRule.mainClock.advanceTimeBy(500L)
+        composeRule.onNodeWithTag("reasoning-inline-status").performClick()
+        composeRule.mainClock.advanceTimeBy(500L)
+        composeRule.waitForIdle()
+
+        val initialBounds = composeRule.onNodeWithTag("reasoning-chain-summary-2").fetchSemanticsNode().boundsInRoot
+        val initialHeight = composeRule.onNodeWithTag("reasoning-process-container").fetchSemanticsNode().boundsInRoot.height
+        for (nextStatus in listOf("正在编辑", "正在执行", "正在分析", "正在分析一段很长的工具结果并准备下一步操作", null)) {
+            composeRule.runOnIdle {
+                status.value = nextStatus
+                pending.value = nextStatus == "正在执行"
+                if (nextStatus == null) streaming.value = false
+            }
+            composeRule.mainClock.advanceTimeBy(500L)
+            composeRule.waitForIdle()
+            val tag = if (nextStatus == null) "reasoning-chain-summary-static" else "reasoning-chain-summary-scanning"
+            val labels = composeRule.onAllNodesWithTag(tag, useUnmergedTree = true).fetchSemanticsNodes()
+            assertEquals(if (nextStatus == null) 2 else 1, labels.size)
+            composeRule.onNodeWithTag("reasoning-chain-summary-2")
+                .assertHasClickAction()
+            if (nextStatus != null) {
+                composeRule.onNodeWithTag("reasoning-chain-summary-scanning", useUnmergedTree = true)
+                    .assertTextEquals(nextStatus)
+                    .assertIsDisplayed()
+            } else {
+                assertEquals(2, composeRule.onAllNodesWithText("执行了 1 项服务器操作", useUnmergedTree = true)
+                    .fetchSemanticsNodes().size)
+            }
+            val bounds = composeRule.onNodeWithTag("reasoning-chain-summary-2").fetchSemanticsNode().boundsInRoot
+            assertEquals("标签位置不能随状态变化", initialBounds.top, bounds.top, 0.5f)
+            assertEquals("标签高度不能随状态变化", initialBounds.height, bounds.height, 0.5f)
+            assertEquals("过程区域不能因状态行增删而抖动", initialHeight,
+                composeRule.onNodeWithTag("reasoning-process-container").fetchSemanticsNode().boundsInRoot.height, 0.5f)
+            composeRule.onNodeWithTag("reasoning-chain-live-status", useUnmergedTree = true).assertDoesNotExist()
+        }
+        composeRule.onNodeWithTag("reasoning-chain-summary-2").performClick()
+        composeRule.mainClock.advanceTimeBy(500L)
+        composeRule.onNodeWithTag("reasoning-chain-tool-2-0").assertIsDisplayed()
+    }
+
+    @Test
     fun `正文后尚无完整工具记录时显示正在编写`() {
         composeRule.mainClock.autoAdvance = false
         composeRule.setContent {
@@ -527,14 +684,15 @@ class ThinkingUiScrollComposeTest {
         }
         composeRule.mainClock.advanceTimeBy(1_000L)
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("reasoning-chain-live-status", useUnmergedTree = true)
+        composeRule.onNodeWithTag("reasoning-inline-status-text", useUnmergedTree = true)
             .assertTextEquals("正在编写")
+        composeRule.onNodeWithTag("reasoning-chain-live-status", useUnmergedTree = true).assertDoesNotExist()
         assertTrue(composeRule.onAllNodesWithText("正在编写").fetchSemanticsNodes().isNotEmpty())
         assertTrue(composeRule.onAllNodesWithText("执行了 1 项服务器操作").fetchSemanticsNodes().isEmpty())
     }
 
     @Test
-    fun `正在编写只在旁白下方显示一次且不占用顶部标题`() {
+    fun `没有工具标签时正在编写复用顶部标题且不新增状态行`() {
         composeRule.mainClock.autoAdvance = false
         composeRule.setContent {
             MaterialTheme {
@@ -557,12 +715,11 @@ class ThinkingUiScrollComposeTest {
         composeRule.mainClock.advanceTimeBy(1_000L)
         composeRule.waitForIdle()
 
-        val commentary = composeRule.onNodeWithTag("reasoning-chain-commentary").fetchSemanticsNode()
-        val writing = composeRule.onNodeWithTag("reasoning-chain-live-status", useUnmergedTree = true)
+        composeRule.onNodeWithTag("reasoning-chain-commentary").assertIsDisplayed()
+        composeRule.onNodeWithTag("reasoning-inline-status-text", useUnmergedTree = true)
             .assertTextEquals("正在编写")
             .assertIsDisplayed()
-            .fetchSemanticsNode()
-        assertTrue("编写状态必须排在旁白之后", writing.boundsInRoot.top >= commentary.boundsInRoot.bottom)
+        composeRule.onNodeWithTag("reasoning-chain-live-status", useUnmergedTree = true).assertDoesNotExist()
         assertEquals(1, composeRule.onAllNodesWithText("正在编写", useUnmergedTree = true).fetchSemanticsNodes().size)
     }
 
@@ -602,7 +759,7 @@ class ThinkingUiScrollComposeTest {
 
         composeRule.mainClock.advanceTimeBy(2_100L)
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("reasoning-chain-live-status", useUnmergedTree = true)
+        composeRule.onNodeWithTag("reasoning-inline-status-text", useUnmergedTree = true)
             .assertTextEquals("调用工具 · search_docs")
             .assertIsDisplayed()
         assertTrue(
@@ -644,6 +801,10 @@ class ThinkingUiScrollComposeTest {
         composeRule.waitForIdle()
 
         composeRule.onNodeWithTag("reasoning-inline-status").fetchSemanticsNode("")
+        composeRule.onNodeWithTag("reasoning-chain-summaries").assertDoesNotExist()
+        composeRule.onNodeWithTag("reasoning-inline-status").performClick()
+        composeRule.mainClock.advanceTimeBy(300L)
+        composeRule.waitForIdle()
         composeRule.onNodeWithTag("reasoning-chain-summaries").assertIsDisplayed()
         composeRule.onNodeWithTag("reasoning-chain-tool-1-0").assertDoesNotExist()
         composeRule.onNodeWithTag("reasoning-chain-summary-1").assertHasClickAction().performClick()
@@ -700,7 +861,8 @@ class ThinkingUiScrollComposeTest {
         composeRule.mainClock.advanceTimeBy(1_000L)
         composeRule.waitForIdle()
         composeRule.onNodeWithText("正在核对搜索结果").fetchSemanticsNode("")
-        composeRule.onNodeWithText("搜索了 1 次网页").fetchSemanticsNode("")
+        composeRule.onNodeWithTag("reasoning-chain-summary-scanning", useUnmergedTree = true)
+            .assertTextEquals("搜索网页 · $query")
 
         openReasoningSheet()
         composeRule.mainClock.advanceTimeBy(1_000L)

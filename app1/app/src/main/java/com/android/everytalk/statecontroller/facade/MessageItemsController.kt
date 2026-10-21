@@ -110,6 +110,8 @@ open class MessageItemsController(
         val blocksHash: String,
         val hasPendingMath: Boolean,
         val imageUrls: List<String>?,
+        /** 下载回执可独立于正文到达；附件变化必须使正文段和页脚缓存一起失效。 */
+        val attachments: List<com.android.everytalk.models.SelectedMediaItem>,
         val webSearchResults: List<WebSearchResult>?,
         val contentStarted: Boolean,
         val executionStatus: String?,
@@ -380,6 +382,7 @@ open class MessageItemsController(
                                 cached.outputType == message.outputType &&
                                 cached.hasReasoning == hasReasoning &&
                                 cached.imageUrls == message.imageUrls &&
+                                cached.attachments == message.attachments &&
                                 cached.webSearchResults == message.webSearchResults &&
                                 cached.contentStarted == effectiveMessage.contentStarted &&
                                 cached.executionStatus == message.executionStatus &&
@@ -427,6 +430,7 @@ open class MessageItemsController(
                                     blocksHash = parseResult.blocksHash,
                                     hasPendingMath = parseResult.hasPendingMath,
                                     imageUrls = message.imageUrls,
+                                    attachments = message.attachments,
                                     webSearchResults = message.webSearchResults,
                                     contentStarted = effectiveMessage.contentStarted,
                                     executionStatus = message.executionStatus,
@@ -489,6 +493,7 @@ open class MessageItemsController(
                                 cached.outputType == message.outputType &&
                                 cached.hasReasoning == hasReasoning &&
                                 cached.imageUrls == message.imageUrls &&
+                                cached.attachments == message.attachments &&
                                 cached.webSearchResults == message.webSearchResults &&
                                 cached.contentStarted == effectiveMessage.contentStarted &&
                                 cached.executionStatus == message.executionStatus &&
@@ -521,6 +526,7 @@ open class MessageItemsController(
                                     blocksHash = parseResult.blocksHash,
                                     hasPendingMath = parseResult.hasPendingMath,
                                     imageUrls = message.imageUrls,
+                                    attachments = message.attachments,
                                     webSearchResults = message.webSearchResults,
                                     contentStarted = effectiveMessage.contentStarted,
                                     executionStatus = message.executionStatus,
@@ -955,10 +961,9 @@ open class MessageItemsController(
                 events = items.flatMap { it.events },
                 detailStartIndex = items.minOf { it.detailStartIndex },
                 activityStatusText = items.asReversed().firstNotNullOfOrNull { it.activityStatusText },
-                // 末尾正文输出时还不知道它是旁白还是最终回答，整条回复流式期间保持最后的执行区展开，
-                // 避免每轮工具之间反复收起展开导致页面高度跳动。
-                replyIsStreaming = items.any { it.replyIsStreaming } ||
-                    (replyIsStreaming && items === processGroups.last().second),
+                // 正文开始输出说明前面的过程已结束，应立即收起；后续若再次调用工具，
+                // 新的活动过程会自然恢复展开，不能用整条回复的流状态强制展开已结束的过程。
+                replyIsStreaming = items.any { it.replyIsStreaming },
                 processIsActive = isProcessActive,
                 webSearchResults = message.webSearchResults.orEmpty(),
                 messageIsError = items.any { it.messageIsError },
@@ -995,6 +1000,9 @@ open class MessageItemsController(
                             // 避免每个正文段重复出现同一个来源胶囊。
                             webSearchResults = message.webSearchResults
                                 .takeIf { segmentIndex == lastContentIndex },
+                            // 段落只是同一回复的显示切片；正文文件链接仍要按原消息的附件 ID 打开。
+                            // 页脚统一管理兜底附件，这里传递元数据不会额外生成附件列表。
+                            attachments = message.attachments,
                         )
                         val contentItem = ChatListItem.AiMessageContentSegment(
                             sourceMessageId = message.id,

@@ -20,6 +20,7 @@ import com.android.everytalk.data.DataClass.ThinkingConfig
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.agent.ManualCompactionOutcome
+import com.android.everytalk.data.agent.AgentRunControlState
 import com.android.everytalk.data.safety.AiContentReportCategory
 import com.android.everytalk.data.safety.AiContentReportSubmissionResult
 import com.android.everytalk.data.computer.AddComputerRequest
@@ -1054,16 +1055,35 @@ import java.util.UUID
 
     internal fun AppViewModel.toggleStreamingPause() = streamingControls.togglePause()
 
-    // 明确动作而不是 toggle，连续点击或重组延迟不能把 Pause 反向变成 Resume。
-    internal fun AppViewModel.pauseStreaming() = streamingControls.pause()
+    /**
+     * 按钮传入渲染时的消息 ID，点击时直接读取运行控制器，避免 Compose 重组和派生流的延迟。
+     * 同一按钮连续点击：第一次登记安全暂停，后续暂停点击进入完整停止流程；不会反向恢复。
+     * 若页面已切换或停止正在确认，旧回调不能影响新任务。
+     */
+    internal fun AppViewModel.pauseStreaming(expectedMessageId: String?) {
+        if (expectedMessageId == null ||
+            stateHolder._currentTextStreamingAiMessageId.value != expectedMessageId ||
+            stateHolder._isRemoteCancellationPending.value
+        ) return
+        when (apiHandler.agentRunControlSnapshots.value[expectedMessageId]?.state) {
+            AgentRunControlState.RUNNING -> {
+                if (apiHandler.requestPauseCurrentAgent(expectedMessageId)) {
+                    stateHolder.showSnackbar("正在安全暂停")
+                }
+            }
+            AgentRunControlState.PAUSE_REQUESTED, AgentRunControlState.PAUSED ->
+                forceStopPendingPause(expectedMessageId)
+            null -> stopUncontrolledRun(expectedMessageId)
+        }
+    }
 
-    /** 只接受等待安全边界时的第二次点击；旧页面或尚未重组的按钮不能重复取消/误停新 Run。 */
+    /** 强停意图不因刚到达安全边界而失效；已暂停任务仍可终止，但旧页面不能误停新 Run。 */
     internal fun AppViewModel.forceStopPendingPause(expectedMessageId: String?) {
         if (expectedMessageId == null ||
             stateHolder._currentTextStreamingAiMessageId.value != expectedMessageId ||
             stateHolder._isRemoteCancellationPending.value ||
-            apiHandler.agentRunControlSnapshots.value[expectedMessageId]?.state !=
-                com.android.everytalk.data.agent.AgentRunControlState.PAUSE_REQUESTED
+            apiHandler.agentRunControlSnapshots.value[expectedMessageId]?.state !in
+                setOf(AgentRunControlState.PAUSE_REQUESTED, AgentRunControlState.PAUSED)
         ) return
         apiHandler.cancelCurrentApiJob("等待安全暂停时用户再次点击停止", isImageGeneration = false, showFeedback = true)
     }

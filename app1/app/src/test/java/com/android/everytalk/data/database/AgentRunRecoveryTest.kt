@@ -13,11 +13,16 @@ import com.android.everytalk.data.agent.AgentContentBlock
 import com.android.everytalk.data.agent.AgentEntryStatus
 import com.android.everytalk.data.agent.AgentRunStatus
 import com.android.everytalk.data.agent.AgentRunStore
+import com.android.everytalk.data.agent.AgentTaskTarget
+import com.android.everytalk.data.DataClass.ChatRequest
+import com.android.everytalk.data.computer.ComputerRequestContext
+import com.android.everytalk.data.computer.ComputerTargetBinding
 import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.database.entities.toEntity
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import org.junit.After
@@ -44,6 +49,64 @@ class AgentRunRecoveryTest {
     @After
     fun tearDown() {
         database.close()
+    }
+
+    @Test
+    fun `多服务器任务结束后清理快照并重建Store仍能查看目标和过程`() = runBlocking {
+        val dao = database.agentDao()
+        val sessionId = "session-task-panel"
+        database.chatDao().insertSession(ChatSessionEntity(sessionId, 1L, 1L, isImageGeneration = false))
+        val request = ChatRequest(
+            messages = emptyList(), provider = "OpenAI", channel = "OpenAI Chat Completions",
+            apiAddress = "https://example.test/v1", apiKey = "secret", model = "model-1",
+            localComputerRequestContext = ComputerRequestContext(
+                conversationId = sessionId, computerId = "a", workspaceId = "workspace-a",
+                selectedTargets = listOf(
+                    ComputerTargetBinding("a", "workspace-a", "服务器 A"),
+                    ComputerTargetBinding("b", "workspace-b", "服务器 B"),
+                    ComputerTargetBinding("c", "workspace-c", "未执行的服务器 C"),
+                ),
+            ),
+        )
+        val store = AgentRunStore(dao)
+        val run = store.createRun(sessionId, "user-task", "assistant-task", null, request)
+        val calls = listOf("a", "b").map { id ->
+            AgentContentBlock.ToolCall("call-$id", "exec", buildJsonObject {
+                put("computer_id", JsonPrimitive(id))
+                put("command", JsonPrimitive("echo ok"))
+            })
+        }
+        store.appendAssistant(run.id, "request-task", AgentAssistantTurn(calls))
+        calls.forEach { call ->
+            store.appendToolResult(run.id, "request-task", AgentContentBlock.ToolResult(
+                toolCallId = call.id, toolName = call.name, content = JsonPrimitive("ok"),
+            ))
+        }
+        store.updateRunStatus(run, AgentRunStatus.COMPLETED)
+        assertTrue(dao.getRunSnapshotChunkPage(run.id, -1, 8).isEmpty())
+
+        // 新 Store 不复用内存快照，且普通后续聊天不能遮掉之前的多服务器任务。
+        val plainRun = store.createRun(sessionId, "user-plain", "assistant-plain", null,
+            request.copy(localComputerRequestContext = null))
+        dao.upsertRun(plainRun.copy(createdAt = run.createdAt + 1))
+        val restarted = AgentRunStore(dao)
+        val candidates = dao.observeTaskRuns(sessionId).first()
+        assertEquals(plainRun.id, candidates.first().id)
+        val restoredRun = candidates.first { restarted.taskTargets(it).size > 1 }
+        assertEquals(run.id, restoredRun.id)
+        assertEquals("COMPLETED", restoredRun.status)
+        assertEquals(listOf(AgentTaskTarget("a", "服务器 A"), AgentTaskTarget("b", "服务器 B"),
+            AgentTaskTarget("c", "未执行的服务器 C")), restarted.taskTargets(restoredRun))
+        val trace = restarted.executionTrace(run.id).filterIsInstance<ExecutionTraceEvent.Tool>()
+        assertEquals(listOf("a", "b"), trace.map { it.step.computerId })
+        assertTrue(trace.all { it.step.completed && !it.step.isError && it.step.resultPreview != null })
+
+        // 兼容旧版本：展示记录缺失或损坏、恢复快照已清理时，仍可按工具记录找回服务器。
+        val targetEntry = dao.getEntries(run.id).first { it.kind == "TASK_TARGETS" }
+        database.openHelper.writableDatabase.execSQL("DELETE FROM agent_entries WHERE id = ?", arrayOf(targetEntry.id))
+        assertEquals(listOf("a", "b"), AgentRunStore(dao).taskTargets(restoredRun).map { it.computerId })
+        dao.upsertEntry(targetEntry.copy(payloadJson = "invalid"))
+        assertEquals(listOf("a", "b"), AgentRunStore(dao).taskTargets(restoredRun).map { it.computerId })
     }
 
     @Test

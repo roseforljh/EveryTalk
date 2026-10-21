@@ -766,8 +766,10 @@ internal class RoomSyncStore(
         val memberKeys = allSettings.filter { it.kind == "group_members" }.mapTo(hashSetOf()) { it.key }
         val localGroups = settings.getConversationGroups().map { group ->
             val encoded = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(group.groupName.toByteArray(Charsets.UTF_8))
+            // 分组内新建的会话在首条消息前只有临时编号、尚未落库；不能当作失效成员删掉，
+            // 否则首次保存迁移编号时找不到归属，会话会掉到普通列表。
             group.copy(conversationIds = group.conversationIds.filter { id ->
-                chat.getStoredSession(id)?.let { !it.deleted && (it.isImageGeneration || "$encoded.${it.uuid}" !in memberKeys) } == true
+                chat.getStoredSession(id)?.let { !it.deleted && (it.isImageGeneration || "$encoded.${it.uuid}" !in memberKeys) } ?: true
             })
         }
         val legacyGroups = synced.filter { it.kind == "conversation_groups" }.mapNotNull { setting ->
