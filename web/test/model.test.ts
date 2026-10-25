@@ -62,17 +62,18 @@ describe('安卓模型端点解析兼容性', () => {
     })
 
     const qwen = imageRequest({
-      address: 'https://dashscope.aliyuncs.com/api/v1/services/aigc/image-generation/generation', model: 'qwen-image-edit', apiKey: 'secret', provider: 'Qwen',
+      address: 'https://qwen.example.modal.run/generate', model: 'qwen-image-edit', apiKey: 'secret', provider: 'Qwen',
       numInferenceSteps: 20, guidanceScale: 4,
     }, '去掉背景', [attachment])
-    expect(imageProtocol({ provider: 'Qwen', model: 'qwen-image-edit' })).toBe('qwen')
+    expect(imageProtocol({ address: 'https://qwen.example.modal.run/generate', model: 'qwen-image-edit' })).toBe('qwen')
+    expect(imageProtocol({ channel: 'OpenAI兼容', model: 'qwen-image-edit' })).toBe('openai')
     expect(qwen.body).toEqual({ image_base64: 'AQID', prompt: '去掉背景', num_inference_steps: 20, guidance_scale: 4 })
 
     const modal = imageRequest({
       address: 'https://example.modal.run/generate', model: 'z-image-turbo', apiKey: 'secret', provider: 'Modal',
       imageSize: '768x1024', numInferenceSteps: 8, guidanceScale: 1.5,
     }, '生成海报')
-    expect(imageProtocol({ provider: 'Modal', model: 'z-image-turbo' })).toBe('modal')
+    expect(imageProtocol({ address: 'https://example.modal.run/generate', model: 'z-image-turbo' })).toBe('modal')
     expect(modal.body).toEqual({ prompt: '生成海报', imageSize: '768x1024', numInferenceSteps: 8, guidanceScale: 1.5 })
   })
 

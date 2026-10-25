@@ -48,7 +48,7 @@ export async function POST(request: Request): Promise<Response> {
     const input: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'))
     if (!isObject(input) || typeof input.target !== 'string' || typeof input.apiKey !== 'string' || input.apiKey.length > 8192 || /[\r\n]/.test(input.apiKey) || !isObject(input.body)) return fail('模型请求格式无效', 400)
     const protocol = input.protocol
-    if (!['openai', 'anthropic', 'gemini'].includes(String(protocol))) return fail('暂不支持这个模型协议', 400)
+    if (!['openai', 'responses', 'anthropic', 'gemini'].includes(String(protocol))) return fail('暂不支持这个模型协议', 400)
     const target = new URL(input.target)
     const headers: Record<string, string> = protocol === 'anthropic'
       ? { 'x-api-key': input.apiKey, 'anthropic-version': '2023-06-01' }

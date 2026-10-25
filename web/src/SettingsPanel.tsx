@@ -1,9 +1,12 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Plus, X, Check, ChevronRight } from 'lucide-react'
 import { isObject } from './sync-core'
-import { modelProtocol } from './model'
+import { isBuiltinModel } from './builtin-models'
+import { ModelIcon } from './ModelIcon'
+import { ModelParametersFields } from './ModelParametersFields'
+import { findCatalogModel, modalityLabels, modelCapabilities, parameterProtocol, withModelId, type CatalogModel } from './model-capabilities'
 import type { JsonObject, StoredRecord } from './types'
 import type { useFileDownloads } from './use-file-downloads'
 
@@ -29,10 +32,21 @@ export function SettingsPanel({ records, onClose, saveSetting, saveMemory, error
   const [entryKey, setEntryKey] = useState('default')
   const [json, setJson] = useState('{}')
   const [name, setName] = useState(''), [address, setAddress] = useState(''), [model, setModel] = useState(''), [apiKey, setApiKey] = useState('')
-  const [imageConfig, setImageConfig] = useState(false)
-  const [imageSize, setImageSize] = useState(''), [inferenceSteps, setInferenceSteps] = useState(''), [guidanceScale, setGuidanceScale] = useState('')
-  const [aspectRatio, setAspectRatio] = useState(''), [quality, setQuality] = useState(''), [watermark, setWatermark] = useState(false)
-  const [protocol, setProtocol] = useState('OPENAI')
+  const [parameterConfig, setParameterConfig] = useState<JsonObject>({})
+  const [catalog, setCatalog] = useState<CatalogModel[]>([])
+  const [catalogLoading, setCatalogLoading] = useState(false), [catalogError, setCatalogError] = useState('')
+  const [catalogVersion, setCatalogVersion] = useState(0)
+  useEffect(() => {
+    const abort = new AbortController()
+    setCatalogLoading(true); setCatalogError('')
+    void fetch('/api/model-catalog', { signal: abort.signal }).then(async response => {
+      const value: unknown = await response.json()
+      if (!response.ok || !isObject(value) || !Array.isArray(value.models)) throw new Error('目录暂不可用，可手动配置或稍后刷新')
+      setCatalog(value.models as unknown as CatalogModel[])
+    }).catch(error => { if (!abort.signal.aborted) setCatalogError(error instanceof Error ? error.message : '目录加载失败') })
+      .finally(() => { if (!abort.signal.aborted) setCatalogLoading(false) })
+    return () => abort.abort()
+  }, [catalogVersion])
   const [searchProvider, setSearchProvider] = useState('tavily'), [searchApiKey, setSearchApiKey] = useState('')
   const [memory, setMemory] = useState('')
   const [busy, setBusy] = useState(false)
@@ -46,14 +60,7 @@ export function SettingsPanel({ records, onClose, saveSetting, saveMemory, error
     setEditing(record); setSaved(false); setApiKey('')
     const value = record && isObject(record.payload.value) ? record.payload.value : {}
     setName(String(value.name ?? '')); setAddress(String(value.address ?? '')); setModel(String(value.model ?? ''))
-    setImageConfig(value.imageConfig === true)
-    setImageSize(String(value.imageSize ?? '')); setInferenceSteps(String(value.inferenceSteps ?? ''))
-    setGuidanceScale(String(value.guidanceScale ?? '')); setAspectRatio(String(value.aspectRatio ?? ''))
-    setQuality(String(value.quality ?? '')); setWatermark(value.watermark === true)
-    const parameters = isObject(value.modelParameters) ? value.modelParameters : {}
-    const override = String(parameters.protocolOverride ?? '').toLowerCase()
-    const selectedProtocol = override === 'anthropic' || override === 'gemini' || override === 'openai' ? override : modelProtocol(value)
-    setProtocol(selectedProtocol.toUpperCase())
+    setParameterConfig(value)
     setSearchProvider(String(value.providerId ?? record?.payload.key ?? 'tavily')); setSearchApiKey('')
     setKind(String(record?.payload.kind ?? 'web_search_configs')); setEntryKey(String(record?.payload.key ?? 'default')); setJson(JSON.stringify(value, null, 2))
     setMemory(String(record?.payload.content ?? ''))
@@ -87,10 +94,10 @@ export function SettingsPanel({ records, onClose, saveSetting, saveMemory, error
         </>}
         {editing === undefined && tab !== 'files' && <>
           <div className="et-settings-intro"><p className="et-muted">{tab === 'models' ? '使用安卓端同步的模型，也可以在这里添加。' : tab === 'search' ? '配置后可在当前对话开启联网搜索，密钥只用于当前搜索请求。' : tab === 'memory' ? '记忆随账号同步；启用的记忆可用于聊天上下文。' : '保留全部协议字段。MCP、技能和电脑配置会同步，浏览器暂不执行。'}</p><button className="et-outline" onClick={() => edit(null)}><Plus size={14} />新增</button></div>
-          {tab === 'models' && models.map(record => { const value = isObject(record.payload.value) ? record.payload.value : {}; return <button className="et-setting-row" key={record.id} onClick={() => edit(record)}><div><strong>{String(value.name || value.model || '未命名模型')}</strong><small>{String(value.model || '')} · {String(value.address || '')}</small></div><ChevronRight size={16} /></button> })}
+          {tab === 'models' && models.map(record => { const value = isObject(record.payload.value) ? record.payload.value : {}; const caps = modelCapabilities(value); return <button className="et-setting-row et-model-row" key={record.id} onClick={() => { if (!isBuiltinModel(value, String(record.payload.key))) edit(record) }}><ModelIcon model={String(value.model ?? '')} /><div><strong>{isBuiltinModel(value, String(record.payload.key)) ? '默认配置 · ' : ''}{String(value.name || value.model || '未命名模型')}</strong><small>{String(value.model || '')} · {isBuiltinModel(value, String(record.payload.key)) ? '内置 · 不可删除' : parameterProtocol(value)}</small><span className="et-model-output">{caps.input.map(value => modalityLabels[value] ?? value).join(' / ')} → {caps.output.map(value => modalityLabels[value] ?? value).join(' / ')}</span></div><ChevronRight size={16} /></button> })}
           {tab === 'search' && searchConfigs.map(record => { const value = isObject(record.payload.value) ? record.payload.value : {}; return <button className="et-setting-row" key={record.id} onClick={() => edit(record)}><div><strong>{String(value.providerId || record.payload.key || '搜索服务')}</strong><small>API Key 已加密保存</small></div><ChevronRight size={16} /></button> })}
           {tab === 'memory' && memories.map(record => <button className="et-setting-row" key={record.id} onClick={() => edit(record)}><div><strong>{String(record.payload.content)}</strong><small>{String(record.payload.category || '记忆')} · {record.payload.enabled === false ? '已关闭' : '已启用'}</small></div><ChevronRight size={16} /></button>)}
-          {tab === 'advanced' && settings.map(record => <button className="et-setting-row" key={record.id} onClick={() => edit(record)}><div><strong>{settingNames[String(record.payload.kind)] || String(record.payload.kind)}</strong><small>{String(record.payload.key)}</small></div><ChevronRight size={16} /></button>)}
+          {tab === 'advanced' && settings.filter(record => !(record.payload.kind === 'api_configs' && isObject(record.payload.value) && isBuiltinModel(record.payload.value, String(record.payload.key)))).map(record => <button className="et-setting-row" key={record.id} onClick={() => edit(record)}><div><strong>{settingNames[String(record.payload.kind)] || String(record.payload.kind)}</strong><small>{String(record.payload.key)}</small></div><ChevronRight size={16} /></button>)}
           {(tab === 'models' ? models : tab === 'search' ? searchConfigs : tab === 'memory' ? memories : settings).length === 0 && <p className="et-empty-list">还没有{tab === 'models' ? '模型' : tab === 'search' ? '搜索服务' : tab === 'memory' ? '记忆' : '配置'}，可新增或等待安卓端同步。</p>}
         </>}
         {editing !== undefined && <form onSubmit={event => {
@@ -107,11 +114,12 @@ export function SettingsPanel({ records, onClose, saveSetting, saveMemory, error
             if (tab === 'models') {
               const old = editing && isObject(editing.payload.value) ? editing.payload.value : {}
               const key = String(editing?.payload.key ?? crypto.randomUUID())
-              await saveSetting('api_configs', key, { ...old, name: name.trim(), address: address.trim(), model: model.trim(), provider: protocol === 'ANTHROPIC' ? 'Anthropic' : protocol === 'GEMINI' ? 'Google' : 'OpenAI',
-                imageConfig, channel: old.channel ?? '', modality: imageConfig ? 'IMAGE' : old.modality ?? 'TEXT', temperature: old.temperature ?? 0.7,
-                imageSize: imageSize.trim() || null, inferenceSteps: Number(inferenceSteps) || null, guidanceScale: Number(guidanceScale) || null,
-                aspectRatio: aspectRatio.trim() || null, quality: quality.trim() || null, watermark,
-                modelParameters: { ...(isObject(old.modelParameters) ? old.modelParameters : {}), protocolOverride: protocol },
+              const capabilities = modelCapabilities(parameterConfig)
+              const imageConfig = capabilities.output.includes('image')
+              const parameters = isObject(parameterConfig.modelParameters) ? parameterConfig.modelParameters : {}
+              if (capabilities.output.includes('text') && (!Number.isSafeInteger(Number(parameterConfig.outputLimit ?? 4096)) || !Number.isSafeInteger(Number(parameters.contextLimit ?? 128000)) || Number(parameters.contextLimit ?? 128000) > 10000000 || Number(parameterConfig.outputLimit ?? 4096) < 1 || Number(parameterConfig.outputLimit ?? 4096) >= Number(parameters.contextLimit ?? 128000))) throw new Error('最大输出必须大于 0 且小于上下文窗口')
+              await saveSetting('api_configs', key, { ...old, ...parameterConfig, name: name.trim(), address: address.trim(), model: model.trim(), provider: old.provider ?? findCatalogModel(catalog, model)?.provider ?? 'OpenAI',
+                imageConfig, channel: old.channel ?? '', modality: imageConfig ? 'IMAGE' : 'TEXT',
                 ...(apiKey ? { apiKey } : {}) }, editing ?? undefined)
               return
             }
@@ -123,19 +131,13 @@ export function SettingsPanel({ records, onClose, saveSetting, saveMemory, error
         }}>
           {tab === 'models' && <>
             <label>名称<input required value={name} onChange={e => setName(e.target.value)} placeholder="我的模型" /></label>
-            <label>协议<select value={protocol} onChange={e => setProtocol(e.target.value)}><option value="OPENAI">OpenAI 兼容</option><option value="ANTHROPIC">Anthropic</option><option value="GEMINI">Gemini</option></select></label>
             <label>模型地址<input required type="url" value={address} onChange={e => setAddress(e.target.value)} placeholder="https://api.openai.com/v1" /></label>
-            <label>模型名称<input required value={model} onChange={e => setModel(e.target.value)} placeholder="供应商提供的模型 ID" /></label>
+            <label>模型名称<input required list="et-model-catalog" value={model} onChange={e => {
+              const id = e.target.value; setModel(id)
+              setParameterConfig(current => withModelId(current, id, catalog))
+            }} placeholder="搜索 models.dev 或填写自定义模型 ID" /><datalist id="et-model-catalog">{[...new Map(catalog.filter(item => !model || `${item.id} ${item.name}`.toLowerCase().includes(model.toLowerCase())).map(item => [item.id, item])).values()].slice(0, 80).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</datalist></label>
             <label>API Key<input type="password" required={!editing} value={apiKey} onChange={e => setApiKey(e.target.value)} autoComplete="new-password" placeholder={editing ? '留空保留已有密钥' : '加密后同步'} /></label>
-            <label className="et-checkbox"><input type="checkbox" checked={imageConfig} onChange={e => setImageConfig(e.target.checked)} />图片生成模型（Gemini、OpenAI、Seedream、Qwen 或 Modal）</label>
-            {imageConfig && <>
-              <label>图片尺寸<input value={imageSize} onChange={e => setImageSize(e.target.value)} placeholder="1024x1024、2K 或 1K" /></label>
-              <label>推理步数<input inputMode="numeric" value={inferenceSteps} onChange={e => setInferenceSteps(e.target.value)} placeholder="可选，例如 30" /></label>
-              <label>引导系数<input inputMode="decimal" value={guidanceScale} onChange={e => setGuidanceScale(e.target.value)} placeholder="可选，例如 7.5" /></label>
-              <label>宽高比<input value={aspectRatio} onChange={e => setAspectRatio(e.target.value)} placeholder="Gemini/Seedream，例如 16:9" /></label>
-              <label>质量<input value={quality} onChange={e => setQuality(e.target.value)} placeholder="OpenAI 兼容接口可选" /></label>
-              <label className="et-checkbox"><input type="checkbox" checked={watermark} onChange={e => setWatermark(e.target.checked)} />Seedream 添加水印</label>
-            </>}
+            <ModelParametersFields config={{ ...parameterConfig, model, address }} onChange={setParameterConfig} catalog={catalog} loading={catalogLoading} error={catalogError} onRefresh={() => setCatalogVersion(value => value + 1)} />
           </>}
           {tab === 'search' && <>
             <label>搜索服务商<select value={searchProvider} onChange={e => setSearchProvider(e.target.value)}><option value="tavily">Tavily</option><option value="exa">Exa</option><option value="bocha">Bocha</option><option value="serpapi">SerpAPI</option></select></label>

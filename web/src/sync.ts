@@ -175,6 +175,8 @@ export class SyncClient {
 
   async downloadPreferences(): Promise<DownloadPreferences | undefined> { return this.requireStore().downloadPreferences(); }
   async saveDownloadPreferences(value: DownloadPreferences): Promise<void> { await this.requireStore().saveDownloadPreferences(value); }
+  async cachedAttachment(key: string): Promise<Blob | undefined> { return this.requireStore().cachedAttachment(key); }
+  async cacheAttachment(key: string, value: Blob): Promise<void> { await this.requireStore().cacheAttachment(key, value); }
 
   /** 资源和密钥请求共用账号、退出取消和协议头，不另建无保护的网络入口。 */
   async cloudJson(session: AuthSession, path: string, body?: unknown, headers?: HeadersInit, refreshSession?: () => Promise<AuthSession>): Promise<unknown> {

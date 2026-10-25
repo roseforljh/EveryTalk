@@ -68,6 +68,10 @@ describe('客户端固定目录保存', () => {
     await saveReceivedFile(store, 'directory-1', attachment, load, () => true, true)
     expect(await saveReceivedFile(store, 'directory-1', attachment, load, () => true, true)).toBe('AppTalk/报告.txt')
     expect(requests).toBe(1)
+    await saveReceivedFile(store, 'directory-1', attachment, load, () => true)
+    await saveReceivedFile(store, 'directory-1', attachment, load, () => true)
+    expect(requests).toBe(1)
+    expect(dir.files.size).toBe(1)
     const next = { ...attachment, id: 'file-2' }
     dir.deny()
     await expect(saveReceivedFile(store, 'directory-1', next, load, () => true)).rejects.toThrow('重新授权')

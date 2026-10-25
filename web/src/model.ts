@@ -1,11 +1,13 @@
 import { isObject } from './sync-core'
 import { authenticatedFetch } from './auth'
 import type { AuthSession, JsonObject, StoredRecord } from './types'
+import { modelCapabilities, parameterProtocol } from './model-capabilities'
+import { ModelToolTurn, withModelTools, type ModelTools } from './model-tools'
 
 export interface ModelResult { text: string; reasoning: string; usage?: JsonObject }
-export type ModelProtocol = 'openai' | 'anthropic' | 'gemini'
+export type ModelProtocol = 'openai' | 'responses' | 'anthropic' | 'gemini'
 export interface ImageResult { text: string; images: string[] }
-export type ImageProtocol = 'openai' | 'gemini' | 'qwen' | 'modal'
+export type ImageProtocol = 'openai' | 'gemini' | 'qwen' | 'modal' | 'unsupported'
 
 /**
  * 浏览器已经读取的图片输入。
@@ -14,9 +16,8 @@ export type ImageProtocol = 'openai' | 'gemini' | 'qwen' | 'modal'
 export interface ModelAttachment { mime: string; dataUrl: string }
 
 export function modelProtocol(config: JsonObject): ModelProtocol {
-  const parameters = isObject(config.modelParameters) ? config.modelParameters : {}
-  const hint = [parameters.protocolOverride, config.provider, config.model, config.address].map(value => String(value ?? '')).join(' ').toLowerCase()
-  return /anthropic|claude/.test(hint) ? 'anthropic' : /gemini|google/.test(hint) ? 'gemini' : 'openai'
+  const protocol = parameterProtocol(config)
+  return protocol === 'CODEX' ? 'responses' : protocol === 'ANTHROPIC' ? 'anthropic' : protocol === 'GEMINI' ? 'gemini' : 'openai'
 }
 
 /**
@@ -25,11 +26,18 @@ export function modelProtocol(config: JsonObject): ModelProtocol {
  * 模型名才进入专用分支，避免把普通聊天模型误当成图片服务。
  */
 export function imageProtocol(config: JsonObject): ImageProtocol {
-  const hint = [config.provider, config.model, config.address].map(value => String(value ?? '')).join(' ').toLowerCase()
-  if (/modal|z[-_ ]?image|image[-_ ]?turbo/.test(hint)) return 'modal'
-  if (/qwen.*image.*edit|image.*edit.*qwen|qwen[-_ ]?image[-_ ]?edit/.test(hint)) return 'qwen'
-  if (/gemini|google/.test(hint)) return 'gemini'
-  return 'openai'
+  const model = String(config.model ?? '')
+  if (['默认', 'default', 'builtin'].includes(String(config.provider ?? '').toLowerCase())) {
+    if (model === 'qwen-image-edit-modal') return 'qwen'
+    if (model === 'z-image-turbo-modal') return 'modal'
+    if (model === 'Kwai-Kolors/Kolors') return 'openai'
+  }
+  const endpoint = String(config.address ?? '').trim().replace(/#$/, '').toLowerCase()
+  if (endpoint.includes('modal.run')) return /qwen.*edit/i.test(model) ? 'qwen' : 'modal'
+  if (/\/images\/(generations|edits)(?:[/?]|$)/.test(endpoint)) return 'openai'
+  if (/\/v1beta(?:[/?]|$)/.test(endpoint) || endpoint.includes('generativelanguage.googleapis.com')) return 'gemini'
+  const protocol = parameterProtocol(config)
+  return protocol === 'GEMINI' ? 'gemini' : protocol === 'OPENAI_COMPATIBLE' ? 'openai' : 'unsupported'
 }
 
 /**
@@ -77,7 +85,7 @@ export function resolveModelEndpoint(protocol: ModelProtocol, rawAddress: string
   const lower = knownBase.toLowerCase()
   const geminiIndex = lower.lastIndexOf('/v1beta/models/')
   const geminiOperation = geminiIndex >= 0 ? lower.slice(geminiIndex).split(':')[1] : ''
-  const knownSuffixes = ['/v1/chat/completions', '/chat/completions', '/v1/responses', '/responses', '/v1/completions', '/completions', '/v1/messages', '/messages', '/v1beta/models', '/v1beta']
+  const knownSuffixes = ['/v1/images/generations', '/images/generations', '/v1/images/edits', '/images/edits', '/v1/chat/completions', '/chat/completions', '/v1/responses', '/responses', '/v1/completions', '/completions', '/v1/messages', '/messages', '/v1beta/models', '/v1beta']
   const base = geminiOperation === 'streamgeneratecontent' || geminiOperation === 'generatecontent'
     ? knownBase.slice(0, geminiIndex).replace(/\/+$/, '')
     : (knownSuffixes.find(suffix => lower.endsWith(suffix)) ? knownBase.slice(0, -knownSuffixes.find(suffix => lower.endsWith(suffix))!.length) : knownBase).replace(/\/+$/, '')
@@ -86,7 +94,7 @@ export function resolveModelEndpoint(protocol: ModelProtocol, rawAddress: string
     const encodedModel = encodeURIComponent(model.trim().replace(/^models\//, ''))
     endpoint = lower.endsWith('/v1beta/models') ? `${base}/${encodedModel}:streamGenerateContent` : `${base}${lower.endsWith('/v1beta') ? '' : '/v1beta'}/models/${encodedModel}:streamGenerateContent`
   } else {
-    const path = protocol === 'anthropic' ? 'messages' : 'chat/completions'
+    const path = protocol === 'anthropic' ? 'messages' : protocol === 'responses' ? 'responses' : 'chat/completions'
     const hasVersion = /^v\d+$/.test(base.slice(base.lastIndexOf('/') + 1))
     endpoint = `${base}${hasVersion ? '' : '/v1'}/${path}`
   }
@@ -97,11 +105,15 @@ export function resolveModelEndpoint(protocol: ModelProtocol, rawAddress: string
 /** 复用安卓地址与协议覆盖值；已包含完整路径时不重复追加。 */
 export function modelRequest(config: JsonObject, messages: StoredRecord[], system: string, attachments: ModelAttachment[] = []): { target: string; protocol: ModelProtocol; apiKey: string; body: JsonObject } {
   const protocol = modelProtocol(config)
+  const capability = modelCapabilities(config)
+  const parameters = isObject(config.modelParameters) ? config.modelParameters : {}
   const model = String(config.model ?? '')
   const address = String(config.address ?? '')
   if (!address || !model || typeof config.apiKey !== 'string' || !config.apiKey.trim()) throw new Error('请先配置模型地址、模型名和 API Key')
   const history = messages.filter(m => !m.deleted && !m.payload.isError).map(m => ({ role: m.payload.sender === 'User' ? 'user' : 'assistant', content: String(m.payload.text ?? '') }))
   const images = attachments.filter(item => /^image\/[a-z0-9.+-]+$/i.test(item.mime) && /^data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=]+$/i.test(item.dataUrl))
+  // 明确配置过输入能力时必须校验，不能悄悄丢弃不被模型支持的附件。
+  if (images.length && !capability.input.includes('image') && (parameters.inputModalities || parameters.resolvedCapability)) throw new Error('当前模型未启用图片输入能力')
   const lastUser = history.findLastIndex(item => item.role === 'user')
   const openAiHistory = history.map((item, index) => index === lastUser && images.length > 0
     ? { ...item, content: [{ type: 'text', text: item.content }, ...images.map(image => ({ type: 'image_url', image_url: { url: image.dataUrl } }))] }
@@ -111,27 +123,48 @@ export function modelRequest(config: JsonObject, messages: StoredRecord[], syste
     : item)
   let target: string, body: JsonObject
   const outputLimit = typeof config.outputLimit === 'number' ? config.outputLimit : undefined
-  if (protocol === 'anthropic') {
+  if (protocol === 'responses') {
+    target = resolveModelEndpoint(protocol, address, model)
+    body = { model, stream: true, input: history.map((item, index) => ({ role: item.role, content: [{ type: item.role === 'assistant' ? 'output_text' : 'input_text', text: item.content }, ...(index === lastUser ? images.map(image => ({ type: 'input_image', image_url: image.dataUrl })) : [])] })), ...(system ? { instructions: system } : {}), ...(outputLimit ? { max_output_tokens: outputLimit } : {}) }
+  } else if (protocol === 'anthropic') {
     target = resolveModelEndpoint(protocol, address, model)
     body = { model, stream: true, messages: anthropicHistory, max_tokens: outputLimit ?? 4096, ...(system ? { system } : {}) }
   } else if (protocol === 'gemini') {
     target = resolveModelEndpoint(protocol, address, model)
     body = { contents: history.map((m, index) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }, ...(index === lastUser ? images.map(image => { const [, data] = image.dataUrl.split(',', 2); return { inline_data: { mime_type: image.mime, data } } }) : [])] })),
-      ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}), generationConfig: { ...(outputLimit ? { maxOutputTokens: outputLimit } : {}), ...(typeof config.temperature === 'number' ? { temperature: config.temperature } : {}) } }
+      ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}), generationConfig: { ...(outputLimit ? { maxOutputTokens: outputLimit } : {}) } }
   } else {
     target = resolveModelEndpoint(protocol, address, model)
     body = { model, stream: true, messages: [...(system ? [{ role: 'system', content: system }] : []), ...openAiHistory], ...(outputLimit ? { max_tokens: outputLimit } : {}) }
   }
-  if (protocol !== 'gemini') {
-    if (typeof config.temperature === 'number') body.temperature = config.temperature
-    if (typeof config.topP === 'number') body.top_p = config.topP
+  // 采样参数统一使用服务端默认值，旧配置中的温度和 Top P 不再进入任何协议请求。
+  if (capability.reasoning !== false) {
+    // 安卓兼容接口把思考程度存为自定义参数；优先读取同一字段，避免跨端选项与请求不一致。
+    const customEffort = protocol === 'openai' && Array.isArray(parameters.customParameters) ? parameters.customParameters.find(item => isObject(item) && item.name === 'reasoning_effort') : undefined
+    const effort = isObject(customEffort) ? customEffort.enabled === false ? '' : String(customEffort.value ?? '') : String(parameters.reasoningMode === 'DISABLED' ? 'none' : parameters.reasoningEffort ?? '')
+    const budget = typeof parameters.thoughtBudget === 'number' ? parameters.thoughtBudget : 2048
+    if (effort && protocol === 'responses') body.reasoning = { effort }
+    if (effort && protocol === 'openai') body.reasoning_effort = effort
+    if (effort && effort !== 'none' && protocol === 'anthropic') body.thinking = { type: 'enabled', budget_tokens: Math.min(budget, (outputLimit ?? 4096) - 1) }
+    if (effort && protocol === 'gemini' && isObject(body.generationConfig)) body.generationConfig.thinkingConfig = /gemini-3/i.test(model) && parameters.reasoningMode !== 'BUDGET' ? { thinkingLevel: effort === 'none' ? 'minimal' : effort } : { thinkingBudget: effort === 'none' ? 0 : budget }
   }
   return { target, protocol, apiKey: config.apiKey, body }
 }
 
 /** 生成图片只使用 Android 已有的 Gemini 和 OpenAI 兼容 JSON 合同。 */
-export function imageRequest(config: JsonObject, prompt: string, attachments: ModelAttachment[] = []): { target: string; protocol: ImageProtocol; apiKey: string; body: JsonObject } {
+export function imageRequest(config: JsonObject, prompt: string, attachments: ModelAttachment[] = []): { target: string; protocol: ImageProtocol; apiKey: string; body: JsonObject; builtinModel?: string } {
+  const parameters = isObject(config.modelParameters) ? config.modelParameters : {}
+  config = { ...config, aspectRatio: parameters.imageAspectRatio ?? config.aspectRatio, quality: parameters.imageQuality ?? config.quality, batchSize: parameters.imageBatchSize ?? config.batchSize }
+  const builtin = ['默认', 'default'].includes(String(config.provider ?? '').trim().toLowerCase()) &&
+    ['z-image-turbo-modal', 'qwen-image-edit-modal', 'Kwai-Kolors/Kolors'].includes(String(config.model))
+  if (builtin) {
+    // 只传模型身份，服务端再解析固定服务和密钥，客户端不能指定内置服务的目的地址。
+    const request = imageRequest({ ...config, provider: 'builtin', address: 'https://builtin.invalid', apiKey: 'builtin' }, prompt, attachments)
+    return { ...request, target: '', apiKey: '', builtinModel: String(config.model) }
+  }
+  const inferenceSteps = config.inferenceSteps ?? config.numInferenceSteps
   const protocol = imageProtocol(config)
+  if (protocol === 'unsupported') throw new Error('当前 API 协议未接入图片生成，请在 API 配置中选择支持图片生成的接口。')
   const model = String(config.model ?? ''), address = String(config.address ?? '')
   if (!address || !model || typeof config.apiKey !== 'string' || !config.apiKey.trim()) throw new Error('请先配置图片模型地址、模型名和 API Key')
   const exactAddress = address.trim().replace(/#$/, '').replace(/\/+$/, '')
@@ -139,7 +172,7 @@ export function imageRequest(config: JsonObject, prompt: string, attachments: Mo
     const body: JsonObject = { prompt }
     if (typeof config.imageSize === 'string' && config.imageSize.trim()) body.imageSize = config.imageSize.trim()
     if (typeof config.aspectRatio === 'string' && config.aspectRatio.trim()) body.aspectRatio = config.aspectRatio.trim()
-    if (Number.isSafeInteger(config.numInferenceSteps)) body.numInferenceSteps = config.numInferenceSteps
+    if (Number.isSafeInteger(inferenceSteps)) body.numInferenceSteps = inferenceSteps
     if (typeof config.guidanceScale === 'number') body.guidanceScale = config.guidanceScale
     return { protocol, apiKey: config.apiKey, target: exactAddress, body }
   }
@@ -148,25 +181,24 @@ export function imageRequest(config: JsonObject, prompt: string, attachments: Mo
     if (!image) throw new Error('Qwen 图像编辑需要至少一张参考图片')
     const [, data] = image.dataUrl.split(',', 2)
     return { protocol, apiKey: config.apiKey, target: exactAddress, body: {
-      image_base64: data, prompt, ...(Number.isSafeInteger(config.numInferenceSteps) ? { num_inference_steps: config.numInferenceSteps } : {}),
+      image_base64: data, prompt, ...(Number.isSafeInteger(inferenceSteps) ? { num_inference_steps: inferenceSteps } : {}),
       ...(typeof config.guidanceScale === 'number' ? { guidance_scale: config.guidanceScale } : {}),
     } }
   }
   if (protocol === 'gemini') {
-    const base = exactAddress.replace(/\/v1beta\/models\/.*$/i, '').replace(/\/v1\/.*$/i, '')
+    const target = new URL(resolveModelEndpoint('gemini', address, model).replace(':streamGenerateContent', ':generateContent'))
+    if (target.searchParams.get('alt') === 'sse') target.searchParams.delete('alt')
     const parts: JsonObject[] = [{ text: prompt }, ...attachments.map(image => { const [, data] = image.dataUrl.split(',', 2); return { inlineData: { mimeType: image.mime, data } } })]
     const generationConfig: JsonObject = { responseModalities: ['IMAGE', 'TEXT'] }
     const aspectRatio = typeof config.aspectRatio === 'string' && /^(?:1:1|2:3|3:2|3:4|4:3|4:5|5:4|9:16|16:9|21:9)$/.test(config.aspectRatio) ? config.aspectRatio : undefined
     const configuredImageSize = config.geminiImageSize ?? config.imageSize
     const imageSize = typeof configuredImageSize === 'string' && /^(?:1K|2K|4K)$/i.test(configuredImageSize) && /gemini-3.*image/i.test(model) ? configuredImageSize.toUpperCase() : undefined
     if (aspectRatio || imageSize) generationConfig.imageConfig = { ...(aspectRatio ? { aspectRatio } : {}), ...(imageSize ? { imageSize } : {}) }
-    return { protocol, apiKey: config.apiKey, target: `${base}/v1beta/models/${encodeURIComponent(model.replace(/^models\//, ''))}:generateContent`, body: { contents: [{ role: 'user', parts }], generationConfig } }
+    return { protocol, apiKey: config.apiKey, target: target.toString(), body: { contents: [{ role: 'user', parts }], generationConfig } }
   }
   if (attachments.length > 1) throw new Error('OpenAI 图像编辑目前只支持一张参考图片')
   const edit = attachments.length === 1
-  const target = edit
-    ? /\/images\/edits$/i.test(exactAddress) ? exactAddress : `${exactAddress.replace(/\/v1(?:\/images\/generations)?$/i, '')}/v1/images/edits`
-    : /\/images\/generations$/i.test(exactAddress) ? exactAddress : `${exactAddress.replace(/\/v1$/i, '')}/v1/images/generations`
+  const target = resolveModelEndpoint('openai', address, model).replace(/\/chat\/completions(?=\?|$)/, edit ? '/images/edits' : '/images/generations')
   const providerHint = [config.provider, config.model, config.address].map(value => String(value ?? '')).join(' ').toLowerCase()
   const siliconFlow = /siliconflow|硅基流动/.test(providerHint)
   const seedream = /seedream|doubao|豆包|即梦/.test(providerHint)
@@ -174,8 +206,8 @@ export function imageRequest(config: JsonObject, prompt: string, attachments: Mo
   const body: JsonObject = { model, prompt, ...(edit ? { image: attachments[0]?.dataUrl } : {}) }
   if (typeof config.imageSize === 'string' && config.imageSize.trim()) body[siliconFlow ? 'image_size' : 'size'] = config.imageSize.trim()
   if (typeof config.batchSize === 'number') body[siliconFlow ? 'batch_size' : 'n'] = config.batchSize
-  if (typeof config.numInferenceSteps === 'number') body.num_inference_steps = config.numInferenceSteps
-  if (typeof config.guidanceScale === 'number') body.guidance_scale = config.guidanceScale
+  if (siliconFlow && typeof inferenceSteps === 'number') body.num_inference_steps = inferenceSteps
+  if (siliconFlow && typeof config.guidanceScale === 'number') body.guidance_scale = config.guidanceScale
   if (typeof config.quality === 'string' && config.quality.trim()) body.quality = config.quality.trim()
   if (seedream) { body.response_format = 'url'; body.watermark = config.watermark === true }
   if (seedream && attachments.length) body.image = attachments.map(image => image.dataUrl)
@@ -192,44 +224,91 @@ export async function generateImage(session: AuthSession, request: ReturnType<ty
   return { images, text: typeof value.text === 'string' ? value.text : '' }
 }
 
+/** 有界的原生工具循环：仅开启记忆时注册工具，历史片段和调用轨迹始终留在本轮内存。 */
+export async function generate(session: AuthSession, request: ReturnType<typeof modelRequest>, signal: AbortSignal, onDelta: (result: ModelResult) => void, refreshSession?: () => Promise<AuthSession>, tools?: ModelTools): Promise<ModelResult> {
+  let body = tools ? withModelTools(request.body, request.protocol, tools.definitions) : request.body
+  let reasoning = ''
+  for (let round = 0; round < 8; round++) {
+    signal.throwIfAborted()
+    await tools?.validate()
+    const turn = new ModelToolTurn(request.protocol)
+    const result = await generateTurn(session, { ...request, body }, signal, partial => onDelta({ ...partial, reasoning: reasoning + partial.reasoning }), refreshSession, turn)
+    signal.throwIfAborted()
+    await tools?.validate()
+    const calls = turn.calls()
+    if (!calls.length) return { ...result, reasoning: reasoning + result.reasoning }
+    if (!tools) throw new Error('本轮没有授权使用模型工具')
+    if (round === 7) throw new Error('历史搜索轮数过多，请提供更具体的关键词或日期')
+    const outputs: JsonObject[] = []
+    for (const call of calls) { signal.throwIfAborted(); outputs.push(await tools.execute(call)) }
+    body = turn.continue(body, result, calls, outputs)
+    reasoning += result.reasoning
+    onDelta({ text: '', reasoning })
+  }
+  throw new Error('模型工具循环未完成')
+}
+
 /** SSE 支持跨网络块、CRLF 和最后一帧；草稿仅在内存中，成功定稿后才能入同步队列。 */
-export async function generate(session: AuthSession, request: ReturnType<typeof modelRequest>, signal: AbortSignal, onDelta: (result: ModelResult) => void, refreshSession?: () => Promise<AuthSession>): Promise<ModelResult> {
+async function generateTurn(session: AuthSession, request: ReturnType<typeof modelRequest>, signal: AbortSignal, onDelta: (result: ModelResult) => void, refreshSession: (() => Promise<AuthSession>) | undefined, toolTurn: ModelToolTurn): Promise<ModelResult> {
   const response = await authenticatedFetch(session, '/api/model', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request), signal, cache: 'no-store' }, refreshSession)
   if (!response.ok) throw new Error(`模型请求失败（HTTP ${response.status}），请检查密钥、余额和模型名称`)
   const result: ModelResult = { text: '', reasoning: '' }
+  let ended = false
   function accept(value: unknown): void {
     if (!isObject(value)) return
     if (value.error || value.type === 'error') throw new Error('模型服务返回错误，本次草稿没有同步')
+    if (value.stop_reason === 'max_tokens' || value.stop_reason === 'refusal') throw new Error('模型回复未完整结束，本轮工具未执行')
+    toolTurn.accept(value)
+    if (value.type === 'response.output_text.delta' && typeof value.delta === 'string') result.text += value.delta
+    if (value.type === 'response.reasoning_summary_text.delta' && typeof value.delta === 'string') result.reasoning += value.delta
+    if (value.type === 'response.failed' || value.type === 'response.incomplete' || value.status === 'incomplete' || value.status === 'failed') throw new Error('模型回复未完成，本次草稿没有同步')
     if (Array.isArray(value.choices)) {
-      for (const choice of value.choices) if (isObject(choice)) {
+      for (const choice of value.choices.slice(0, 1)) if (isObject(choice)) {
+        if (choice.finish_reason === 'length' || choice.finish_reason === 'content_filter') throw new Error('模型回复未完整结束，本轮工具未执行')
+        if (choice.finish_reason === 'stop' || choice.finish_reason === 'tool_calls') ended = true
         const delta = isObject(choice.delta) ? choice.delta : isObject(choice.message) ? choice.message : {}
         if (typeof delta.content === 'string') result.text += delta.content
         if (typeof delta.reasoning_content === 'string') result.reasoning += delta.reasoning_content
       }
     }
     if (isObject(value.delta)) {
+      if (value.delta.stop_reason === 'max_tokens' || value.delta.stop_reason === 'refusal') throw new Error('模型回复未完整结束，本轮工具未执行')
       if (typeof value.delta.text === 'string') result.text += value.delta.text
       if (typeof value.delta.thinking === 'string') result.reasoning += value.delta.thinking
     }
+    if (value.type === 'content_block_start' && isObject(value.content_block)) {
+      if (typeof value.content_block.text === 'string') result.text += value.content_block.text
+      if (typeof value.content_block.thinking === 'string') result.reasoning += value.content_block.thinking
+    }
     if (Array.isArray(value.content)) for (const part of value.content) if (isObject(part) && typeof part.text === 'string') result.text += part.text
-    if (Array.isArray(value.candidates)) for (const candidate of value.candidates) if (isObject(candidate) && isObject(candidate.content) && Array.isArray(candidate.content.parts)) {
+    if (Array.isArray(value.candidates)) for (const candidate of value.candidates.slice(0, 1)) if (isObject(candidate)) {
+      if (candidate.finishReason && candidate.finishReason !== 'STOP') throw new Error('模型回复未完整结束，本轮工具未执行')
+      if (!isObject(candidate.content) || !Array.isArray(candidate.content.parts)) continue
       for (const part of candidate.content.parts) if (isObject(part) && typeof part.text === 'string') { if (part.thought) result.reasoning += part.text; else result.text += part.text }
+    }
+    // Responses 既可能返回 SSE，也可能由兼容服务返回完整 JSON；完整 output 只作为没有增量时的补充。
+    const output = Array.isArray(value.output) ? value.output : isObject(value.response) && Array.isArray(value.response.output) ? value.response.output : []
+    if (!result.text) for (const item of output) if (isObject(item) && item.type === 'message' && Array.isArray(item.content)) {
+      for (const part of item.content) if (isObject(part) && part.type === 'output_text' && typeof part.text === 'string') result.text += part.text
     }
     if (isObject(value.usage)) result.usage = value.usage
     onDelta({ ...result })
   }
-  if (!response.headers.get('content-type')?.includes('text/event-stream')) { accept(await response.json()); if (!result.text) throw new Error('模型没有返回正文'); return result }
+  if (!response.headers.get('content-type')?.includes('text/event-stream')) {
+    accept(await response.json())
+    if (!result.text.trim() && !toolTurn.calls().length) throw new Error('模型没有返回正文')
+    return result
+  }
   const reader = response.body?.getReader()
   if (!reader) throw new Error('模型响应为空')
   const decoder = new TextDecoder()
   let buffer = '', received = 0
-  let ended = false
   const frame = (raw: string) => {
     const data = raw.split('\n').filter(l => l.startsWith('data:')).map(l => l.slice(5).trimStart()).join('\n')
     if (!data) return
     if (data.trim() === '[DONE]') { ended = true; return }
     const parsed: unknown = JSON.parse(data)
-    if (isObject(parsed) && (parsed.type === 'message_stop' || (Array.isArray(parsed.candidates) && parsed.candidates.some(c => isObject(c) && c.finishReason)))) ended = true
+    if (isObject(parsed) && (parsed.type === 'response.completed' || parsed.type === 'message_stop' || (Array.isArray(parsed.candidates) && parsed.candidates.some(c => isObject(c) && c.finishReason)))) ended = true
     accept(parsed)
   }
   try {
@@ -244,6 +323,6 @@ export async function generate(session: AuthSession, request: ReturnType<typeof 
     }
   } finally { await reader.cancel().catch(() => undefined); reader.releaseLock() }
   if (!ended) throw new Error('模型连接提前中断，未将不完整回复上传')
-  if (!result.text.trim()) throw new Error('模型没有返回正文')
+  if (!result.text.trim() && !toolTurn.calls().length) throw new Error('模型没有返回正文')
   return result
 }

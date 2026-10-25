@@ -79,6 +79,20 @@ export class SyncStore {
     });
   }
 
+  /** 已校验附件只保留在当前账号本机，不进入同步队列；重开网页可继续离线预览。 */
+  async cachedAttachment(key: string): Promise<Blob | undefined> {
+    return this.transaction('readonly', async tx => {
+      const row = await read(tx.objectStore('meta').get(`attachment:${key}`)) as { value: Blob } | undefined;
+      return row?.value;
+    });
+  }
+
+  async cacheAttachment(key: string, value: Blob): Promise<void> {
+    await this.transaction('readwrite', async tx => {
+      await read(tx.objectStore('meta').put({ key: `attachment:${key}`, value }));
+    });
+  }
+
   /** 一次业务操作可以同时更新会话时间和消息，失败时一起回滚。 */
   async saveLocal(records: StoredRecord[]): Promise<void> {
     await this.transaction("readwrite", async (tx) => {

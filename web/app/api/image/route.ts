@@ -113,6 +113,24 @@ export async function POST(request: Request): Promise<Response> {
     if (body.byteLength > MAX_REQUEST_BYTES) return fail('图片请求过大', 413)
     const input: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body))
     if (!isObject(input) || !isProtocol(input.protocol) || typeof input.target !== 'string' || typeof input.apiKey !== 'string' || input.apiKey.length > 8192 || /[\r\n]/.test(input.apiKey) || !isObject(input.body)) return fail('图片请求格式无效', 400)
+    // 内置模型复用安卓同名服务端环境变量，严格覆盖客户端传来的协议、地址和密钥。
+    if (input.builtinModel !== undefined) {
+      const firstUrl = (value: string | undefined): string => value?.split(',').map(item => item.trim()).find(Boolean) ?? ''
+      if (input.builtinModel === 'z-image-turbo-modal') {
+        input.protocol = 'modal'; input.target = firstUrl(process.env.VITE_API_URLS)
+      } else if (input.builtinModel === 'qwen-image-edit-modal') {
+        input.protocol = 'qwen'; input.target = firstUrl(process.env.QWEN_EDIT_API_URLS); input.apiKey = process.env.QWEN_EDIT_API_SECRET ?? ''
+      } else if (input.builtinModel === 'Kwai-Kolors/Kolors') {
+        input.protocol = 'openai'; input.target = process.env.SILICONFLOW_IMAGE_API_URL ?? 'https://api.siliconflow.cn/v1/images/generations'
+        input.apiKey = process.env.SILICONFLOW_API_KEY ?? ''; input.body.model = 'Kwai-Kolors/Kolors'
+        if (typeof input.body.size === 'string') { input.body.image_size = input.body.size; delete input.body.size }
+        if (input.body.image) return fail('Kolors 不支持参考图编辑，请选择 Qwen Image Edit', 422)
+        if (!input.apiKey) return fail('服务端尚未配置默认 Kolors 服务', 503)
+      } else return fail('内置模型无效', 400)
+      if (!input.target) return fail('服务端尚未配置此默认图片服务', 503)
+    }
+    // 修改过的未知输入必须重新缩窄类型，后面的请求只能使用这四种图片协议。
+    if (!isProtocol(input.protocol) || typeof input.target !== 'string' || typeof input.apiKey !== 'string') return fail('图片配置无效', 400)
     const target = new URL(input.target)
     if (input.protocol === 'modal') {
       // Modal Z-Image-Turbo 使用 GET 查询参数并直接返回图片字节，
@@ -129,7 +147,7 @@ export async function POST(request: Request): Promise<Response> {
       const image = await publicImageData(target.toString(), request.signal, MAX_RESPONSE_BYTES)
       return Response.json({ images: [image] }, { headers: { 'Cache-Control': 'private,no-store', 'X-Content-Type-Options': 'nosniff' } })
     }
-    const headers = input.protocol === 'gemini' ? { 'x-goog-api-key': input.apiKey } : input.protocol === 'qwen' ? { 'x-api-key': input.apiKey } : { Authorization: `Bearer ${input.apiKey}` }
+    const headers: Record<string, string> = input.protocol === 'gemini' ? { 'x-goog-api-key': input.apiKey } : input.protocol === 'qwen' ? { 'x-api-key': input.apiKey } : { Authorization: `Bearer ${input.apiKey}` }
     const edit = input.protocol === 'openai' && typeof input.body.image === 'string'
     const multipart = edit ? openAiEditBody(input.body) : undefined
     const upstream = await modelUpstream(target, headers, multipart?.bytes ?? JSON.stringify(input.body), AbortSignal.any([request.signal, AbortSignal.timeout(180_000)]), multipart?.contentType)

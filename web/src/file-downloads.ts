@@ -88,10 +88,18 @@ export async function saveReceivedFile(
   const current = await preferences.read()
   if (!active() || !current || current.id !== directoryId || (automatic && !current.enabled)) return
   const key = attachmentDownloadKey(attachment)
-  // 自动同步去重；用户主动点击附件仍可重新保存，支持本机副本已被移动或删除的情况。
+  // 自动同步不重复落盘；手动保存也先检查真实文件，只有副本不存在才重新保存。
   if (automatic && Object.hasOwn(current.saved, key)) return `${current.directory.name}/${current.saved[key]}`
   if (await current.directory.queryPermission({ mode: 'readwrite' }) !== 'granted') {
     throw new Error('自动保存目录需要重新授权，请在“设置 → 文件保存”点击“恢复授权”')
+  }
+  if (Object.hasOwn(current.saved, key)) {
+    try {
+      await current.directory.getFileHandle(current.saved[key])
+      return `${current.directory.name}/${current.saved[key]}`
+    } catch (error) {
+      if (!(error instanceof DOMException) || error.name !== 'NotFoundError') throw error
+    }
   }
   const bytes = await loadBytes()
   if (!active()) return
