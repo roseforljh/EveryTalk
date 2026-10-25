@@ -210,6 +210,9 @@ object SyntaxHighlighter {
         if (code.isEmpty()) {
             return AnnotatedString("")
         }
+
+        // 所有内联和全屏代码共用此入口；原生 TextMate 优先，其他语言或失败时保留旧规则。
+        TextMateHighlighter.highlightOrNull(code, language, theme)?.let { return it }
         
         // 获取语言高亮器
         val normalizedLang = language?.trim()?.lowercase()

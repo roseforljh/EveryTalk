@@ -417,6 +417,8 @@ ksp {
 
         // ===== Markdown AST Parser =====
         implementation(libs.intellij.markdown)
+        // 复用 TextMate 语法与主题，仅引入解析核心，代码块继续使用现有原生组件。
+        implementation(libs.kotlin.textmate.core)
 
         // ===== Markdown 渲染 =====
         implementation(libs.mikepenz.markdown.core)

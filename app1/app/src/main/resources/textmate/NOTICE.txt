@@ -1,0 +1,104 @@
+资源来源：shikijs/textmate-grammars-themes
+固定版本：8f1828ebccc57930cf0adde9b35ae929584fe191
+https://github.com/shikijs/textmate-grammars-themes/tree/8f1828ebccc57930cf0adde9b35ae929584fe191
+
+以下保留资源仓库及本目录所用语法、主题的原始许可证。
+兼容调整：github-dark-default.json 移除了与代码着色无关的 symbolIcon.constantForeground 数组字段；原生主题解析器只接受字符串形式的界面颜色。语法规则和代码配色未修改。
+
+MIT License
+
+Copyright (c) 2021 Pine Wu
+Copyright (c) 2023 Anthony Fu <https://github.com/antfu>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+
+Files:   angular-ts.json, bat.json, bibtex.json, c.json, clojure.json, coffee.json, cpp.json, cpp-macro.json, csharp.json, css.json, dart.json, diff.json, docker.json, fsharp.json, git-commit.json, git-rebase.json, go.json, groovy.json, handlebars.json, hlsl.json, html.json, html-derivative.json, ini.json, java.json, javascript.json, json.json, jsonc.json, jsonl.json, jsx.json, julia.json, latex.json, less.json, lua.json, make.json, markdown.json, objective-c.json, objective-cpp.json, perl.json, php.json, powershell.json, pug.json, python.json, raku.json, rst.json, ruby.json, rust.json, scss.json, shaderlab.json, shellscript.json, sql.json, tex.json, tsx.json, typescript.json, vb.json, xml.json, xsl.json
+License: https://raw.githubusercontent.com/microsoft/vscode/main/LICENSE.txt
+SPDX:    MIT
+---------------------------------------------------------------------------------------------------------
+MIT License
+
+Copyright (c) 2015 - present Microsoft Corporation
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+============================================================
+
+Files:   kotlin.json
+License: https://raw.githubusercontent.com/fwcd/vscode-kotlin/main/LICENSE
+SPDX:    MIT
+---------------------------------------------------------------------------------------------------------
+The MIT License (MIT)
+
+Copyright (c) 2016 George Fraser
+Copyright (c) 2018 fwcd
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+
+
+
+Files:   github-dark.json, github-dark-default.json, github-dark-dimmed.json, github-dark-high-contrast.json, github-light.json, github-light-default.json, github-light-high-contrast.json
+License: https://raw.githubusercontent.com/primer/github-vscode-theme/main/LICENSE
+SPDX:    MIT
+---------------------------------------------------------------------------------------------------------
+MIT License
+
+Copyright (c) 2020 Primer
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

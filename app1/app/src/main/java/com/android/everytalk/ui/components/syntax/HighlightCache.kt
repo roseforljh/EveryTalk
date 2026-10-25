@@ -20,7 +20,7 @@ object HighlightCache {
     private var cacheWeight = 0
 
     // 缓存版本号 - 更新高亮规则时递增此值以使旧缓存失效
-    private const val CACHE_VERSION = 6
+    private const val CACHE_VERSION = 7
 
     fun shouldHighlight(code: String, isStreaming: Boolean): Boolean {
         val limit = if (isStreaming) MAX_STREAMING_HIGHLIGHT_CODE_CHARS else MAX_HIGHLIGHT_CODE_CHARS

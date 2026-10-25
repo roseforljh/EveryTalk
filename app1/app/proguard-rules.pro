@@ -1,4 +1,9 @@
 # ===== 基础配置 =====
+# TextMate 用 Gson 按 JSON 字段名读取语法和主题；Release 必须保留这些模型。
+-keep class dev.textmate.grammar.raw.** { *; }
+-keep class dev.textmate.theme.Raw* { *; }
+# JCodings 通过类名查找编码实现，并从 JAR 读取编码表。
+-keep class org.jcodings.** { *; }
 -dontwarn javax.annotation.**
 -dontwarn javax.inject.**
 -dontwarn sun.misc.Unsafe
