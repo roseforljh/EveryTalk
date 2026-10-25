@@ -3,6 +3,9 @@ import com.android.everytalk.statecontroller.*
 
 import android.annotation.SuppressLint
 import android.content.ClipData
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
 import android.graphics.Typeface
 import android.os.Build
 import android.text.SpannableString
@@ -101,6 +104,7 @@ import com.android.everytalk.ui.components.content.isPreviewSupported
 import com.android.everytalk.ui.theme.chatColors
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -127,9 +131,10 @@ fun FullScreenCodeViewerDialog(
     val closeDescription = stringResource(R.string.action_close)
     val codeLabel = stringResource(R.string.code_label)
     val previewLabel = stringResource(R.string.code_preview)
-    val shareDescription = stringResource(R.string.action_share)
+    val openBrowserDescription = stringResource(R.string.code_open_browser)
     val copyDescription = stringResource(R.string.action_copy)
-    val shareCodeChooser = stringResource(R.string.code_share_chooser)
+    var previewDocument by remember(code, language, previewBgColor, previewTextColor) { mutableStateOf<String?>(null) }
+    var openingBrowser by remember { mutableStateOf(false) }
 
     val canPreview = isPreviewSupported(language)
     val pagerState = rememberPagerState(
@@ -325,7 +330,7 @@ fun FullScreenCodeViewerDialog(
                             Spacer(modifier = Modifier.weight(1f))
                         }
 
-                        // 右侧：预览模式为分享，代码模式为复制
+                        // 右侧：预览模式在默认浏览器打开，代码模式复制源码。
                         val context = LocalContext.current
                         AnimatedContent(
                             targetState = isPreviewMode,
@@ -345,17 +350,40 @@ fun FullScreenCodeViewerDialog(
                             if (previewMode) {
                                 IconButton(
                                     onClick = {
-                                        val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-                                            type = "text/plain"
-                                            putExtra(android.content.Intent.EXTRA_TEXT, code)
+                                        val document = previewDocument ?: return@IconButton
+                                        openingBrowser = true
+                                        scope.launch {
+                                            var server: ExternalWebPreviewServer? = null
+                                            try {
+                                                // 只提供本机临时网址，不导出文件，也不上传用户代码。
+                                                val assets = context.applicationContext.assets
+                                                val startedServer = withContext(Dispatchers.IO) {
+                                                    ExternalWebPreviewServer.open(document) { path ->
+                                                        assets.open(path).use { it.readBytes() }
+                                                    }.also { server = it }
+                                                }
+                                                context.startActivity(
+                                                    Intent(Intent.ACTION_VIEW, Uri.parse(startedServer.url))
+                                                        .addCategory(Intent.CATEGORY_BROWSABLE)
+                                                )
+                                            } catch (cancelled: CancellationException) {
+                                                server?.close()
+                                                throw cancelled
+                                            } catch (error: Exception) {
+                                                server?.close()
+                                                android.util.Log.e("WebPreview", "无法打开外部预览", error)
+                                                Toast.makeText(context, R.string.code_open_browser_failed, Toast.LENGTH_LONG).show()
+                                            } finally {
+                                                openingBrowser = false
+                                            }
                                         }
-                                        context.startActivity(android.content.Intent.createChooser(shareIntent, shareCodeChooser))
                                     },
+                                    enabled = previewDocument != null && !openingBrowser,
                                     modifier = Modifier.size(48.dp)
                                 ) {
                                     Icon(
-                                        painter = painterResource(R.drawable.ic_gpt_share),
-                                        contentDescription = shareDescription,
+                                        painter = painterResource(R.drawable.ic_gpt_open_in_new),
+                                        contentDescription = openBrowserDescription,
                                         tint = headerColor,
                                         modifier = Modifier.size(24.dp)
                                     )
@@ -401,6 +429,7 @@ fun FullScreenCodeViewerDialog(
                                 color = previewBgColor
                             ) {
                                 WebPreviewContent(
+                                    onDocumentReady = { previewDocument = it },
                                     code = code,
                                     language = language,
                                     previewBackgroundColor = previewBgColor,

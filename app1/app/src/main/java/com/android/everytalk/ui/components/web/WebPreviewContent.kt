@@ -114,10 +114,12 @@ fun WebPreviewContent(
     previewTextColor: Color = Color.Black,
     onLoadStateChanged: (WebPreviewLoadState) -> Unit = {},
     onContentHeightChanged: (Float) -> Unit = {},
+    onDocumentReady: (String?) -> Unit = {},
 ) {
     val context = LocalContext.current
     val latestOnLoadStateChanged by rememberUpdatedState(onLoadStateChanged)
     val latestOnContentHeightChanged by rememberUpdatedState(onContentHeightChanged)
+    val latestOnDocumentReady by rememberUpdatedState(onDocumentReady)
 
     val previewContent = remember(code, language) {
         prepareWebPreviewContent(code, language)
@@ -209,6 +211,11 @@ fun WebPreviewContent(
                 completionToken = previewLoadToken,
             ) to context.getString(R.string.web_preview_error_template, errorDetail)
         }
+    }
+
+    // 外部浏览器复用同一份完整文档，保留主题、图表模板及原始 HTML 的样式和脚本。
+    LaunchedEffect(htmlContent, previewBuildError) {
+        latestOnDocumentReady(htmlContent.takeIf { previewBuildError == null })
     }
 
     var previewWebView by remember { mutableStateOf<WebView?>(null) }

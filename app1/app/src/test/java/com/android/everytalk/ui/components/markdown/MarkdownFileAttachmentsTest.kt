@@ -56,6 +56,12 @@ import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.components.attachmentFileIcon
 import com.android.everytalk.ui.components.attachmentFolderIntent
 import com.android.everytalk.ui.components.attachmentViewIntent
+import com.android.everytalk.ui.components.attachmentTypeColor
+import com.android.everytalk.ui.components.attachmentPreviewKind
+import com.android.everytalk.ui.components.AttachmentPreviewKind
+import com.android.everytalk.ui.components.localAttachmentUri
+import com.android.everytalk.ui.components.readAttachmentText
+import com.android.everytalk.ui.components.MessageFilePreview
 import com.android.everytalk.ui.components.streaming.PreparedMessage
 import com.mikepenz.markdown.annotator.DefaultAnnotatorSettings
 import com.mikepenz.markdown.annotator.buildMarkdownAnnotatedString
@@ -165,6 +171,11 @@ class MarkdownFileAttachmentsTest {
         assertEquals(R.drawable.ic_gpt_code, attachmentFileIcon("text/plain", "main.ts"))
         assertEquals(R.drawable.ic_gpt_file_document, attachmentFileIcon("text/plain", "说明.md"))
         assertEquals(R.drawable.ic_gpt_file_zip, attachmentFileIcon("application/octet-stream", "附件.7z"))
+        val icons = listOf("a.pdf", "a.xlsx", "a.pptx", "a.zip", "a.png", "a.mp3", "a.mp4", "a.ts", "a.docx")
+            .map { attachmentFileIcon("application/octet-stream", it) }
+        assertEquals(icons.size, icons.map { attachmentTypeColor(it, false) }.distinct().size)
+        assertEquals(AttachmentPreviewKind.TEXT, attachmentPreviewKind(pdf.copy(displayName = "a.html", mimeType = "text/html")))
+        assertNull(attachmentPreviewKind(sheet))
     }
 
     @Test
@@ -239,8 +250,10 @@ class MarkdownFileAttachmentsTest {
         val layouts = mutableListOf<TextLayoutResult>()
         paragraph.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
         paragraph.performTouchInput { click(layouts.single().getBoundingBox(body.text.indexOf(file.displayName) + file.displayName.length / 2).center) }
-        composeRule.waitUntil(5_000) { shadowOf(context).peekNextStartedActivity() != null }
-        assertEquals(file.uri, shadowOf(context).nextStartedActivity.data)
+        composeRule.waitUntil(5_000) { composeRule.onAllNodesWithText("序号,主机\n1,服务器").fetchSemanticsNodes().isNotEmpty() }
+        composeRule.onNodeWithText("本地预览").assertIsDisplayed()
+        assertNull(shadowOf(context).peekNextStartedActivity())
+        composeRule.onNodeWithText("关闭预览").performClick()
         composeRule.onAllNodesWithContentDescription("AI 文件操作：${file.displayName}", useUnmergedTree = true)[0].performClick()
         composeRule.onNodeWithText("查看所在文件夹").assertIsDisplayed()
     }
@@ -250,7 +263,7 @@ class MarkdownFileAttachmentsTest {
     fun `已完成回复的实际分段组件保留正文文件链接及操作入口`() {
         // 复现截图：模型只写普通文件名和保存路径，底部去重后，静态正文必须仍能打开附件。
         val context = ApplicationProvider.getApplicationContext<Application>()
-        DownloadTestProvider.install(context)
+        val provider = DownloadTestProvider.install(context)
         val source = File.createTempFile("received-", ".md", context.cacheDir).apply { writeText("# 测试文件") }
         val saved = ComputerDownloadStore(context).save(source, "everytalk-test2.md", "text/markdown")
         source.delete()
@@ -279,12 +292,13 @@ class MarkdownFileAttachmentsTest {
         val layouts = mutableListOf<TextLayoutResult>()
         val paragraph = composeRule.onNodeWithText("第二个也发好了", substring = true)
         paragraph.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
-        paragraph.performTouchInput { click(layouts.single().getBoundingBox(body.text.indexOf(file.displayName) + file.displayName.length / 2).center) }
-        composeRule.waitForIdle()
-        composeRule.waitUntil(5_000) { shadowOf(context).peekNextStartedActivity() != null }
-        val opened = shadowOf(context).nextStartedActivity
-        assertEquals(Intent.ACTION_VIEW, opened.action)
-        assertEquals(file.uri, opened.data)
+        repeat(3) {
+            paragraph.performTouchInput { click(layouts.single().getBoundingBox(body.text.indexOf(file.displayName) + file.displayName.length / 2).center) }
+            composeRule.waitUntil(5_000) { composeRule.onAllNodesWithText("# 测试文件").fetchSemanticsNodes().isNotEmpty() }
+            assertNull(shadowOf(context).peekNextStartedActivity())
+            assertEquals(1, provider.rows.size)
+            composeRule.onNodeWithText("关闭预览").performClick()
+        }
 
         composeRule.onAllNodesWithContentDescription("AI 文件操作：${file.displayName}", useUnmergedTree = true)[0].performClick()
         composeRule.onNodeWithText("打开文件").assertIsDisplayed()
@@ -305,5 +319,34 @@ class MarkdownFileAttachmentsTest {
         @Suppress("DEPRECATION")
         val initial = folder.getParcelableExtra<Uri>(DocumentsContract.EXTRA_INITIAL_URI)
         assertEquals("primary:Download/App/AppTalk", DocumentsContract.getDocumentId(initial!!))
+    }
+
+    @Test
+    fun `文本预览有大小上限且不能回源下载`() {
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        val provider = DownloadTestProvider.install(context)
+        val source = File.createTempFile("preview-", ".txt", context.cacheDir).apply { writeText("a".repeat(600 * 1024)) }
+        val saved = ComputerDownloadStore(context).save(source, "large.txt", "text/plain")
+        source.delete()
+        val result = readAttachmentText(context, saved.uri)
+        assertEquals(512 * 1024, result.text.length)
+        assertTrue(result.truncated)
+        assertEquals(1, provider.rows.size)
+        assertThrows(IllegalArgumentException::class.java) {
+            localAttachmentUri(context, pdf.copy(uri = Uri.parse("https://example.com/file.pdf")))
+        }
+    }
+
+    @Test
+    fun `PDF不可读时明确提示并保留其他应用打开入口`() {
+        // Robolectric 未实现原生 PDF 引擎；这里验证真实 UI 的读取失败分支，不伪造渲染成功。
+        composeRule.setContent {
+            MaterialTheme { MessageFilePreview(pdf.copy(uri = Uri.parse("content://missing/file.pdf"))) {} }
+        }
+        composeRule.waitUntil(5_000) {
+            composeRule.onAllNodesWithText("无法预览此本地文件，可尝试用其他应用打开。").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithText("用其他应用打开").assertIsDisplayed()
+        composeRule.onNodeWithText("关闭预览").assertIsDisplayed()
     }
 }

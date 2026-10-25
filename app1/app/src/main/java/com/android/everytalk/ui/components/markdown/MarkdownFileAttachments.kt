@@ -17,11 +17,10 @@ import androidx.compose.ui.unit.em
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.components.AttachmentTypeIcon
 import com.android.everytalk.ui.components.MessageFileActions
-import com.android.everytalk.ui.components.openMessageAttachment
+import com.android.everytalk.ui.components.rememberMessageFileOpener
 import com.android.everytalk.util.AppToast
 import com.mikepenz.markdown.model.State
 import com.mikepenz.markdown.model.parseMarkdown
-import kotlinx.coroutines.launch
 import org.intellij.markdown.MarkdownElementTypes
 import org.intellij.markdown.MarkdownTokenTypes
 import org.intellij.markdown.ast.ASTNode
@@ -38,15 +37,15 @@ fun MessageFileAttachmentScope(attachments: List<SelectedMediaItem>, content: @C
     val files = remember(attachments) { attachments.filterIsInstance<SelectedMediaItem.GenericFile>() }
     val fallback = LocalUriHandler.current
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val handler = remember(files, fallback, context, scope) {
+    val open = rememberMessageFileOpener()
+    val handler = remember(files, fallback, context, open) {
         object : UriHandler {
             override fun openUri(uri: String) {
                 if (!uri.startsWith(MESSAGE_FILE_SCHEME)) { fallback.openUri(uri); return }
                 val file = resolveMessageFile(uri, files)
                 // 缺少消息附件映射不能推断磁盘文件已被删除，提示应与实际失败阶段一致。
                 if (file == null) AppToast.show(context, "此回复未关联到该文件，请重新接收文件")
-                else scope.launch { openMessageAttachment(context, file) }
+                else open(file)
             }
         }
     }

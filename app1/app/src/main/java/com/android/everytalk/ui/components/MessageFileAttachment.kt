@@ -15,6 +15,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextDecoration
@@ -50,6 +51,32 @@ fun attachmentFileIcon(mimeType: String, name: String): Int {
     }
 }
 
+/** 彩色原图不染色；单色 GPT 图标按类型配色，并在深色背景上提高亮度。 */
+internal fun attachmentTypeColor(icon: Int, dark: Boolean): Color = when (icon) {
+    R.drawable.ic_gpt_file_pdf -> if (dark) Color(0xFFFF8585) else Color(0xFFC62828)
+    R.drawable.ic_gpt_file_spreedsheet -> if (dark) Color(0xFF6ED5A0) else Color(0xFF167347)
+    R.drawable.ic_gpt_file_powerpoint -> if (dark) Color(0xFFFFAD79) else Color(0xFFB44E16)
+    R.drawable.ic_gpt_file_zip -> if (dark) Color(0xFFE3C46C) else Color(0xFF8A6510)
+    R.drawable.ic_gpt_file_image -> if (dark) Color(0xFFC5A2FF) else Color(0xFF7843B5)
+    R.drawable.ic_gpt_file_audio -> if (dark) Color(0xFFF39BC6) else Color(0xFFAB3674)
+    R.drawable.ic_gpt_file_video -> if (dark) Color(0xFFB8ACFF) else Color(0xFF6550B4)
+    R.drawable.ic_gpt_code -> if (dark) Color(0xFF6BD6D0) else Color(0xFF087B75)
+    else -> if (dark) Color(0xFF87BBFF) else Color(0xFF2468B2)
+}
+
+@Composable
+internal fun attachmentIconTint(icon: Int): Color =
+    if (icon == R.drawable.ic_gpt_file_pdf || icon == R.drawable.ic_gpt_file_powerpoint) Color.Unspecified
+    else attachmentTypeColor(icon, MaterialTheme.colorScheme.background.luminance() < 0.5f)
+
+/** 打开和预览共用本机 URI；本函数没有网络或保存操作，重复打开不会创建新副本。 */
+internal fun localAttachmentUri(context: Context, file: SelectedMediaItem.GenericFile): Uri {
+    val local = file.filePath?.let(::File)?.takeIf(File::isFile)
+    val uri = if (local != null) FileManager(context).getFileProviderUri(local) else file.uri
+    require(uri.scheme == "content") { "本地文件不可用，请重新接收文件" }
+    return uri
+}
+
 /** 优先使用附件已经持有的 MIME，仅在未知时补全，外部应用据此选择对应文件类型。 */
 internal fun attachmentOpenMime(file: SelectedMediaItem.GenericFile): String =
     file.mimeType.takeUnless { it.isBlank() || it == "application/octet-stream" }
@@ -82,9 +109,7 @@ internal fun attachmentFolderIntent(file: SelectedMediaItem.GenericFile): Intent
 internal suspend fun openMessageAttachment(context: Context, file: SelectedMediaItem.GenericFile, chooseApp: Boolean = false) {
     try {
         val uri = withContext(Dispatchers.IO) {
-            val local = file.filePath?.let(::File)?.takeIf(File::isFile)
-            val candidate = if (local != null) FileManager(context).getFileProviderUri(local) else file.uri
-            require(candidate.scheme == "content") { "附件文件已不可用，请重新下载" }
+            val candidate = localAttachmentUri(context, file)
             context.contentResolver.openFileDescriptor(candidate, "r")?.use { } ?: error("附件文件已不可用，请重新下载")
             candidate
         }
@@ -100,6 +125,7 @@ internal suspend fun openMessageAttachment(context: Context, file: SelectedMedia
 fun MessageFileActions(file: SelectedMediaItem.GenericFile, onDismiss: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val open = rememberMessageFileOpener()
     AlertDialog(
         onDismissRequest = onDismiss,
         icon = { AttachmentTypeIcon(file) },
@@ -107,8 +133,9 @@ fun MessageFileActions(file: SelectedMediaItem.GenericFile, onDismiss: () -> Uni
         text = {
             Column {
                 Text(file.savedDownloadPath ?: "此文件保存在当前聊天附件中", style = MaterialTheme.typography.bodySmall)
-                TextButton(onClick = { scope.launch { openMessageAttachment(context, file) }; onDismiss() }) { Text("打开文件") }
-                TextButton(onClick = { scope.launch { openMessageAttachment(context, file, true) }; onDismiss() }) { Text("用其他应用打开") }
+                if (attachmentPreviewKind(file) != null) TextButton(onClick = { open(file) }) { Text("预览文件") }
+                TextButton(onClick = { scope.launch { openMessageAttachment(context, file); onDismiss() } }) { Text("打开文件") }
+                TextButton(onClick = { scope.launch { openMessageAttachment(context, file, true); onDismiss() } }) { Text("用其他应用打开") }
                 val folderIntent = attachmentFolderIntent(file)
                 if (folderIntent != null) TextButton(onClick = {
                     try { context.startActivity(folderIntent) }
@@ -126,21 +153,20 @@ fun MessageFileActions(file: SelectedMediaItem.GenericFile, onDismiss: () -> Uni
 fun AttachmentTypeIcon(file: SelectedMediaItem.GenericFile, modifier: Modifier = Modifier) {
     val icon = attachmentFileIcon(file.mimeType, file.displayName)
     Icon(painterResource(icon), contentDescription = null, modifier = modifier.size(22.dp),
-        tint = if (icon == R.drawable.ic_gpt_file_powerpoint) Color.Unspecified else MaterialTheme.chatColors.loadingIndicator)
+        tint = attachmentIconTint(icon))
 }
 
 /** 仅供未在正文引用的附件和用户附件使用；避免旧会话、失败回复中的文件变得不可访问。 */
 @Composable
 fun MessageFileLink(file: SelectedMediaItem.GenericFile, maxWidth: Dp) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+    val open = rememberMessageFileOpener()
     var menu by remember(file.id) { mutableStateOf(false) }
     Row(Modifier.widthIn(max = maxWidth).padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         IconButton(onClick = { menu = true }) {
             Icon(painterResource(attachmentFileIcon(file.mimeType, file.displayName)), "文件操作：${file.displayName}",
-                Modifier.size(22.dp), tint = if (attachmentFileIcon(file.mimeType, file.displayName) == R.drawable.ic_gpt_file_powerpoint) Color.Unspecified else MaterialTheme.chatColors.loadingIndicator)
+                Modifier.size(22.dp), tint = attachmentIconTint(attachmentFileIcon(file.mimeType, file.displayName)))
         }
-        Text(file.displayName, modifier = Modifier.weight(1f, fill = false).clickable { scope.launch { openMessageAttachment(context, file) } }.padding(vertical = 12.dp),
+        Text(file.displayName, modifier = Modifier.weight(1f, fill = false).clickable { open(file) }.padding(vertical = 12.dp),
             color = MaterialTheme.chatColors.loadingIndicator, textDecoration = TextDecoration.Underline,
             style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
