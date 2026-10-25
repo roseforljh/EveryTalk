@@ -1,3 +1,4 @@
+import { publicOrigin } from '@/lib/utils'
 import { modelUpstream } from '@/lib/model-upstream'
 import { isObject } from '@/src/sync-core'
 
@@ -30,7 +31,7 @@ async function backendModelProxy(input: Record<string, unknown>, authorization: 
 /** 登录用户的模型流式中转。验证同一 Supabase 账号后才接受请求，不保存 API Key 和消息。 */
 export async function POST(request: Request): Promise<Response> {
   const fail = (message: string, status: number) => Response.json({ error: message }, { status, headers: { 'Cache-Control': 'no-store' } })
-  if (request.headers.get('origin') !== new URL(request.url).origin) return fail('请求来源无效', 403)
+  if (request.headers.get('origin') !== publicOrigin(request)) return fail('请求来源无效', 403)
   const authorization = request.headers.get('authorization')
   if (!authorization?.startsWith('Bearer ') || authorization.length > 17000) return fail('请先登录', 401)
   try {

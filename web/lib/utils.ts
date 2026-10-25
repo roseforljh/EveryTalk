@@ -51,3 +51,14 @@ export function randomRange(min: number, max: number): number {
   return Math.random() * (max - min) + min
 }
 
+
+/**
+ * 站点对外的源，用于接口的同源校验。自托管时 Next 看到的是容器内地址，
+ * 以反代覆盖写入的 X-Forwarded-Host/Proto 为准（Caddy、Vercel 都会写）；没有反代头时退回请求地址。
+ */
+export function publicOrigin(request: Request): string {
+  const url = new URL(request.url)
+  const host = request.headers.get('x-forwarded-host')?.split(',')[0].trim() || request.headers.get('host') || url.host
+  const proto = request.headers.get('x-forwarded-proto')?.split(',')[0].trim() || url.protocol.slice(0, -1)
+  return `${proto}://${host}`
+}

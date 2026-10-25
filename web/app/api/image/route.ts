@@ -1,3 +1,4 @@
+import { publicOrigin } from '@/lib/utils'
 import { modelUpstream, publicImageData } from '@/lib/model-upstream'
 import { isObject } from '@/src/sync-core'
 import { modalImageDimensions } from '@/src/model'
@@ -103,7 +104,7 @@ async function parseImages(protocol: Exclude<ImageProtocol, 'modal'>, raw: strin
 /** 登录用户的图片生成中转；只保留图片字节，不保存 API Key、供应商 URL 或请求正文。 */
 export async function POST(request: Request): Promise<Response> {
   const fail = (message: string, status: number) => Response.json({ error: message }, { status, headers: { 'Cache-Control': 'no-store' } })
-  if (request.headers.get('origin') !== new URL(request.url).origin) return fail('请求来源无效', 403)
+  if (request.headers.get('origin') !== publicOrigin(request)) return fail('请求来源无效', 403)
   const authorization = request.headers.get('authorization')
   if (!authorization?.startsWith('Bearer ') || authorization.length > 17000) return fail('请先登录', 401)
   try {

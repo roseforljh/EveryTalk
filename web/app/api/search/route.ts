@@ -1,3 +1,4 @@
+import { publicOrigin } from '@/lib/utils'
 import { buildSearchRequest, normalizeSearchProvider, parseSearchResponse } from '@/src/search'
 import { isObject } from '@/src/sync-core'
 
@@ -49,7 +50,7 @@ async function readLimitedResponse(response: Response, limit: number): Promise<u
 /** 登录用户的固定供应商搜索代理；密钥只用于本次请求，不写日志、不进入同步数据。 */
 export async function POST(request: Request): Promise<Response> {
   const fail = (message: string, status: number) => Response.json({ error: message }, { status, headers: { 'Cache-Control': 'no-store' } })
-  if (request.headers.get('origin') !== new URL(request.url).origin) return fail('请求来源无效', 403)
+  if (request.headers.get('origin') !== publicOrigin(request)) return fail('请求来源无效', 403)
   const authorization = request.headers.get('authorization')
   if (!authorization?.startsWith('Bearer ') || authorization.length > 17000) return fail('请先登录', 401)
   try {

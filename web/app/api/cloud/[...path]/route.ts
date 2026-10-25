@@ -1,3 +1,4 @@
+import { publicOrigin } from '@/lib/utils'
 import type { NextRequest } from 'next/server'
 
 export const runtime = 'nodejs'
@@ -21,7 +22,7 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
   if (!authorization?.startsWith('Bearer ') || authorization.length > 17000) return Response.json({ error: { code: 'UNAUTHORIZED' } }, { status: 401 })
   if (request.headers.get('x-everytalk-sync-version') !== '0.2.0') return Response.json({ error: { code: 'UNSUPPORTED_SYNC_VERSION' } }, { status: 426 })
   const origin = request.headers.get('origin')
-  if (origin && origin !== request.nextUrl.origin) return Response.json({ error: { code: 'INVALID_ORIGIN' } }, { status: 403 })
+  if (origin && origin !== publicOrigin(request)) return Response.json({ error: { code: 'INVALID_ORIGIN' } }, { status: 403 })
   let target: URL
   try {
     const base = new URL(process.env.EVERYTALK_SYNC_BASE_URL ?? '')
