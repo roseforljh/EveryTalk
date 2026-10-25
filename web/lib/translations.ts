@@ -6,6 +6,8 @@ export const englishTranslations: Readonly<Record<string, string>> = {
   体验: 'Showcase',
   下载: 'Download',
   源码: 'Source',
+  登录: 'Sign in',
+  进入对话: 'Open chat',
   快捷导航: 'Quick navigation',
   主导航: 'Main navigation',
   'EveryTalk 首页': 'EveryTalk home',

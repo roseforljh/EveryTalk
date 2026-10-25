@@ -11,13 +11,15 @@ import {
   Download,
   GalleryHorizontal,
   House,
-  MessageSquare,
   Layers,
+  LogIn,
+  MessageSquare,
   SquareTerminal,
 } from 'lucide-react'
 import { Dock, DockIcon } from '@/components/ui/Dock'
 import GlassSurface from '@/components/ui/GlassSurface'
 import { LanguageToggle, useLanguage } from '@/components/ui/LanguageProvider'
+import { authStorageKey } from '@/src/auth-storage'
 
 // 导航先显示并可操作，三维玻璃随后加载，不把模型下载作为导航可用的前提。
 const FluidGlass = dynamic(() => import('@/components/ui/FluidGlass'), { ssr: false })
@@ -28,7 +30,6 @@ const links = [
   { label: '技术', href: '/#ecosystem', icon: SquareTerminal },
   { label: '体验', href: '/#showcase', icon: GalleryHorizontal },
   { label: '下载', href: '/#download', icon: Download },
-  { label: '网页版', href: '/chat', icon: MessageSquare },
 ]
 
 /** 品牌、原 Dock 导航和设置合并为一个顶部玻璃容器，手机在容器内分为两排。 */
@@ -36,8 +37,19 @@ export default function Header() {
   const { t } = useLanguage()
   const router = useRouter()
   const [compact, setCompact] = useState(false)
+  const [signedIn, setSignedIn] = useState(false)
   const lastScrollY = useRef(0)
   const frame = useRef<number | null>(null)
+
+  /** 网页版登录后会话保存在本地；官网据此把登录按钮换成进入对话，失效会话由网页版自行要求重新登录。 */
+  useEffect(() => {
+    try {
+      const key = authStorageKey()
+      setSignedIn(Boolean(key && localStorage.getItem(key)))
+    } catch {
+      /* 存储不可用时按未登录显示。 */
+    }
+  }, [])
 
   /** 用一帧合并连续滚轮事件；向下收起、向上展开，回到页面顶部强制展开。 */
   useEffect(() => {
@@ -151,9 +163,15 @@ export default function Header() {
             </a>
           </DockIcon>
           <div className="header-actions">
+            <Link href="/chat" className="header-login">
+              {signedIn ? <MessageSquare aria-hidden="true" size={15} strokeWidth={1.8} /> : <LogIn aria-hidden="true" size={15} strokeWidth={1.8} />}
+              {t(signedIn ? '进入对话' : '登录')}
+            </Link>
             <ThemeToggle />
             <LanguageToggle />
           </div>
+          {/* 手机上强制换行：第一排品牌与操作，第二排导航入口。 */}
+          <div className="dock-break" aria-hidden="true" />
         </Dock>
       </nav>
     </header>

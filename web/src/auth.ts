@@ -1,4 +1,5 @@
 import { createClient, type Session, type SupabaseClient } from "@supabase/supabase-js";
+import { authStorageKey } from "./auth-storage";
 import { isObject } from "./sync-core";
 import type { AuthSession } from "./types";
 
@@ -56,7 +57,7 @@ export class AuthClient {
     if (!configuredAuth()) throw new Error("账号服务配置缺失或无效，请联系维护者");
     this.sdk ??= createClient(authConfig.url, authConfig.key, { auth: {
       flowType: "pkce", detectSessionInUrl: false, persistSession: true, autoRefreshToken: true,
-      storageKey: `everytalk-web-auth:${new URL(authConfig.url).hostname}`,
+      storageKey: authStorageKey(authConfig.url),
     } });
     return this.sdk;
   }

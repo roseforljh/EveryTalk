@@ -213,6 +213,29 @@ a:focus-visible {
   margin-left: auto;
   gap: 2px;
 }
+.header-login {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  margin-right: 6px;
+  padding: 0 14px;
+  border-radius: 999px;
+  background: var(--fg);
+  color: var(--bg);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+.header-login:hover,
+.header-login:focus-visible {
+  transform: translateY(-1px);
+  opacity: 0.88;
+}
+.dock-break {
+  display: none;
+}
 .language-toggle {
   width: 44px;
   height: 44px;
@@ -265,7 +288,7 @@ a:focus-visible {
     border-radius 0.56s cubic-bezier(0.16, 1, 0.3, 1);
 }
 .header-inner.header-compact {
-  width: min(calc(100% - 28px), 310px);
+  width: min(calc(100% - 28px), 420px);
   max-width: calc(100% - 28px);
   min-height: 56px;
   padding: 6px 10px 6px 12px;
@@ -276,7 +299,7 @@ a:focus-visible {
 
 /* 移动端基础规则在后面定义，这条更具体的选择器确保收起时真的缩到内容宽度。 */
 .dock-bar.header-inner.header-compact {
-  width: min(calc(100% - 28px), 310px);
+  width: min(calc(100% - 28px), 420px);
   max-width: calc(100% - 28px);
   min-height: 56px;
   justify-content: flex-start;
@@ -2012,15 +2035,24 @@ html[data-theme='dark'] .ecosystem-logo[data-tone='ink'] {
     padding: 6px;
     gap: 2px;
   }
-  /* 第一排品牌与设置，第二排六个入口；不缩小 44px 触摸区域。 */
+  /* 第一排品牌、登录与设置，第二排导航入口；不缩小 44px 触摸区域。 */
   .header-inner > .brand {
-    flex: 1 0 calc(100% - 92px);
+    flex: 1 0 auto;
     padding-left: 6px;
     order: 0;
     min-height: 44px;
   }
   .header-actions {
     order: 1;
+  }
+  .dock-break {
+    display: block;
+    flex-basis: 100%;
+    height: 0;
+    order: 1;
+  }
+  .header-compact .dock-break {
+    display: none;
   }
   .header-inner > .dock-item,
   .header-inner > .dock-divider {
