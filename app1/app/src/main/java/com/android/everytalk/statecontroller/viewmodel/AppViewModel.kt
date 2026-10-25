@@ -372,9 +372,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         messageId: String,
         response: ImageGenerationResponse?,
         error: Throwable?,
+        isImageGeneration: Boolean,
     ) {
         val stored = persistenceManager.loadHistorySession(conversationId).orEmpty()
-        val baseMessages = if (stored.isNotEmpty()) {
+        val baseMessages = if (!isImageGeneration && stateHolder._currentConversationId.value == conversationId) {
+            // 取当前完整快照，保留尚未写入 Room 的占位身份、模型名和期间新增的消息。
+            stateHolder.messages.toList()
+        } else if (stored.isNotEmpty()) {
             stored
         } else if (stateHolder._currentImageGenerationConversationId.value == conversationId) {
             stateHolder.imageGenerationMessages.toList()
@@ -432,10 +436,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val toSave = if (storedTitle == null) messages else {
             listOfNotNull(baseMessages.firstOrNull { it.sender == Sender.System && it.isPlaceholderName }) + messages
         }
-        persistenceManager.saveHistorySession(conversationId, toSave, isImageGeneration = true)
+        persistenceManager.saveHistorySession(conversationId, toSave, isImageGeneration = isImageGeneration)
 
         withContext(Dispatchers.Main.immediate) {
-            if (stateHolder._currentImageGenerationConversationId.value == conversationId) {
+            if (!isImageGeneration && stateHolder._currentConversationId.value == conversationId) {
+                stateHolder.messages.clear()
+                stateHolder.messages.addAll(messages)
+                stateHolder.isTextConversationDirty.value = false
+            } else if (isImageGeneration && stateHolder._currentImageGenerationConversationId.value == conversationId) {
                 stateHolder.imageGenerationMessages.clear()
                 stateHolder.imageGenerationMessages.addAll(messages)
                 stateHolder.isImageConversationDirty.value = false

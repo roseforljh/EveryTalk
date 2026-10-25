@@ -49,7 +49,9 @@ data class ImageGenRequest(
    @SerialName("gemini_image_size")
    val geminiImageSize: String? = null,
    @SerialName("quality")
-   val quality: String? = null
+   val quality: String? = null,
+   // 显式图片协议优先于模型名推断，兼容同一模型经不同 API 网关提供的情况。
+   val apiFormat: String? = null,
 )
 
 @Serializable

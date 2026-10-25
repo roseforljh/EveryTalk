@@ -31,7 +31,7 @@ import org.junit.Test
 class ModelCatalogServiceTest {
 
     @Test
-    fun `批量与单模型按名称获取pi参数且高于models dev`() = runTest {
+    fun `批量与单模型以models dev为标准并由pi补齐缺失能力`() = runTest {
         var piRequests = 0
         val engine = testEngine { request ->
             when (request.url.host) {
@@ -54,12 +54,13 @@ class ModelCatalogServiceTest {
             val single = service.getCapabilities("https://proxy-b.example/v1", "secret", "Codex", "model-a", "different-provider")
             for ((candidates, protocol) in listOf(batch to ModelParameterProtocol.OPENAI_COMPATIBLE, single to ModelParameterProtocol.CODEX)) {
                 val resolved = resolveModelCapability("model-a", protocol, "https://proxy-b.example/v1", candidates)
-                assertEquals(200_000, resolved.contextWindowTokens)
-                assertEquals(32_000, resolved.maxOutputTokens)
-                assertEquals(ModelCapabilitySource.PI_CATALOG, resolved.contextWindowSource)
-                assertEquals(ModelCapabilitySource.PI_CATALOG, resolved.maxOutputSource)
-                assertEquals(true, resolved.supportsReasoning)
-                // pi 没有提供的输入限制才由 models.dev 补齐。
+                assertEquals(128_000, resolved.contextWindowTokens)
+                assertEquals(8_000, resolved.maxOutputTokens)
+                assertEquals(ModelCapabilitySource.COMMUNITY_CATALOG, resolved.contextWindowSource)
+                assertEquals(ModelCapabilitySource.COMMUNITY_CATALOG, resolved.maxOutputSource)
+                assertEquals(false, resolved.supportsReasoning)
+                // 目录未提供模态时由 pi 补齐，输入限制仍采用 models.dev。
+                assertEquals(setOf("text", "image"), resolved.inputModalities)
                 assertEquals(100_000, resolved.maxInputTokens)
                 assertEquals(ModelCapabilitySource.COMMUNITY_CATALOG, resolved.maxInputSource)
             }
@@ -103,8 +104,8 @@ class ModelCatalogServiceTest {
             val catalog = service.getCatalogWithCapabilities("https://api.example/v1", "key", "OpenAI兼容")
             val first = resolveModelCapability("model-a", ModelParameterProtocol.OPENAI_COMPATIBLE, "https://api.example/v1", catalog)
             val second = resolveModelCapability("model-b", ModelParameterProtocol.OPENAI_COMPATIBLE, "https://api.example/v1", catalog)
-            assertEquals(256_000, first.contextWindowTokens)
-            assertEquals(ModelCapabilitySource.LIVE_ENDPOINT, first.contextWindowSource)
+            assertEquals(128_000, first.contextWindowTokens)
+            assertEquals(ModelCapabilitySource.COMMUNITY_CATALOG, first.contextWindowSource)
             assertEquals(16_000, first.maxOutputTokens)
             assertEquals(ModelCapabilitySource.COMMUNITY_CATALOG, first.maxOutputSource)
             assertEquals(setOf("high"), first.reasoningEfforts)
@@ -366,7 +367,7 @@ class ModelCatalogServiceTest {
                 "model-a", ModelParameterProtocol.OPENAI_COMPATIBLE, "https://api.example/v1", current,
             )
             assertEquals(64_000, resolved.maxOutputTokens)
-            assertEquals(ModelCapabilitySource.PI_CATALOG, resolved.maxOutputSource)
+            assertEquals(ModelCapabilitySource.COMMUNITY_CATALOG, resolved.maxOutputSource)
             assertEquals(2, requests.count { it == "api.example/v1/models" })
             assertEquals(2, requests.count { it == "pi.dev/api/models" })
             assertEquals(2, requests.count { it == "models.dev/api.json" })

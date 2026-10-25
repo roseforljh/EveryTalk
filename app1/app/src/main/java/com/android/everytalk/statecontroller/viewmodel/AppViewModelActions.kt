@@ -419,7 +419,7 @@ import java.util.UUID
             onSendRejected?.invoke()
             return
         }
-        if (!isImageGeneration && stateHolder._isWebSearchEnabled.value) {
+        if (!isImageGeneration && stateHolder._selectedApiConfig.value?.modalityType != com.android.everytalk.data.DataClass.ModalityType.IMAGE && stateHolder._isWebSearchEnabled.value) {
             val currentConfig = stateHolder._selectedApiConfig.value
             val supportsNative = com.android.everytalk.data.network.WebSearchSupport.supportsNativeWebSearch(currentConfig)
             if (!supportsNative && !canUseSelectedExternalWebSearchProvider()) {

@@ -142,6 +142,34 @@ class RoomDataSourceBatchHistoryTest {
         }
     }
 
+    @Test
+    fun `统一历史包含旧图片会话且续聊保持UUID和原图片`() = runBlocking {
+        val image = Message(id = "old-image", text = "", sender = Sender.AI, contentStarted = true, imageUrls = listOf("/local/cat.png"), timestamp = 2)
+        dataSource.saveLoadedHistorySession("legacy-image", listOf(image), true)
+        val uuid = database.chatDao().getSession("legacy-image")!!.uuid
+        assertEquals(listOf("legacy-image"), dataSource.loadChatHistoryPreviewResult().sessions.map { it.sessionId })
+        val restored = dataSource.loadHistorySession("legacy-image")!!
+        assertEquals(image.imageUrls, restored.single().imageUrls)
+        dataSource.saveLoadedHistorySession("legacy-image", restored + Message(id = "next-text", text = "继续聊", sender = Sender.User, timestamp = 3), false)
+        assertEquals(uuid, database.chatDao().getSession("legacy-image")!!.uuid)
+        assertEquals(1, dataSource.loadChatHistoryResult().sessions.size)
+        assertEquals(listOf("old-image", "next-text"), dataSource.loadHistorySession("legacy-image")!!.map { it.id })
+    }
+
+    @Test
+    fun `内置配置缺失自动补齐且清空保留旧随机ID`() = runBlocking {
+        val legacy = com.android.everytalk.data.DataClass.builtinImageModels.first().copy(id = "legacy-default")
+        database.apiConfigDao().replaceConfigs(true, listOf(legacy.toEntity(isImageGenConfig = true)))
+        val loaded = dataSource.loadImageGenApiConfigs()
+        assertEquals(3, loaded.size)
+        assertTrue(loaded.any { it.id == "legacy-default" })
+        dataSource.saveImageGenApiConfigs(emptyList())
+        val retained = dataSource.loadImageGenApiConfigs()
+        assertEquals(3, retained.size)
+        assertTrue(retained.any { it.id == "legacy-default" })
+        assertEquals(3, database.apiConfigDao().getConfigs(true).size)
+    }
+
     private lateinit var database: AppDatabase
     private lateinit var dataSource: RoomDataSource
     private val queries = Collections.synchronizedList(mutableListOf<String>())

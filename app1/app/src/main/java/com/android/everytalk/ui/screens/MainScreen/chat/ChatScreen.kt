@@ -1,4 +1,5 @@
 package com.android.everytalk.ui.screens.MainScreen
+import com.android.everytalk.data.DataClass.isBuiltinModel
 import com.android.everytalk.statecontroller.*
 
 import androidx.activity.compose.BackHandler
@@ -53,6 +54,7 @@ import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.statecontroller.ConversationScrollState
 import com.android.everytalk.statecontroller.SimpleModeManager
 import com.android.everytalk.ui.components.AppTopBar
+import com.android.everytalk.ui.components.modelsInSelectedConfig
 import com.android.everytalk.ui.components.AnimatedWebSourcesDialog
 import com.android.everytalk.ui.components.EveryTalkLoadingIndicator
 import com.android.everytalk.ui.components.ScrollToBottomButton
@@ -94,16 +96,8 @@ fun ChatScreen(
     val conversationSearchQuery by viewModel.conversationSearchQuery.collectAsState()
     val historicalConversations by viewModel.historicalConversations.collectAsState()
 
-    // Dynamic config selection based on mode
-    val uiMode by viewModel.uiModeFlow.collectAsState()
-    val textConfig by viewModel.selectedApiConfig.collectAsState()
-    val imageConfig by viewModel.selectedImageGenApiConfig.collectAsState()
-
-    val selectedApiConfig by remember(uiMode, textConfig, imageConfig) {
-        derivedStateOf {
-            if (uiMode == SimpleModeManager.ModeType.IMAGE) imageConfig else textConfig
-        }
-    }
+    // 模型类型只决定下一次请求；页面、消息和会话 ID 始终保持同一份状态。
+    val selectedApiConfig by viewModel.selectedApiConfig.collectAsState()
 
     val isRemoteCancellationPending by viewModel.isRemoteCancellationPending.collectAsState()
     val currentStreamingAiMessageId by viewModel.currentTextStreamingAiMessageId.collectAsState()
@@ -525,32 +519,15 @@ fun ChatScreen(
     val textModels by viewModel.apiConfigs.collectAsState()
     val imageModels by viewModel.imageGenApiConfigs.collectAsState()
 
-    val availableModels by remember(uiMode, textModels, imageModels) {
-        derivedStateOf {
-            if (uiMode == SimpleModeManager.ModeType.IMAGE) imageModels else textModels
-        }
-    }
+    val availableModels = remember(textModels, imageModels) { textModels + imageModels }
 
     var showAiMessageOptionsBottomSheet by remember { mutableStateOf(false) }
     var selectedMessageForOptions by remember { mutableStateOf<Message?>(null) }
     val aiMessageOptionsBottomSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
-    val filteredModelsForBottomSheet by remember(availableModels, selectedApiConfig) {
-        derivedStateOf {
-            selectedApiConfig?.let { sel ->
-                val filtered = availableModels.filter {
-                    it.provider == sel.provider &&
-                    it.address == sel.address &&
-                    it.key == sel.key
-                }
-                if (filtered.isNotEmpty()) filtered else listOfNotNull(sel)
-            } ?: availableModels
-        }
+    val filteredModelsForBottomSheet = remember(availableModels, selectedApiConfig) {
+        availableModels.modelsInSelectedConfig(selectedApiConfig)
     }
-
-
-
-
 
     val screenWidth = with(density) { windowSize.width.toDp() }
     // 放宽列表传入的上限为整屏，由子项根据角色再做 60%/80% 约束
@@ -625,16 +602,7 @@ fun ChatScreen(
                 when {
                     messages.isEmpty() && !isHistoryLoadingOverlayVisible -> {
                         EmptyChatView(
-                            onNavigateToImageGen = {
-                                viewModel.simpleModeManager.setIntendedMode(com.android.everytalk.statecontroller.SimpleModeManager.ModeType.IMAGE)
-                                navController.navigate(Screen.IMAGE_GENERATION_SCREEN) {
-                                    popUpTo(navController.graph.findStartDestination().id) {
-                                        saveState = true
-                                    }
-                                    launchSingleTop = true
-                                    restoreState = true
-                                }
-                            },
+                            onNavigateToImageGen = { showModelSelectionBottomSheet = true },
                             onNavigateToVoice = {
                                 navController.navigate(Screen.VOICE_INPUT_SCREEN)
                             },
@@ -870,19 +838,19 @@ fun ChatScreen(
                 modelList = filteredModelsForBottomSheet,
                 selectedApiConfig = selectedApiConfig,
                 onModelSelected = { modelConfig ->
-                    viewModel.selectConfig(modelConfig)
+                    viewModel.selectConfig(modelConfig, modelConfig.modalityType == com.android.everytalk.data.DataClass.ModalityType.IMAGE)
                     showModelSelectionBottomSheet = false
                 },
                 onModelLongClick = { modelConfig ->
-                    modelParametersTarget = modelConfig
+                    if (!modelConfig.isBuiltinModel()) modelParametersTarget = modelConfig
                 },
                 onDismissModelSelection = { showModelSelectionBottomSheet = false },
                 allApiConfigs = availableModels,
                 onConfigModelSelected = { config ->
-                    viewModel.selectConfig(config)
+                    viewModel.selectConfig(config, config.modalityType == com.android.everytalk.data.DataClass.ModalityType.IMAGE)
                 },
                 onTitleLongClick = {
-                    if (selectedApiConfig != null) {
+                    if (selectedApiConfig != null && selectedApiConfig?.provider !in listOf("默认", "default")) {
                         showEditConfigDialog = true
                     }
                 },
@@ -937,7 +905,7 @@ fun ChatScreen(
                 onConfirm = { updatedConfig ->
                     viewModel.updateConfig(
                         config = updatedConfig,
-                        isImageGen = uiMode == SimpleModeManager.ModeType.IMAGE,
+                        isImageGen = updatedConfig.modalityType == com.android.everytalk.data.DataClass.ModalityType.IMAGE,
                     )
                     modelParametersTarget = null
                 },

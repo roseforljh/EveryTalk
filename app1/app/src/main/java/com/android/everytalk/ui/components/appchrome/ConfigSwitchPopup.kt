@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.PopupProperties
 import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.ApiConfig
+import com.android.everytalk.data.DataClass.isBuiltinModel
 import com.android.everytalk.ui.components.popup.AppFloatingCardPopup
 import com.android.everytalk.ui.screens.MainScreen.chat.models.sortModelConfigs
 import com.android.everytalk.ui.screens.settings.localizedChannelLabel
@@ -40,8 +41,18 @@ data class ConfigGroup(
         get() = provider.ifBlank { channel }
 }
 
+/** 单击只展示当前 API 配置组，长按再切换配置；合并文本/图片不能扩大到所有配置。 */
+fun List<ApiConfig>.modelsInSelectedConfig(selected: ApiConfig?): List<ApiConfig> {
+    val current = selected ?: firstOrNull() ?: return emptyList()
+    return filter { config ->
+        if (current.isBuiltinModel()) config.isBuiltinModel()
+        else !config.isBuiltinModel() && config.provider == current.provider &&
+            config.address == current.address && config.key == current.key
+    }
+}
+
 fun List<ApiConfig>.groupByConfig(): List<ConfigGroup> {
-    return groupBy { Triple(it.provider, it.address, it.key) }
+    return groupBy { if (it.isBuiltinModel()) Triple("默认", "", "") else Triple(it.provider, it.address, it.key) }
         .map { (key, configs) ->
             ConfigGroup(
                 provider = key.first,
@@ -104,11 +115,7 @@ fun ConfigSwitchPopup(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
             )
             configGroups.forEach { group ->
-                val isCurrentGroup = selectedApiConfig?.let {
-                    it.provider == group.provider &&
-                        it.address == group.address &&
-                        it.key == group.key
-                } == true
+                val isCurrentGroup = group.models.any { it.id == selectedApiConfig?.id }
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()

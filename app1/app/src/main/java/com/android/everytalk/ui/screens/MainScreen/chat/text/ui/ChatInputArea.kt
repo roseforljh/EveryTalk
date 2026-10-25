@@ -1,6 +1,10 @@
 package com.android.everytalk.ui.screens.MainScreen.chat.text.ui
 import com.android.everytalk.statecontroller.*
+import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.sin
+import kotlin.math.sqrt
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
@@ -16,7 +20,7 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -41,6 +45,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.isSystemInDarkTheme
 import com.android.everytalk.ui.components.LinkStyledTextField
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -60,6 +65,15 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Paint
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathOperation
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativePaint
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -76,6 +90,14 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
 import androidx.core.content.ContextCompat
 import com.android.everytalk.data.DataClass.ApiConfig
+import com.android.everytalk.data.DataClass.ImageRatio
+import com.android.everytalk.data.DataClass.outputModalities
+import com.android.everytalk.data.DataClass.inputModalities
+import com.android.everytalk.data.DataClass.imageApiFormat
+import com.android.everytalk.data.DataClass.imageParameterKeys
+import com.android.everytalk.ui.components.ImageGenCapabilities
+import com.android.everytalk.ui.screens.ImageGeneration.ImageFunctionPanelContent
+import com.android.everytalk.ui.screens.ImageGeneration.ImageGenerationInputDialogs
 import com.android.everytalk.data.computer.Computer
 import com.android.everytalk.data.computer.ComputerDisclosureKind
 import com.android.everytalk.data.computer.ComputerDisclosureStore
@@ -100,7 +122,6 @@ import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.components.dialog.appDialogSubtextColor
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldColors
-import com.android.everytalk.ui.components.modifier.diffuseShadow
 import com.android.everytalk.ui.components.popup.AppFloatingCardPopup
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -194,6 +215,27 @@ fun ChatInputArea(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    // 输入框保持同一份草稿，仅按实际输出能力切换快捷菜单，不再固定使用文本工具。
+    val isImageModel = selectedApiConfig?.outputModalities()?.contains("image") == true
+    val imageFormat = selectedApiConfig?.imageApiFormat()
+    val detectedImageFamily = ImageGenCapabilities.detectFamily(selectedApiConfig?.model, selectedApiConfig?.provider, selectedApiConfig?.address)
+    val imageFamily = when (imageFormat) {
+        "qwen" -> ImageGenCapabilities.ModelFamily.QWEN
+        "modal" -> ImageGenCapabilities.ModelFamily.MODAL_Z_IMAGE
+        "gemini" -> ImageGenCapabilities.ModelFamily.GEMINI
+        else -> detectedImageFamily.takeUnless { it in setOf(ImageGenCapabilities.ModelFamily.GEMINI, ImageGenCapabilities.ModelFamily.MODAL_Z_IMAGE) }
+            ?: ImageGenCapabilities.ModelFamily.UNKNOWN
+    }
+    val imageFields = imageParameterKeys(imageFormat ?: "openai")
+    val storedImageRatio by viewModel.stateHolder._selectedImageRatio.collectAsState()
+    val imageRatio = ImageRatio.DEFAULT_RATIOS.firstOrNull { it.displayName == selectedApiConfig?.modelParameters?.imageAspectRatio } ?: storedImageRatio
+    val storedImageQuality by viewModel.stateHolder._gptImageQuality.collectAsState()
+    val imageQuality = ImageGenCapabilities.GptImageQuality.entries.firstOrNull { it.apiValue == selectedApiConfig?.modelParameters?.imageQuality } ?: storedImageQuality
+    val supportsReferenceImage = selectedApiConfig?.let { config ->
+        if (config.modelParameters.inputModalities != null || !config.modelParameters.resolvedCapability?.inputModalities.isNullOrEmpty()) "image" in config.inputModalities()
+        else ImageGenCapabilities.getCapabilities(imageFamily).maxInputImages > 0
+    } ?: false
+    var imageOptionDialog by remember(selectedApiConfig?.id, imageFormat) { mutableStateOf<String?>(null) }
     val skillRepository = remember(context) { SkillRepository(context) }
     val installedSkills by skillRepository.observeAll().collectAsState(initial = emptyList())
 
@@ -607,7 +649,7 @@ fun ChatInputArea(
     val localText = localTextFieldValue.text
     val slashQuery = findSkillSlashQuery(localTextFieldValue)
     var dismissedSlashQueryStart by remember { mutableStateOf<Int?>(null) }
-    val activeSlashQuery = slashQuery?.takeUnless { it.start == dismissedSlashQueryStart }
+    val activeSlashQuery = slashQuery?.takeUnless { isImageModel || it.start == dismissedSlashQueryStart }
     val skillCandidates = remember(installedSkills, activeSlashQuery?.query) {
         activeSlashQuery?.let { rankSkillCandidates(installedSkills, it.query) }.orEmpty()
     }
@@ -645,10 +687,10 @@ fun ChatInputArea(
     BackHandler(enabled = activeSlashQuery != null) {
         dismissedSlashQueryStart = slashQuery?.start
     }
-    LaunchedEffect(localText, messageEditSession) {
+    LaunchedEffect(localText, messageEditSession, isImageModel) {
         // 编辑历史时保持原文可逆，不把回填的长文本自动改成文件，避免未动内容却失去复原按钮。
         val editingHistory = messageEditSession?.belongsTo(currentConversationId, false) == true
-        if (editingHistory || localText.length < LONG_TEXT_ATTACHMENT_THRESHOLD_CHARS) {
+        if (isImageModel || editingHistory || localText.length < LONG_TEXT_ATTACHMENT_THRESHOLD_CHARS) {
             isConvertingLongText = false
             return@LaunchedEffect
         }
@@ -1055,18 +1097,8 @@ fun ChatInputArea(
                     )
                 }
 
-                // 输入法收起/展开进度直接跟随 imeInsets，避免等 isImeVisible 布尔值最后一刻才切换
-                val imeBottomPx = imeInsets.getBottom(density)
-                var maxImeBottomPx by remember { mutableIntStateOf(0) }
-                if (imeBottomPx > maxImeBottomPx) {
-                    maxImeBottomPx = imeBottomPx
-                }
-                val imeProgress = if (maxImeBottomPx > 0) {
-                    (imeBottomPx.toFloat() / maxImeBottomPx.toFloat()).coerceIn(0f, 1f)
-                } else {
-                    0f
-                }
-                val isImeVisible = imeProgress > 0.01f
+                // 组合阶段只关心键盘是否可见；逐帧高度在下方协程里读取，键盘动画期间不重组整个输入区。
+                val isImeVisible by remember(imeInsets, density) { derivedStateOf { imeInsets.getBottom(density) > 0 } }
                 val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
                 LaunchedEffect(isImeVisible, localText) {
                     if (!isImeVisible && !showFunctionPanel && localText.isEmpty()) {
@@ -1086,38 +1118,29 @@ fun ChatInputArea(
                         (if (isMcpEnabled) 1 else 0) +
                         (if (isAgentEnabled) 1 else 0) +
                         (if (!isAgentEnabled && currentAgentResourceState != null) 1 else 0)
-                val hasActiveTags = activeTagCount > 0
+                val hasActiveTags = !isImageModel && activeTagCount > 0
 
-                // 合并保护：只有输入框完全回到原始状态（无文本、无媒体、无标签）
-                // 且输入框高度动画已完成后，才允许合并
+                // 合并保护：只有输入框完全回到原始状态（无文本、无媒体、无标签），
+                // 且多行/标签收起的高度动画实际缩回单行附近后，才允许合并。
                 val hasAnyContent = localText.isNotEmpty() || selectedMediaItems.isNotEmpty() || hasActiveTags
-                var inputHeightSettled by remember { mutableStateOf(true) }
-                var prevHasAnyContent by remember { mutableStateOf(hasAnyContent) }
-
-                // 当内容从有变无时，标记高度未稳定，等待 animateContentSize 完成
-                LaunchedEffect(hasAnyContent) {
-                    if (prevHasAnyContent && !hasAnyContent) {
-                        // 内容刚清空，等输入框高度动画结束再允许合并
-                        inputHeightSettled = false
-                        delay(300L)
-                        inputHeightSettled = true
+                var inputTall by remember { mutableStateOf(false) }
+                val inputTallThresholdPx = with(density) { 56.dp.roundToPx() }
+                val keepInputSeparated = hasAnyContent || inputTall
+                val separation = remember { Animatable(if (keepInputSeparated) 1f else 0f) }
+                var maxImeBottomPx by remember { mutableIntStateOf(0) }
+                LaunchedEffect(keepInputSeparated, imeInsets, density) {
+                    if (keepInputSeparated) {
+                        separation.animateTo(1f, separationSpring)
+                        return@LaunchedEffect
                     }
-                    prevHasAnyContent = hasAnyContent
+                    // 键盘自带缓动，逐帧直接跟随，不再叠加弹簧；只有进度跳变（刚恢复跟随、输入法无动画）时才补间。
+                    snapshotFlow { imeInsets.getBottom(density) }.collect { px ->
+                        maxImeBottomPx = max(maxImeBottomPx, px)
+                        val target = if (maxImeBottomPx > 0) px.toFloat() / maxImeBottomPx else 0f
+                        if (abs(target - separation.value) > 0.25f) separation.animateTo(target, separationSpring)
+                        else separation.snapTo(target)
+                    }
                 }
-
-                val keepInputSeparated = hasAnyContent || !inputHeightSettled
-                val separationTarget = if (keepInputSeparated) 1f else imeProgress
-                val separationProgress by animateFloatAsState(
-                    targetValue = separationTarget,
-                    animationSpec = spring(
-                        dampingRatio = 0.857f,
-                        stiffness = 150f
-                    ),
-                    label = "separationProgress"
-                )
-                val sizeProgress = separationProgress
-                val verticalPadding = ((4f - 1f * sizeProgress).coerceAtLeast(0f)).dp
-                val inputMinHeight = ((48f - 4f * sizeProgress).coerceIn(44f, 48f)).dp
 
                 val buttonBackgroundColor by animateColorAsState(
                     targetValue = if (isDarkTheme) Color.White else Color.Black,
@@ -1141,43 +1164,63 @@ fun ChatInputArea(
                         .graphicsLayer { clip = false },
                     contentAlignment = Alignment.Center
                 ) {
-                    val sep = separationProgress.coerceIn(0f, 1f)
-                    val layoutProgress = sep * sep * (3f - 2f * sep)
-                    val plusMotionProgress = layoutProgress
-                    val textPaddingProgress = layoutProgress * layoutProgress
+                    // 所有尺寸、位移、边框共用同一条进度，保证加号、输入框和文字同步到位。
+                    val p = separation.value.coerceIn(0f, 1f)
+                    val verticalPadding = (4f - p).dp
+                    val inputMinHeight = (48f - 4f * p).dp
                     // 展开态左侧按钮会占用约 80dp。旧算法先取屏宽 82% 再叠加这段位移，
                     // 窄屏时输入框右侧会越过父布局，随后被裁剪成“压扁/消失”。
                     // 这里先扣除按钮占用的空间，保证输入框和发送按钮始终落在可用宽度内。
                     val expandedInputFieldWidth = (maxWidth - 80.dp).coerceAtLeast(0.dp)
                     val collapsedInputFieldWidth = expandedInputFieldWidth + 16.dp
-                    val inputFieldWidth = collapsedInputFieldWidth + (expandedInputFieldWidth - collapsedInputFieldWidth) * layoutProgress
+                    val inputFieldWidth = collapsedInputFieldWidth + (expandedInputFieldWidth - collapsedInputFieldWidth) * p
                     val plusBoxWidth = 64.dp
 
-                    val plusStretchProgress = (plusMotionProgress * 2f).coerceIn(0f, 1f)
-                    val plusRecoverProgress = ((plusMotionProgress - 0.5f) * 2f).coerceIn(0f, 1f)
-                    val plusBorderInset = if (isDarkTheme) 1.dp * (1f - plusMotionProgress) else 0.dp
-                    val plusWidth = (48f + 16f * plusStretchProgress - 20f * plusRecoverProgress).dp - plusBorderInset * 2
-                    val plusOffset = plusBorderInset + (-20f * plusStretchProgress - 40f * plusRecoverProgress).dp
-                    val groupLeft = if (plusOffset < 0.dp) plusOffset * layoutProgress else 0.dp
+                    // 加号像水滴一样先拉长再脱离：宽度 48 → 中段约 64 → 44，位移前慢后快，曲线全程连续无拐点。
+                    val plusTravel = -30f * p * (1f + p)
+                    val plusRawWidth = 48f - 4f * p + 18f * sin(PI.toFloat() * p)
+                    val plusWidth = plusRawWidth.dp
+                    val plusOffset = plusTravel.dp
+                    val groupLeft = if (plusOffset < 0.dp) plusOffset * p else 0.dp
                     val groupWidth = inputFieldWidth - groupLeft
-                    val plusHeight = inputMinHeight - plusBorderInset * 2
-                    val plusCorner = plusHeight / 2
-                    val plusShape = RoundedCornerShape(plusCorner)
-                    val plusBg = inputBackground
-                    val borderColor = if (isDarkTheme) Color(0xFF48474C) else Color(0xFFD6D6D6)
-                    val separatedBorderAlpha = if (isDarkTheme) (((layoutProgress - 0.15f) / 0.35f).coerceIn(0f, 1f)) else 0f
-                    val plusBorderAlpha = if (isDarkTheme && separationTarget > 0.5f) separatedBorderAlpha else 0f
-                    val collapsedInputBorderAlpha = if (isDarkTheme) (((0.35f - layoutProgress) / 0.35f).coerceIn(0f, 1f)) else 0f
-                    val inputBorderAlpha = kotlin.math.max(separatedBorderAlpha, collapsedInputBorderAlpha)
-
-                    val inputShape = RoundedCornerShape(inputMinHeight / 2)
-                    val textStartPadding = 48.dp - (48.dp - 16.dp) * textPaddingProgress
+                    val plusHeight = inputMinHeight
+                    val borderColor = Color(0xFF48474C)
+                    // 文字起点贴着加号右缘走，过渡中途不会被加号盖住。
+                    val textStartPadding = (plusTravel + plusRawWidth).coerceIn(16f, 48f).dp
 
                     Box(
                         modifier = Modifier
                             .width(groupWidth)
                             .wrapContentHeight()
-                            .graphicsLayer { clip = false },
+                            .graphicsLayer { clip = false }
+                            // 加号和输入框共用一个液态轮廓：两者合并成同一块填充、同一圈边框、同一层阴影，
+                            // 靠近时中间长出逐渐变细的液桥，不再是两个叠在一起的独立形状。
+                            .drawBehind {
+                                val inputLeft = -groupLeft.toPx()
+                                val plusLeft = inputLeft + plusOffset.toPx()
+                                val shape = liquidComposerPath(
+                                    plusLeft = plusLeft,
+                                    plusRight = plusLeft + plusWidth.toPx(),
+                                    inputLeft = inputLeft,
+                                    inputRight = inputLeft + inputFieldWidth.toPx(),
+                                    height = size.height,
+                                    radius = inputMinHeight.toPx() / 2,
+                                )
+                                if (isDarkTheme) {
+                                    drawPath(shape, inputBackground)
+                                    drawPath(shape, borderColor, style = Stroke(1.dp.toPx()))
+                                } else {
+                                    drawIntoCanvas { canvas ->
+                                        val shadow = Paint()
+                                        shadow.nativePaint.maskFilter = android.graphics.BlurMaskFilter(
+                                            24.dp.toPx(), android.graphics.BlurMaskFilter.Blur.NORMAL
+                                        )
+                                        shadow.nativePaint.color = Color.Black.copy(alpha = 0.12f).toArgb()
+                                        canvas.drawPath(shape, shadow)
+                                    }
+                                    drawPath(shape, inputBackground)
+                                }
+                            },
                         contentAlignment = Alignment.CenterStart
                     ) {
                         // 加号按钮
@@ -1198,23 +1241,7 @@ fun ChatInputArea(
                                     modifier = Modifier
                                         .offset(x = plusOffset)
                                         .width(plusWidth)
-                                        .height(plusHeight)
-                                        .diffuseShadow(
-                                            color = Color.Black,
-                                            alpha = 0.12f * layoutProgress,
-                                            borderRadius = plusCorner,
-                                            shadowRadius = 24.dp,
-                                            offsetY = 0.dp,
-                                            offsetX = 0.dp
-                                        )
-                                        .background(plusBg, plusShape)
-                                        .then(
-                                            if (isDarkTheme) {
-                                                Modifier.border(1.dp, borderColor.copy(alpha = plusBorderAlpha), plusShape)
-                                            } else {
-                                                Modifier
-                                            }
-                                        ),
+                                        .height(plusHeight),
                                     contentAlignment = Alignment.CenterStart
                                 ) {
                                     IconButton(
@@ -1285,7 +1312,43 @@ fun ChatInputArea(
                                     .widthIn(max = 320.dp)
                                     .wrapContentHeight(),
                             ) {
-                                FunctionPanelContent(
+                                if (isImageModel) {
+                                    ImageFunctionPanelContent(
+                                        supportsImageEditing = supportsReferenceImage,
+                                        hasContent = hasContent,
+                                        isQwenEdit = imageFormat == "qwen",
+                                        detectedFamily = imageFamily,
+                                        onChangeImageSteps = viewModel::updateImageNumInferenceStepsForSelectedConfig,
+                                        onChangeImageParams = viewModel::updateImageGenerationParamsForSelectedConfig,
+                                        onOpenGallery = {
+                                            showFunctionPanel = false
+                                            photoPickerLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                                        },
+                                        onOpenCamera = {
+                                            showFunctionPanel = false
+                                            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                                        },
+                                        onShowRatioDialog = { imageOptionDialog = "ratio"; showFunctionPanel = false },
+                                        onShowStepsDialog = { imageOptionDialog = "steps"; showFunctionPanel = false },
+                                        onShowParamsDialog = { imageOptionDialog = "params"; showFunctionPanel = false },
+                                        onShowQualityDialog = { imageOptionDialog = "quality"; showFunctionPanel = false },
+                                        onClearContent = {
+                                            localTextFieldValue = TextFieldValue("", TextRange(0))
+                                            skillReferences = emptyList()
+                                            lastExternalText = ""
+                                            onTextChange("")
+                                            deleteDraftTextAttachments(selectedMediaItems)
+                                            onClearMediaItems()
+                                            syncJob?.cancel()
+                                            showFunctionPanel = false
+                                        },
+                                        currentImageSteps = selectedApiConfig.numInferenceSteps,
+                                        selectedImageRatio = imageRatio,
+                                        isGptImage = imageFamily == ImageGenCapabilities.ModelFamily.GPT_IMAGE,
+                                        currentGptImageQuality = imageQuality,
+                                        parameterKeys = imageFields,
+                                    )
+                                } else FunctionPanelContent(
                                     isWebSearchEnabled = isWebSearchEnabled,
                                     isWebSearchAvailable = effectiveWebSearchAvailable,
                                     onToggleWebSearch = onToggleWebSearch,
@@ -1427,18 +1490,6 @@ fun ChatInputArea(
                             .zIndex(1f)
                             .graphicsLayer { clip = false }
                         
-                        val shadowedInputModifier = if (!isDarkTheme) {
-                            inputModifier.diffuseShadow(
-                                color = Color.Black,
-                                alpha = 0.12f,
-                                borderRadius = inputMinHeight / 2,
-                                shadowRadius = 24.dp,
-                                offsetY = 0.dp,
-                                offsetX = 0.dp
-                            )
-                        } else {
-                            inputModifier
-                        }
 
                         LinkStyledTextField(
                             readOnly = isRestoringMessage,
@@ -1454,7 +1505,7 @@ fun ChatInputArea(
                                 textColor = if (isDarkTheme) Color(0xFF99CEFF) else Color(0xFF026FC2),
                                 backgroundColor = if (isDarkTheme) Color(0xFF173B59) else Color(0xFFDDEEFF),
                             ),
-                            modifier = shadowedInputModifier
+                            modifier = inputModifier
                                 .focusRequester(focusRequester)
                                 .onPreviewKeyEvent { event ->
                                     if (event.type != KeyEventType.KeyDown || activeSlashQuery == null) return@onPreviewKeyEvent false
@@ -1507,10 +1558,9 @@ fun ChatInputArea(
                                 val safeVerticalPadding = verticalPadding.coerceAtLeast(0.dp)
                                 Column(
                                     modifier = Modifier
+                                        .onSizeChanged { inputTall = it.height > inputTallThresholdPx }
                                         .heightIn(min = inputMinHeight)
                                         .animateContentSize(animationSpec = spring(stiffness = Spring.StiffnessMediumLow))
-                                        .background(inputBackground, inputShape)
-                                        .border(1.dp, borderColor.copy(alpha = inputBorderAlpha), inputShape)
                                         .padding(start = textStartPadding, end = 5.dp, top = safeVerticalPadding, bottom = safeVerticalPadding)
                                 ) {
                                     if (hasActiveTags) {
@@ -1685,6 +1735,36 @@ fun ChatInputArea(
             // 已由 Column 自身处理 navigationBars + ime 内边距，移除额外 spacer
         }
     }
+
+    // 对话框放在菜单浮层之外，关闭菜单后仍可编辑；换模型时自动清除旧弹窗状态。
+    if (isImageModel) ImageGenerationInputDialogs(
+        showStepsDialog = imageOptionDialog == "steps", onShowStepsDialogChange = { if (!it) imageOptionDialog = null },
+        currentImageSteps = selectedApiConfig.numInferenceSteps,
+        onChangeImageSteps = viewModel::updateImageNumInferenceStepsForSelectedConfig,
+        showParamsDialog = imageOptionDialog == "params", onShowParamsDialogChange = { if (!it) imageOptionDialog = null },
+        currentImageGuidance = selectedApiConfig.guidanceScale,
+        onChangeImageParams = viewModel::updateImageGenerationParamsForSelectedConfig,
+        showGptQualityDialog = imageOptionDialog == "quality", onShowGptQualityDialogChange = { if (!it) imageOptionDialog = null },
+        currentGptImageQuality = imageQuality,
+        onGptImageQualityChanged = {
+            viewModel.stateHolder._gptImageQuality.value = it
+            viewModel.updateImageQualityForSelectedConfig(it.apiValue)
+        },
+        showRatioDialog = imageOptionDialog == "ratio", onShowRatioDialogChange = { if (!it) imageOptionDialog = null },
+        selectedImageRatio = imageRatio,
+        onImageRatioChanged = { ratio ->
+            viewModel.stateHolder._selectedImageRatio.value = ratio
+            viewModel.updateImageAspectRatioForSelectedConfig(ratio.displayName.takeUnless { ratio.isAuto })
+        },
+        allowedRatioNames = ImageGenCapabilities.getCapabilities(imageFamily).ratios.map { it.ratio }.takeIf { it.isNotEmpty() },
+        detectedFamily = imageFamily,
+        seedreamQuality = ImageGenCapabilities.getSeedreamQuality(selectedApiConfig.imageSize),
+        onSeedreamQualityChange = { viewModel.updateImageSizeForSelectedConfig(it.label) },
+        selectedApiConfig = selectedApiConfig,
+        onGeminiImageSizeChanged = viewModel::updateImageSizeForSelectedConfig,
+        context = context,
+        tempCameraImageUri = null,
+    )
 
     ChatInputDialogs(
         showMcpServerListDialog = showMcpServerListDialog,
@@ -2092,4 +2172,61 @@ private fun EmptySkillSlashRow() {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
+}
+
+// 内容驱动的分离/合并（不跟随键盘时）统一用这条不回弹的弹簧。
+private val separationSpring = spring<Float>(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow)
+
+/**
+ * 加号与输入框的合并轮廓：两个同高胶囊取并集，再补上中间的液桥。
+ * 液桥连接加号右端圆和输入框左端圆，圆心距越大颈部越细，间隙达到半个半径时收细断开。
+ */
+internal fun liquidComposerPath(
+    plusLeft: Float,
+    plusRight: Float,
+    inputLeft: Float,
+    inputRight: Float,
+    height: Float,
+    radius: Float,
+): Path {
+    val cy = height / 2
+    val corner = CornerRadius(radius)
+    val plus = Path().apply { addRoundRect(RoundRect(plusLeft, cy - radius, plusRight, cy + radius, corner)) }
+    val input = Path().apply { addRoundRect(RoundRect(inputLeft, 0f, inputRight, height, corner)) }
+    val body = Path.combine(PathOperation.Union, plus, input)
+    val x1 = plusRight - radius
+    val x2 = inputLeft + radius
+    val waist = liquidNeckWaist(x2 - x1, radius)
+    if (waist <= 0f) return body
+    // 附着点随颈部粗细在端圆上滑动：颈部满宽时贴着顶边，收细时退到约 30°；切线与端圆连续。
+    val sinA = (1f + waist / radius) / 2f
+    val cosA = sqrt(1f - sinA * sinA)
+    val p1x = x1 + radius * cosA
+    val p2x = x2 - radius * cosA
+    if (p2x <= p1x) return body
+    val mid = (x1 + x2) / 2
+    val h = (mid - p1x) * 0.55f
+    val top = cy - radius * sinA
+    val bottom = cy + radius * sinA
+    val neck = Path().apply {
+        moveTo(p1x, top)
+        cubicTo(p1x + sinA * h, top + cosA * h, mid - h, cy - waist, mid, cy - waist)
+        cubicTo(mid + h, cy - waist, p2x - sinA * h, top + cosA * h, p2x, top)
+        lineTo(p2x, bottom)
+        cubicTo(p2x - sinA * h, bottom - cosA * h, mid + h, cy + waist, mid, cy + waist)
+        cubicTo(mid - h, cy + waist, p1x + sinA * h, bottom - cosA * h, p1x, bottom)
+        close()
+    }
+    return Path.combine(PathOperation.Union, body, neck)
+}
+
+/**
+ * 液桥半宽：两端圆还深度重叠（圆心距不超过半径）时保持满宽，把交叉处的尖角完全填平；
+ * 之后按平方根收细，越接近断开收得越快，圆心距达到 2.5 倍半径（间隙半个半径）时收为 0。
+ * 满足重叠期间半宽始终不低于两圆交点高度，不会再露出两层叠加的缺口。
+ */
+internal fun liquidNeckWaist(centerDistance: Float, radius: Float): Float {
+    if (centerDistance <= 0f) return 0f
+    val t = ((centerDistance - radius) / (radius * 1.5f)).coerceIn(0f, 1f)
+    return if (t >= 1f) 0f else radius * sqrt(1f - t)
 }

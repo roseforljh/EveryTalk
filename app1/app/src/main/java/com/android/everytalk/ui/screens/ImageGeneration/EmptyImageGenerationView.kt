@@ -28,6 +28,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.res.stringResource
 import com.android.everytalk.R
+import com.android.everytalk.ui.components.ParticlesBackground
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -36,6 +37,8 @@ import kotlinx.coroutines.launch
 
 @Composable
 fun EmptyImageGenerationView() {
+    Box(Modifier.fillMaxSize()) {
+    ParticlesBackground()
     Box(
         Modifier
             .fillMaxSize()
@@ -112,4 +115,5 @@ fun EmptyImageGenerationView() {
             }
         }
     }
+}
 }

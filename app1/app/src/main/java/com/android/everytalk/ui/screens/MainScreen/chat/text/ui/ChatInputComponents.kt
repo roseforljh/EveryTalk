@@ -234,7 +234,7 @@ fun OptimizedSelectedItemPreview(
                                 contentDescription = text,
                                 modifier = Modifier.size(32.dp),
                                 // 彩色文件图标保留原始配色，其余图标继续跟随主题。
-                                tint = if (it == R.drawable.ic_gpt_file_powerpoint) Color.Unspecified else MaterialTheme.colorScheme.primary
+                                tint = com.android.everytalk.ui.components.attachmentIconTint(it)
                             )
                         }
                         Spacer(Modifier.height(4.dp))

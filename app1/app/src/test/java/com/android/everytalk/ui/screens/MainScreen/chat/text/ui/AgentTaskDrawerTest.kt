@@ -47,7 +47,7 @@ class AgentTaskDrawerTest {
         rule.onNodeWithTag("agent-task-process-b").assertIsDisplayed()
         rule.onNodeWithTag("agent-task-tab-a").performClick()
         rule.onNodeWithText("检查 18").assertIsDisplayed()
-        rule.onNodeWithContentDescription("关闭任务").performClick()
+        rule.onNodeWithTag("agent-task-drawer").performTouchInput { swipeRight() }
         rule.onNodeWithTag("agent-task-drawer").assertDoesNotExist()
         rule.onNodeWithTag("agent-task-entry").assertIsDisplayed()
     }

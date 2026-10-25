@@ -1,5 +1,7 @@
 package com.android.everytalk.ui.screens.appinfo
 
+import com.android.everytalk.ui.theme.AppInputFieldShape
+
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -108,7 +110,7 @@ fun MemoryManagementScreen(onBack: () -> Unit, modifier: Modifier = Modifier, re
                         label = { Text(stringResource(R.string.memory_content)) },
                         placeholder = { Text(stringResource(R.string.memory_empty)) },
                         minLines = 14, maxLines = 20,
-                        shape = RoundedCornerShape(24.dp),
+                        shape = AppInputFieldShape,
                         modifier = Modifier.fillMaxWidth().testTag("memory_editor"),
                     )
                     error?.let { message ->

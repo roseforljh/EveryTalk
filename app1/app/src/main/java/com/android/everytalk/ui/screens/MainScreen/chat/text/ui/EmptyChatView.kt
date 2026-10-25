@@ -48,6 +48,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.android.everytalk.R
+import com.android.everytalk.ui.components.ParticlesBackground
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -60,6 +61,8 @@ fun EmptyChatView(
     onNavigateToSettings: () -> Unit,
     onShowSystemPrompt: () -> Unit
 ) {
+    Box(Modifier.fillMaxSize()) {
+    ParticlesBackground()
     Box(
         Modifier
             .fillMaxSize()
@@ -189,6 +192,7 @@ fun EmptyChatView(
                 }
             }
         }
+    }
     }
 }
 

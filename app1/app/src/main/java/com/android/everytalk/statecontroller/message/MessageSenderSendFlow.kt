@@ -35,6 +35,8 @@ import com.android.everytalk.data.DataClass.ImageGenRequest
 import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.DataClass.modelParameterProtocol
 import com.android.everytalk.data.DataClass.effectiveModelChannel
+import com.android.everytalk.data.DataClass.outputModalities
+import com.android.everytalk.data.DataClass.imageApiFormat
 import com.android.everytalk.data.DataClass.openAICompatibleRequestParameters
 import com.android.everytalk.data.DataClass.resolvedModelTokenLimits
 import com.android.everytalk.data.DataClass.toThinkingConfig
@@ -149,10 +151,19 @@ internal fun MessageSender.sendMessageInternal(
             return
         }
 
+        val currentConfig = (if (isImageGeneration) stateHolder._selectedImageGenApiConfig.value else stateHolder._selectedApiConfig.value) ?: run {
+            Log.e("MessageSender", "❌ No API config selected! isImageGeneration=$isImageGeneration")
+            viewModelScope.launch { showSnackbar(if (isImageGeneration) "请先选择 图像生成 的API配置" else "请先选择 API 配置") }
+            onSendRejected?.invoke()
+            return
+        }
+        // 会话归属与请求类型分开：统一聊天列表里可以交替调用文本和图片模型。
+        val isImageRequest = isImageGeneration || "image" in currentConfig.outputModalities()
+
         when (
             val safetyDecision = AiContentSafetyPolicy.evaluateUserInput(
                 text = originalText,
-                isImageGeneration = isImageGeneration,
+                isImageGeneration = isImageRequest,
             )
         ) {
             AiContentSafetyDecision.Allowed -> Unit
@@ -178,12 +189,7 @@ internal fun MessageSender.sendMessageInternal(
         Log.d("MessageSender", "imageGenerationMessages.size: ${stateHolder.imageGenerationMessages.size}")
         Log.d("MessageSender", "messages.size: ${stateHolder.messages.size}")
         
-        val currentConfig = (if (isImageGeneration) stateHolder._selectedImageGenApiConfig.value else stateHolder._selectedApiConfig.value) ?: run {
-            Log.e("MessageSender", "❌ No API config selected! isImageGeneration=$isImageGeneration")
-            viewModelScope.launch { showSnackbar(if (isImageGeneration) "请先选择 图像生成 的API配置" else "请先选择 API 配置") }
-            onSendRejected?.invoke()
-            return
-        }
+
 
         // 记录会话使用的配置ID
         if (!isImageGeneration) {
@@ -227,12 +233,12 @@ internal fun MessageSender.sendMessageInternal(
             val modelIsGeminiType = parameterProtocol == ModelParameterProtocol.GEMINI
             val shouldUsePartsApiMessage = modelIsGeminiType
             val providerForRequestBackend = currentConfig.provider
-            val webSearchEnabledForRequest = !isImageGeneration && stateHolder._isWebSearchEnabled.value
-            val isMcpEnabledForRequest = !isImageGeneration && stateHolder._isMcpEnabledForNextRequest.value
-            val isAgentEnabledForRequest = !isImageGeneration && stateHolder._isAgentEnabled.value
+            val webSearchEnabledForRequest = !isImageRequest && stateHolder._isWebSearchEnabled.value
+            val isMcpEnabledForRequest = !isImageRequest && stateHolder._isMcpEnabledForNextRequest.value
+            val isAgentEnabledForRequest = !isImageRequest && stateHolder._isAgentEnabled.value
             val requestConversationId = stateHolder._currentConversationId.value
             // 每条请求只冻结一次。后续启停和更新从下一条消息生效。
-            val skillSnapshotForRequest = if (isImageGeneration) {
+            val skillSnapshotForRequest = if (isImageRequest) {
                 null
             } else {
                 val manualReferences = contentParts.filterIsInstance<MessageContentPart.SkillReference>()
@@ -242,7 +248,7 @@ internal fun MessageSender.sendMessageInternal(
             // Workspace 准备和附件处理并行。用户消息无需等待 SSH，点击发送后立即进入消息列表。
             // 生图和未启用 Agent 的请求不依赖 Computer，避免无关的初始化阻塞发送。
             val computerPreparation = async(Dispatchers.IO) {
-                if (isImageGeneration || !isAgentEnabledForRequest) {
+                if (isImageRequest || !isAgentEnabledForRequest) {
                     Result.success(null)
                 } else {
                     captureComputerPreparation {
@@ -251,7 +257,7 @@ internal fun MessageSender.sendMessageInternal(
                 }
             }
             val enabledToolIdsForRequest = enabledMessageToolIdsForRequest(
-                isImageGeneration = isImageGeneration,
+                isImageGeneration = isImageRequest,
                 webSearchEnabled = webSearchEnabledForRequest,
                 mcpEnabled = isMcpEnabledForRequest,
                 agentEnabled = isAgentEnabledForRequest,
@@ -271,7 +277,7 @@ internal fun MessageSender.sendMessageInternal(
                 emptyMap()
             }
 
-            val longTextAttachment = if (shouldConvertMessageTextToAttachment(originalText, isImageGeneration)) {
+            val longTextAttachment = if (shouldConvertMessageTextToAttachment(originalText, isImageRequest)) {
                 createTextAttachment(application, originalText)
             } else {
                 null
@@ -288,12 +294,12 @@ internal fun MessageSender.sendMessageInternal(
             }
 
             // 自动注入"上一轮AI出图"作为参考，以支持"在上一张基础上修改"等编辑语义
-            if (isImageGeneration && allAttachments.isEmpty()) {
+            if (isImageRequest && allAttachments.isEmpty()) {
                 val t = textToActuallySend.lowercase()
                 if (hasImageEditKeywords(t)) {
                     try {
                         // 找到最近一条包含图片的AI消息
-                        val lastAiWithImage = stateHolder.imageGenerationMessages.lastOrNull {
+                        val lastAiWithImage = (if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages).lastOrNull {
                             it.sender == UiSender.AI && !it.imageUrls.isNullOrEmpty()
                         }
                         val refImageUrl = lastAiWithImage?.imageUrls?.lastOrNull()
@@ -562,7 +568,7 @@ internal fun MessageSender.sendMessageInternal(
                 val historyApiMessages = historyUiMessages.map { it.toApiMessage(uriToBase64Encoder, application) }.toMutableList()
                 logApiMessages("historyApiMessages", historyApiMessages)
 
-                val currentUserApiMessage = if (isImageGeneration) {
+                val currentUserApiMessage = if (isImageRequest) {
                     newUserMessageForUi.toApiMessage(uriToBase64Encoder, application)
                 } else {
                     // 当前附件在上下文统计前统一注入，避免图片和音频重复。
@@ -584,7 +590,7 @@ internal fun MessageSender.sendMessageInternal(
                     currentUserHasAttachments = attachmentsForApiClient.isNotEmpty(),
                 )
 
-                val dispatchCandidates = if (!isImageGeneration) {
+                val dispatchCandidates = if (!isImageRequest) {
                     getMcpDispatchCandidates()
                 } else {
                     emptyList()
@@ -595,7 +601,9 @@ internal fun MessageSender.sendMessageInternal(
                     provider = currentConfig.provider,
                     apiAddress = currentConfig.address
                 )
-                val selectedRatioForImage = stateHolder._selectedImageRatio.value
+                val selectedRatioForImage = com.android.everytalk.data.DataClass.ImageRatio.DEFAULT_RATIOS.firstOrNull {
+                    it.displayName == currentConfig.modelParameters.imageAspectRatio
+                } ?: stateHolder._selectedImageRatio.value
                 val imageSizeForRequest = com.android.everytalk.ui.components.ImageGenCapabilities.resolveRequestImageSize(
                     family = detectedFamilyForImage,
                     modelName = currentConfig.model,
@@ -603,7 +611,7 @@ internal fun MessageSender.sendMessageInternal(
                     configuredSize = currentConfig.imageSize,
                 )
                 // 检查是否包含图像生成关键词
-                if (isImageGeneration && hasImageGenerationKeywords(textToActuallySend)) {
+                if (isImageRequest && hasImageGenerationKeywords(textToActuallySend)) {
                     // 重置重试计数
                     stateHolder._imageGenerationRetryCount.value = 0
                     stateHolder._imageGenerationError.value = null
@@ -757,7 +765,7 @@ internal fun MessageSender.sendMessageInternal(
                     .firstOrNull { it.matchesConfig(currentConfig) }
                 // 文本会在 AgentLoop 按同一真实请求的 Room 快照校准；旧气泡可能把展开前估算
                 // 与展开后实测配在一起。这里不能再用它裁附件或估预算，图片链路仍沿用原逻辑。
-                val calibrationSnapshot = if (isImageGeneration) {
+                val calibrationSnapshot = if (isImageRequest) {
                     historyUiMessages.asReversed().firstOrNull { message ->
                         message.sender == UiSender.AI &&
                             message.modelName.equals(currentConfig.model, ignoreCase = true) &&
@@ -830,7 +838,7 @@ internal fun MessageSender.sendMessageInternal(
                             .coerceAtMost(MAX_ATTACHMENT_PAGE_CHARS.toLong())
                             .toInt()
                     }
-                    val messagesWithCurrentAttachments = if (isImageGeneration || attachmentsForApiClient.isEmpty()) {
+                    val messagesWithCurrentAttachments = if (isImageRequest || attachmentsForApiClient.isEmpty()) {
                         apiMessagesForBackend
                     } else {
                         buildDirectMultimodalRequest(
@@ -871,7 +879,7 @@ internal fun MessageSender.sendMessageInternal(
                         messagesForContextControl,
                         state = restoredCompressionState,
                     )
-                    val fittedMessages = if (isImageGeneration) {
+                    val fittedMessages = if (isImageRequest) {
                         trimMessagesToContextWindow(
                             messages = compressionApplication.messages,
                             limits = tokenLimits,
@@ -886,7 +894,7 @@ internal fun MessageSender.sendMessageInternal(
                 } catch (error: CancellationException) {
                     throw error
                 } catch (error: Exception) {
-                    if (isImageGeneration) throw error
+                    if (isImageRequest) throw error
                     val failureText = contextCompressionFailureText(error)
                     if (preCreatedAiMessageId == null) {
                         preCreatedAiMessageId = apiHandler.prepareStreamingAiMessage(
@@ -970,14 +978,13 @@ internal fun MessageSender.sendMessageInternal(
                     // 显式传递代码执行开关状态
                     enableCodeExecution = enableCodeExecutionForRequest,
                     generationConfig = GenerationConfig(
-                        temperature = currentConfig.temperature,
-                        topP = currentConfig.topP,
+                        // 不传温度和 Top P，统一沿用模型接口的默认采样设置。
                         maxOutputTokens = tokenLimits.maxOutputTokens,
                         thinkingConfig = currentConfig.modelParameters.toThinkingConfig(
                             channel = effectiveModelChannel,
                             model = currentConfig.model,
                         )
-                    ).let { if (it.temperature != null || it.topP != null || it.maxOutputTokens != null || it.thinkingConfig != null) it else null },
+                    ),
                     qwenEnableSearch = if (WebSearchSupport.shouldEnableQwenNativeSearch(currentConfig, webSearchRouting.useNativeWebSearch)) true else null,
                     customModelParameters = customModelParameters.ifEmpty { null },
                     tools = requestTools,
@@ -996,20 +1003,15 @@ internal fun MessageSender.sendMessageInternal(
                     ),
                     localComputerRequestContext = preparedComputerRequest?.context,
                     localSkillSnapshot = skillSnapshotForRequest,
-                    imageGenRequest = if (isImageGeneration) {
+                    imageGenRequest = if (isImageRequest) {
                         // 调试信息：检查发送的配置
                         Log.d("MessageSender", "Image generation config: ${safeApiConfigSummary(currentConfig)}")
                         
-                        // 计算上游完整图片生成端点（默认平台交由后端注入，避免相对路径）
+                        // 图片与文本共享 API 地址，最终端点由公共解析器按协议生成。
                         val upstreamApiForImageGen = if (isDefaultProvider) {
                             ""
                         } else {
-                            val upstreamBase = currentConfig.address.trim().trimEnd('/')
-                            if (upstreamBase.endsWith("/v1/images/generations")) {
-                                upstreamBase
-                            } else {
-                                "$upstreamBase/v1/images/generations"
-                            }
+                            currentConfig.address.trim()
                         }
 
                         // 构建"无状态历史摘要"，保证每个会话自带记忆（即使后端会话未命中）
@@ -1040,7 +1042,7 @@ internal fun MessageSender.sendMessageInternal(
                             model = currentConfig.model,
                             prompt = textToActuallySend,
                             imageSize = imageSizeForRequest, // Kolors/Qwen 生效；Qwen-Image-Edit 禁用
-                            batchSize = 1,
+                            batchSize = currentConfig.modelParameters.imageBatchSize ?: 1,
                             numInferenceSteps = currentConfig.numInferenceSteps,
                             guidanceScale = currentConfig.guidanceScale,
                             // 默认平台：apiAddress/apiKey 留空，由后端从 .env 注入
@@ -1049,20 +1051,21 @@ internal fun MessageSender.sendMessageInternal(
                             // 渠道控制路由：默认平台传"默认"，非默认按"渠道"字段（OpenAI兼容/Gemini）
                             provider = if (isDefaultProvider) currentConfig.provider else effectiveModelChannel,
                             responseModalities = listOf("Image"),
-                            aspectRatio = selectedRatioForImage.let { r ->
+                            aspectRatio = currentConfig.modelParameters.imageAspectRatio ?: selectedRatioForImage.let { r ->
                                 if (r.isAuto) null else r.displayName
                             },
                             // 严格会话隔离：把当前图像历史项ID透传到后端
-                            conversationId = stateHolder._currentImageGenerationConversationId.value,
+                            conversationId = if (isImageGeneration) stateHolder._currentImageGenerationConversationId.value else stateHolder._currentConversationId.value,
                             // 额外兜底：把最近若干轮文本摘要也发给后端，确保"该会话独立记忆"不依赖服务端状态
                             history = historyForStatelessMemory.ifEmpty { null },
                             // 禁用水印（针对 Seedream 直连）
                             watermark = false,
                             // 将配置中的 imageSize (1K/2K/4K) 传递给 Gemini 专用字段
                             geminiImageSize = if (modelIsGeminiType) currentConfig.imageSize else null,
-                            quality = if (detectedFamilyForImage == com.android.everytalk.ui.components.ImageGenCapabilities.ModelFamily.GPT_IMAGE) {
+                            quality = currentConfig.modelParameters.imageQuality ?: if (detectedFamilyForImage == com.android.everytalk.ui.components.ImageGenCapabilities.ModelFamily.GPT_IMAGE) {
                                 stateHolder._gptImageQuality.value.apiValue
-                            } else null
+                            } else null,
+                            apiFormat = currentConfig.imageApiFormat(),
                         )
                     } else null
                 )
@@ -1081,8 +1084,8 @@ internal fun MessageSender.sendMessageInternal(
                         stateHolder._currentConversationId.value
                     }
                     // 图像模型通常只返回图片，优先使用已配置的文本模型生成标题；没有文本配置时再回退当前配置。
-                    val titleConfig = if (isImageGeneration) {
-                        stateHolder._selectedApiConfig.value ?: currentConfig
+                    val titleConfig = if (isImageRequest) {
+                        stateHolder._apiConfigs.value.firstOrNull() ?: currentConfig
                     } else {
                         currentConfig
                     }
@@ -1091,7 +1094,7 @@ internal fun MessageSender.sendMessageInternal(
 
                 apiHandler.streamChatResponse(
                     requestBody = chatRequestForApi,
-                    attachmentsToPassToApiClient = if (isImageGeneration) attachmentsForApiClient else emptyList(),
+                    attachmentsToPassToApiClient = if (isImageRequest) attachmentsForApiClient else emptyList(),
                     applicationContextForApiClient = application,
                     userMessageTextForContext = textToActuallySend,
                     afterUserMessageId = newUserMessageForUi.id,
@@ -1110,7 +1113,7 @@ internal fun MessageSender.sendMessageInternal(
                         }
                     },
                     onNewAiMessageAdded = triggerScrollToBottom,
-                    audioBase64 = if (isImageGeneration) audioBase64 else null,
+                    audioBase64 = if (isImageRequest) audioBase64 else null,
                     mimeType = mimeType,
                     isImageGeneration = isImageGeneration,
                     preCreatedAiMessageId = preCreatedAiMessageId,

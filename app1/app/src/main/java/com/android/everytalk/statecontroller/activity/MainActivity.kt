@@ -307,7 +307,7 @@ class MainActivity : AppCompatActivity() {
                                 DeferredDrawerContent(appViewModel.drawerState) {
                                     val navBackStackEntryState = navController.currentBackStackEntryAsState()
                                     val currentRoute = navBackStackEntryState.value?.destination?.route
-                                    val isImageGenerationMode = currentRoute == Screen.IMAGE_GENERATION_SCREEN
+                                    val isImageGenerationMode = false
 
                                     suspend fun waitForRoute(route: String) {
                                         withTimeoutOrNull(NAVIGATION_ROUTE_WAIT_TIMEOUT_MS) {
@@ -614,7 +614,11 @@ class MainActivity : AppCompatActivity() {
                                        )
                                    }
                                ) {
-                                    ImageGenerationScreen(viewModel = appViewModel, navController = navController)
+                                    // 兼容升级前恢复的旧路由，统一回到聊天页。
+                                    LaunchedEffect(Unit) {
+                                        appViewModel.simpleModeManager.setIntendedMode(SimpleModeManager.ModeType.TEXT)
+                                        navController.navigate(Screen.CHAT_SCREEN) { popUpTo(Screen.IMAGE_GENERATION_SCREEN) { inclusive = true }; launchSingleTop = true }
+                                    }
                                }
                                 composable(
                                     route = Screen.SETTINGS_SCREEN,

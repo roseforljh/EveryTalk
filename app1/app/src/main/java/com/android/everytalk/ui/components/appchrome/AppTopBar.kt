@@ -20,6 +20,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -46,8 +48,33 @@ import kotlin.math.roundToInt
 
 internal data class TopBarModelDisplayInfo(
     val label: String,
-    val textColor: Color
+    val textColor: Color,
+    val gradientColors: List<Color> = emptyList(),
 )
+
+private val TopBarDarkButtonColor = Color(0xFF303030)
+
+/**
+ * 品牌原色用于白色或深灰胶囊上的小号文字时，可能对比度不足。
+ * 从原色逐步向黑/白调整亮度，达到所需对比度（至少 4.5:1）即停止；原本清楚的颜色直接保留。
+ * 同时处理渐变的每个色点，避免黄色等浅色在白底上看不清。
+ */
+private fun readableTopBarBrandColor(
+    brandColor: Color,
+    isDark: Boolean,
+    minimumContrast: Float = 4.5f,
+): Color {
+    val backgroundLuminance = if (isDark) TopBarDarkButtonColor.luminance() else 1f
+    val target = if (isDark) Color.White else Color.Black
+    for (step in 0..100) {
+        val color = if (step == 0) brandColor else lerp(brandColor, target, step / 100f)
+        val luminance = color.luminance()
+        val contrast = (maxOf(luminance, backgroundLuminance) + 0.05f) /
+            (minOf(luminance, backgroundLuminance) + 0.05f)
+        if (contrast >= minimumContrast) return color
+    }
+    return target
+}
 
 private const val MODEL_SELECTION_SURROUNDING_ITEM_COUNT = 3
 private const val MODEL_SELECTION_VISIBLE_ITEM_COUNT = MODEL_SELECTION_SURROUNDING_ITEM_COUNT * 2 + 1
@@ -66,29 +93,124 @@ internal fun modelSelectionInitialFirstVisibleIndex(
         .coerceIn(0, modelCount - MODEL_SELECTION_VISIBLE_ITEM_COUNT)
 }
 
+/** 优先匹配具体模型家族，再匹配厂商品牌；兼容供应商前缀、中文名及图片/视频模型。 */
+private val topBarModelPatterns = listOf(
+    "Z-Image" to "z[-_ ]?image",
+    "Kolors" to "kolors|kwai[-_/ ]?kolors|可图",
+    "Seedream" to "seedream|即梦",
+    "Seedance" to "seedance",
+    "CogView" to "cogview",
+    "CogVideo" to "cogvideo",
+    "Gemma" to "gemma",
+    "Imagen" to "imagen",
+    "Veo" to "(?:^|[./\\s_-])veo(?:[\\d./\\s_-]|$)",
+    "Sora" to "(?:^|[./\\s_-])sora(?:[\\d./\\s_-]|$)",
+    "DALL-E" to "dall[-_ ]?e",
+    "FLUX" to "flux",
+    "Stable Diffusion" to "stable[-_ ]?diffusion|stable[-_ ]?image|sdxl|(?:^|[./\\s_-])sd[.-]?[35](?:[./\\s_-]|$)",
+    "Recraft" to "recraft",
+    "Ideogram" to "ideogram",
+    "Wan" to "(?:^|[./\\s_-])wan(?:[\\d./\\s_-]|$)|万相",
+    "Kling" to "kling|可灵",
+    "Hailuo" to "hailuo|海螺",
+    "Grok" to "grok|x[-_]?ai",
+    "Gemini" to "gemini",
+    "GPT" to "gpt|chatgpt|(?:^|[./\\s_-])o[134](?:[./\\s_-]|$)",
+    "Claude" to "claude|anthropic|克劳德",
+    "DeepSeek" to "deepseek|deep[-_ ]?seek|深度求索",
+    "Kimi" to "kimi|moonshot|月之暗面",
+    "MiniMax" to "minimax|mini[-_ ]?max",
+    "GLM" to "glm|zhipu|智谱",
+    "Qwen" to "qwen|qwq|qvq|tongyi|通义|千问",
+    "Doubao" to "doubao|豆包|(?:^|[./\\s_-])seed(?:[\\d./\\s_-]|$)",
+    "Mistral" to "mistral|mixtral|codestral|devstral|magistral|ministral|pixtral|voxtral",
+    "Llama" to "llama",
+    "Hunyuan" to "hunyuan|混元",
+    "ERNIE" to "ernie|文心",
+    "Step" to "stepfun|(?:^|[./\\s_-])step(?:[\\d./\\s_-]|$)|阶跃",
+    "Yi" to "(?:^|[./\\s_-])yi(?:[\\d./\\s_-]|$)|零一万物",
+    "InternLM" to "internlm|internvl|书生",
+    "Baichuan" to "baichuan|百川",
+    "Cohere" to "cohere|(?:^|[./\\s_-])command[-_ ]",
+    "Jamba" to "jamba|ai21",
+    "Nova" to "(?:^|[./\\s_-])nova(?:[\\d./\\s_-]|$)",
+    "Titan" to "(?:^|[./\\s_-])titan(?:[\\d./\\s_-]|$)",
+    "Phi" to "(?:^|[./\\s_-])phi(?:[\\d./\\s_-]|$)",
+    "OLMo" to "olmo",
+    "Falcon" to "falcon",
+    "DBRX" to "dbrx",
+    "MiMo" to "mimo|小米",
+    "LongCat" to "longcat",
+    "Trinity" to "trinity|arcee",
+    "Hermes" to "hermes|nousresearch",
+    "Cogito" to "cogito",
+    "Sonar" to "sonar|perplexity",
+).map { (label, pattern) -> label to Regex(pattern) }
+
+/**
+ * 使用真实模型 ID 判断家族，避免“我的模型”等昵称让已支持模型落到“其它”。
+ * 未收录的模型仍显示自身名称，只有名称为空时才使用本地化兜底。
+ */
 internal fun resolveTopBarModelDisplayInfo(
     selectedConfigName: String,
     isDark: Boolean,
     otherLabel: String,
+    selectedModelId: String = "",
 ): TopBarModelDisplayInfo {
-    val lower = selectedConfigName.lowercase()
-    return when {
-        lower.contains("grok") -> TopBarModelDisplayInfo(
-            label = "Grok",
-            textColor = if (isDark) Color.White else Color.Black
-        )
-        lower.contains("gemini") -> TopBarModelDisplayInfo("Gemini", Color(0xFF10B981))
-        lower.contains("gpt") -> TopBarModelDisplayInfo(
-            label = "GPT",
-            textColor = if (isDark) Color.White else Color.Black
-        )
-        lower.contains("claude") -> TopBarModelDisplayInfo("Claude", Color(0xFFF97316))
-        lower.contains("deepseek") -> TopBarModelDisplayInfo("DeepSeek", Color(0xFF3B82F6))
-        lower.contains("kimi") -> TopBarModelDisplayInfo("Kimi", Color(0xFF06B6D4))
-        lower.contains("minimax") -> TopBarModelDisplayInfo("MiniMax", Color(0xFFEF4444))
-        lower.contains("glm") -> TopBarModelDisplayInfo("GLM", Color(0xFF8B5CF6))
-        else -> TopBarModelDisplayInfo(otherLabel, Color(0xFF9E9E9E))
+    val modelName = selectedModelId.trim().ifBlank { selectedConfigName.trim() }
+    val lower = modelName.lowercase()
+    val label = topBarModelPatterns.firstOrNull { (_, pattern) -> pattern.containsMatchIn(lower) }?.first
+        ?: modelName.substringAfterLast('/').ifBlank { otherLabel }
+    // 色值来源：现有图标资源及 LobeHub icons 5.19.3 的品牌 style.js / Color.js。
+    // 无单独主色的家族沿用厂商色（如 CogView/CogVideo → 智谱、Seed → 字节），
+    // 黑白品牌保留黑白，不为了区分模型而虚构品牌色。
+    val brandColor = when (label) {
+        "GPT", "Grok", "DALL-E", "FLUX", "Recraft", "Ideogram", "Step", "MiMo", "Hermes" ->
+            if (isDark) Color.White else Color.Black
+        "Sora" -> Color(0xFF0968DA)
+        "Gemini" -> Color(0xFF3186FF)
+        "Gemma" -> Color(0xFF2E96FF)
+        "Imagen", "Veo" -> Color(0xFF4285F4)
+        "Claude" -> Color(0xFFD97757)
+        "DeepSeek" -> Color(0xFF4D6BFE)
+        "Kimi" -> Color(0xFF1783FF)
+        "MiniMax" -> Color(0xFFF23F5D)
+        "Hailuo" -> Color(0xFFFF5538)
+        "GLM", "CogView", "CogVideo" -> Color(0xFF3859FF)
+        "Qwen" -> Color(0xFF615CED)
+        "Z-Image", "Wan" -> Color(0xFFFF6003) // 通义系列沿用阿里品牌色。
+        "Doubao" -> Color(0xFF1E37FC)
+        "Seedream", "Seedance" -> Color(0xFF325AB4)
+        "Mistral" -> Color(0xFFFA520F)
+        "Llama" -> Color(0xFF1D65C1)
+        "Hunyuan" -> Color(0xFF0053E0)
+        "ERNIE" -> Color(0xFF2932E1)
+        "Yi" -> Color(0xFF003425)
+        "InternLM" -> Color(0xFF1B3882)
+        "Baichuan" -> Color(0xFFFF6933)
+        "Cohere" -> Color(0xFF39594D)
+        "Jamba" -> Color(0xFFE91E63)
+        "Nova", "Titan" -> Color(0xFF222F3E)
+        "Phi" -> Color(0xFF00A4EF)
+        "OLMo" -> Color(0xFFF0529C)
+        "Falcon" -> Color(0xFF6400FF)
+        "DBRX" -> Color(0xFFEE3D2C)
+        "LongCat" -> Color(0xFF29E154)
+        "Trinity" -> Color(0xFF008C8C)
+        "Cogito" -> Color(0xFF4E81EE)
+        "Sonar" -> Color(0xFF22B8CD)
+        "Stable Diffusion" -> Color(0xFF330066)
+        "Kolors" -> Color(0xFF83FF63)
+        "Kling" -> Color(0xFF0DF35E)
+        else -> Color(0xFF9E9E9E)
     }
+    // Gemini 使用本地 Gemini 图标的四色，不再套用 Google 标志的另一组色值。
+    val gradientColors = if (label == "Gemini") {
+        listOf(Color(0xFF3186FF), Color(0xFFF94543), Color(0xFFFABC12), Color(0xFF08B962))
+            // 深色背景上，渐变中间色可能比端点更暗，预留亮度以保证整段文字清楚。
+            .map { readableTopBarBrandColor(it, isDark, minimumContrast = if (isDark) 6f else 4.5f) }
+    } else emptyList()
+    return TopBarModelDisplayInfo(label, readableTopBarBrandColor(brandColor, isDark), gradientColors)
 }
 
 @Composable
@@ -127,13 +249,13 @@ fun AppTopBar(
 ) {
     val isDark = isSystemInDarkTheme()
     val otherModelLabel = stringResource(R.string.top_bar_model_other)
-    val buttonBg = if (isDark) Color(0xFF303030) else Color.White
+    val buttonBg = if (isDark) TopBarDarkButtonColor else Color.White
     val contentColor = if (isDark) Color.White else Color(0xFF0D0D0D)
     val topButtonSize = iconButtonSize + 2.dp
 
-    // 模型名称提取与彩虹色映射
-    val modelDisplayInfo = remember(selectedConfigName, isDark, otherModelLabel) {
-        resolveTopBarModelDisplayInfo(selectedConfigName, isDark, otherModelLabel)
+    // 模型名称与品牌配色一起缓存，只有模型或主题改变时重新计算。
+    val modelDisplayInfo = remember(selectedConfigName, selectedApiConfig?.model, isDark, otherModelLabel) {
+        resolveTopBarModelDisplayInfo(selectedConfigName, isDark, otherModelLabel, selectedApiConfig?.model.orEmpty())
     }
 
     Box(
@@ -203,15 +325,8 @@ fun AppTopBar(
                             .padding(horizontal = 16.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        if (modelDisplayInfo.label == "Gemini") {
-                            val geminiGradient = Brush.linearGradient(
-                                colors = listOf(
-                                    Color(0xFFEA4335),
-                                    Color(0xFFFBBC05),
-                                    Color(0xFF34A853),
-                                    Color(0xFF4285F4),
-                                )
-                            )
+                        if (modelDisplayInfo.gradientColors.isNotEmpty()) {
+                            val geminiGradient = Brush.horizontalGradient(modelDisplayInfo.gradientColors)
                             Text(
                                 text = modelDisplayInfo.label,
                                 style = TextStyle(
@@ -236,7 +351,7 @@ fun AppTopBar(
 
                     ModelSelectionDropdown(
                         expanded = showModelSelection,
-                        models = modelList,
+                        models = remember(modelList, selectedApiConfig) { modelList.modelsInSelectedConfig(selectedApiConfig) },
                         selectedApiConfig = selectedApiConfig,
                         onModelSelected = onModelSelected,
                         onModelLongClick = onModelLongClick,

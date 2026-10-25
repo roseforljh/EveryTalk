@@ -218,6 +218,9 @@ class ImageGenerationAspectRatioTest {
                     assertEquals("1", payload[if (isSiliconFlow) "batch_size" else "n"]?.jsonPrimitive?.content)
                     assertFalse(payload.containsKey(if (isSiliconFlow) "size" else "image_size"))
                     assertFalse(payload.containsKey(if (isSiliconFlow) "n" else "batch_size"))
+                    assertEquals("high", payload["quality"]?.jsonPrimitive?.content)
+                    assertEquals(isSiliconFlow, payload.containsKey("num_inference_steps"))
+                    assertEquals(isSiliconFlow, payload.containsKey("guidance_scale"))
                     val imagesKey = if (isSiliconFlow) "images" else "data"
                     respond(
                         content = """{"$imagesKey":[{"url":"$imageUrl"}]}""",
@@ -236,6 +239,9 @@ class ImageGenerationAspectRatioTest {
                             provider = provider,
                             imageSize = size,
                             batchSize = 1,
+                            quality = "high",
+                            numInferenceSteps = 30,
+                            guidanceScale = 7.5f,
                         ),
                     )
                     assertEquals(imageUrl, response.images.single().url)

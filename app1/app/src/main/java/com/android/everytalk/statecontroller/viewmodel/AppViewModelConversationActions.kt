@@ -10,6 +10,7 @@ import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import coil3.imageLoader
+import com.android.everytalk.data.DataClass.outputModalities
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.util.storage.FileManager
 import com.android.everytalk.data.DataClass.Message
@@ -348,104 +349,46 @@ import java.util.TimeZone
         configFacade.clearSelectedConfig(isImageGen)
     }
 
-    internal fun AppViewModel.updateImageNumInferenceStepsForSelectedConfig(steps: Int) {
-        val clamped = steps.coerceIn(1, 20)
+    /**
+     * 图片快捷参数始终更新当前聊天选中的模型；旧图片页面仅在主选择不是图片模型时兜底。
+     * 只允许调用方修改生成参数，内置模型的身份、接口和密钥仍不可编辑或删除。
+     */
+    private fun AppViewModel.updateSelectedImageParameters(transform: (ApiConfig) -> ApiConfig) {
         viewModelScope.launch(Dispatchers.Main.immediate) {
-            val current = stateHolder._selectedImageGenApiConfig.value ?: return@launch
-            val updated = current.copy(numInferenceSteps = clamped)
-
-            // 更新当前选中配置
-            stateHolder._selectedImageGenApiConfig.value = updated
-
-            // 在图像配置列表中替换对应项
-            val currentList = stateHolder._imageGenApiConfigs.value
-            val index = currentList.indexOfFirst { it.id == current.id }
-            if (index >= 0) {
-                val mutable = currentList.toMutableList()
-                mutable[index] = updated
-                stateHolder._imageGenApiConfigs.value = mutable.toList()
-            }
-
-            // 异步持久化更新后的图像配置列表
-            launch(Dispatchers.IO) {
-                try {
-                    persistenceManager.saveApiConfigs(stateHolder._imageGenApiConfigs.value, isImageGen = true)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    Log.e("AppViewModel", "Failed to persist updated image numInferenceSteps", e)
-                }
+            val current = stateHolder._selectedApiConfig.value?.takeIf { "image" in it.outputModalities() }
+                ?: stateHolder._selectedImageGenApiConfig.value ?: return@launch
+            val updated = transform(current)
+            val isImageStorage = stateHolder._imageGenApiConfigs.value.any { it.id == current.id }
+            val configs = if (isImageStorage) stateHolder._imageGenApiConfigs else stateHolder._apiConfigs
+            if (configs.value.none { it.id == current.id }) return@launch
+            configs.update { list -> list.map { if (it.id == current.id) updated else it } }
+            if (stateHolder._selectedApiConfig.value?.id == current.id) stateHolder._selectedApiConfig.value = updated
+            if (stateHolder._selectedImageGenApiConfig.value?.id == current.id) stateHolder._selectedImageGenApiConfig.value = updated
+            try {
+                withContext(Dispatchers.IO) { persistenceManager.saveApiConfigs(configs.value, isImageGen = isImageStorage) }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) {
+                Log.e("AppViewModel", "保存图片生成参数失败", error)
+                showSnackbar("图片参数保存失败，请重试")
             }
         }
     }
 
-    internal fun AppViewModel.updateImageGenerationParamsForSelectedConfig(steps: Int, guidance: Float) {
-        val clampedSteps = steps.coerceIn(1, 50)
-        // guidance 通常在 1.0 到 20.0 之间，这里给个宽松范围
-        val clampedGuidance = guidance.coerceIn(1.0f, 30.0f)
-        
-        viewModelScope.launch(Dispatchers.Main.immediate) {
-            val current = stateHolder._selectedImageGenApiConfig.value ?: return@launch
-            val updated = current.copy(
-                numInferenceSteps = clampedSteps,
-                guidanceScale = clampedGuidance
-            )
+    internal fun AppViewModel.updateImageNumInferenceStepsForSelectedConfig(steps: Int) =
+        updateSelectedImageParameters { it.copy(numInferenceSteps = steps.coerceIn(1, 20)) }
 
-            // 更新当前选中配置
-            stateHolder._selectedImageGenApiConfig.value = updated
+    internal fun AppViewModel.updateImageGenerationParamsForSelectedConfig(steps: Int, guidance: Float) =
+        updateSelectedImageParameters { it.copy(numInferenceSteps = steps.coerceIn(1, 50), guidanceScale = guidance.coerceIn(1f, 30f)) }
 
-            // 在图像配置列表中替换对应项
-            val currentList = stateHolder._imageGenApiConfigs.value
-            val index = currentList.indexOfFirst { it.id == current.id }
-            if (index >= 0) {
-                val mutable = currentList.toMutableList()
-                mutable[index] = updated
-                stateHolder._imageGenApiConfigs.value = mutable.toList()
-            }
+    internal fun AppViewModel.updateImageSizeForSelectedConfig(size: String) =
+        updateSelectedImageParameters { it.copy(imageSize = size) }
 
-            // 异步持久化更新后的图像配置列表
-            launch(Dispatchers.IO) {
-                try {
-                    persistenceManager.saveApiConfigs(stateHolder._imageGenApiConfigs.value, isImageGen = true)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    Log.e("AppViewModel", "Failed to persist updated image params", e)
-                }
-            }
-        }
-    }
+    /** 比例与质量按模型保存，快捷菜单与模型参数面板使用同一字段。 */
+    internal fun AppViewModel.updateImageAspectRatioForSelectedConfig(ratio: String?) =
+        updateSelectedImageParameters { it.copy(modelParameters = it.modelParameters.copy(imageAspectRatio = ratio)) }
 
-    /** 保存当前图像模型的清晰度；Gemini 与 Seedream 共用配置字段和持久化入口。 */
-    internal fun AppViewModel.updateImageSizeForSelectedConfig(size: String) {
-        viewModelScope.launch(Dispatchers.Main.immediate) {
-            val current = stateHolder._selectedImageGenApiConfig.value ?: return@launch
-            val updated = current.copy(imageSize = size)
-
-            // 更新当前选中配置
-            stateHolder._selectedImageGenApiConfig.value = updated
-
-            // 在图像配置列表中替换对应项
-            val currentList = stateHolder._imageGenApiConfigs.value
-            val index = currentList.indexOfFirst { it.id == current.id }
-            if (index >= 0) {
-                val mutable = currentList.toMutableList()
-                mutable[index] = updated
-                stateHolder._imageGenApiConfigs.value = mutable.toList()
-            }
-
-            // 异步持久化更新后的图像配置列表
-            launch(Dispatchers.IO) {
-                try {
-                    persistenceManager.saveApiConfigs(stateHolder._imageGenApiConfigs.value, isImageGen = true)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    Log.e("AppViewModel", "Failed to persist updated gemini image size", e)
-                }
-            }
-        }
-    }
+    internal fun AppViewModel.updateImageQualityForSelectedConfig(quality: String) =
+        updateSelectedImageParameters { it.copy(modelParameters = it.modelParameters.copy(imageQuality = quality)) }
 
     internal fun AppViewModel.saveApiConfigs() {
         configFacade.saveApiConfigs()

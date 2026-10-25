@@ -135,6 +135,19 @@ class ModelParametersTest {
     }
 
     @Test
+    fun `旧自定义采样参数被忽略且不影响其他参数`() {
+        val result = ModelParameters(customParameters = listOf(
+            // 已失效的采样字段不应继续参与值校验，避免旧数据阻塞发送。
+            CustomModelParameter(" Temperature ", "旧值", CustomParameterType.NUMBER),
+            CustomModelParameter("top_p", "0.2", CustomParameterType.NUMBER),
+            CustomModelParameter("topP", "0.3", CustomParameterType.NUMBER),
+            CustomModelParameter("reasoning_effort", "high"),
+        )).openAICompatibleRequestParameters()
+        assertEquals(setOf("reasoning_effort"), result.keys)
+        assertEquals("high", result.getValue("reasoning_effort").jsonPrimitive.content)
+    }
+
+    @Test
     fun `模型名称不影响OpenAI兼容接口参数`() {
         assertEquals(
             mapOf("reasoning_effort" to Json.parseToJsonElement("\"medium\"")),

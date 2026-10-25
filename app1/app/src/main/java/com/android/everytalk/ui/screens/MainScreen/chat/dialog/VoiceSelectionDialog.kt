@@ -278,14 +278,11 @@ fun VoiceSelectionDialog(
                                 .clickable { selectedVoice = voiceName }
                                 .border(
                                     1.dp,
-                                    if (isSelected) (if (isDark) Color.White else Color.Black) else borderColor,
+                                    borderColor,
                                     RoundedCornerShape(12.dp)
                                 ),
                             colors = CardDefaults.cardColors(
-                                containerColor = if (isSelected) 
-                                    (if (isDark) Color(0xFF1A1A1A) else Color(0xFFF5F5F5))
-                                else 
-                                    Color.Transparent
+                                containerColor = Color.Transparent
                             ),
                             shape = RoundedCornerShape(12.dp)
                         ) {

@@ -1,4 +1,6 @@
 package com.android.everytalk.ui.screens.ImageGeneration
+
+import com.android.everytalk.ui.theme.AppInputFieldShape
 import com.android.everytalk.statecontroller.*
 
 import kotlin.math.max
@@ -198,7 +200,7 @@ internal fun ImageGenerationInputDialogs(
                                     .width(56.dp)
                                     .height(48.dp),
                                 singleLine = true,
-                                shape = CircleShape,
+                                shape = AppInputFieldShape,
                                 textStyle = LocalTextStyle.current.copy(
                                     textAlign = androidx.compose.ui.text.style.TextAlign.Center
                                 ),
@@ -349,7 +351,7 @@ internal fun ImageGenerationInputDialogs(
                                 onShowGptQualityDialogChange(false)
                             },
                             shape = RoundedCornerShape(12.dp),
-                            color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
+                            color = Color.Transparent
                         ) {
                             Row(
                                 modifier = Modifier
@@ -359,9 +361,11 @@ internal fun ImageGenerationInputDialogs(
                             ) {
                                 Text(
                                     text = stringResource(quality.displayNameRes),
+                                    modifier = Modifier.weight(1f),
                                     style = MaterialTheme.typography.bodyLarge,
-                                    color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                                    color = MaterialTheme.colorScheme.onSurface
                                 )
+                                if (isSelected) Icon(painterResource(R.drawable.ic_check), stringResource(R.string.state_selected), modifier = Modifier.size(20.dp))
                             }
                         }
                     }

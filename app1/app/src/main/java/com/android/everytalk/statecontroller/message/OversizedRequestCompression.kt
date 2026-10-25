@@ -434,8 +434,7 @@ internal suspend fun MessageSender.requestContextCompressionCompletion(
         apiKey = config.key,
         model = config.model,
         generationConfig = GenerationConfig(
-            temperature = config.temperature,
-            topP = config.topP,
+            // 压缩请求同样使用接口默认采样值，避免旧配置在辅助请求中继续生效。
             maxOutputTokens = resolvedOutputTokens,
             thinkingConfig = config.modelParameters.toThinkingConfig(config.effectiveModelChannel(), config.model),
         ),

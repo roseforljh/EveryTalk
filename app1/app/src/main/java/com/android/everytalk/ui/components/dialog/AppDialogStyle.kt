@@ -15,10 +15,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.dp
 import com.android.everytalk.ui.components.EveryTalkLoadingIndicator
+import com.android.everytalk.ui.theme.AppInputFieldShape
 
 val AppDialogShape = RoundedCornerShape(28.dp)
 val AppDialogButtonShape = RoundedCornerShape(24.dp)
-val AppDialogTextFieldShape = RoundedCornerShape(16.dp)
+val AppDialogTextFieldShape = AppInputFieldShape
 
 /**
  * 对话框异步确认按钮的固定尺寸内容。

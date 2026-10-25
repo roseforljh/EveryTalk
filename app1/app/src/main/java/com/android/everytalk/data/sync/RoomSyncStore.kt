@@ -1,5 +1,6 @@
 package com.android.everytalk.data.sync
 
+import com.android.everytalk.data.DataClass.isBuiltinModel
 import androidx.room.withTransaction
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.MessageContentPart
@@ -234,6 +235,14 @@ internal class RoomSyncStore(
                 customParameters = customParameters,
                 customReasoningEfforts = (params["customReasoningEfforts"] as? JsonArray)?.mapNotNull { it.jsonPrimitive.contentOrNull }
                     ?: old?.modelParameters?.customReasoningEfforts.orEmpty(),
+                inputModalities = if ("inputModalities" in params) (params["inputModalities"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }?.toSet() else old?.modelParameters?.inputModalities,
+                outputModalities = if ("outputModalities" in params) (params["outputModalities"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }?.toSet() else old?.modelParameters?.outputModalities,
+                supportsReasoning = if ("supportsReasoning" in params) (params["supportsReasoning"] as? JsonPrimitive)?.booleanOrNull else old?.modelParameters?.supportsReasoning,
+                resolvedCapability = if ("resolvedCapability" in params) (params["resolvedCapability"] as? JsonObject)?.let { runCatching { syncJson.decodeFromJsonElement<com.android.everytalk.data.DataClass.ResolvedModelCapability>(it) }.getOrNull() } else old?.modelParameters?.resolvedCapability,
+                imageApiFormat = if ("imageApiFormat" in params) (params["imageApiFormat"] as? JsonPrimitive)?.contentOrNull else old?.modelParameters?.imageApiFormat,
+                imageAspectRatio = if ("imageAspectRatio" in params) (params["imageAspectRatio"] as? JsonPrimitive)?.contentOrNull else old?.modelParameters?.imageAspectRatio,
+                imageQuality = if ("imageQuality" in params) (params["imageQuality"] as? JsonPrimitive)?.contentOrNull else old?.modelParameters?.imageQuality,
+                imageBatchSize = if ("imageBatchSize" in params) (params["imageBatchSize"] as? JsonPrimitive)?.intOrNull else old?.modelParameters?.imageBatchSize,
             )
         } ?: old?.modelParameters ?: ModelParameters()
         val key = decryptedString(setting, value, "apiKey", "/apiKey") ?: old?.key ?: ""
@@ -734,7 +743,10 @@ internal class RoomSyncStore(
         // 普通配置必须在拉取时生效，不能等待用户进入已取消的同步密码流程。
         if (!record.deleted) restoreSetting(setting) else {
             when (kind) {
-                "api_configs" -> database.apiConfigDao().deleteConfigById(key)
+                "api_configs" -> {
+                    val builtin = database.apiConfigDao().getConfigs(true).any { it.id == key && it.toApiConfig().isBuiltinModel() }
+                    if (!builtin) database.apiConfigDao().deleteConfigById(key)
+                }
                 "voice_configs" -> database.voiceConfigDao().deleteById(key)
                 "mcp_servers" -> database.mcpConfigDao().deleteConfigById(
                     old?.value?.let { runCatching { syncJson.parseToJsonElement(it).jsonObject["localId"]?.jsonPrimitive?.contentOrNull }.getOrNull() } ?: key)

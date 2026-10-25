@@ -37,14 +37,12 @@ object SettingsEndpointRules {
     ): String {
         val raw = base.trim()
         if (raw.isEmpty()) return ""
-        val noHash = raw.removeSuffix("#").trimEnd('/')
 
         val channelName = channel?.trim()?.lowercase().orEmpty()
         val protocol = modelParameterProtocol(channelName)
 
-        if (isImageMode && protocol != ModelParameterProtocol.GEMINI) {
-            if (raw.endsWith('#')) return noHash
-            return noHash.removeKnownCompletionPath() + "/v1/images/generations"
+        if (isImageMode) {
+            return LlmEndpointResolver.resolveImage(raw, model, protocol)
         }
         return LlmEndpointResolver.resolve(
             protocol = protocol,
@@ -57,19 +55,6 @@ object SettingsEndpointRules {
         secret.isBlank() -> notConfiguredLabel
         secret.length <= 8 -> "****"
         else -> secret.take(4) + "****" + secret.takeLast(4)
-    }
-
-    private fun String.removeKnownCompletionPath(): String {
-        val paths = listOf(
-            "/v1/images/generations",
-            "/images/generations",
-            "/v1/chat/completions",
-            "/chat/completions",
-            "/v1/completions",
-            "/completions",
-        )
-        val path = paths.firstOrNull { endsWith(it, ignoreCase = true) } ?: return this
-        return dropLast(path.length).trimEnd('/')
     }
 
 }

@@ -417,7 +417,7 @@ class SimpleModeManager(
             // 恢复会话使用的配置
             val savedConfigId = stateHolder.conversationApiConfigIds.value[stableId]
             if (savedConfigId != null) {
-                val config = stateHolder._apiConfigs.value.find { it.id == savedConfigId }
+                val config = (stateHolder._apiConfigs.value + stateHolder._imageGenApiConfigs.value).find { it.id == savedConfigId }
                 if (config != null) {
                     stateHolder._selectedApiConfig.value = config
                     Log.d(TAG, "🔥 Restored selected config: ${safeApiConfigSummary(config)}")

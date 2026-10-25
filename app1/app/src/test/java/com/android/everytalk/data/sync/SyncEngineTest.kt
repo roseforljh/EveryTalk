@@ -634,6 +634,13 @@ class SyncEngineTest {
             channel = "Gemini", temperature = 0f,
             modelParameters = com.android.everytalk.data.DataClass.ModelParameters(
                 apiProtocolOverride = com.android.everytalk.data.DataClass.ModelParameterProtocol.GEMINI,
+                inputModalities = setOf("text", "image", "audio"),
+                outputModalities = setOf("text", "image"),
+                supportsReasoning = false,
+                imageApiFormat = "gemini",
+                imageAspectRatio = "16:9",
+                imageQuality = "high",
+                imageBatchSize = 2,
             ),
         ).toEntity()
         a.apiConfigDao().insertConfigs(listOf(config))
@@ -643,6 +650,13 @@ class SyncEngineTest {
         val received = b.apiConfigDao().getConfigs(false).single()
         assertEquals(modelId, received.id); assertEquals("", received.key)
         assertEquals(config.modelParameters.apiProtocolOverride, received.modelParameters.apiProtocolOverride)
+        assertEquals(config.modelParameters.inputModalities, received.modelParameters.inputModalities)
+        assertEquals(config.modelParameters.outputModalities, received.modelParameters.outputModalities)
+        assertEquals(config.modelParameters.supportsReasoning, received.modelParameters.supportsReasoning)
+        assertEquals(config.modelParameters.imageApiFormat, received.modelParameters.imageApiFormat)
+        assertEquals(config.modelParameters.imageAspectRatio, received.modelParameters.imageAspectRatio)
+        assertEquals(config.modelParameters.imageQuality, received.modelParameters.imageQuality)
+        assertEquals(config.modelParameters.imageBatchSize, received.modelParameters.imageBatchSize)
         val pushes = api.pushes
         repeat(3) { run(a, api); run(b, api) }
         assertEquals(pushes, api.pushes)

@@ -1112,6 +1112,8 @@
     <string name="code_label">Code</string>
     <string name="code_copy">Copy code</string>
     <string name="code_preview">Preview</string>
+    <string name="code_open_browser">Open in default browser</string>
+    <string name="code_open_browser_failed">Could not open preview. Check that a browser is installed and try again.</string>
     <string name="code_open_fullscreen_preview">Open full-screen web preview</string>
     <string name="code_share_chooser">Share code</string>
 
@@ -2084,7 +2086,6 @@
     <string name="agent_servers_tag">Agent · %1$d servers</string>
     <string name="agent_tasks">Tasks</string>
     <string name="agent_tasks_open">Open tasks, %1$d servers</string>
-    <string name="agent_tasks_close">Close tasks</string>
     <string name="agent_task_main">Main task</string>
     <string name="agent_task_waiting">Waiting</string>
     <string name="agent_task_running">Running</string>

@@ -12,17 +12,51 @@ import com.android.everytalk.data.DataClass.withModelCapabilityDefaults
 import kotlinx.serialization.json.Json
 import com.android.everytalk.data.DataClass.familyModelCapability
 import com.android.everytalk.data.DataClass.withUserTokenLimits
+import com.android.everytalk.data.DataClass.openAICompatibleRequestParameters
+import com.android.everytalk.data.DataClass.toThinkingConfig
+import com.android.everytalk.data.DataClass.imageApiFormat
+import com.android.everytalk.data.DataClass.imageParameterKeys
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class ModelCapabilityResolverTest {
+    @Test
+    fun `图片协议只跟随API配置不受模型名和旧图片覆盖影响`() {
+        val config = ApiConfig("https://proxy.example/v1", "key", "gemini-image", "我的服务", name = "图片", channel = "OpenAI兼容",
+            modelParameters = ModelParameters(imageApiFormat = "gemini"))
+        assertEquals("openai", config.imageApiFormat())
+        assertEquals("gemini", config.copy(channel = "Gemini").imageApiFormat())
+        assertEquals("unsupported", config.copy(channel = "Anthropic").imageApiFormat())
+        assertEquals(emptySet<String>(), imageParameterKeys("unsupported"))
+        assertEquals("qwen", config.copy(address = "https://edit.example.modal.run", model = "qwen-image-edit").imageApiFormat())
+        assertEquals("modal", com.android.everytalk.data.DataClass.builtinImageModels.first().imageApiFormat())
+        val legacy = ModelParameters(supportsReasoning = false, reasoningEffort = "high")
+        // 兼容接口沿用自己的默认参数表；旧能力开关不能把默认思考参数过滤掉。
+        assertEquals("medium", legacy.openAICompatibleRequestParameters().getValue("reasoning_effort").toString().trim('"'))
+        assertEquals("high", legacy.toThinkingConfig("Gemini", "gemini-3-pro")?.thinkingLevel)
+    }
 
     @Test
-    fun `pi高于社区与旧缓存但保留实时和手动值优先级`() {
+    fun `刷新目录保留手动模态并按能力过滤思考参数`() {
+        val config = ApiConfig(address = "https://example.com", key = "key", model = "model", provider = "provider", name = "model",
+            modelParameters = ModelParameters(inputModalities = setOf("text"), outputModalities = setOf("image")))
+        val result = config.withModelCapabilityDefaults(listOf(ModelCapabilityCandidate(
+            modelId = "model", protocol = ModelParameterProtocol.OPENAI_COMPATIBLE, source = ModelCapabilitySource.COMMUNITY_CATALOG,
+            inputModalities = setOf("text", "image/png", "application/pdf"), outputModalities = setOf("text"), supportsReasoning = false, supportsTemperature = false,
+        )))
+        assertEquals(setOf("text"), com.android.everytalk.data.DataClass.normalizeModelModalities(result.modelParameters.inputModalities!!))
+        assertEquals(setOf("image"), result.modelParameters.outputModalities)
+        assertEquals(false, result.modelParameters.resolvedCapability?.supportsTemperature)
+        assertEquals(emptyMap<String, kotlinx.serialization.json.JsonElement>(), result.modelParameters.openAICompatibleRequestParameters())
+        assertEquals(null, result.modelParameters.toThinkingConfig("Gemini", "model"))
+    }
+
+    @Test
+    fun `以models dev为标准并保留手动覆盖和其他来源兜底`() {
         val priority = listOf(
-            ModelCapabilitySource.USER_OVERRIDE, ModelCapabilitySource.LIVE_ENDPOINT,
+            ModelCapabilitySource.USER_OVERRIDE, ModelCapabilitySource.COMMUNITY_CATALOG, ModelCapabilitySource.LIVE_ENDPOINT,
             ModelCapabilitySource.PI_CATALOG,
-            ModelCapabilitySource.LOCAL_CACHE, ModelCapabilitySource.COMMUNITY_CATALOG,
+            ModelCapabilitySource.LOCAL_CACHE,
             ModelCapabilitySource.FAMILY_FALLBACK, ModelCapabilitySource.CONSERVATIVE_DEFAULT,
         )
         val candidates = priority.mapIndexed { index, source ->
@@ -133,7 +167,7 @@ class ModelCapabilityResolverTest {
     }
 
     @Test
-    fun `实时端点值优先于社区目录和家族兜底`() {
+    fun `models dev值优先于实时端点和家族兜底`() {
         val resolved = resolveModelCapability(
             modelId = "example-model",
             protocol = ModelParameterProtocol.OPENAI_COMPATIBLE,
@@ -164,10 +198,10 @@ class ModelCapabilityResolverTest {
             ),
         )
 
-        assertEquals(256_000, resolved.contextWindowTokens)
-        assertEquals(16_384, resolved.maxOutputTokens)
-        assertEquals(ModelCapabilitySource.LIVE_ENDPOINT, resolved.contextWindowSource)
-        assertEquals(ModelCapabilitySource.LIVE_ENDPOINT, resolved.maxOutputSource)
+        assertEquals(128_000, resolved.contextWindowTokens)
+        assertEquals(8_192, resolved.maxOutputTokens)
+        assertEquals(ModelCapabilitySource.COMMUNITY_CATALOG, resolved.contextWindowSource)
+        assertEquals(ModelCapabilitySource.COMMUNITY_CATALOG, resolved.maxOutputSource)
     }
 
     @Test
@@ -242,16 +276,16 @@ class ModelCapabilityResolverTest {
     }
 
     @Test
-    fun `GPT56实际配置采用pi限制而不被内置值覆盖`() {
+    fun `GPT56实际配置采用models dev限制并保留其他来源兜底`() {
         for (model in listOf("gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna")) {
             val config = ApiConfig(address = "https://proxy.example", key = "key", model = model, provider = "proxy", name = model)
             val pi = ModelCapabilityCandidate(modelId = model, protocol = ModelParameterProtocol.OPENAI_COMPATIBLE,
                 contextWindowTokens = 272_000, maxOutputTokens = 128_000, source = ModelCapabilitySource.PI_CATALOG)
             val community = pi.copy(contextWindowTokens = 1_050_000, source = ModelCapabilitySource.COMMUNITY_CATALOG)
             val result = config.withModelCapabilityDefaults(listOf(community, pi))
-            assertEquals(272_000, result.modelParameters.maxContextTokens)
+            assertEquals(1_050_000, result.modelParameters.maxContextTokens)
             assertEquals(128_000, result.maxTokens)
-            assertEquals(ModelCapabilitySource.PI_CATALOG, result.modelParameters.resolvedCapability?.contextWindowSource)
+            assertEquals(ModelCapabilitySource.COMMUNITY_CATALOG, result.modelParameters.resolvedCapability?.contextWindowSource)
             val fallback = config.withModelCapabilityDefaults(listOf(community.copy(contextWindowTokens = 200_000)))
             assertEquals(200_000, fallback.modelParameters.maxContextTokens)
             assertEquals(ModelCapabilitySource.COMMUNITY_CATALOG, fallback.modelParameters.resolvedCapability?.contextWindowSource)

@@ -110,14 +110,7 @@ internal fun DrawerPrimaryActions(
             label = stringResource(R.string.drawer_clear_history),
             onClick = onClearClick,
         )
-        Spacer(Modifier.height(5.dp))
-        DrawerActionButton(
-            iconRes = if (isImageGenerationMode) R.drawable.ic_writing else R.drawable.ic_image_gallery,
-            label = stringResource(
-                if (isImageGenerationMode) R.string.drawer_text_generation else R.string.drawer_image_generation
-            ),
-            onClick = if (isImageGenerationMode) onNewChatClick else onImageGenerationClick,
-        )
+
     }
 }
 

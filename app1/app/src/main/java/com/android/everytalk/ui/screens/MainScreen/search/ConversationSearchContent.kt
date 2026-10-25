@@ -1,5 +1,7 @@
 package com.android.everytalk.ui.screens.MainScreen.search
 
+import com.android.everytalk.ui.theme.AppInputFieldShape
+
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
@@ -79,7 +81,7 @@ private const val SEARCH_DEBOUNCE_MILLIS = 120L
 private const val MAX_SNIPPET_CHARS = 168
 private const val MAX_VISIBLE_SNIPPETS_PER_CONVERSATION = 24
 private val SearchCardShape = RoundedCornerShape(22.dp)
-private val SearchInputShape = RoundedCornerShape(28.dp)
+private val SearchInputShape = AppInputFieldShape
 private val SearchSnippetShape = RoundedCornerShape(16.dp)
 
 internal data class ConversationSearchSource(

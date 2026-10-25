@@ -1,5 +1,8 @@
 package com.android.everytalk.ui.screens.account
 
+import com.android.everytalk.ui.components.ParticlesBackground
+import com.android.everytalk.ui.theme.AppInputFieldShape
+
 import com.android.everytalk.util.locale.localizeUiMessage
 import android.content.Intent
 import android.net.Uri
@@ -106,6 +109,7 @@ internal fun AccountScreen(
         }
     }
     Box(Modifier.fillMaxSize().background(colors.background)) {
+        ParticlesBackground(color = colors.onBackground)
         Box(Modifier.fillMaxSize().imePadding(), contentAlignment = Alignment.Center) {
             if (isWholePageLoading) {
                 // 账号管理首次恢复资料时用整页状态，避免在页面底部额外挤出一行“正在处理”。
@@ -149,7 +153,7 @@ internal fun AccountScreen(
                     }
                     OutlinedTextField(value = displayName, onValueChange = { displayName = it.take(50) },
                         label = { Text(stringResource(R.string.account_display_name)) },
-                        singleLine = true, enabled = !state.busy, shape = CircleShape, colors = fieldColors,
+                        singleLine = true, enabled = !state.busy, shape = AppInputFieldShape, colors = fieldColors,
                         modifier = Modifier.fillMaxWidth())
                     Button(onClick = { manager.updateDisplayName(displayName) },
                         enabled = !state.busy && displayName.isNotBlank() && displayName.trim() != user.displayName,
@@ -186,7 +190,7 @@ internal fun AccountScreen(
                         onValueChange = { email = it },
                         placeholder = { Text(stringResource(R.string.account_email)) },
                         leadingIcon = { Icon(Icons.Outlined.Email, contentDescription = null) },
-                        shape = CircleShape,
+                        shape = AppInputFieldShape,
                         colors = fieldColors,
                         textStyle = MaterialTheme.typography.bodyLarge,
                         singleLine = true,
@@ -218,7 +222,7 @@ internal fun AccountScreen(
                             onValueChange = { code = it.filter { char -> char in '0'..'9' }.take(6) },
                             placeholder = { Text(stringResource(R.string.account_code)) },
                             leadingIcon = { Icon(Icons.Outlined.Lock, contentDescription = null) },
-                            shape = CircleShape,
+                            shape = AppInputFieldShape,
                             colors = fieldColors,
                             textStyle = MaterialTheme.typography.bodyLarge,
                             singleLine = true,

@@ -1,5 +1,7 @@
 package com.android.everytalk.ui.screens.mcp
 
+import com.android.everytalk.ui.theme.AppInputFieldShape
+
 import androidx.compose.ui.res.painterResource
 import com.android.everytalk.statecontroller.*
 
@@ -962,7 +964,7 @@ fun AddMcpServerDialog(
     val mcpDialogBg = if (isDarkTheme) Color.Black else Color.White
     val mcpBorderColor = if (isDarkTheme) Color(0xFF414141) else Color(0xFFF3F3F3)
     val mcpContentColor = if (isDarkTheme) Color.White else Color(0xFF0D0D0D)
-    val textFieldShape = RoundedCornerShape(16.dp)
+    val textFieldShape = AppInputFieldShape
 
     AlertDialog(
         onDismissRequest = onDismiss,

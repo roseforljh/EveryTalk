@@ -15,7 +15,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 
 internal const val MODELS_DEV_URL = "https://models.dev/api.json"
-internal const val MAX_MODELS_DEV_RESPONSE_BYTES = 6L * 1024L * 1024L
+internal const val MAX_MODELS_DEV_RESPONSE_BYTES = 12L * 1024L * 1024L
 
 internal data class ModelsDevEntry(
     val providerId: String,
@@ -127,6 +127,8 @@ internal fun parseModelsDevCatalog(
                     reasoningEfforts = efforts,
                     source = ModelCapabilitySource.COMMUNITY_CATALOG,
                     sourceUpdatedAt = fetchedAtEpochMillis,
+                    supportsTemperature = model.boolean("temperature"),
+                    supportsToolCalls = model.boolean("tool_call"),
                 ),
             )
         }
@@ -162,6 +164,8 @@ private fun mergeModelsDevEntries(
             .orEmpty(),
         source = ModelCapabilitySource.COMMUNITY_CATALOG,
         sourceUpdatedAt = capabilities.mapNotNull(ModelCapabilityCandidate::sourceUpdatedAt).maxOrNull(),
+        supportsTemperature = capabilities.mapNotNull { it.supportsTemperature }.takeIf { it.isNotEmpty() }?.all { it },
+        supportsToolCalls = capabilities.mapNotNull { it.supportsToolCalls }.takeIf { it.isNotEmpty() }?.all { it },
     )
 }
 

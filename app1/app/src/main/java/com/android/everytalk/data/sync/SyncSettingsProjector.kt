@@ -22,6 +22,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.encodeToJsonElement
 
 /** 把本地配置投影为合同中的逐条 user_settings；机密字段只有解锁后才进入 payload。 */
 internal class SyncSettingsProjector(
@@ -251,6 +252,15 @@ internal class SyncSettingsProjector(
             put("contextLimit", config.modelParameters.maxContextTokens); put("autoCompressionEnabled", config.modelParameters.autoContextCompressionEnabled)
             put("autoCompressionThreshold", config.modelParameters.autoContextCompressionThresholdPercent)
             put("customReasoningEfforts", JsonArray(config.modelParameters.customReasoningEfforts.map(::JsonPrimitive)))
+            // 能力覆盖与目录事实一起同步，两端刷新目录都不能冲掉用户手动选择。
+            put("inputModalities", config.modelParameters.inputModalities?.let { JsonArray(it.map(::JsonPrimitive)) } ?: JsonNull)
+            put("outputModalities", config.modelParameters.outputModalities?.let { JsonArray(it.map(::JsonPrimitive)) } ?: JsonNull)
+            put("supportsReasoning", config.modelParameters.supportsReasoning?.let(::JsonPrimitive) ?: JsonNull)
+            put("resolvedCapability", config.modelParameters.resolvedCapability?.let { syncJson.encodeToJsonElement(it) } ?: JsonNull)
+            put("imageApiFormat", config.modelParameters.imageApiFormat?.let(::JsonPrimitive) ?: JsonNull)
+            put("imageAspectRatio", config.modelParameters.imageAspectRatio?.let(::JsonPrimitive) ?: JsonNull)
+            put("imageQuality", config.modelParameters.imageQuality?.let(::JsonPrimitive) ?: JsonNull)
+            put("imageBatchSize", config.modelParameters.imageBatchSize?.let(::JsonPrimitive) ?: JsonNull)
             // 参数名作为列表项的值保存，不当作 JSON 属性名；敏感参数的值仍必须加密。
             val parameters = config.modelParameters.customParameters
             if (parameters != null) {

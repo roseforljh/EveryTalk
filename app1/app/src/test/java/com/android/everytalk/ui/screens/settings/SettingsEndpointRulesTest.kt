@@ -9,6 +9,21 @@ import org.junit.Test
 
 class SettingsEndpointRulesTest {
     @Test
+    fun `图片复用API地址时保留代理前缀版本和查询参数`() {
+        val base = "https://proxy.example/gateway/v1/chat/completions?tenant=demo"
+        assertEquals("https://proxy.example/gateway/v1/images/generations?tenant=demo",
+            LlmEndpointResolver.resolveImage(base, "gemini-proxy-image", ModelParameterProtocol.OPENAI_COMPATIBLE))
+        assertEquals("https://proxy.example/gateway/v1/images/edits?tenant=demo",
+            LlmEndpointResolver.resolveImage(base, "image", ModelParameterProtocol.OPENAI_COMPATIBLE, edit = true))
+        assertEquals("https://proxy.example/api/v3/images/generations",
+            LlmEndpointResolver.resolveImage("https://proxy.example/api/v3", "image", ModelParameterProtocol.OPENAI_COMPATIBLE))
+        assertEquals("https://proxy.example/custom?tenant=demo",
+            LlmEndpointResolver.resolveImage("https://proxy.example/custom?tenant=demo#", "image", ModelParameterProtocol.OPENAI_COMPATIBLE))
+        assertEquals("https://proxy.example/v1beta/models/image:generateContent",
+            LlmEndpointResolver.resolveImage("https://proxy.example/v1beta", "image", ModelParameterProtocol.GEMINI))
+    }
+
+    @Test
     fun `anthropic root address previews messages endpoint`() {
         assertEquals(
             "https://api.anthropic.com/v1/messages",

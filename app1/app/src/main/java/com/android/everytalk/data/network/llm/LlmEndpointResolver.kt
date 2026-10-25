@@ -10,6 +10,17 @@ import java.net.URI
  * 地址末尾加 `#` 时按完整自定义地址原样使用，兼容没有标准路径的私有代理。
  */
 object LlmEndpointResolver {
+    /** 图片沿用同一 API 地址，复用版本号、代理前缀、查询参数和完整地址标记的处理。 */
+    fun resolveImage(apiAddress: String, model: String, protocol: ModelParameterProtocol, edit: Boolean = false): String {
+        val endpoint = resolve(protocol, apiAddress, model)
+        if (apiAddress.trim().endsWith('#')) return endpoint
+        return if (protocol == ModelParameterProtocol.GEMINI) {
+            endpoint.replace(":streamGenerateContent", ":generateContent")
+        } else {
+            Regex("/chat/completions(?=\\?|$)").replace(endpoint, if (edit) "/images/edits" else "/images/generations")
+        }
+    }
+
     fun resolve(
         protocol: ModelParameterProtocol,
         apiAddress: String,
@@ -87,6 +98,7 @@ object LlmEndpointResolver {
         }
 
         val knownSuffixes = listOf(
+            "/v1/images/generations", "/images/generations", "/v1/images/edits", "/images/edits",
             "/v1/chat/completions",
             "/chat/completions",
             "/v1/responses",

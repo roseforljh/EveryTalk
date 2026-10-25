@@ -84,7 +84,8 @@ internal fun AddNewFullConfigDialog(
     onApiKeyChange: (String) -> Unit,
     onDismissRequest: () -> Unit,
     onConfirm: (String, String, String, String, String?, Int?, Float?, Boolean?, String?) -> Unit,
-    isImageMode: Boolean
+    isImageMode: Boolean,
+    onImageModeChange: ((Boolean) -> Unit)? = null,
 ) {
     var providerMenuExpanded by remember { mutableStateOf(false) }
     var channelMenuExpanded by remember { mutableStateOf(false) }
@@ -93,7 +94,7 @@ internal fun AddNewFullConfigDialog(
     } else {
         listOf("OpenAI兼容", "Anthropic", "Gemini", "Codex")
     }
-    var selectedChannel by remember { mutableStateOf(channels.first()) }
+    var selectedChannel by remember(isImageMode) { mutableStateOf(channels.first()) }
     var apiKeyVisible by remember { mutableStateOf(false) }
     // val focusRequesterApiKey = remember { FocusRequester() } // Removed auto-focus
     var textFieldAnchorBounds by remember { mutableStateOf<Rect?>(null) }
@@ -212,6 +213,12 @@ internal fun AddNewFullConfigDialog(
                 Column(
                     modifier = Modifier.padding(vertical = 8.dp)
                 ) {
+                    onImageModeChange?.let { changeMode ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            FilterChip(selected = !isImageMode, onClick = { changeMode(false) }, label = { Text("文本模型") })
+                            FilterChip(selected = isImageMode, onClick = { changeMode(true) }, label = { Text("图片模型") })
+                        }
+                    }
                     SettingsFieldLabel(stringResource(R.string.settings_model_platform_label))
                     ExposedDropdownMenuBox(
                         expanded = providerMenuExpanded && providersToShow.isNotEmpty(),

@@ -11,6 +11,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
@@ -25,6 +26,7 @@ import androidx.core.content.ContextCompat
 import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.network.VoiceChatSession
+import com.android.everytalk.ui.components.ParticlesBackground
 import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.ui.screens.MainScreen.chat.dialog.LlmSettingsDialog
 import com.android.everytalk.ui.screens.MainScreen.chat.dialog.SttSettingsDialog
@@ -150,12 +152,14 @@ fun VoiceInputScreen(
     val isDarkTheme = isSystemInDarkTheme()
     val backgroundColor = if (isDarkTheme) Color.Black else MaterialTheme.colorScheme.background
     val contentColor = if (isDarkTheme) Color.White else MaterialTheme.colorScheme.onBackground
-    val waveCircleColor = if (isDarkTheme) Color.White else MaterialTheme.colorScheme.primary
     
     // ========== UI布局 ==========
+    // 粒子铺满整页（含顶栏和底栏区域），Scaffold 透明叠在上面。
+    Box(Modifier.fillMaxSize().background(backgroundColor)) {
+    ParticlesBackground(color = contentColor)
     Scaffold(
         modifier = Modifier.fillMaxSize(),
-        containerColor = backgroundColor,
+        containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
                 title = { },
@@ -246,7 +250,6 @@ fun VoiceInputScreen(
                 userText = userText,
                 assistantText = assistantText,
                 currentVolume = currentVolume,
-                waveCircleColor = waveCircleColor,
                 contentColor = contentColor
             )
             
@@ -276,6 +279,7 @@ fun VoiceInputScreen(
                 )
             }
         }
+    }
     }
     
     // ========== 对话框 ==========

@@ -55,6 +55,16 @@ data class ModelParameters(
     val autoContextCompressionThresholdPercent: Int = DEFAULT_AUTO_CONTEXT_COMPRESSION_THRESHOLD_PERCENT,
     // 记录自动解析后的能力及来源；旧配置缺少该字段时按用户现有值处理。
     val resolvedCapability: ResolvedModelCapability? = null,
+    // null 沿用 models.dev；手动选择独立保存，刷新目录时不会被覆盖。
+    val inputModalities: Set<String>? = null,
+    val outputModalities: Set<String>? = null,
+    // 仅兼容旧配置；思考设置常驻，不再通过手动能力开关控制。
+    val supportsReasoning: Boolean? = null,
+    // 仅兼容旧配置；实际图片协议统一由 API 地址和 apiProtocolOverride 推导。
+    val imageApiFormat: String? = null,
+    val imageAspectRatio: String? = null,
+    val imageQuality: String? = null,
+    val imageBatchSize: Int? = null,
 )
 
 fun validateAutoContextCompressionThreshold(percent: Int): Int {
@@ -154,6 +164,7 @@ fun thinkingLevelOptions(protocol: ModelParameterProtocol): List<String> = when 
 
 /** 按当前接口协议转换用户设置；目录能力缺失或变更不能吞掉已选的思考参数。 */
 fun ModelParameters.toThinkingConfig(channel: String, model: String): ThinkingConfig? {
+    if (resolvedCapability?.supportsReasoning == false) return null
     val protocol = modelParameterProtocol(channel)
     val normalizedEffort = reasoningEffort.trim().lowercase().takeIf { it in thinkingLevelOptions(protocol) }
         ?: DEFAULT_REASONING_EFFORT
@@ -244,8 +255,11 @@ fun CustomModelParameter.toJsonElement(): JsonElement = when (type) {
 }
 
 fun ModelParameters.openAICompatibleRequestParameters(): Map<String, JsonElement> {
-    // 与兼容接口的界面默认值一致，不读取模型目录。显式空列表和用户私有参数原样保留。
-    val parameters = customParameters ?: defaultOpenAICompatibleParameters
+    // 与兼容接口的界面默认值一致。旧的采样覆盖直接忽略，避免用户移除设置后仍被历史值影响。
+    val parameters = (customParameters ?: defaultOpenAICompatibleParameters).filterNot {
+        it.name.trim().lowercase() in setOf("temperature", "top_p", "topp") ||
+            (resolvedCapability?.supportsReasoning == false && it.name.trim().equals("reasoning_effort", true))
+    }
     val enabledParameters = parameters.filter(CustomModelParameter::enabled)
     val duplicateName = enabledParameters
         .groupBy { it.name.trim().lowercase() }

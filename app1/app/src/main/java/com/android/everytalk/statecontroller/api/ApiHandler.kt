@@ -379,7 +379,7 @@ class ApiHandler(
     private val prepareAgentResumeRequest: suspend (String, ChatRequest, List<String>) -> ChatRequest = { _, request, _ -> request },
     private val prepareMcpResumeRequest: suspend (String, ChatRequest) -> ChatRequest = { _, _ -> error("MCP 开启入口不可用") },
     /** 图像任务完成后按会话 ID 回写 Room，避免结果依赖当前可见页面。 */
-    private val persistImageGenerationResult: suspend (String, String, ImageGenerationResponse?, Throwable?) -> Unit = { _, _, _, _ -> },
+    private val persistImageGenerationResult: suspend (String, String, ImageGenerationResponse?, Throwable?, Boolean) -> Unit = { _, _, _, _, _ -> },
 ) {
     private val context = context.applicationContext
     private val logger = AppLogger.forComponent("ApiHandler")
@@ -1690,7 +1690,7 @@ class ApiHandler(
                         }
                     }
                 }
-                if (isImageGeneration) {
+                if (requestBody.imageGenRequest != null) {
                     try {
                         val response = ApiClient.generateImage(requestBody)
                         logger.debug(
@@ -1698,7 +1698,7 @@ class ApiHandler(
                         )
                         // 结果处理与当前页面解耦：切换到其他会话后仍按 requestConversationId 写入原会话。
                         withContext(Dispatchers.IO) {
-                            persistImageGenerationResult(requestConversationId, aiMessageId, response, null)
+                            persistImageGenerationResult(requestConversationId, aiMessageId, response, null, isImageGeneration)
                         }
                     } catch (exception: CancellationException) {
                         throw exception
@@ -1706,7 +1706,7 @@ class ApiHandler(
                         // 网络请求失败或任何其他异常
                         logger.error("[ImageGen] Exception during image generation for message $aiMessageId", e)
                         withContext(Dispatchers.IO) {
-                            persistImageGenerationResult(requestConversationId, aiMessageId, null, e)
+                            persistImageGenerationResult(requestConversationId, aiMessageId, null, e, isImageGeneration)
                         }
                         // 不再调用 onRequestFailed，避免 Snackbar 弹出
                     }

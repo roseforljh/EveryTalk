@@ -96,7 +96,7 @@ internal fun DataPersistenceManager.loadInitialDataInternal(
                 val selectedConfigId: String? = roomDataSource.loadSelectedConfigId()
                 var selectedConfigFromDataSource: ApiConfig? = null
                 if (selectedConfigId != null) {
-                    selectedConfigFromDataSource = loadedConfigs.find { it.id == selectedConfigId }
+                    selectedConfigFromDataSource = (loadedConfigs + roomDataSource.loadImageGenApiConfigs()).find { it.id == selectedConfigId }
                     // 同步分页可能先到选中 ID、后到模型配置；暂缺时保留引用，不能反写默认选择。
                 }
 
@@ -117,64 +117,9 @@ internal fun DataPersistenceManager.loadInitialDataInternal(
                 // Load image generation configs
                 var loadedImageGenConfigs: List<ApiConfig> = roomDataSource.loadImageGenApiConfigs()
 
-                val defaultConfigsInitialized = roomDataSource.getSetting(KEY_DEFAULT_CONFIGS_INITIALIZED, "false") == "true"
+                // 内置项由公共存储层补齐；旧版本的“已初始化”标记不再影响可用性。
+                roomDataSource.saveImageGenApiConfigs(loadedImageGenConfigs)
 
-                // 自动创建默认图像配置（如果不存在且未初始化过）
-                // 默认创建三个图像模型：Modal Z-Image-Turbo、Qwen 图像编辑、SiliconFlow
-                val hasDefaultImageConfig = loadedImageGenConfigs.any {
-                    it.provider.trim().lowercase() in listOf("默认", "default") &&
-                    it.modalityType == com.android.everytalk.data.DataClass.ModalityType.IMAGE
-                }
-                if (!hasDefaultImageConfig && !defaultConfigsInitialized) {
-                    Log.i(TAG, "loadInitialData: 未找到默认图像配置且首次初始化，自动创建三个默认图像模型...")
-                    
-                    val newDefaultImageConfigs = mutableListOf<ApiConfig>()
-                    
-                    // 1. Modal Z-Image-Turbo 图像生成
-                    newDefaultImageConfigs.add(ApiConfig(
-                        id = java.util.UUID.randomUUID().toString(),
-                        name = "Z-Image-Turbo (Modal)",
-                        provider = "默认",
-                        address = "",
-                        key = "",
-                        model = "z-image-turbo-modal",
-                        modalityType = com.android.everytalk.data.DataClass.ModalityType.IMAGE,
-                        channel = "",
-                        isValid = true,
-                        numInferenceSteps = 4
-                    ))
-                    
-                    // 2. Qwen 图像编辑
-                    newDefaultImageConfigs.add(ApiConfig(
-                        id = java.util.UUID.randomUUID().toString(),
-                        name = "Qwen Image Edit",
-                        provider = "默认",
-                        address = "",
-                        key = "",
-                        model = "qwen-image-edit-modal",
-                        modalityType = com.android.everytalk.data.DataClass.ModalityType.IMAGE,
-                        channel = "",
-                        isValid = true,
-                        numInferenceSteps = 30
-                    ))
-                    
-                    // 3. SiliconFlow 图像生成 (Kwai-Kolors/Kolors)
-                    newDefaultImageConfigs.add(ApiConfig(
-                        id = java.util.UUID.randomUUID().toString(),
-                        name = "Kwai-Kolors/Kolors",
-                        provider = "默认",
-                        address = "",
-                        key = "",
-                        model = "Kwai-Kolors/Kolors",
-                        modalityType = com.android.everytalk.data.DataClass.ModalityType.IMAGE,
-                        channel = "",
-                        isValid = true
-                    ))
-                    
-                    loadedImageGenConfigs = loadedImageGenConfigs + newDefaultImageConfigs
-                    Log.i(TAG, "loadInitialData: 已创建 ${newDefaultImageConfigs.size} 个默认图像配置")
-                }
-                
                 // 修复：去重时记录旧ID到保留ID的映射，避免历史会话继续引用已删除ID。
                 val retainedByKey = linkedMapOf<String, ApiConfig>()
                 val duplicateImageConfigIds = linkedMapOf<String, String>()
@@ -201,17 +146,6 @@ internal fun DataPersistenceManager.loadInitialDataInternal(
                     roomDataSource.saveImageGenApiConfigs(loadedImageGenConfigs)
                 }
 
-                // 统一保存所有图像配置（包括新增的）
-                if (!hasDefaultImageConfig && !defaultConfigsInitialized) {
-                    roomDataSource.saveImageGenApiConfigs(loadedImageGenConfigs)
-                    Log.i(TAG, "loadInitialData: 已保存更新后的图像配置列表")
-                }
-                
-                // 标记默认配置已初始化 (保存到 Room 数据库)
-                if (!defaultConfigsInitialized) {
-                    roomDataSource.setSetting(KEY_DEFAULT_CONFIGS_INITIALIZED, "true")
-                }
-                
                 val selectedImageGenConfigId: String? = roomDataSource.loadSelectedImageGenConfigId()
                 val retainedSelectedImageGenConfigId = selectedImageGenConfigId?.let {
                     duplicateImageConfigIds[it] ?: it
@@ -230,8 +164,10 @@ internal fun DataPersistenceManager.loadInitialDataInternal(
                  withContext(Dispatchers.Main.immediate) {
                      stateHolder._imageGenApiConfigs.value = loadedImageGenConfigs
                      stateHolder._selectedImageGenApiConfig.value = selectedImageGenConfig
+                     if (stateHolder._selectedApiConfig.value == null) stateHolder._selectedApiConfig.value = selectedImageGenConfig
                  }
 
+                val defaultConfigsInitialized = roomDataSource.getSetting(KEY_DEFAULT_CONFIGS_INITIALIZED, "false") == "true"
                 // 加载语音后端配置
                 var loadedVoiceConfigs = roomDataSource.loadVoiceBackendConfigs()
                 
@@ -248,6 +184,7 @@ internal fun DataPersistenceManager.loadInitialDataInternal(
                     Log.i(TAG, "loadInitialData: 已创建默认语音配置")
                 }
                 
+                if (!defaultConfigsInitialized) roomDataSource.setSetting(KEY_DEFAULT_CONFIGS_INITIALIZED, "true")
                 val selectedVoiceConfigId: String? = roomDataSource.loadSelectedVoiceConfigId()
                 var selectedVoiceConfig: com.android.everytalk.data.DataClass.VoiceBackendConfig? = null
                 if (selectedVoiceConfigId != null) {
@@ -377,21 +314,10 @@ internal fun DataPersistenceManager.loadInitialDataInternal(
                         warnOnce("部分历史加载失败，原数据已保留")
                     }
 
-                    try {
-                        val imageHistoryLoadResult = roomDataSource.loadImageGenerationHistoryPreviewResult()
-                        val convertedImageGenHistory = imageHistoryLoadResult.sessions
-                            .map(com.android.everytalk.data.database.LoadedHistorySession::messages)
-                        withContext(Dispatchers.Main.immediate) {
-                            stateHolder._imageGenerationHistoricalConversations.value = convertedImageGenHistory
-                            if (imageHistoryLoadResult.failedSessionIds.isEmpty()) {
-                                stateHolder.markImageHistoryReadyForStateCleanup()
-                            }
-                        }
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        Log.e(TAG, "loadInitialData: 加载图像历史时发生错误", e)
-                        warnOnce("部分历史加载失败，原数据已保留")
+                    // 旧图片历史已由统一历史查询加载，禁止再保留第二份可写快照。
+                    // 否则生命周期保存可能把同一会话较新的文本/图片混合结果写回旧图片列表。
+                    withContext(Dispatchers.Main.immediate) {
+                        stateHolder._imageGenerationHistoricalConversations.value = emptyList()
                     }
                 }
 
@@ -503,15 +429,12 @@ internal fun DataPersistenceManager.loadInitialDataInternal(
                                 stateHolder.applyCurrentConversationFunctionToggleState()
                                 stateHolder._loadedHistoryIndex.value = null
                             }
-                            visibleImageMessages?.let { visibleMessages ->
-                                stateHolder.imageGenerationMessages.clear()
-                                stateHolder.imageGenerationMessages.addAll(visibleMessages)
-                                stateHolder.imageReasoningCompleteMap.clear()
-                                stateHolder.imageReasoningCompleteMap.putAll(imageReasoningStates)
-                                stateHolder._currentImageGenerationConversationId.value =
-                                    imageSessionId
-                                        ?: "image_resume_${System.currentTimeMillis()}"
-                                stateHolder._loadedImageGenerationHistoryIndex.value = null
+                            // 文本上次会话为空时，把旧图片会话恢复到同一个聊天状态。
+                            if (stateHolder.messages.isEmpty() && !visibleImageMessages.isNullOrEmpty()) {
+                                stateHolder.messages.addAll(visibleImageMessages)
+                                stateHolder.textReasoningCompleteMap.putAll(imageReasoningStates)
+                                stateHolder.setCurrentConversationId(imageSessionId ?: "chat_resume_${System.currentTimeMillis()}")
+                                stateHolder._loadedHistoryIndex.value = null
                             }
                         }
                     }
@@ -535,7 +458,7 @@ internal fun DataPersistenceManager.loadInitialDataInternal(
                 // 最近页身份与逐会话设置并行加载；两者齐备后再套用，避免重启显示全局模型和空标签。
                 withContext(Dispatchers.Main.immediate) {
                     stateHolder.conversationApiConfigIds.value[stateHolder._currentConversationId.value]?.let { modelId ->
-                        stateHolder._selectedApiConfig.value = stateHolder._apiConfigs.value.find { it.id == modelId }
+                        stateHolder._selectedApiConfig.value = (stateHolder._apiConfigs.value + stateHolder._imageGenApiConfigs.value).find { it.id == modelId }
                     }
                     if (stateHolder.messages.isNotEmpty()) stateHolder.applyCurrentConversationFunctionToggleState()
                     else if (stateHolder.imageGenerationMessages.isNotEmpty()) stateHolder.applyCurrentImageConversationFunctionToggleState()

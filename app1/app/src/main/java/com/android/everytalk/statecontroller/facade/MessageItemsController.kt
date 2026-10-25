@@ -28,6 +28,7 @@ import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
 import com.android.everytalk.ui.screens.MainScreen.chat.core.expandStaticAiMessageItem
 import com.android.everytalk.ui.screens.MainScreen.chat.core.OrderedAiOutputSegment
 import com.android.everytalk.ui.screens.MainScreen.chat.core.orderedAiOutputSegments
+import com.android.everytalk.ui.screens.MainScreen.chat.core.executionTraceForProcessDisplay
 import com.mikepenz.markdown.model.State
 import com.mikepenz.markdown.model.parseMarkdown
 import kotlinx.coroutines.CoroutineScope
@@ -751,7 +752,7 @@ open class MessageItemsController(
                 val hasImageContent = !message.imageUrls.isNullOrEmpty()
                 val hasTextContent = message.text.isNotBlank() || completedParseResult.blocks.isNotEmpty()
 
-                if (hasTextContent || (isImageGeneration && hasImageContent)) {
+                if (hasTextContent || hasImageContent) {
                     val contentItem = when (message.outputType) {
                             "code" -> ChatListItem.AiMessageCode(
                                 message = message,
@@ -779,7 +780,7 @@ open class MessageItemsController(
                             )
                         }
                     items.addAll(
-                        if (isImageGeneration || !allowLazyStaticRender) {
+                        if (isImageGeneration || hasImageContent || !allowLazyStaticRender) {
                             listOf(contentItem)
                         } else {
                             expandStaticAiMessageItem(contentItem)
@@ -828,7 +829,6 @@ open class MessageItemsController(
             state is com.android.everytalk.ui.state.AiBubbleState.Streaming
         val segments = orderedAiOutputSegments(
             trace = message.executionTrace,
-            toolCallWriting = replyIsStreaming && message.executionStatus == TOOL_CALL_WRITING_STATUS,
         ).toMutableList()
         // 编写阶段还没有完整工具记录。追加临时过程段，后续真实工具沿用同一列表位置；
         // 不把未执行的操作写入历史，停止或失败后也不会残留“正在编写”。
@@ -837,9 +837,10 @@ open class MessageItemsController(
         ) {
             segments += OrderedAiOutputSegment.Process(
                 events = emptyList(),
-                detailStartIndex = message.executionTrace.count {
-                    it is ExecutionTraceEvent.Reasoning || it is ExecutionTraceEvent.Tool
-                },
+                detailStartIndex = executionTraceForProcessDisplay(
+                    message.executionTrace,
+                    toolCallWriting = true,
+                ).size,
                 startedAtMillis = null,
                 finishedAtMillis = null,
             )
@@ -860,12 +861,10 @@ open class MessageItemsController(
             message.executionStatus
         }
 
-        // QoneAgent 的输出结构只有一个执行区，最终正文统一位于执行区之后。
-        // 这里先把各个有序过程段规范化，再合并成一个列表项；过程事件仍按原顺序
-        // 保留，因此执行区内部的步骤时间线和底部详情抽屉不会丢失信息。
+        // 每个连续过程沿用自己的段序号，不跨正文合并或搬到列表头部。
+        // 临时编写状态与随后到达的工具复用同一位置，前面的正文及其 Markdown 状态保持不变。
         val processItems = buildList {
-            // 旁白会归入 Process，因此不能从 segments 的首项判断首字耗时。
-            // 只看原始轨迹的首个 Content，保留请求开始到首字出现的等待时间。
+            // 首字耗时独立保留在第一段正文之前，后续工具不会改变它的身份或耗时。
             val firstContentStartedAt = (message.executionTrace.firstOrNull() as? ExecutionTraceEvent.Content)
                 ?.startedAtMillis
             if (firstContentStartedAt != null && firstContentStartedAt > message.timestamp) {
@@ -903,7 +902,6 @@ open class MessageItemsController(
                 add(
                     ChatListItem.AiMessageProcessSegment(
                         messageId = message.id,
-                        // 来源段的序号只在这里临时使用，合并后的稳定节点固定为 -1。
                         segmentIndex = segmentIndex,
                         events = segment.events,
                         detailStartIndex = segment.detailStartIndex,
@@ -916,74 +914,17 @@ open class MessageItemsController(
                         webSearchResults = message.webSearchResults.orEmpty(),
                         messageIsError = message.isError && segmentIndex == lastProcessIndex,
                         executionStartedAtMillis = segmentStartedAt,
-                        executionFinishedAtMillis = segmentFinishedAt,
+                        executionFinishedAtMillis = segmentFinishedAt.takeUnless { segmentIndex == activeProcessIndex },
                     )
                 )
             }
         }
-        // 用户在一条回复中追加调整消息时，边界前后的过程属于两个可区分的执行阶段。
-        // 因此只跨正文合并，不跨 UserMessageBoundary 合并，避免用户消息被挪到错误的位置。
         val processItemsBySegmentIndex = processItems.associateBy { it.segmentIndex }
-        val processGroups = mutableListOf<Pair<Int, List<ChatListItem.AiMessageProcessSegment>>>()
-        var currentGroupStartIndex = -1
-        var currentGroupItems = mutableListOf<ChatListItem.AiMessageProcessSegment>()
-
-        fun flushProcessGroup() {
-            if (currentGroupItems.isNotEmpty()) {
-                processGroups += currentGroupStartIndex to currentGroupItems.toList()
-                currentGroupItems = mutableListOf()
-                currentGroupStartIndex = -1
-            }
-        }
-
-        fun appendProcessItem(segmentIndex: Int) {
-            val item = processItemsBySegmentIndex[segmentIndex] ?: return
-            if (currentGroupItems.isEmpty()) currentGroupStartIndex = segmentIndex
-            currentGroupItems += item
-        }
-
-        appendProcessItem(-1)
-        segments.forEachIndexed { segmentIndex, segment ->
-            if (segment is OrderedAiOutputSegment.UserMessageBoundary) flushProcessGroup()
-            if (segment is OrderedAiOutputSegment.Process) appendProcessItem(segmentIndex)
-        }
-        flushProcessGroup()
-
-        val hasUserMessageBoundary = segments.any {
-            it is OrderedAiOutputSegment.UserMessageBoundary
-        }
-        val mergedProcessItems = processGroups.map { (segmentIndex, items) ->
-            val isProcessActive = items.any { it.processIsActive }
-            ChatListItem.AiMessageProcessSegment(
-                messageId = message.id,
-                // 普通回复只有一个执行区，固定放到正文之前；有用户边界时保留阶段位置。
-                segmentIndex = segmentIndex.takeIf { hasUserMessageBoundary } ?: -1,
-                events = items.flatMap { it.events },
-                detailStartIndex = items.minOf { it.detailStartIndex },
-                activityStatusText = items.asReversed().firstNotNullOfOrNull { it.activityStatusText },
-                // 正文开始输出说明前面的过程已结束，应立即收起；后续若再次调用工具，
-                // 新的活动过程会自然恢复展开，不能用整条回复的流状态强制展开已结束的过程。
-                replyIsStreaming = items.any { it.replyIsStreaming },
-                processIsActive = isProcessActive,
-                webSearchResults = message.webSearchResults.orEmpty(),
-                messageIsError = items.any { it.messageIsError },
-                executionStartedAtMillis = items.mapNotNull { it.executionStartedAtMillis }.minOrNull(),
-                // 执行中的临时过程没有结束时间，否则 UI 会把它误判成历史执行。
-                executionFinishedAtMillis = if (isProcessActive) {
-                    null
-                } else {
-                    items.mapNotNull { it.executionFinishedAtMillis }.maxOrNull()
-                },
-            )
-        }
-        val mergedProcessItemsBySegmentIndex = mergedProcessItems.associateBy { it.segmentIndex }
 
         return buildList {
-            // 没有用户边界时通常是 -1，执行区会稳定地位于最终正文之前。
-            mergedProcessItemsBySegmentIndex[-1]?.let(::add)
+            processItemsBySegmentIndex[-1]?.let(::add)
             segments.forEachIndexed { segmentIndex, segment ->
-                // 有用户边界时，执行区在自己的原始阶段位置出现，保证边界投影顺序不变。
-                mergedProcessItemsBySegmentIndex[segmentIndex]?.let(::add)
+                processItemsBySegmentIndex[segmentIndex]?.let(::add)
                 when (segment) {
                     // 用户项由最终投影插入，避免缓存持有过期用户内容或重复气泡。
                     is OrderedAiOutputSegment.UserMessageBoundary -> Unit
@@ -1054,7 +995,7 @@ open class MessageItemsController(
                             }
                         }
                     }
-                    // 所有过程段已在上面合并成一个执行区，这里只输出正文。
+                    // 过程项已在对应段的位置插入，不能再次添加。
                     is OrderedAiOutputSegment.Process -> Unit
                 }
             }

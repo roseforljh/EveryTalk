@@ -3,9 +3,11 @@ package com.android.everytalk.ui.screens.settings
 import android.app.Application
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
@@ -36,6 +38,41 @@ class ModelParametersDialogComposeTest {
     val composeRule = createComposeRule()
 
     @Test
+    fun `切换为图片输出后显示对应接口参数并保存能力`() {
+        val config = openAICompatibleConfig().copy(model = "qwen-image-edit", address = "https://qwen.example.modal.run")
+        var confirmedConfig: ApiConfig? = null
+        composeRule.setContent {
+            MaterialTheme {
+                ModelParametersDialog(config = config, onDismissRequest = {}, onConfirm = { confirmedConfig = it })
+            }
+        }
+
+        // 对齐 QoneAgent 的四类能力；温度、Top P 和 PDF 不再出现在编辑器。
+        listOf("文本", "图片", "视频", "音频").forEach { label ->
+            composeRule.onAllNodesWithText(label).assertCountEquals(2)
+        }
+        composeRule.onNodeWithText("PDF").assertDoesNotExist()
+        composeRule.onNodeWithText("温度", substring = true).assertDoesNotExist()
+        composeRule.onNodeWithText("Top P", substring = true).assertDoesNotExist()
+        composeRule.onNodeWithText("思考能力").assertDoesNotExist()
+        composeRule.onNodeWithText("图片接口").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("思考程度下拉框").assertExists()
+
+        // 第一组是输入，第二组是输出；切换只改变输出能力，不替换模型或会话。
+        composeRule.onAllNodesWithText("图片")[1].performScrollTo().performClick()
+        composeRule.onAllNodesWithText("文本")[1].performScrollTo().performClick()
+        composeRule.onNodeWithText("推理步数").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("图片质量").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("思考程度下拉框").assertDoesNotExist()
+        composeRule.onNodeWithText("保存").performClick()
+
+        composeRule.runOnIdle {
+            assertEquals(setOf("image"), confirmedConfig?.modelParameters?.outputModalities)
+            assertEquals("qwen-image-edit", confirmedConfig?.model)
+        }
+    }
+
+    @Test
     fun `当前参数在菜单右侧显示勾选图标`() {
         val context = ApplicationProvider.getApplicationContext<Application>()
         val config = ApiConfig(
@@ -57,7 +94,7 @@ class ModelParametersDialogComposeTest {
             }
         }
 
-        composeRule.onNodeWithContentDescription("思考程度下拉框").performClick()
+        composeRule.onNodeWithContentDescription("思考程度下拉框").performScrollTo().performClick()
 
         composeRule
             .onNodeWithContentDescription(
@@ -86,7 +123,7 @@ class ModelParametersDialogComposeTest {
             }
         }
 
-        composeRule.onNodeWithContentDescription("思考程度下拉框").performClick()
+        composeRule.onNodeWithContentDescription("思考程度下拉框").performScrollTo().performClick()
         val customTop = composeRule.onNodeWithText("自定义").fetchSemanticsNode().boundsInRoot.top
         val firstPresetTop = composeRule
             .onNodeWithText(context.getString(R.string.model_parameters_reasoning_none))
@@ -125,12 +162,12 @@ class ModelParametersDialogComposeTest {
             }
         }
 
-        composeRule.onNodeWithContentDescription("思考程度下拉框").performClick()
+        composeRule.onNodeWithContentDescription("思考程度下拉框").performScrollTo().performClick()
         composeRule
             .onNodeWithContentDescription("删除自定义参数 ultra", useUnmergedTree = true)
             .performScrollTo()
             .performClick()
-        composeRule.onNodeWithContentDescription("思考程度下拉框").performClick()
+        composeRule.onNodeWithContentDescription("思考程度下拉框").performScrollTo().performClick()
         composeRule.onNodeWithText("保存").performClick()
 
         composeRule.runOnIdle {
@@ -242,6 +279,8 @@ class ModelParametersDialogComposeTest {
         assertTrue(loadButton.fetchSemanticsNode().boundsInRoot.left > titleBounds.right)
         loadButton.performClick()
         composeRule.waitForIdle()
+        // 接口声明不支持时也不隐藏整个思考设置，保存时仍避免发送不支持的参数。
+        composeRule.onNodeWithContentDescription("思考程度下拉框").assertExists()
         composeRule.onNodeWithText("保存").performClick()
 
         composeRule.runOnIdle {

@@ -3,7 +3,9 @@ import com.android.everytalk.statecontroller.*
 
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
@@ -11,6 +13,10 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+
+/** 所有表单、搜索和自定义输入框共用的大圆角，避免页面各自定义小圆角。 */
+val AppInputFieldShape = RoundedCornerShape(24.dp)
 
 private val DarkColorScheme = darkColorScheme(
     // 标准 Material 控件共用灰阶主色，按钮、链接和进度圈不再各自回落到蓝色。
@@ -145,6 +151,7 @@ fun App1Theme(
     MaterialTheme(
         colorScheme = colorScheme,
         typography = AppTypography,
+        shapes = Shapes(extraSmall = AppInputFieldShape),
         content = content
     )
 }

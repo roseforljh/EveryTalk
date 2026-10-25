@@ -267,32 +267,24 @@ private fun QualitySelector(
         ) {
             options.forEach { option ->
                 val isSelected = option == selectedOption
-                val backgroundColor = if (isSelected) {
-                    MaterialTheme.colorScheme.primaryContainer
-                } else {
-                    Color.Transparent
-                }
-                val contentColor = if (isSelected) {
-                    MaterialTheme.colorScheme.onPrimaryContainer
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                }
+                val contentColor = MaterialTheme.colorScheme.onSurface
 
                 Box(
                     modifier = Modifier
                         .weight(1f)
                         .clip(RoundedCornerShape(12.dp))
-                        .background(backgroundColor)
                         .clickable { onOptionSelected(option) }
                         .padding(vertical = 10.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        text = option,
-                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                        color = contentColor,
-                        style = MaterialTheme.typography.labelLarge
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = option,
+                            color = contentColor,
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                        if (isSelected) Icon(painterResource(R.drawable.ic_check), stringResource(R.string.state_selected), modifier = Modifier.size(16.dp))
+                    }
                 }
             }
         }
@@ -313,24 +305,9 @@ private fun ImageRatioItem(
 ) {
     val isDarkTheme = isSystemInDarkTheme()
 
-    val backgroundColor = if (isSelected) {
-        MaterialTheme.colorScheme.primaryContainer
-    } else {
-        if (isDarkTheme) Color(0xFF2A2A2A) else Color(0xFFF5F5F5)
-    }
-
-    // 未选中时也显示边框，增加视觉区分
-    val borderColor = if (isSelected) {
-        MaterialTheme.colorScheme.primary
-    } else {
-        if (isDarkTheme) Color(0xFF404040) else Color(0xFFE0E0E0)
-    }
-
-    val textColor = if (isSelected) {
-        MaterialTheme.colorScheme.onPrimaryContainer
-    } else {
-        MaterialTheme.colorScheme.onSurface
-    }
+    // 所有比例选项使用相同底色和边框，选中状态只由右侧勾号表示。
+    val borderColor = if (isDarkTheme) Color(0xFF404040) else Color(0xFFE0E0E0)
+    val textColor = MaterialTheme.colorScheme.onSurface
 
     val itemHeight = if (isAutoItem) 48.dp else 64.dp
 
@@ -338,13 +315,13 @@ private fun ImageRatioItem(
         modifier = modifier
             .height(itemHeight)
             .border(
-                width = if (isSelected) 2.dp else 1.dp,
+                width = 1.dp,
                 color = borderColor,
                 shape = RoundedCornerShape(14.dp)
             ),
         shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = backgroundColor),
-        elevation = CardDefaults.cardElevation(defaultElevation = if (isSelected) 2.dp else 0.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
         onClick = onClick
     ) {
         Row(
@@ -364,7 +341,7 @@ private fun ImageRatioItem(
                         painter = painterResource(R.drawable.ic_gpt_sparkle),
                         contentDescription = null,
                         modifier = Modifier.size(18.dp),
-                        tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
                         text = stringResource(R.string.image_ratio_auto),
@@ -378,7 +355,7 @@ private fun ImageRatioItem(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    RatioPreviewBox(ratio = ratio, isSelected = isSelected)
+                    RatioPreviewBox(ratio = ratio)
                     Column {
                         Text(
                             text = ratio.displayName,
@@ -415,7 +392,6 @@ private fun ImageRatioItem(
 @Composable
 private fun RatioPreviewBox(
     ratio: ImageRatio,
-    isSelected: Boolean,
     modifier: Modifier = Modifier
 ) {
     val aspectRatio = ratio.width.toFloat() / ratio.height.toFloat()
@@ -427,11 +403,7 @@ private fun RatioPreviewBox(
         (maxSize * aspectRatio) to maxSize
     }
 
-    val boxColor = if (isSelected) {
-        MaterialTheme.colorScheme.primary
-    } else {
-        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-    }
+    val boxColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
 
     Box(
         modifier = modifier

@@ -807,6 +807,22 @@ fun ChatMessagesList(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalAlignment = Alignment.Start
                                 ) {
+                                    // 复用原图片页的图片气泡和预览能力，文本、图片共用同一个列表。
+                                    if (!message.imageUrls.isNullOrEmpty()) {
+                                        com.android.everytalk.ui.screens.ImageGeneration.AiMessageItem(
+                                            message = message, text = text, maxWidth = bubbleMaxWidth,
+                                            onLongPress = { msg, offset ->
+                                                contextMenuMessage = msg
+                                                contextMenuPressOffset = offset
+                                                isContextMenuVisible = true
+                                            },
+                                            onOpenPreview = { model -> onImageClick(model.toString()) },
+                                            isStreaming = isStreaming,
+                                            onImageLoaded = onImageLoaded,
+                                            scrollStateManager = scrollStateManager,
+                                            viewModel = viewModel,
+                                        )
+                                    } else
                                     AiMessageItem(
                                         message = message,
                                         text = text,

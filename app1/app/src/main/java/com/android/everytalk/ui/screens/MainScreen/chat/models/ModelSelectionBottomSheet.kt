@@ -390,6 +390,7 @@ fun ModelSelectionBottomSheet(
                             }
 
                             ListItem(
+                                leadingContent = { com.android.everytalk.ui.components.ModelIcon(modelConfig.model, Modifier.size(32.dp)) },
                                 headlineContent = {
                                     Text(
                                         text = modelConfig.name.ifEmpty { modelConfig.model },
@@ -511,15 +512,9 @@ fun PlatformSelectionDialog(
                             trailingContent = {
                                 if (tempSelectedPlatform == platform) {
                                     Icon(
-                                        painter = painterResource(R.drawable.ic_check_circle),
+                                        painter = painterResource(R.drawable.ic_check),
                                         contentDescription = stringResource(R.string.state_selected),
                                         tint = MaterialTheme.colorScheme.primary
-                                    )
-                                } else {
-                                    Icon(
-                                        painter = painterResource(R.drawable.ic_circle_empty),
-                                        contentDescription = stringResource(R.string.state_unselected),
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                             }

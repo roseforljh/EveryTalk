@@ -1106,6 +1106,8 @@
     <string name="code_label">代码</string>
     <string name="code_copy">复制代码</string>
     <string name="code_preview">预览</string>
+    <string name="code_open_browser">在默认浏览器中打开</string>
+    <string name="code_open_browser_failed">无法打开预览，请检查设备是否安装浏览器后重试。</string>
     <string name="code_open_fullscreen_preview">打开全屏网页预览</string>
     <string name="code_share_chooser">分享代码</string>
 
@@ -2054,7 +2056,6 @@
     <string name="agent_servers_tag">Agent · %1$d 台</string>
     <string name="agent_tasks">任务</string>
     <string name="agent_tasks_open">查看任务，共 %1$d 台服务器</string>
-    <string name="agent_tasks_close">关闭任务</string>
     <string name="agent_task_main">主任务</string>
     <string name="agent_task_waiting">等待执行</string>
     <string name="agent_task_running">执行中</string>

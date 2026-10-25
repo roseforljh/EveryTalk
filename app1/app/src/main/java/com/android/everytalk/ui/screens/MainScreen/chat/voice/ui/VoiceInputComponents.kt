@@ -168,7 +168,6 @@ fun VoiceContentDisplay(
     userText: String,
     assistantText: String,
     currentVolume: Float,
-    waveCircleColor: Color,
     contentColor: Color,
     modifier: Modifier = Modifier
 ) {
@@ -179,11 +178,15 @@ fun VoiceContentDisplay(
         verticalArrangement = Arrangement.Center,
         modifier = modifier.fillMaxSize()
     ) {
-        // 中央波形动画
-        VoiceWaveAnimation(
-            isRecording = isRecording,
-            color = waveCircleColor,
-            currentVolume = currentVolume
+        // 中央语音球：录音时跟随麦克风音量；处理中尚无回复时脉冲等待，拿到回复后进入说话态。
+        VoiceOrb(
+            state = when {
+                isRecording -> VoiceOrbState.LISTENING
+                isProcessing && assistantText.isEmpty() -> VoiceOrbState.CONNECTING
+                isProcessing -> VoiceOrbState.SPEAKING
+                else -> VoiceOrbState.IDLE
+            },
+            volume = if (isRecording) currentVolume else 0f,
         )
         
         // 处理状态指示器

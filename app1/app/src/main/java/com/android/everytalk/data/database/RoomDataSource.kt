@@ -2,6 +2,8 @@ package com.android.everytalk.data.database
 
 import android.content.Context
 import androidx.room.withTransaction
+import com.android.everytalk.data.DataClass.isBuiltinModel
+import com.android.everytalk.data.DataClass.withBuiltinImageModels
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.VoiceBackendConfig
@@ -90,14 +92,18 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
     }
 
     suspend fun loadImageGenApiConfigs(): List<ApiConfig> {
-        return apiConfigDao.getConfigs(isImageGen = true).map { it.toApiConfig() }
+        return withBuiltinImageModels(apiConfigDao.getConfigs(isImageGen = true).map { it.toApiConfig() })
     }
 
     suspend fun saveImageGenApiConfigs(configs: List<ApiConfig>) = database.withTransaction {
-        val removed = apiConfigDao.getConfigs(true).map { it.id }.toSet() - configs.map { it.id }.toSet()
+        val stored = apiConfigDao.getConfigs(true).map { it.toApiConfig() }
+        // 清空和导入同样保留已有内置 ID；缺失的模型再用稳定 ID 补齐。
+        val protected = stored.filter { it.isBuiltinModel() && configs.none { candidate -> candidate.id == it.id } }
+        val complete = withBuiltinImageModels(configs + protected)
+        val removed = stored.map { it.id }.toSet() - complete.map { it.id }.toSet()
         apiConfigDao.replaceConfigs(
             isImageGen = true,
-            configs = configs.map { it.toEntity(isImageGenConfig = true) },
+            configs = complete.map { it.toEntity(isImageGenConfig = true) },
         )
         recordRemovedSettings("api_configs", removed)
         captureSyncSettings()
@@ -264,13 +270,10 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
         return loadChatHistoryResult().sessions.map(LoadedHistorySession::messages)
     }
 
-    suspend fun loadChatHistoryResult(): SessionHistoryLoadResult {
-        return loadSessionsResult(isImageGeneration = false)
-    }
+    /** null 读取所有旧会话，保持原会话 ID 和图片附件；无需批量迁移或重写正文。 */
+    suspend fun loadChatHistoryResult(): SessionHistoryLoadResult = loadSessionsResult(isImageGeneration = null)
 
-    suspend fun loadChatHistoryPreviewResult(): SessionHistoryLoadResult {
-        return loadSessionPreviewsResult(isImageGeneration = false)
-    }
+    suspend fun loadChatHistoryPreviewResult(): SessionHistoryLoadResult = loadSessionPreviewsResult(isImageGeneration = null)
 
     suspend fun saveChatHistory(
         history: List<List<Message>>,
@@ -307,14 +310,17 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
     }
 
     suspend fun clearChatHistory() {
-        chatDao.clearAllSessions(isImageGen = false)
+        database.withTransaction {
+            chatDao.clearAllSessions(isImageGen = false)
+            chatDao.clearAllSessions(isImageGen = true)
+        }
     }
 
     suspend fun clearImageGenerationHistory() {
         chatDao.clearAllSessions(isImageGen = true)
     }
 
-    private suspend fun loadSessionsResult(isImageGeneration: Boolean): SessionHistoryLoadResult {
+    private suspend fun loadSessionsResult(isImageGeneration: Boolean?): SessionHistoryLoadResult {
         val loadedSessions = mutableListOf<LoadedHistorySession>()
         val failedSessionIds = linkedSetOf<String>()
         val sessions = chatDao.getAllSessions(isImageGeneration)
@@ -340,7 +346,7 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
     }
 
     /** 启动只加载标量字段，禁止触发消息 JSON 的批量反序列化。 */
-    private suspend fun loadSessionPreviewsResult(isImageGeneration: Boolean): SessionHistoryLoadResult {
+    private suspend fun loadSessionPreviewsResult(isImageGeneration: Boolean?): SessionHistoryLoadResult {
         val sessions = chatDao.getAllSessions(isImageGeneration)
             .filterNot { it.id in LAST_OPEN_SESSION_IDS }
         val messagesBySession = chatDao.getLightweightMessagesForMode(isImageGeneration)
@@ -452,7 +458,7 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
         protectedSessionIds: Set<String>,
     ) {
         val effectiveProtectedSessionIds = protectedSessionIds
-        val existingSessions = chatDao.getAllSessions(isImageGeneration)
+        val existingSessions = chatDao.getAllSessions(if (isImageGeneration) true else null)
         val existingSessionsById = existingSessions.associateBy(ChatSessionEntity::id)
 
         history.forEach { messages ->
@@ -565,11 +571,14 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
 
     // --- Pinned Items ---
     suspend fun loadPinnedTextIds(): Set<String> {
-        return settingsDao.getPinnedIds(isImageGen = false).toSet()
+        return (settingsDao.getPinnedIds(isImageGen = false) + settingsDao.getPinnedIds(isImageGen = true)).toSet()
     }
 
     suspend fun savePinnedTextIds(ids: Set<String>) {
-        savePinnedIds(ids, isImageGen = false)
+        database.withTransaction {
+            savePinnedIds(emptySet(), isImageGen = true)
+            savePinnedIds(ids, isImageGen = false)
+        }
     }
 
     suspend fun loadPinnedImageIds(): Set<String> {
@@ -600,7 +609,7 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
 
     /** 将现有本地设置投影为可同步记录；生图会话通过会话白名单自然排除。 */
     private suspend fun refreshSyncableUserSettings(kind: String) {
-        val sessions = chatDao.getAllSessions(false).filterNot { it.id in LAST_OPEN_SESSION_IDS }.associateBy { it.id }
+        val sessions = chatDao.getAllSessions(null).filterNot { it.id in LAST_OPEN_SESSION_IDS }.associateBy { it.id }
         val knownUuids = sessions.values.mapTo(hashSetOf()) { it.uuid }
         val snapshots = buildList {
             if (kind == "group_members") settingsDao.getConversationGroups().forEach { group ->

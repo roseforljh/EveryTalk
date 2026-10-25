@@ -46,6 +46,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalView
@@ -103,10 +104,10 @@ internal fun ComputerAddCard(
     val borderColor = appDialogBorderColor()
     val contentColor = appDialogContentColor()
     val choiceColors = FilterChipDefaults.filterChipColors(
-        containerColor = dialogBackground,
+        containerColor = Color.Transparent,
         labelColor = contentColor,
-        selectedContainerColor = contentColor,
-        selectedLabelColor = dialogBackground,
+        selectedContainerColor = Color.Transparent,
+        selectedLabelColor = contentColor,
         disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
         disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
     )
@@ -176,11 +177,15 @@ internal fun ComputerAddCard(
                             selected = form.provider == ComputerProvider.SSH,
                             onClick = { onFormChange(form.copy(provider = ComputerProvider.SSH)) },
                             label = { Text("SSH / VPS") }, enabled = !isBusy, colors = choiceColors,
+                            border = null,
+                            leadingIcon = if (form.provider == ComputerProvider.SSH) { { Icon(painterResource(R.drawable.ic_check), stringResource(R.string.state_selected)) } } else null,
                         )
                         FilterChip(
                             selected = form.provider == ComputerProvider.CLOUDFLARE,
                             onClick = { onFormChange(form.copy(provider = ComputerProvider.CLOUDFLARE)) },
                             label = { Text("Cloudflare") }, enabled = !isBusy, colors = choiceColors,
+                            border = null,
+                            leadingIcon = if (form.provider == ComputerProvider.CLOUDFLARE) { { Icon(painterResource(R.drawable.ic_check), stringResource(R.string.state_selected)) } } else null,
                         )
                     }
 
@@ -276,6 +281,8 @@ internal fun ComputerAddCard(
                             selected = form.authKind == ComputerAuthKind.PASSWORD,
                             onClick = { onFormChange(form.copy(authKind = ComputerAuthKind.PASSWORD)) },
                             label = { Text(stringResource(R.string.computer_auth_password)) },
+                            border = null,
+                            leadingIcon = if (form.authKind == ComputerAuthKind.PASSWORD) { { Icon(painterResource(R.drawable.ic_check), stringResource(R.string.state_selected)) } } else null,
                             enabled = !isBusy,
                             shape = AppDialogTextFieldShape,
                             colors = choiceColors,
@@ -285,6 +292,8 @@ internal fun ComputerAddCard(
                             selected = form.authKind == ComputerAuthKind.PRIVATE_KEY,
                             onClick = { onFormChange(form.copy(authKind = ComputerAuthKind.PRIVATE_KEY)) },
                             label = { Text(stringResource(R.string.computer_auth_private_key)) },
+                            border = null,
+                            leadingIcon = if (form.authKind == ComputerAuthKind.PRIVATE_KEY) { { Icon(painterResource(R.drawable.ic_check), stringResource(R.string.state_selected)) } } else null,
                             enabled = !isBusy,
                             shape = AppDialogTextFieldShape,
                             colors = choiceColors,

@@ -1,5 +1,7 @@
 package com.android.everytalk.ui.screens.settings
 
+import com.android.everytalk.ui.theme.AppInputFieldShape
+
 import androidx.annotation.StringRes
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateFloat
@@ -91,12 +93,17 @@ import com.android.everytalk.data.DataClass.thinkingLevelOptions
 import com.android.everytalk.data.DataClass.validateAutoContextCompressionThreshold
 import com.android.everytalk.data.DataClass.validateModelTokenLimits
 import com.android.everytalk.data.DataClass.withUserTokenLimits
+import com.android.everytalk.data.DataClass.inputModalities
+import com.android.everytalk.data.DataClass.outputModalities
+import com.android.everytalk.data.DataClass.effectiveModelChannel
+import com.android.everytalk.ui.components.ModelIcon
 import com.android.everytalk.ui.components.dialog.AppDialogButtonShape
 import com.android.everytalk.ui.components.dialog.AppDialogShape
 import com.android.everytalk.ui.components.dialog.appDialogBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogContainerColor
 import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.components.dialog.appDialogSubtextColor
+import com.android.everytalk.ui.components.dialog.appDialogTextFieldDefaultBorderColor
 import com.android.everytalk.ui.components.popup.AppFloatingCardElevation
 import com.android.everytalk.ui.components.popup.AppFloatingCardShape
 import com.android.everytalk.ui.components.popup.appFloatingCardBorderColor
@@ -320,7 +327,7 @@ internal fun ModelParametersDialog(
     val coroutineScope = rememberCoroutineScope()
     var workingConfig by remember(config) { mutableStateOf(config) }
     var protocol by remember(config.id, config.channel) {
-        mutableStateOf(modelParameterProtocol(config.channel))
+        mutableStateOf(modelParameterProtocol(config.effectiveModelChannel()))
     }
     var selectedValue by remember(config.id, config.channel, config.modelParameters) {
         mutableStateOf(
@@ -361,6 +368,9 @@ internal fun ModelParametersDialog(
     var errorText by remember(config.id) { mutableStateOf<String?>(null) }
     var isAutoLoading by remember(config.id) { mutableStateOf(false) }
     val resolvedCapability = workingConfig.modelParameters.resolvedCapability
+    val hasTextOutput = "text" in workingConfig.outputModalities()
+    val hasImageOutput = "image" in workingConfig.outputModalities()
+    val hasReasoning = resolvedCapability?.supportsReasoning != false
     val menuOptions = thinkingLevelMenuOptions(
         protocol,
         selectedValue,
@@ -376,6 +386,7 @@ internal fun ModelParametersDialog(
         provider = workingConfig.provider,
         channel = modelParameterChannel(protocol),
         model = workingConfig.model,
+        isImageMode = hasImageOutput && !hasTextOutput,
     )
     val refreshRotation = if (isAutoLoading) {
         val transition = rememberInfiniteTransition(label = "模型参数加载旋转")
@@ -444,7 +455,7 @@ internal fun ModelParametersDialog(
                     autoContextCompressionEnabled = autoCompressionEnabled,
                     autoContextCompressionThresholdPercent = compressionThreshold,
                 ),
-                selectedValue = selectedValue,
+                selectedValue = if (hasReasoning && hasTextOutput) selectedValue else "none",
             )
             if (protocol == ModelParameterProtocol.OPENAI_COMPATIBLE) {
                 updated.openAICompatibleRequestParameters()
@@ -459,8 +470,8 @@ internal fun ModelParametersDialog(
         }
         onConfirm(
             workingConfig.copy(
-                channel = modelParameterChannel(protocol),
-                modelParameters = update.first,
+                // 协议只覆盖当前模型，不改变原配置组的接口与密钥分组。
+                modelParameters = update.first.copy(apiProtocolOverride = protocol),
             )
                 .withUserTokenLimits(update.second)
         )
@@ -478,6 +489,8 @@ internal fun ModelParametersDialog(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                ModelIcon(config.model, Modifier.size(36.dp))
+                Spacer(Modifier.width(10.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = stringResource(R.string.model_parameters_title),
@@ -519,6 +532,8 @@ internal fun ModelParametersDialog(
                     .heightIn(max = 520.dp)
                     .verticalScroll(rememberScrollState())
             ) {
+                ModelCapabilityFields(workingConfig) { workingConfig = it }
+                HorizontalDivider(color = borderColor.copy(alpha = 0.55f))
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -542,10 +557,9 @@ internal fun ModelParametersDialog(
                                 if (selectedProtocol != protocol) {
                                     protocol = selectedProtocol
                                     workingConfig = workingConfig.copy(
-                                        channel = modelParameterChannel(selectedProtocol),
-                                        // 自动获取的能力与协议和接口绑定，切换协议后必须重新获取。
+                                        // 目录模态属于模型事实，切换协议后保留；只更换当前模型的接口格式。
                                         modelParameters = workingConfig.modelParameters.copy(
-                                            resolvedCapability = null,
+                                            apiProtocolOverride = selectedProtocol,
                                         ),
                                     )
                                     val supportedValues = thinkingLevelOptions(selectedProtocol)
@@ -572,6 +586,9 @@ internal fun ModelParametersDialog(
                     )
                 }
                 HorizontalDivider(color = borderColor.copy(alpha = 0.55f))
+                if (hasImageOutput) ImageModelParameterFields(workingConfig) { workingConfig = it }
+                if (hasTextOutput) {
+                // 思考设置常驻；是否发送由目录能力和所选程度共同决定，不再增加能力勾选。
                 ModelParameterRow(
                     label = stringResource(R.string.model_parameters_reasoning_effort),
                     supportingText = stringResource(R.string.model_parameters_reasoning_strength),
@@ -598,6 +615,15 @@ internal fun ModelParametersDialog(
                             errorText = null
                         },
                     )
+                }
+                if (protocol == ModelParameterProtocol.ANTHROPIC || protocol == ModelParameterProtocol.GEMINI) {
+                    ModelParameterRow(label = "思考预算", supportingText = "tokens · 仅预算模式使用") {
+                        TokenValueField(value = workingConfig.modelParameters.thinkingBudget.toString(), contentDescription = "思考预算 tokens", onValueChange = { value ->
+                            value.toIntOrNull()?.takeIf { it >= 1024 }?.let { budget ->
+                                workingConfig = workingConfig.copy(modelParameters = workingConfig.modelParameters.copy(thinkingBudget = budget, reasoningMode = ReasoningMode.BUDGET))
+                            }
+                        })
+                    }
                 }
                 HorizontalDivider(color = borderColor.copy(alpha = 0.55f))
                 ModelParameterRow(
@@ -650,6 +676,7 @@ internal fun ModelParametersDialog(
                         errorText = null
                     },
                 )
+                }
                 errorText?.let { message ->
                     Spacer(Modifier.height(10.dp))
                     Text(
@@ -810,7 +837,7 @@ private fun TokenValueField(
     contentDescription: String,
     onValueChange: (String) -> Unit,
 ) {
-    val shape = RoundedCornerShape(12.dp)
+    val shape = AppInputFieldShape
     val contentColor = appDialogContentColor()
     BasicTextField(
         value = value,
@@ -845,6 +872,7 @@ private fun TokenValueField(
             .width(148.dp)
             .height(44.dp)
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f), shape)
+            .border(1.dp, appDialogTextFieldDefaultBorderColor(), shape)
             .padding(horizontal = 12.dp)
             .semantics { this.contentDescription = contentDescription },
     )
@@ -948,7 +976,7 @@ private fun ThinkingLevelDropdown(
                 .height(44.dp)
                 .background(
                     MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f),
-                    RoundedCornerShape(12.dp),
+                    AppInputFieldShape,
                 )
                 .padding(horizontal = 12.dp)
                 .semantics { contentDescription = dropdownLabel },

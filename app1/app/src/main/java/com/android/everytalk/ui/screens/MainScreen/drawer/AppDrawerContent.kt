@@ -1,4 +1,6 @@
 package com.android.everytalk.ui.screens.MainScreen
+
+import com.android.everytalk.ui.theme.AppInputFieldShape
 import com.android.everytalk.statecontroller.*
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateContentSize
@@ -551,7 +553,7 @@ fun AppDrawerContent(
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth(),
                                 placeholder = { Text(stringResource(R.string.drawer_conversation_name_hint)) },
-                                shape = RoundedCornerShape(12.dp),
+                                shape = AppInputFieldShape,
                                 colors = appDialogTextFieldColors()
                             )
                         }

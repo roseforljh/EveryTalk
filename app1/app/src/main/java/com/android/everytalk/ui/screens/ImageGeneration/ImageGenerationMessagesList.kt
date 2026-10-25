@@ -141,6 +141,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import coil3.size.Size
+import kotlin.math.PI
+import kotlin.math.cos
 import kotlin.math.min
 
 @Composable
@@ -162,5 +164,53 @@ fun ImageGenerationLoadingView() {
             modifier = Modifier.fillMaxWidth(),
             onVisibilityChanged = {},
         )
+    }
+}
+
+/**
+ * 生图等待占位，参考 assistant-ui ImageGeneration：按选定比例的卡片里排 8×8 小点，
+ * 沿对角线依次呼吸（每格错开 90ms，周期 2s），右上角标出比例。时钟只在绘制阶段读取。
+ */
+@Composable
+internal fun ImageGeneratingPlaceholder(
+    ratio: com.android.everytalk.data.DataClass.ImageRatio,
+    modifier: Modifier = Modifier,
+) {
+    val aspect = if (ratio.isAuto) 1f else ratio.width.toFloat() / ratio.height
+    val clock = rememberInfiniteTransition(label = "image-dots").animateFloat(
+        initialValue = 0f,
+        targetValue = 2000f,
+        animationSpec = infiniteRepeatable(tween(2000, easing = LinearEasing)),
+        label = "image-dots-clock",
+    )
+    val dotColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
+    Box(
+        modifier
+            .padding(top = 8.dp)
+            .widthIn(max = 300.dp)
+            .fillMaxWidth()
+            .aspectRatio(aspect)
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+    ) {
+        Canvas(Modifier.fillMaxSize().padding(24.dp)) {
+            val t = clock.value
+            val cellW = size.width / 8
+            val cellH = size.height / 8
+            val radius = 2.dp.toPx()
+            for (row in 0 until 8) for (col in 0 until 8) {
+                val phase = (t - (row + col) * 90f) / 2000f * 2f * PI.toFloat()
+                drawCircle(dotColor, radius, Offset(cellW * (col + 0.5f), cellH * (row + 0.5f)), 0.75f + 0.25f * cos(phase))
+            }
+        }
+        if (!ratio.isAuto) {
+            Text(
+                ratio.displayName,
+                modifier = Modifier.align(Alignment.TopEnd).padding(10.dp),
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }

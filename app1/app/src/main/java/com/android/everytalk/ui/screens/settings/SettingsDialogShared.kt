@@ -1,4 +1,6 @@
 package com.android.everytalk.ui.screens.settings
+
+import com.android.everytalk.ui.theme.AppInputFieldShape
 import com.android.everytalk.statecontroller.*
 
 import android.util.Log
@@ -127,5 +129,5 @@ val DialogTextFieldColors
             disabledContainerColor = Color.Transparent
         )
     }
-val DialogShape = RoundedCornerShape(16.dp)
+val DialogShape = AppInputFieldShape
 

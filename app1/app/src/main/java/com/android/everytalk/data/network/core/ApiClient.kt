@@ -568,6 +568,7 @@ object ApiClient {
         
         val imgReq = chatRequest.imageGenRequest
             ?: throw IOException("缺少 imageGenRequest 配置，无法发起图像生成。")
+        require(imgReq.apiFormat != "unsupported") { "当前 API 协议未接入图片生成，请在 API 配置中选择支持图片生成的接口。" }
 
         android.util.Log.i("ApiClient", "🔄 图像生成强制直连模式启动")
         
@@ -576,9 +577,9 @@ object ApiClient {
                                 imgReq.provider.isNullOrBlank()
         
         // 判断是 Gemini 还是 OpenAI 兼容
-        val isGemini = imgReq.provider?.lowercase()?.contains("gemini") == true ||
+        val isGemini = imgReq.apiFormat?.let { it == "gemini" } ?: (imgReq.provider?.lowercase()?.contains("gemini") == true ||
                        imgReq.model.contains("gemini", ignoreCase = true) ||
-                       imgReq.model.contains("imagen", ignoreCase = true)
+                       imgReq.model.contains("imagen", ignoreCase = true))
         
         // 增加 Seedream 判断
         val isSeedream = imgReq.provider?.lowercase()?.contains("seedream") == true ||
@@ -590,14 +591,14 @@ object ApiClient {
                             imgReq.apiAddress.contains("siliconflow.cn")
 
         // 增加 Qwen 图像编辑判断（Modal 部署的 Qwen 图像编辑 API）
-        val isQwenEdit = imgReq.model.contains("qwen-image-edit", ignoreCase = true) ||
+        val isQwenEdit = imgReq.apiFormat?.let { it == "qwen" } ?: (imgReq.model.contains("qwen-image-edit", ignoreCase = true) ||
                          imgReq.model.contains("qwen-edit", ignoreCase = true) ||
-                         imgReq.model.contains("qwen_edit", ignoreCase = true)
+                         imgReq.model.contains("qwen_edit", ignoreCase = true))
 
         // 增加 Modal Z-Image-Turbo 判断（无需密钥）
-        val isModalZImage = imgReq.model.contains("z-image-turbo", ignoreCase = true) ||
+        val isModalZImage = imgReq.apiFormat?.let { it == "modal" } ?: (imgReq.model.contains("z-image-turbo", ignoreCase = true) ||
                             imgReq.model.contains("z_image_turbo", ignoreCase = true) ||
-                            imgReq.apiAddress.contains("z-image-turbo", ignoreCase = true)
+                            imgReq.apiAddress.contains("z-image-turbo", ignoreCase = true))
 
         // 配置注入逻辑：
         // 1. Modal Z-Image-Turbo / Qwen Edit -> 不注入配置，使用 BuildConfig 中的 URL
@@ -657,7 +658,7 @@ object ApiClient {
             when {
                 isModalZImage -> {
                     // Modal Z-Image-Turbo 无需密钥，使用 GET 请求
-                    val modalUrls = com.android.everytalk.BuildConfig.VITE_API_URLS
+                    val modalUrls = (effectiveImgReq.apiAddress.takeIf { !isDefaultProvider && it.isNotBlank() } ?: com.android.everytalk.BuildConfig.VITE_API_URLS)
                         .split(",")
                         .map { it.trim() }
                         .filter { it.isNotBlank() }
@@ -669,11 +670,11 @@ object ApiClient {
                 }
                 isQwenEdit -> {
                     // Qwen 图像编辑需要输入图片和专用 Modal API
-                    val qwenUrls = com.android.everytalk.BuildConfig.QWEN_EDIT_API_URLS
+                    val qwenUrls = (effectiveImgReq.apiAddress.takeIf { !isDefaultProvider && it.isNotBlank() } ?: com.android.everytalk.BuildConfig.QWEN_EDIT_API_URLS)
                         .split(",")
                         .map { it.trim() }
                         .filter { it.isNotBlank() }
-                    val qwenSecret = com.android.everytalk.BuildConfig.QWEN_EDIT_API_SECRET
+                    val qwenSecret = if (isDefaultProvider) com.android.everytalk.BuildConfig.QWEN_EDIT_API_SECRET else effectiveImgReq.apiKey
                     
                     // 从 chatRequest 中提取输入图片的 Base64
                     val inputImageBase64 = extractInputImageBase64(chatRequest)

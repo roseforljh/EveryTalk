@@ -51,7 +51,10 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.ui.graphics.asImageBitmap
@@ -158,8 +161,22 @@ internal fun AiMessageItem(
     onImageLoaded: () -> Unit,
     scrollStateManager: ChatScrollStateManager,
     viewModel: AppViewModel,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    revealOnArrival: Boolean = false,
 ) {
+    // 刚生成的图片先隐藏，加载完成后 1 秒内从模糊淡入到清晰；1.5 秒内未回调也强制显示，避免图片一直不可见。
+    var imageRevealed by remember(message.id) { mutableStateOf(!revealOnArrival) }
+    LaunchedEffect(message.id, revealOnArrival) {
+        if (revealOnArrival) {
+            kotlinx.coroutines.delay(1500)
+            imageRevealed = true
+        }
+    }
+    val revealProgress by animateFloatAsState(
+        targetValue = if (imageRevealed) 1f else 0f,
+        animationSpec = tween(1000, easing = LinearOutSlowInEasing),
+        label = "image-reveal",
+    )
     val shape = androidx.compose.ui.graphics.RectangleShape
     val aiReplyMessageDescription = stringResource(id = R.string.ai_reply_message)
     val streamingRenderStateSource = remember(message.id, viewModel) {
@@ -266,6 +283,11 @@ internal fun AiMessageItem(
                         if (text.isNotBlank()) {
                             Spacer(modifier = Modifier.height(8.dp))
                         }
+                        Box(
+                            Modifier
+                                .graphicsLayer { alpha = revealProgress }
+                                .then(if (revealProgress < 1f) Modifier.blur((24f * (1f - revealProgress)).dp) else Modifier)
+                        ) {
                         AttachmentsContent(
                             attachments = message.imageUrls.map { urlStr ->
                                 val safeUri = try {
@@ -291,12 +313,16 @@ internal fun AiMessageItem(
                             onEditRequest = {},
                             onRegenerateRequest = {},
                             onLongPress = { msg, offset -> onLongPress(msg, offset) },
-                            onImageLoaded = onImageLoaded,
+                            onImageLoaded = {
+                                imageRevealed = true
+                                onImageLoaded()
+                            },
                             bubbleColor = MaterialTheme.chatColors.aiBubble,
                             scrollStateManager = scrollStateManager,
                             isAiGenerated = true,
                             onImageClick = { url -> onOpenPreview(url) }
                         )
+                        }
                     }
                     if (!shouldPreferStreamingContent) {
                         Row(

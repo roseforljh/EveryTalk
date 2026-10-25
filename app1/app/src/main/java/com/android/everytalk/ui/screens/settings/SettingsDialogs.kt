@@ -1,4 +1,6 @@
 package com.android.everytalk.ui.screens.settings
+
+import com.android.everytalk.ui.theme.AppInputFieldShape
 import com.android.everytalk.statecontroller.*
 
 import android.util.Log
@@ -108,7 +110,7 @@ internal fun EditExternalWebSearchProviderDialog(
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 Surface(
-                    shape = RoundedCornerShape(16.dp),
+                    shape = AppInputFieldShape,
                     color = provider.accentColor.copy(alpha = 0.12f),
                     border = BorderStroke(1.dp, provider.accentColor.copy(alpha = 0.35f)),
                 ) {

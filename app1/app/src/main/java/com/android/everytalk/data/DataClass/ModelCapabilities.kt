@@ -33,6 +33,8 @@ data class ModelCapabilityCandidate(
     val source: ModelCapabilitySource,
     val cachedSource: ModelCapabilitySource? = null,
     val sourceUpdatedAt: Long? = null,
+    val supportsTemperature: Boolean? = null,
+    val supportsToolCalls: Boolean? = null,
 )
 
 @Serializable
@@ -59,6 +61,8 @@ data class ResolvedModelCapability(
     val reasoningEfforts: Set<String> = emptySet(),
     val reasoningSource: ModelCapabilitySource? = null,
     val reasoningUpdatedAt: Long? = null,
+    val supportsTemperature: Boolean? = null,
+    val supportsToolCalls: Boolean? = null,
 )
 
 fun normalizeModelEndpointIdentity(apiAddress: String): String {
@@ -95,7 +99,7 @@ fun resolveModelCapability(
             candidate.endpointIdentity == null ||
                 normalizeModelEndpointIdentity(candidate.endpointIdentity) == endpointIdentity
         }
-        .sortedBy { sourcePriority(it.source) }
+        .sortedBy { sourcePriority(it.cachedSource ?: it.source) }
         .toList()
 
     val contextCandidate = applicableCandidates.firstOrNull {
@@ -133,8 +137,8 @@ fun resolveModelCapability(
         maxInputUpdatedAt = maxInputCandidate?.sourceUpdatedAt,
         maxOutputSource = maxOutputCandidate?.source ?: ModelCapabilitySource.CONSERVATIVE_DEFAULT,
         maxOutputUpdatedAt = maxOutputCandidate?.sourceUpdatedAt,
-        inputModalities = modalityCandidate?.inputModalities.orEmpty(),
-        outputModalities = modalityCandidate?.outputModalities.orEmpty(),
+        inputModalities = applicableCandidates.firstOrNull { it.inputModalities.isNotEmpty() }?.inputModalities.orEmpty(),
+        outputModalities = applicableCandidates.firstOrNull { it.outputModalities.isNotEmpty() }?.outputModalities.orEmpty(),
         modalitiesSource = modalityCandidate?.source,
         modalitiesUpdatedAt = modalityCandidate?.sourceUpdatedAt,
         supportsReasoning = reasoningCandidate?.supportsReasoning
@@ -142,18 +146,69 @@ fun resolveModelCapability(
         reasoningEfforts = reasoningCandidate?.reasoningEfforts.orEmpty(),
         reasoningSource = reasoningCandidate?.source,
         reasoningUpdatedAt = reasoningCandidate?.sourceUpdatedAt,
+        supportsTemperature = applicableCandidates.firstOrNull { it.supportsTemperature != null }?.supportsTemperature,
+        supportsToolCalls = applicableCandidates.firstOrNull { it.supportsToolCalls != null }?.supportsToolCalls,
     )
 }
 
 private fun sourcePriority(source: ModelCapabilitySource): Int = when (source) {
     ModelCapabilitySource.USER_OVERRIDE -> 0
-    ModelCapabilitySource.LIVE_ENDPOINT -> 1
-    ModelCapabilitySource.PI_CATALOG -> 2
-    ModelCapabilitySource.LOCAL_CACHE -> 3
-    ModelCapabilitySource.COMMUNITY_CATALOG -> 4
+    ModelCapabilitySource.COMMUNITY_CATALOG -> 1
+    ModelCapabilitySource.LIVE_ENDPOINT -> 2
+    ModelCapabilitySource.PI_CATALOG -> 3
+    ModelCapabilitySource.LOCAL_CACHE -> 4
     ModelCapabilitySource.FAMILY_FALLBACK -> 5
     ModelCapabilitySource.CONSERVATIVE_DEFAULT -> 6
     ModelCapabilitySource.OFFICIAL_CATALOG -> Int.MAX_VALUE
+}
+
+/** 与 models.dev 一致区分输入和输出；旧配置在无目录数据时保持原本的文本/图片用途。 */
+fun ApiConfig.inputModalities(): Set<String> = normalizeModelModalities(
+    modelParameters.inputModalities ?: modelParameters.resolvedCapability?.inputModalities.orEmpty()
+).ifEmpty { setOf("text") }
+
+fun ApiConfig.outputModalities(): Set<String> = normalizeModelModalities(
+    modelParameters.outputModalities ?: modelParameters.resolvedCapability?.outputModalities.orEmpty()
+).ifEmpty { setOf(if (modalityType == ModalityType.IMAGE) "image" else "text") }
+
+fun normalizeModelModalities(values: Set<String>): Set<String> = values.mapTo(linkedSetOf()) {
+    val value = it.trim().lowercase()
+    when {
+        value == "application/pdf" -> "pdf"
+        value.startsWith("image/") || value.startsWith("audio/") || value.startsWith("video/") -> value.substringBefore('/')
+        else -> value
+    }
+}.filterTo(linkedSetOf()) { it.isNotEmpty() }
+
+/**
+ * 图片复用 API 地址和协议，不再读取独立的图片协议覆盖。
+ * 只有内置服务和明确的 Modal 地址使用专用传输；代理中的模型名不能改变 API 协议。
+ */
+fun ApiConfig.imageApiFormat(): String {
+    val qwenEdit = model.contains("qwen", true) && model.contains("edit", true)
+    if (isBuiltinModel()) return when (model) {
+        "qwen-image-edit-modal" -> "qwen"
+        "z-image-turbo-modal" -> "modal"
+        else -> "openai"
+    }
+    val endpoint = address.trim().removeSuffix("#").lowercase()
+    if ("modal.run" in endpoint) return if (qwenEdit) "qwen" else "modal"
+    if (Regex("/images/(generations|edits)(?:[/?]|$)").containsMatchIn(endpoint)) return "openai"
+    if (Regex("/v1beta(?:[/?]|$)").containsMatchIn(endpoint) || "generativelanguage.googleapis.com" in endpoint) return "gemini"
+    return when (modelParameterProtocol(effectiveModelChannel())) {
+        ModelParameterProtocol.GEMINI -> "gemini"
+        ModelParameterProtocol.OPENAI_COMPATIBLE -> "openai"
+        // 这两个原生接口目前没有接入图片生成，不能偷偷改用 OpenAI Images。
+        ModelParameterProtocol.ANTHROPIC, ModelParameterProtocol.CODEX -> "unsupported"
+    }
+}
+
+fun imageParameterKeys(format: String): Set<String> = when (format) {
+    "gemini" -> setOf("imageSize", "aspectRatio")
+    "qwen" -> setOf("inferenceSteps", "guidanceScale")
+    "modal" -> setOf("imageSize", "aspectRatio", "inferenceSteps", "guidanceScale")
+    "unsupported" -> emptySet()
+    else -> setOf("imageSize", "quality", "batchSize")
 }
 
 fun ApiConfig.withModelCapabilityDefaults(

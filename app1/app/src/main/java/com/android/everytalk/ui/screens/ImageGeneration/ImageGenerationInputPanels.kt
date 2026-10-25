@@ -127,7 +127,8 @@ internal fun ImageFunctionPanelContent(
     maxHeight: androidx.compose.ui.unit.Dp = 370.dp,
     isGptImage: Boolean = false,
     currentGptImageQuality: ImageGenCapabilities.GptImageQuality = ImageGenCapabilities.GptImageQuality.AUTO,
-    onShowQualityDialog: () -> Unit = {}
+    onShowQualityDialog: () -> Unit = {},
+    parameterKeys: Set<String>? = null,
 ) {
     val isDark = isSystemInDarkTheme()
     val iconBg = if (isDark) Color(0xFF3B3B3B) else Color(0xFFE8E8E8)
@@ -140,7 +141,7 @@ internal fun ImageFunctionPanelContent(
             .heightIn(max = maxHeight)
             .verticalScroll(rememberScrollState()),
     ) {
-        if (!isQwenEdit) {
+        if (!isQwenEdit && (parameterKeys == null || "imageSize" in parameterKeys || "aspectRatio" in parameterKeys)) {
             ImageFunctionPanelRow(
                 iconRes = R.drawable.ic_aspect_ratio,
                 label = stringResource(R.string.image_ratio_label, selectedImageRatio.displayName),
@@ -150,7 +151,7 @@ internal fun ImageFunctionPanelContent(
                 onClick = onShowRatioDialog
             )
         }
-        if (isGptImage) {
+        if (isGptImage && (parameterKeys == null || "quality" in parameterKeys)) {
             ImageFunctionPanelRow(
                 iconRes = R.drawable.ic_settings_slider,
                 label = stringResource(
@@ -181,7 +182,7 @@ internal fun ImageFunctionPanelContent(
                 onClick = onOpenCamera
             )
         }
-        if (detectedFamily == ImageGenCapabilities.ModelFamily.MODAL_Z_IMAGE && onChangeImageSteps != null) {
+        if (!isQwenEdit && onChangeImageSteps != null && (parameterKeys?.contains("inferenceSteps") ?: (detectedFamily == ImageGenCapabilities.ModelFamily.MODAL_Z_IMAGE))) {
             ImageFunctionPanelRow(
                 iconRes = R.drawable.ic_tuning,
                 label = stringResource(R.string.image_steps_label, currentImageSteps ?: 4),
@@ -191,7 +192,7 @@ internal fun ImageFunctionPanelContent(
                 onClick = onShowStepsDialog
             )
         }
-        if (isQwenEdit && onChangeImageParams != null) {
+        if (isQwenEdit && onChangeImageParams != null && (parameterKeys == null || "inferenceSteps" in parameterKeys || "guidanceScale" in parameterKeys)) {
             ImageFunctionPanelRow(
                 iconRes = R.drawable.ic_tuning,
                 label = stringResource(R.string.image_adjust_parameters),

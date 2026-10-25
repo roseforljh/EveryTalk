@@ -146,7 +146,7 @@ sealed interface ChatListItem {
         override val stableId: String = "${message.id}_reasoning"
     }
 
-    /** 新版有序输出中的一段正式正文。 */
+    /** 一段模型输出文本，包含执行旁白；显示后不再因工具到达而迁入执行区。 */
     data class AiMessageContentSegment(
         val sourceMessageId: String,
         val message: Message,
@@ -243,10 +243,10 @@ internal fun executionTraceForDisplay(trace: List<ExecutionTraceEvent>): List<Ex
 }
 
 /**
- * 找出当前用户指令阶段里、最后一个工具之前的 Content。
+ * 找出执行详情里需要保留的旁白，即当前用户指令阶段最后一个工具之前的 Content。
  *
- * 这类 Content 是模型的执行旁白，应和工具步骤相邻显示；最后一个工具之后的 Content
- * 仍然是正式回答。按用户边界分阶段计算，避免把上一阶段的正文误放进执行区。
+ * 详情中这类 Content 和工具步骤相邻显示；聊天列表中的正文组件不因此迁移。
+ * 最后一个工具之后的 Content 仍然是正式回答。按用户边界分阶段计算，避免混入上一阶段的正文。
  * 向用户提问的工具不算执行步骤：提问前的 Content 是给用户看的回复，不能折叠进执行区。
  */
 private fun executionNarrativeContentIndexes(
@@ -299,13 +299,16 @@ internal fun executionTraceForProcessDisplay(
     }
 }
 
-/** 相邻正文合并，相邻思考和工具合并；每个事件只处理一次，避免长工具链反复复制列表。 */
+/**
+ * 按事件顺序合并相邻正文、相邻思考和工具。
+ * 后续工具只能追加过程段，不能改变已显示正文的类型和段序号，否则 LazyColumn 会重建气泡。
+ * 旁白索引仅用于对齐详情抽屉，聊天正文始终保留在原来的渲染组件中。
+ */
 internal fun orderedAiOutputSegments(
     trace: List<ExecutionTraceEvent>,
-    toolCallWriting: Boolean = false,
 ): List<OrderedAiOutputSegment> {
     val displayTrace = executionTraceForDisplay(trace)
-    val narrativeContentIndexes = executionNarrativeContentIndexes(displayTrace, toolCallWriting)
+    val narrativeContentIndexes = executionNarrativeContentIndexes(displayTrace)
     val result = mutableListOf<OrderedAiOutputSegment>()
     var content = StringBuilder()
     var processEvents = mutableListOf<ExecutionTraceEvent>()
@@ -344,16 +347,10 @@ internal fun orderedAiOutputSegments(
                 result += OrderedAiOutputSegment.UserMessageBoundary(event.messageId)
             }
             is ExecutionTraceEvent.Content -> {
-                if (eventIndex in narrativeContentIndexes) {
-                    flushContent()
-                    if (processEvents.isEmpty()) processStartIndex = processEventIndex
-                    processEvents += event
-                    processEventIndex++
-                } else {
-                    flushProcess(event.startedAtMillis)
-                    if (content.isEmpty()) contentStartedAtMillis = event.startedAtMillis
-                    content.append(event.text)
-                }
+                flushProcess(event.startedAtMillis)
+                if (content.isEmpty()) contentStartedAtMillis = event.startedAtMillis
+                content.append(event.text)
+                if (eventIndex in narrativeContentIndexes) processEventIndex++
             }
             is ExecutionTraceEvent.Reasoning,
             is ExecutionTraceEvent.Tool,

@@ -116,7 +116,7 @@ class ThinkingExecutionTimelineGroupingTest {
     }
 
     @Test
-    fun `工具前旁白进入执行区而最终正文留在执行区之后`() {
+    fun `工具前后正文保持原位且过程按事件顺序插入`() {
         val segments = orderedAiOutputSegments(
             listOf(
                 ExecutionTraceEvent.Content("正文 1"),
@@ -130,7 +130,7 @@ class ThinkingExecutionTimelineGroupingTest {
         )
 
         assertEquals(
-            listOf("process:6", "正文 3"),
+            listOf("正文 1", "process:2", "正文 2", "process:2", "正文 3"),
             segments.map { segment ->
                 when (segment) {
                     is OrderedAiOutputSegment.UserMessageBoundary -> "user:${segment.messageId}"
@@ -140,33 +140,36 @@ class ThinkingExecutionTimelineGroupingTest {
             },
         )
         assertEquals(
-            listOf(0),
+            listOf(1, 4),
             segments.filterIsInstance<OrderedAiOutputSegment.Process>().map { it.detailStartIndex },
         )
     }
 
     @Test
-    fun `编写工具提前归组当前阶段旁白且工具到达后顺序不变`() {
+    fun `工具到达不改变已有正文分段且详情仍保留执行旁白`() {
         val previousAnswer = ExecutionTraceEvent.Content("上一阶段的回答")
         val boundary = ExecutionTraceEvent.UserMessageBoundary("follow-up")
         val tool = ExecutionTraceEvent.Tool(toolStep("1", "read_file"))
         val commentary = ExecutionTraceEvent.Content("接下来修改配置")
         val trace = listOf(previousAnswer, boundary, tool, commentary)
 
-        val writingSegments = orderedAiOutputSegments(trace, toolCallWriting = true)
+        val writingSegments = orderedAiOutputSegments(trace)
         assertEquals(previousAnswer.text, (writingSegments[0] as OrderedAiOutputSegment.Content).text)
         assertEquals("follow-up", (writingSegments[1] as OrderedAiOutputSegment.UserMessageBoundary).messageId)
         val writing = writingSegments[2] as OrderedAiOutputSegment.Process
-        assertEquals(listOf(tool, commentary), writing.events)
-        assertEquals(writing.events, executionTraceForProcessDisplay(trace, toolCallWriting = true))
+        assertEquals(listOf(tool), writing.events)
+        assertEquals(commentary.text, (writingSegments[3] as OrderedAiOutputSegment.Content).text)
+        assertEquals(listOf(tool, commentary), executionTraceForProcessDisplay(trace, toolCallWriting = true))
 
-        // 实际工具事件接替临时状态；旁白继续留在原位置，最后的正式回答独立显示。
+        // 实际工具只能追加过程段，不能把上一帧的正文重新归入已有过程段。
         val nextTool = ExecutionTraceEvent.Tool(toolStep("2", "edit_file"))
         val completedSegments = orderedAiOutputSegments(
             trace + nextTool + ExecutionTraceEvent.Content("修改完成"),
         )
         val completed = completedSegments[2] as OrderedAiOutputSegment.Process
-        assertEquals(writing.events + nextTool, completed.events)
+        assertEquals(writing, completed)
+        assertEquals(writingSegments, completedSegments.take(writingSegments.size))
+        assertEquals(listOf(nextTool), (completedSegments[4] as OrderedAiOutputSegment.Process).events)
         assertEquals("修改完成", (completedSegments.last() as OrderedAiOutputSegment.Content).text)
     }
 
@@ -184,7 +187,7 @@ class ThinkingExecutionTimelineGroupingTest {
         )
 
         assertEquals(
-            listOf("process:2", "你说的是哪个项目？", "process:1", "user:answer", "process:1"),
+            listOf("先看看。", "process:1", "你说的是哪个项目？", "process:1", "user:answer", "process:1"),
             segments.map { segment ->
                 when (segment) {
                     is OrderedAiOutputSegment.UserMessageBoundary -> "user:${segment.messageId}"
@@ -250,7 +253,7 @@ class ThinkingExecutionTimelineGroupingTest {
         )
 
         val processes = segments.filterIsInstance<OrderedAiOutputSegment.Process>()
-        assertEquals(listOf(100L, 700L), processes.map { it.startedAtMillis })
+        assertEquals(listOf(200L, 700L), processes.map { it.startedAtMillis })
         assertEquals(listOf(500L, null), processes.map { it.finishedAtMillis })
     }
 

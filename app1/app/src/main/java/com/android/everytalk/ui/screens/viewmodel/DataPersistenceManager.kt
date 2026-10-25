@@ -508,6 +508,7 @@ class DataPersistenceManager(
                 protectLastOpenImageSession = false
             } else {
                 roomDataSource.clearChatHistory()
+                roomDataSource.saveLastOpenImageGenerationChat(emptyList())
                 roomDataSource.saveLastOpenChat(emptyList())
                 synchronized(this@DataPersistenceManager) { protectedTextSessionIds.clear() }
                 protectLastOpenTextSession = false
@@ -560,7 +561,7 @@ class DataPersistenceManager(
                     if (stateHolder.conversationApiConfigIds.value == modelsBefore) {
                         val activeModelId = models[stateHolder._currentConversationId.value] ?: selectedText
                         // 所引用模型尚未到达时保留绑定但不显示另一份旧模型，下一页配置到达后再应用。
-                        stateHolder._selectedApiConfig.value = text.find { it.id == activeModelId }
+                        stateHolder._selectedApiConfig.value = (text + images).find { it.id == activeModelId }
                     }
                 }
                 if (stateHolder._imageGenApiConfigs.value == imageBefore) {

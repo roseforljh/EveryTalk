@@ -316,6 +316,9 @@ fun ImageGenerationMessagesList(
         viewModel.currentImageStreamingAiMessageId.freezeWhileStreamingPaused(viewModel.isStreamingPaused)
     }
     val isApiCalling by pauseAwareApiCalling.collectAsState(initial = viewModel.isImageApiCalling.value)
+    val selectedImageRatio by viewModel.stateHolder._selectedImageRatio.collectAsState()
+    // 本次会话中显示过生图占位的消息；只用于出图那一刻的显影，不需要触发重组。
+    val generatingImageIds = remember { HashSet<String>() }
     val currentStreamingId by pauseAwareStreamingId.collectAsState(
         initial = viewModel.currentImageStreamingAiMessageId.value
     )
@@ -597,6 +600,7 @@ fun ImageGenerationMessagesList(
                                     openImagePreview(model)
                                 },
                                 isStreaming = currentStreamingId == message.id,
+                                revealOnArrival = remember(message.id) { generatingImageIds.remove(message.id) },
                                 onImageLoaded = guardedOnImageLoaded,
                                 scrollStateManager = scrollStateManager,
                                 viewModel = viewModel,
@@ -631,6 +635,11 @@ fun ImageGenerationMessagesList(
                                     !item.message.contentStarted
                             }
 
+                            // 生图期间在状态行下方显示点阵占位；记下消息 ID，出图时据此播放显影动画。
+                            val isGeneratingImage = isApiCalling && currentStreamingId == item.message.id &&
+                                !item.message.isError && item.message.imageUrls.isNullOrEmpty()
+                            if (isGeneratingImage) SideEffect { generatingImageIds += item.message.id }
+                            Column(Modifier.fillMaxWidth()) {
                             ReasoningToggleAndContent(
                                 modifier = Modifier.fillMaxWidth(),
                                 currentMessageId = item.message.id,
@@ -650,6 +659,16 @@ fun ImageGenerationMessagesList(
                                 reasoningToggleDotColor = MaterialTheme.colorScheme.onSurface,
                                 onVisibilityChanged = {},
                             )
+                            if (isGeneratingImage) {
+                                ImageGeneratingPlaceholder(
+                                    ratio = selectedImageRatio,
+                                    modifier = Modifier.padding(
+                                        start = ChatMarkdownTextStyle.ASSISTANT_CONTENT_START_PADDING_DP.dp,
+                                        end = ChatMarkdownTextStyle.ASSISTANT_CONTENT_END_PADDING_DP.dp,
+                                    ),
+                                )
+                            }
+                            }
                         }
                         is ChatListItem.ErrorMessage -> {
                             val message = viewModel.getMessageById(item.messageId)

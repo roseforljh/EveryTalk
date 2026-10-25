@@ -6,6 +6,7 @@ import com.android.everytalk.data.DataClass.ImageGenRequest
 import com.android.everytalk.data.DataClass.ImageGenerationResponse
 import com.android.everytalk.data.DataClass.ImageUrl
 import com.android.everytalk.data.DataClass.Timings
+import com.android.everytalk.data.DataClass.ModelParameterProtocol
 import com.android.everytalk.ui.components.ImageGenCapabilities
 import com.android.everytalk.util.AiContentSafetyPolicy
 import com.android.everytalk.util.image.ImageHandlingLimits
@@ -29,6 +30,11 @@ object ImageGenerationDirectClient {
     private const val MAX_REFERENCE_IMAGE_BYTES = ImageHandlingLimits.USER_UPLOAD_MAX_BYTES
     private const val MAX_INLINE_IMAGE_JSON_BYTES = 64L * 1024L * 1024L
     private const val MAX_IMAGE_URL_JSON_BYTES = 2L * 1024L * 1024L
+
+    /** 复用 API 地址解析并由 URLBuilder 编码密钥，避免手工拼接查询参数。 */
+    private fun geminiImageUrl(address: String, request: ImageGenRequest): String = URLBuilder(
+        LlmEndpointResolver.resolveImage(address, request.model, ModelParameterProtocol.GEMINI)
+    ).apply { parameters["key"] = request.apiKey }.buildString()
     
     /**
      * 直连 Gemini 图像生成 API
@@ -43,17 +49,9 @@ object ImageGenerationDirectClient {
             ?: com.android.everytalk.BuildConfig.GOOGLE_API_BASE_URL.trimEnd('/').takeIf { it.isNotBlank() }
             ?: "https://generativelanguage.googleapis.com"
 
-        // 清理可能存在的 OpenAI 风格路径，提取纯基础 URL
-        val baseUrl = rawAddress
-            .replace(Regex("/v1/images/generations.*$"), "")
-            .replace(Regex("/v1beta/models.*$"), "")
-            .replace(Regex("/v1/.*$"), "")
-            .trimEnd('/')
-
-        val model = request.model
-        val url = "$baseUrl/v1beta/models/$model:generateContent?key=${request.apiKey}"
+        val url = geminiImageUrl(rawAddress, request)
         
-        Log.d(TAG, "直连 URL: ${url.substringBefore("?key=")}")
+        Log.d(TAG, "直连 URL: ${url.substringBefore('?')}")
         
         val payload = buildGeminiImagePayload(request)
         
@@ -84,13 +82,7 @@ object ImageGenerationDirectClient {
             ?: com.android.everytalk.BuildConfig.DEFAULT_OPENAI_API_BASE_URL.trimEnd('/').takeIf { it.isNotBlank() }
             ?: "https://api.openai.com"
         
-        // 如果地址已经包含完整的图像生成端点路径，直接使用；否则追加标准路径
-        val url = if (rawAddress.endsWith("/v1/images/generations") ||
-                      rawAddress.endsWith("/images/generations")) {
-            rawAddress
-        } else {
-            "$rawAddress/v1/images/generations"
-        }
+        val url = LlmEndpointResolver.resolveImage(rawAddress, request.model, ModelParameterProtocol.OPENAI_COMPATIBLE)
         
         Log.d(TAG, "直连 URL: $url")
         
@@ -137,12 +129,7 @@ object ImageGenerationDirectClient {
             ?: com.android.everytalk.BuildConfig.DEFAULT_OPENAI_API_BASE_URL.trimEnd('/').takeIf { it.isNotBlank() }
             ?: "https://api.openai.com"
 
-        val url = when {
-            rawAddress.endsWith("/v1/images/edits") || rawAddress.endsWith("/images/edits") -> rawAddress
-            rawAddress.endsWith("/v1/images/generations") -> rawAddress.removeSuffix("/generations") + "/edits"
-            rawAddress.endsWith("/images/generations") -> rawAddress.removeSuffix("/generations") + "/edits"
-            else -> "$rawAddress/v1/images/edits"
-        }
+        val url = LlmEndpointResolver.resolveImage(rawAddress, request.model, ModelParameterProtocol.OPENAI_COMPATIBLE, edit = true)
 
         Log.d(TAG, "直连 URL: $url")
 
@@ -187,16 +174,11 @@ object ImageGenerationDirectClient {
     ): ImageGenerationResponse {
         Log.i(TAG, "🔄 启动 Seedream 图像生成直连模式")
         
-        // 清理 URL：移除尾部的 '#' 和 '/v1/images/generations' 等多余路径
-        val rawUrl = request.apiAddress
-            .trimEnd('/')
-            .removeSuffix("#")
-            .removeSuffix("/v1/images/generations")
-            .removeSuffix("#")
-            .trimEnd('/')
-        
-        val baseUrl = rawUrl.takeIf { it.isNotBlank() }
-            ?: "https://ark.cn-beijing.volces.com/api/v3/images/generations"
+        val baseUrl = LlmEndpointResolver.resolveImage(
+            request.apiAddress.ifBlank { "https://ark.cn-beijing.volces.com/api/v3" },
+            request.model,
+            ModelParameterProtocol.OPENAI_COMPATIBLE,
+        )
             
         Log.d(TAG, "直连 URL: $baseUrl")
         
@@ -504,17 +486,9 @@ object ImageGenerationDirectClient {
             ?: com.android.everytalk.BuildConfig.GOOGLE_API_BASE_URL.trimEnd('/').takeIf { it.isNotBlank() }
             ?: "https://generativelanguage.googleapis.com"
 
-        // 清理可能存在的 OpenAI 风格路径，提取纯基础 URL
-        val baseUrl = rawAddress
-            .replace(Regex("/v1/images/generations.*$"), "")
-            .replace(Regex("/v1beta/models.*$"), "")
-            .replace(Regex("/v1/.*$"), "")
-            .trimEnd('/')
-
-        val model = request.model
-        val url = "$baseUrl/v1beta/models/$model:generateContent?key=${request.apiKey}"
+        val url = geminiImageUrl(rawAddress, request)
         
-        Log.d(TAG, "直连 URL: ${url.substringBefore("?key=")}")
+        Log.d(TAG, "直连 URL: ${url.substringBefore('?')}")
         referenceImageBase64?.takeIf { it.isNotBlank() }?.let {
             ensureGeneratedImageBase64WithinLimit(it, maxBytes = MAX_REFERENCE_IMAGE_BYTES)
         }
@@ -603,16 +577,11 @@ object ImageGenerationDirectClient {
     ): ImageGenerationResponse {
         Log.i(TAG, "🔄 启动 Seedream 图像生成（带参考图）直连模式")
         
-        // 清理 URL：移除尾部的 '#' 和 '/v1/images/generations' 等多余路径
-        val rawUrl = request.apiAddress
-            .trimEnd('/')
-            .removeSuffix("#")
-            .removeSuffix("/v1/images/generations")
-            .removeSuffix("#")
-            .trimEnd('/')
-        
-        val baseUrl = rawUrl.takeIf { it.isNotBlank() }
-            ?: "https://ark.cn-beijing.volces.com/api/v3/images/generations"
+        val baseUrl = LlmEndpointResolver.resolveImage(
+            request.apiAddress.ifBlank { "https://ark.cn-beijing.volces.com/api/v3" },
+            request.model,
+            ModelParameterProtocol.OPENAI_COMPATIBLE,
+        )
             
         Log.d(TAG, "直连 URL: $baseUrl")
         
@@ -714,8 +683,12 @@ object ImageGenerationDirectClient {
             // 所选比例已经由发送层换算成像素尺寸，这里必须使用平台实际识别的字段。
             request.imageSize?.let { put(if (isSiliconFlow) "image_size" else "size", it) }
             request.batchSize?.let { put(if (isSiliconFlow) "batch_size" else "n", it) }
-            request.numInferenceSteps?.let { put("num_inference_steps", it) }
-            request.guidanceScale?.let { put("guidance_scale", it) }
+            // 扩展参数仅由 SiliconFlow 支持，不能随隐藏草稿发给标准 OpenAI Images。
+            if (isSiliconFlow) {
+                request.numInferenceSteps?.let { put("num_inference_steps", it) }
+                request.guidanceScale?.let { put("guidance_scale", it) }
+            }
+            request.quality?.takeIf { it.isNotBlank() }?.let { put("quality", it) }
         }.toString()
     }
 

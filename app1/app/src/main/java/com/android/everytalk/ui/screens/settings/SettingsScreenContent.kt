@@ -48,6 +48,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.android.everytalk.R
+import com.android.everytalk.data.DataClass.isBuiltinModel
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.ModalityType
 import com.android.everytalk.data.network.ExternalWebSearchProvider
@@ -390,7 +391,7 @@ private fun ApiKeyItemGroup(
     var showModelPopup by remember { mutableStateOf(false) }
     var showConfirmDeleteGroupDialog by remember { mutableStateOf(false) }
     val providerName = configsInGroup.firstOrNull()?.provider?.ifBlank { null }
-    val providerDisplayName = providerName?.let { localizedProviderLabel(it) }
+    val providerDisplayName = if (configsInGroup.firstOrNull()?.isBuiltinModel() == true) stringResource(R.string.settings_default_configuration) else providerName?.let { localizedProviderLabel(it) }
         ?: stringResource(R.string.settings_integrated_platform)
     val connectionSummary = stringResource(
         R.string.settings_address_summary,
@@ -402,7 +403,7 @@ private fun ApiKeyItemGroup(
     )
     val firstCfg = configsInGroup.firstOrNull()
     val isPinnedGroup = firstCfg != null && SettingsEndpointRules.isPinnedSettingsGroup(firstCfg.provider)
-    val canExpandModels = firstCfg != null && SettingsEndpointRules.canExpandSettingsModels(firstCfg.provider)
+    val canExpandModels = firstCfg != null
     val isDarkMode = isSystemInDarkTheme()
     val cardContainerColor = if (isDarkMode) Color.Black else Color.White
     val cardBorderColor = if (isDarkMode) Color(0xFF414141) else Color(0xFFF3F3F3)
@@ -618,16 +619,6 @@ private fun ModelItem(
     onDelete: () -> Unit
 ) {
     var showConfirmDeleteDialog by remember { mutableStateOf(false) }
-    val isDarkMode = isSystemInDarkTheme()
-    val rowBackgroundColor = if (isSelected) {
-        if (isDarkMode) {
-            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.75f)
-        } else {
-            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
-        }
-    } else {
-        MaterialTheme.colorScheme.surface
-    }
 
     Row(
         modifier = Modifier
@@ -638,20 +629,18 @@ private fun ModelItem(
                 indication = null,
                 onClick = onSelect
             )
-            .background(rowBackgroundColor)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         // 选择指示器
-        Icon(
-            painter = if (isSelected) painterResource(R.drawable.ic_check_circle) else painterResource(R.drawable.ic_circle_empty),
-            contentDescription = stringResource(R.string.model_select),
-            tint = if (isSelected)
-                MaterialTheme.colorScheme.primary
-            else
-                MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(20.dp)
-        )
+        if (isSelected) {
+            Icon(
+                painter = painterResource(R.drawable.ic_check),
+                contentDescription = stringResource(R.string.model_select),
+                tint = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.size(20.dp)
+            )
+        } else Spacer(Modifier.size(20.dp))
 
         Spacer(Modifier.width(12.dp))
 
@@ -775,7 +764,7 @@ private fun ModelListPopup(
                                     onSelectConfig(config)
                                     onDismiss()
                                 },
-                                onLongClick = onConfigureModelParameters?.let { configure ->
+                                onLongClick = onConfigureModelParameters?.takeIf { !config.isBuiltinModel() }?.let { configure ->
                                     {
                                         configure(config)
                                         onDismiss()
@@ -785,6 +774,8 @@ private fun ModelListPopup(
                             .padding(horizontal = 16.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        com.android.everytalk.ui.components.ModelIcon(config.model, Modifier.size(32.dp))
+                        Spacer(Modifier.width(10.dp))
                         if (isSelected) {
                             Icon(
                                 painter = painterResource(R.drawable.ic_check),
@@ -803,7 +794,7 @@ private fun ModelListPopup(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f)
                         )
-                        if (onConfigureModelParameters != null) {
+                        if (onConfigureModelParameters != null && !config.isBuiltinModel()) {
                             IconButton(
                                 onClick = {
                                     onConfigureModelParameters(config)
@@ -819,7 +810,7 @@ private fun ModelListPopup(
                                 )
                             }
                         }
-                        IconButton(
+                        if (!config.isBuiltinModel()) IconButton(
                             onClick = { onDeleteConfig(config) },
                             modifier = Modifier.size(32.dp)
                         ) {

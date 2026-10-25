@@ -1,5 +1,7 @@
 package com.android.everytalk.ui.screens.MainScreen.chat.text.ui
 
+import com.android.everytalk.ui.theme.AppInputFieldShape
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -100,7 +102,7 @@ internal fun AgentAnswerCard(
                 minLines = 1,
                 maxLines = 4,
                 placeholder = { Text(stringResource(R.string.agent_answer_input_hint)) },
-                shape = RoundedCornerShape(18.dp),
+                shape = AppInputFieldShape,
                 colors = appDialogTextFieldColors(),
                 leadingIcon = {
                     IconButton(

@@ -193,16 +193,19 @@ fun SkillDetailScreen(navController: NavController, skillId: String) {
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .border(1.dp, if (selected) dialogContent.copy(alpha = 0.22f) else cardBorder, RoundedCornerShape(16.dp))
+                                .border(1.dp, cardBorder, RoundedCornerShape(16.dp))
                                 .clip(RoundedCornerShape(16.dp))
                                 .clickable { selectedChildId = child.skillId },
                             shape = RoundedCornerShape(16.dp),
                             colors = CardDefaults.cardColors(
-                                containerColor = if (selected) dialogContent.copy(alpha = if (isDark) 0.10f else 0.06f) else cardBackground,
+                                containerColor = cardBackground,
                             ),
                         ) {
                             Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 11.dp)) {
-                                Text(child.name, fontWeight = FontWeight.SemiBold)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(child.name, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                                    if (selected) Icon(painterResource(R.drawable.ic_check), stringResource(R.string.state_selected), modifier = Modifier.size(18.dp))
+                                }
                                 Text(context.localizeUiMessage(child.description), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }

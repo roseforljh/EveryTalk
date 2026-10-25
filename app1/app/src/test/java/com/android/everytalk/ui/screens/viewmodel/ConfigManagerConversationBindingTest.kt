@@ -130,8 +130,69 @@ class ConfigManagerConversationBindingTest {
         assertTrue(stateHolder._apiConfigs.value.isEmpty())
         assertEquals(listOf(image), stateHolder._imageGenApiConfigs.value)
         assertEquals(mapOf("image-conversation" to image.id), stateHolder.conversationApiConfigIds.value)
-        coVerify { persistenceManager.clearAllApiConfigData(isImageGen = false) }
+        coVerify { persistenceManager.saveApiConfigs(emptyList(), false) }
         coVerify { persistenceManager.saveConversationApiConfigIds(mapOf("image-conversation" to image.id)) }
+    }
+
+    @Test
+    fun `图片模型选择沿用主会话且默认配置不能单删或成组清空`() = runTest(UnconfinedTestDispatcher()) {
+        val defaults = com.android.everytalk.data.DataClass.builtinImageModels
+        val state = ViewModelStateHolder().apply {
+            setCurrentConversationId("same-chat")
+            _imageGenApiConfigs.value = defaults
+        }
+        val manager = ConfigManager(state, mockk(relaxed = true), mockk(relaxed = true), this)
+        manager.selectConfig(defaults.first(), true)
+        advanceUntilIdle()
+        assertEquals(defaults.first(), state._selectedApiConfig.value)
+        assertEquals(defaults.first().id, state.conversationApiConfigIds.value["same-chat"])
+        manager.deleteConfig(defaults.first(), true)
+        manager.deleteConfigGroup(defaults.first(), true)
+        manager.clearAllConfigs(true)
+        advanceUntilIdle()
+        assertEquals(defaults, state._imageGenApiConfigs.value)
+        assertEquals("same-chat", state._currentConversationId.value)
+    }
+
+    @Test
+    fun `图片配置编辑删除和文本清空同步主聊天选择`() = runTest(UnconfinedTestDispatcher()) {
+        val text = config("text", "text-model")
+        val image = config("image", "image-model", modalityType = ModalityType.IMAGE)
+        val fallback = com.android.everytalk.data.DataClass.builtinImageModels.first()
+        val state = ViewModelStateHolder().apply {
+            _apiConfigs.value = listOf(text)
+            _imageGenApiConfigs.value = listOf(image, fallback)
+            _selectedApiConfig.value = image
+            _selectedImageGenApiConfig.value = image
+            conversationApiConfigIds.value = mapOf("same-chat" to image.id)
+        }
+        val persistence = mockk<DataPersistenceManager>(relaxed = true)
+        val manager = ConfigManager(state, persistence, mockk(relaxed = true), this)
+
+        val edited = image.copy(name = "修改后的图片模型")
+        manager.updateConfig(edited, true)
+        advanceUntilIdle()
+        assertEquals(edited, state._selectedApiConfig.value)
+        manager.clearAllConfigs(false)
+        advanceUntilIdle()
+        assertEquals(edited, state._selectedApiConfig.value)
+
+        manager.updateConfigGroup(edited, "new-provider", edited.address, edited.key, edited.channel, true)
+        advanceUntilIdle()
+        assertEquals("new-provider", state._selectedApiConfig.value?.provider)
+        manager.deleteConfig(state._selectedApiConfig.value!!, true)
+        advanceUntilIdle()
+        assertEquals(fallback, state._selectedApiConfig.value)
+        assertEquals(fallback.id, state.conversationApiConfigIds.value["same-chat"])
+        coVerify { persistence.saveSelectedConfigIdentifier(fallback.id, false) }
+
+        // 批量删除走另一条公共入口，也必须更新主聊天的当前模型。
+        state._imageGenApiConfigs.value = listOf(image, fallback)
+        state._selectedApiConfig.value = image
+        state._selectedImageGenApiConfig.value = image
+        manager.deleteConfigGroup(image, true)
+        advanceUntilIdle()
+        assertEquals(fallback, state._selectedApiConfig.value)
     }
 
     private fun config(

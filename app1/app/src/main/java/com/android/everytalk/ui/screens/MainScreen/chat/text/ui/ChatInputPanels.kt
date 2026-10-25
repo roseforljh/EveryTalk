@@ -339,11 +339,7 @@ internal fun ComputerSelectionCard(
                             .width(92.dp)
                             .height(48.dp)
                             .background(
-                                color = if (isSelected) {
-                                    accentColor.copy(alpha = if (isSystemInDarkTheme()) 0.18f else 0.11f)
-                                } else {
-                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.52f)
-                                },
+                                color = Color.Transparent,
                                 shape = shape,
                             )
                             .clip(shape)
@@ -391,6 +387,12 @@ internal fun ComputerSelectionCard(
                                 maxLines = 1,
                                 softWrap = false,
                                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            )
+                            if (isSelected) Icon(
+                                painter = painterResource(R.drawable.ic_check),
+                                contentDescription = stringResource(R.string.state_selected),
+                                modifier = Modifier.size(14.dp),
+                                tint = MaterialTheme.colorScheme.onSurface,
                             )
                         }
                     }
