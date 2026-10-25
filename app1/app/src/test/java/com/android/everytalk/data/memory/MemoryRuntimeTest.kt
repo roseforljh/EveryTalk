@@ -256,6 +256,153 @@ class MemoryRuntimeTest {
         assertTrue(repository.state().entries.isEmpty())
     }
 
+    @Test fun `history search filters sources and supports literal keywords titles and inclusive local dates`() = runBlocking {
+        repository.setSettings(true)
+        val zone = java.time.ZoneId.systemDefault()
+        val day = java.time.LocalDate.of(2026, 10, 24)
+        val midnight = day.atStartOfDay(zone).toInstant().toEpochMilli()
+        val nextDay = day.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        history("old", "项目决策", listOf(
+            Message(id = "before", sender = Sender.User, text = "唯一_%关键词", timestamp = midnight - 1),
+            Message(id = "begin", sender = Sender.User, text = "唯一_%关键词：昨天确定的方案", timestamp = midnight),
+            Message(id = "end", sender = Sender.AI, text = "唯一_%关键词：最后的确认", timestamp = nextDay - 1),
+            Message(id = "after", sender = Sender.User, text = "唯一_%关键词", timestamp = nextDay),
+            Message(id = "system", sender = Sender.System, text = "唯一_%关键词", timestamp = midnight),
+            Message(id = "error", sender = Sender.AI, text = "唯一_%关键词", timestamp = midnight, isError = true),
+            Message(id = "placeholder", sender = Sender.AI, text = "唯一_%关键词", timestamp = midnight, isPlaceholderName = true),
+        ))
+        history("trusted-session", "当前会话", listOf(Message(id = "current", sender = Sender.User, text = "唯一_%关键词", timestamp = midnight)))
+        history("last_open_chat_v1", "内部快照", listOf(Message(id = "internal", sender = Sender.User, text = "唯一_%关键词", timestamp = midnight)))
+        history("deleted", "已删除会话", listOf(Message(id = "removed-session", sender = Sender.User, text = "唯一_%关键词", timestamp = midnight)))
+        val dao = database.chatDao()
+        dao.writeSession(checkNotNull(dao.getSession("deleted")).copy(deleted = true))
+        dao.writeMessages(listOf(Message(id = "removed-message", sender = Sender.User, text = "唯一_%关键词", timestamp = midnight).toEntity("old").copy(deleted = true)))
+        dao.writeDrafts(listOf(com.android.everytalk.data.database.entities.MessageDraftEntity(
+            Message(id = "draft", sender = Sender.User, text = "唯一_%关键词", timestamp = midnight).toEntity("old"))))
+        val tool = MemoryTool(repository, ConversationHistorySearch(database))
+        val result = tool.execute(historyArguments("唯一_%关键词", "2026-10-24", "2026-10-24"), snapshot("昨天的方案是什么？")).jsonObject
+        assertEquals(JsonPrimitive(true), result["ok"])
+        assertEquals(listOf("end", "begin"), result.getValue("messages").jsonArray.map { it.jsonObject.getValue("message_id").jsonPrimitive.content })
+        val byTitle = tool.execute(historyArguments("项目决策", "2026-10-24", "2026-10-24"), snapshot("项目决策")).jsonObject
+        assertEquals(2, byTitle.getValue("messages").jsonArray.size)
+        val noMatches = tool.execute(historyArguments("唯一_Z关键词"), snapshot("没有这个关键词")).jsonObject
+        assertTrue(noMatches.getValue("messages").jsonArray.isEmpty())
+        val byDate = tool.execute(historyArguments(start = "2026-10-24", end = "2026-10-24"), snapshot("昨天说过什么")).jsonObject
+        assertEquals(2, byDate.getValue("messages").jsonArray.size)
+    }
+
+    @Test fun `history pages and long unicode messages are bounded and can be fully read`() = runBlocking {
+        repository.setSettings(true)
+        val text = "😀\"\n\t".repeat(350) + "这是末尾的决策"
+        history("old", "方案", listOf(Message(id = "long", sender = Sender.User, text = text, timestamp = 100)))
+        history("many", "多页会话", (1..12).map { Message(id = "message-$it", sender = Sender.User, text = "资料 $it", timestamp = it.toLong()) })
+        val tool = MemoryTool(repository, ConversationHistorySearch(database))
+        val grant = snapshot("读取历史")
+        val tail = tool.execute(historyArguments("末尾的决策"), grant).jsonObject.getValue("messages").jsonArray.single().jsonObject
+        assertTrue(tail.getValue("content").jsonPrimitive.content.contains("末尾的决策"))
+        var contentOffset = 0
+        val restored = StringBuilder()
+        do {
+            val result = tool.execute(buildJsonObject {
+                put("action", "search_conversations"); put("conversation_id", "old"); put("message_id", "long"); put("content_offset", contentOffset)
+            }, grant).jsonObject
+            assertEquals(JsonPrimitive(true), result["ok"])
+            assertTrue(result.toString().memoryCharacters() <= MemoryPolicy.MAX_SEARCH_CHARACTERS)
+            val row = result.getValue("messages").jsonArray.single().jsonObject
+            restored.append(row.getValue("content").jsonPrimitive.content)
+            val next = row["next_content_offset"]?.jsonPrimitive?.intOrNull ?: break
+            assertTrue(next > contentOffset)
+            contentOffset = next
+        } while (true)
+        assertEquals(text, restored.toString())
+        var offset = 0
+        val ids = mutableListOf<String>()
+        do {
+            val result = tool.execute(buildJsonObject {
+                put("action", "search_conversations"); put("conversation_id", "many"); put("offset", offset)
+            }, grant).jsonObject
+            assertTrue(result.toString().memoryCharacters() <= MemoryPolicy.MAX_SEARCH_CHARACTERS)
+            ids += result.getValue("messages").jsonArray.map { it.jsonObject.getValue("message_id").jsonPrimitive.content }
+            val next = result["next_offset"]?.jsonPrimitive?.intOrNull ?: break
+            assertTrue(next > offset)
+            offset = next
+        } while (true)
+        assertEquals(12, ids.size)
+        assertEquals(12, ids.toSet().size)
+    }
+
+    @Test fun `history search rejects malformed arguments and revoked grants`() = runBlocking {
+        repository.setSettings(true)
+        history("old", "方案", listOf(Message(id = "historical", sender = Sender.User, text = "以前的方案")))
+        val tool = MemoryTool(repository, ConversationHistorySearch(database))
+        val grant = snapshot("以前的方案")
+        val invalid = listOf(
+            buildJsonObject { put("start_date", "2026-02-30") },
+            buildJsonObject { put("start_date", "2026-10-25"); put("end_date", "2026-10-24") },
+            buildJsonObject { put("offset", -1) }, buildJsonObject { put("offset", "1") },
+            buildJsonObject { put("content_offset", 2) }, buildJsonObject { put("message_id", "historical") },
+            buildJsonObject { put("sql", "SELECT * FROM messages") }, buildJsonObject { put("query", true) },
+        )
+        invalid.forEach { extra ->
+            val result = tool.execute(JsonObject(historyArguments() + extra), grant).jsonObject
+            assertEquals(JsonPrimitive(false), result["ok"])
+        }
+        assertEquals(JsonPrimitive(false), tool.execute(historyArguments(), null).jsonObject["ok"])
+        repository.setSettings(false)
+        assertEquals(JsonPrimitive(false), tool.execute(historyArguments(), grant).jsonObject["ok"])
+        // 再开启也不能复用关闭前的授权；数据仍保留，下一次发送才能重新获取授权。
+        repository.setSettings(true)
+        assertEquals(JsonPrimitive(false), tool.execute(historyArguments(), grant).jsonObject["ok"])
+        assertEquals(JsonPrimitive(true), tool.execute(historyArguments(), snapshot("重新搜索")).jsonObject["ok"])
+    }
+
+    @Test fun `agent proactively receives history search guidance without saved memories and can use results`() = runBlocking {
+        repository.setSettings(true)
+        history("earlier", "迁移方案", listOf(Message(id = "decision", sender = Sender.User, text = "迁移方案最终选择分批执行")))
+        val coordinator = MemoryCoordinator(database, scope) { """{"memories":[]}""" }
+        val input = input("OpenAI兼容", "之前说的迁移方案最后选了什么？")
+        var turns = 0
+        val loop = AgentLoop(AgentRunStore(database.agentDao()), memoryCoordinator = coordinator,
+            modelTransport = ModelTurnTransport { turn ->
+                turns++
+                val prompt = turn.request.messages.filterIsInstance<SimpleTextApiMessage>().first { it.role == "system" }.content
+                assertTrue(prompt.contains(input.sessionId))
+                assertTrue(prompt.contains("timezone"))
+                assertTrue(prompt.contains("先自行调用"))
+                if (turns == 1) flowOf(AppStreamEvent.ToolCall("history-call", MemoryTool.NAME,
+                    historyArguments("迁移方案")), AppStreamEvent.Finish("tool_calls"))
+                else {
+                    val result = turn.request.messages.filterIsInstance<AgentToolResultApiMessage>().single().content.jsonObject
+                    assertEquals(JsonPrimitive(true), result["ok"])
+                    assertTrue(result.getValue("messages").jsonArray.single().jsonObject.getValue("content").jsonPrimitive.content.contains("分批执行"))
+                    flowOf(AppStreamEvent.Content("之前最终选择分批执行。"), AppStreamEvent.Finish("stop"))
+                }
+            })
+        loop.run(input).toList()
+        joinBackground()
+        assertEquals(2, turns)
+        assertTrue(repository.state().entries.isEmpty())
+        val oldResult = AgentToolResultApiMessage(toolCallId = "history-call", toolName = MemoryTool.NAME, content = JsonPrimitive("迁移方案最终选择分批执行"))
+        val clean = MemoryPromptRenderer.forHistory(listOf(oldResult)).single() as AgentToolResultApiMessage
+        assertFalse(clean.content.toString().contains("分批执行"))
+        repository.setSettings(false)
+        val disabled = coordinator.prepare(input)
+        assertNull(disabled.request.localMemorySnapshot)
+        assertFalse(disabled.request.messages.toString().contains("search_conversations"))
+        assertFalse(disabled.request.tools.orEmpty().any { (it["function"] as? Map<*, *>)?.get("name") == MemoryTool.NAME })
+    }
+
+    /** 构造正式历史，不走 UI 缓存，确保测试覆盖真实 Room 查询和删除过滤。 */
+    private suspend fun history(id: String, title: String, messages: List<Message>) {
+        database.chatDao().insertSession(ChatSessionEntity(id, 1, 1, false, title))
+        database.chatDao().writeMessages(messages.map { it.toEntity(id) })
+    }
+
+    private fun historyArguments(query: String = "", start: String? = null, end: String? = null): JsonObject = buildJsonObject {
+        put("action", "search_conversations"); put("query", query)
+        start?.let { put("start_date", it) }; end?.let { put("end_date", it) }
+    }
+
     @Test fun `extraction requires successful finish even when truncated content is valid json`() = runBlocking {
         val content = AppStreamEvent.Content("""{"memories":[]}""")
         for (reason in listOf("stop", "STOP", "end_turn", "turn_complete", "completed")) {

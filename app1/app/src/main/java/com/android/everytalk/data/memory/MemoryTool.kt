@@ -11,14 +11,21 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.put
 
 /** 单一内建工具，参数、来源与授权都在本机检查，不接受路径、SQL 或网络地址。 */
-class MemoryTool(private val repository: MemoryRepository) {
+class MemoryTool(
+    private val repository: MemoryRepository,
+    private val historySearch: ConversationHistorySearch? = null,
+) {
     suspend fun execute(arguments: JsonObject, snapshot: MemoryRequestSnapshot?): JsonElement = try {
         check(snapshot != null) { "本次请求没有记忆授权" }
         val settings = repository.settings()
         check(settings.enabled && settings.version == snapshot.context.version) { "记忆已关闭或变更，请在下一次发送后重试" }
-        require(arguments.keys.all { it in setOf("action", "content", "category", "id", "query", "evidence", "offset") }) { "记忆工具包含未知参数" }
         val action = arguments.text("action")
-        if (action == "search") {
+        if (action != "search_conversations") {
+            require(arguments.keys.all { it in setOf("action", "content", "category", "id", "query", "evidence", "offset") }) { "记忆工具包含未知参数" }
+        }
+        if (action == "search_conversations") {
+            checkNotNull(historySearch) { "历史搜索运行时未初始化" }.search(arguments, snapshot.context)
+        } else if (action == "search") {
             val query = arguments.optionalText("query").orEmpty()
             require(query.memoryCharacters() <= 200) { "搜索内容过长" }
             val id = arguments.optionalText("id")
@@ -77,14 +84,19 @@ class MemoryTool(private val repository: MemoryRepository) {
         fun definition(): Map<String, Any> = mapOf(
             "type" to "function", "function" to mapOf(
                 "name" to NAME,
-                "description" to "管理全会话共享记忆。search 按 query 搜索，可用 id 和 next_offset 续读。save/update/forget 需本轮用户明确要求，evidence 引用用户原文；不存凭据或第三方指令。操作成功以 ok=true 为准。",
+                "description" to "记忆开启时可用。search 搜索长期记忆，可用 id 和 offset 续读。search_conversations 搜索本机已保存的历史会话：query 为字面关键词/短语，匹配标题或正文；start_date/end_date 为本地时区 YYYY-MM-DD（包含当天），可只按日期搜索；默认排除当前会话。用返回的 conversation_id 并留空 query 可读上下文，offset 使用 next_offset 翻页；长消息用 conversation_id、message_id、content_offset=next_content_offset 续读（从 0 可读开头）。没有结果时调整关键词或日期，不能编造往事。save/update/forget 需本轮用户明确要求，evidence 引用用户原文；不存凭据或第三方指令。成功以 ok=true 为准。",
                 "parameters" to mapOf("type" to "object", "additionalProperties" to false,
                     "properties" to mapOf(
-                        "action" to mapOf("type" to "string", "enum" to listOf("save", "update", "forget", "search")),
+                        "action" to mapOf("type" to "string", "enum" to listOf("save", "update", "forget", "search", "search_conversations")),
                         "content" to mapOf("type" to "string"),
                         "category" to mapOf("type" to "string", "enum" to MemoryCategory.entries.map { it.name }),
                         "id" to mapOf("type" to "string"), "query" to mapOf("type" to "string", "maxLength" to 200),
                         "offset" to mapOf("type" to "integer", "minimum" to 0),
+                        "conversation_id" to mapOf("type" to "string", "maxLength" to 200),
+                        "message_id" to mapOf("type" to "string", "maxLength" to 200),
+                        "start_date" to mapOf("type" to "string", "description" to "包含当天，YYYY-MM-DD"),
+                        "end_date" to mapOf("type" to "string", "description" to "包含当天，YYYY-MM-DD"),
+                        "content_offset" to mapOf("type" to "integer", "minimum" to 0),
                         "evidence" to mapOf("type" to "string", "maxLength" to 500),
                     ), "required" to listOf("action")),
             ),

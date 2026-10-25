@@ -218,6 +218,18 @@ fun SyncMessageRow.toSyncEntity(converters: Converters = Converters()): MessageE
     isIncomplete = isIncomplete,
 )
 
+/** AI 历史检索只取正文片段及来源，不加载附件、思考内容、工具轨迹或整条消息。 */
+data class ConversationHistoryRow(
+    val conversationId: String,
+    val title: String,
+    val messageId: String,
+    val sender: String,
+    val timestamp: Long,
+    val text: String,
+    val snippetOffset: Int,
+    val totalCharacters: Int,
+)
+
 /**
  * 启动阶段只读取会话列表和搜索真正需要的标量字段。
  * 大型 JSON 字段在用户打开会话时再由完整查询读取。

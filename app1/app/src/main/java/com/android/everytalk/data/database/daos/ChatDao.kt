@@ -13,6 +13,7 @@ import com.android.everytalk.data.database.entities.ChatSessionEntity
 import com.android.everytalk.data.database.entities.MessageEntity
 import com.android.everytalk.data.database.entities.MessageStorageState
 import com.android.everytalk.data.database.entities.LightweightMessageRow
+import com.android.everytalk.data.database.entities.ConversationHistoryRow
 import com.android.everytalk.data.database.entities.SyncMessageRow
 import com.android.everytalk.data.database.entities.toSyncEntity
 import com.android.everytalk.data.database.entities.PendingMessageEntity
@@ -27,6 +28,44 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ChatDao {
+    /**
+     * 只检索正式保存的用户/AI 正文，过滤墓碑、草稿、占位消息和内部恢复快照。
+     * instr 按字面匹配关键词，% 和 _ 不会变成通配符；片段在数据库内截取，避免加载全部历史。
+     * 默认跨会话检索；指定来源会话后可分页读取其上下文，contentOffset 按 Unicode 字符续读长消息。
+     * ponytail: 复用 SQLite 扫描正文，暂不新增索引表；历史量导致明显延迟时再迁移到全文索引。
+     */
+    @Query("""
+        SELECT m.sessionId AS conversationId, substr(COALESCE(s.title, ''), 1, 120) AS title,
+               m.id AS messageId, m.sender, m.timestamp,
+               substr(m.text, COALESCE(:contentOffset, MAX(0, instr(lower(m.text), lower(:query)) - 121)) + 1, :excerptCharacters) AS text,
+               COALESCE(:contentOffset, MAX(0, instr(lower(m.text), lower(:query)) - 121)) AS snippetOffset,
+               length(m.text) AS totalCharacters
+        FROM messages m INNER JOIN chat_sessions s ON s.id = m.sessionId
+        WHERE m.deleted = 0 AND s.deleted = 0 AND m.isError = 0 AND m.isPlaceholderName = 0
+          AND m.sender IN ('User', 'AI') AND length(trim(m.text)) > 0
+          AND s.id NOT IN ('last_open_chat_v1', 'last_open_image_generation_v1')
+          AND (:conversationId IS NOT NULL OR m.sessionId != :currentConversationId)
+          AND (:conversationId IS NULL OR m.sessionId = :conversationId)
+          AND (:messageId IS NULL OR m.id = :messageId)
+          AND (:startTime IS NULL OR m.timestamp >= :startTime)
+          AND (:endTime IS NULL OR m.timestamp < :endTime)
+          AND (:query = '' OR instr(lower(m.text), lower(:query)) > 0 OR instr(lower(COALESCE(s.title, '')), lower(:query)) > 0)
+        ORDER BY m.timestamp DESC, m.uuid ASC
+        LIMIT :limit OFFSET :offset
+    """)
+    suspend fun searchConversationHistory(
+        currentConversationId: String,
+        query: String,
+        conversationId: String?,
+        messageId: String?,
+        startTime: Long?,
+        endTime: Long?,
+        contentOffset: Int?,
+        excerptCharacters: Int,
+        limit: Int,
+        offset: Int,
+    ): List<ConversationHistoryRow>
+
     /** 分页补传既有消息资源，避免一次加载所有历史正文；文字和图片历史共用附件合同。 */
     @Query("SELECT * FROM messages WHERE deleted=0 AND sessionId IN (SELECT id FROM chat_sessions WHERE deleted=0 AND id NOT IN ('last_open_chat_v1','last_open_image_generation_v1')) ORDER BY timestamp DESC, uuid LIMIT :limit OFFSET :offset")
     suspend fun getResourceSyncMessages(limit: Int, offset: Int): List<MessageEntity>
@@ -207,8 +246,8 @@ interface ChatDao {
         }
     }
     
-    @Query("SELECT * FROM chat_sessions WHERE deleted = 0 AND isImageGeneration = :isImageGen ORDER BY lastModifiedTimestamp DESC")
-    suspend fun getAllSessions(isImageGen: Boolean): List<ChatSessionEntity>
+    @Query("SELECT * FROM chat_sessions WHERE deleted = 0 AND (:isImageGen IS NULL OR isImageGeneration = :isImageGen) ORDER BY lastModifiedTimestamp DESC")
+    suspend fun getAllSessions(isImageGen: Boolean?): List<ChatSessionEntity>
 
     @Query("SELECT * FROM chat_sessions WHERE deleted = 0 AND id = :sessionId LIMIT 1")
     suspend fun getSession(sessionId: String): ChatSessionEntity?
@@ -334,24 +373,24 @@ interface ChatDao {
                contextCompressionState AS contextCompressionStateJson, is_incomplete
         FROM (SELECT * FROM messages WHERE deleted = 0 UNION ALL SELECT * FROM message_drafts)
         WHERE sessionId IN (
-            SELECT id FROM chat_sessions WHERE deleted = 0 AND isImageGeneration = :isImageGen
+            SELECT id FROM chat_sessions WHERE deleted = 0 AND (:isImageGen IS NULL OR isImageGeneration = :isImageGen)
         )
         ORDER BY sessionId ASC, timestamp ASC, CASE sender WHEN 'System' THEN 0 WHEN 'User' THEN 1 WHEN 'AI' THEN 2 ELSE 3 END, uuid ASC
         """
     )
-    suspend fun getRawMessagesForMode(isImageGen: Boolean): List<RawMessageRow>
+    suspend fun getRawMessagesForMode(isImageGen: Boolean?): List<RawMessageRow>
 
     @Query(
         """
         SELECT id, sessionId, text, sender, timestamp, isPlaceholderName
         FROM (SELECT * FROM messages WHERE deleted = 0 UNION ALL SELECT * FROM message_drafts)
         WHERE sessionId IN (
-            SELECT id FROM chat_sessions WHERE deleted = 0 AND isImageGeneration = :isImageGen
+            SELECT id FROM chat_sessions WHERE deleted = 0 AND (:isImageGen IS NULL OR isImageGeneration = :isImageGen)
         )
         ORDER BY sessionId ASC, timestamp ASC, CASE sender WHEN 'System' THEN 0 WHEN 'User' THEN 1 WHEN 'AI' THEN 2 ELSE 3 END, uuid ASC
         """
     )
-    suspend fun getLightweightMessagesForMode(isImageGen: Boolean): List<LightweightMessageRow>
+    suspend fun getLightweightMessagesForMode(isImageGen: Boolean?): List<LightweightMessageRow>
 
     @Query(
         "SELECT * FROM pending_messages WHERE conversationId = :conversationId " +

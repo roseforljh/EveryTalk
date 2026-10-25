@@ -36,7 +36,7 @@ class MemoryCoordinator(
     private val extraction: suspend (ChatRequest) -> String = ::extractMemoryJson,
 ) {
     private val repository = MemoryRepository(database)
-    private val tool = MemoryTool(repository)
+    private val tool = MemoryTool(repository, ConversationHistorySearch(database))
     private val snapshots = ConcurrentHashMap<String, MemoryRequestSnapshot>()
 
     /** 先预留 token，再由现有 ContextManager 裁剪历史；记忆正文不放进可持久化消息。 */
@@ -62,7 +62,8 @@ class MemoryCoordinator(
                 else -> ""
             } }.orEmpty()
         val prompt = MemoryPromptRenderer.render(state.entries, user,
-            minOf(MemoryPolicy.MAX_PROMPT_CHARACTERS, (input.tokenLimits.maxContextTokens - input.tokenLimits.maxOutputTokens) / 8))
+            minOf(MemoryPolicy.MAX_PROMPT_CHARACTERS, (input.tokenLimits.maxContextTokens - input.tokenLimits.maxOutputTokens) / 8),
+            conversationId = input.sessionId)
         val reserve = if (prompt.isEmpty()) 0 else RequestTokenEstimator.estimate(
             listOf(SimpleTextApiMessage(role = "system", content = prompt)), tools = null,
         ).totalInputTokens.toInt()
