@@ -13,14 +13,14 @@ export function publicIPv4(ip: string): boolean {
     (a === 203 && b === 0 && c === 113))
 }
 
-export async function modelUpstream(target: URL, headers: Record<string, string>, body: string | Uint8Array, signal: AbortSignal, contentType = 'application/json'): Promise<Response> {
+export async function modelUpstream(target: URL, headers: Record<string, string>, body: string | Uint8Array, signal: AbortSignal, contentType = 'application/json', idleMs = 120_000): Promise<Response> {
   if (target.protocol !== 'https:' || target.username || target.password || target.hash || (target.port && target.port !== '443')) throw new Error('只支持标准 HTTPS 公网模型地址')
   const addresses = await lookup(target.hostname, { family: 4, all: true })
   if (!addresses.length || addresses.some(item => !publicIPv4(item.address))) throw new Error('模型地址必须解析到公网')
   return new Promise((resolve, reject) => {
     const bytes = typeof body === 'string' ? Buffer.from(body) : Buffer.from(body)
     const upstream = request(target, { method: 'POST', agent: false, headers: { ...headers, 'Content-Type': contentType, 'Content-Length': bytes.byteLength },
-      signal, lookup: (_host, _options, callback) => callback(null, addresses[0].address, 4), timeout: 120_000 }, incoming => {
+      signal, lookup: (_host, _options, callback) => callback(null, addresses[0].address, 4), timeout: idleMs }, incoming => {
       const responseHeaders = new Headers({ 'Cache-Control': 'private,no-store', 'X-Content-Type-Options': 'nosniff', 'X-Accel-Buffering': 'no' })
       responseHeaders.set('Content-Type', incoming.headers['content-type'] ?? 'application/json')
       // 仅转发状态和正文，不把上游 Cookie、重定向地址或认证信息带回网页。
@@ -37,13 +37,13 @@ export async function modelUpstream(target: URL, headers: Record<string, string>
  * 图片生成接口常返回短期 URL；服务端先固定公网 IP、禁止重定向并限制大小，
  * 才能把结果安全地交给附件同步链路，避免浏览器直接访问未知地址。
  */
-export async function publicImageData(url: string, signal: AbortSignal, maxBytes = 32 * 1024 * 1024): Promise<string> {
+export async function publicImageData(url: string, signal: AbortSignal, maxBytes = 32 * 1024 * 1024, idleMs = 120_000): Promise<string> {
   const target = new URL(url)
   if (target.protocol !== 'https:' || target.username || target.password || target.hash || (target.port && target.port !== '443')) throw new Error('图片地址必须是标准 HTTPS 公网地址')
   const addresses = await lookup(target.hostname, { family: 4, all: true })
   if (!addresses.length || addresses.some(item => !publicIPv4(item.address))) throw new Error('图片地址必须解析到公网')
   return new Promise((resolve, reject) => {
-    const incomingRequest = request(target, { method: 'GET', agent: false, signal, lookup: (_host, _options, callback) => callback(null, addresses[0].address, 4), timeout: 120_000 }, incoming => {
+    const incomingRequest = request(target, { method: 'GET', agent: false, signal, lookup: (_host, _options, callback) => callback(null, addresses[0].address, 4), timeout: idleMs }, incoming => {
       const contentType = incoming.headers['content-type']?.split(';', 1)[0]?.trim().toLowerCase() ?? ''
       if (!/^image\/[a-z0-9.+-]+$/.test(contentType)) { incoming.resume(); reject(new Error('供应商返回的内容不是图片')); return }
       const declared = Number(incoming.headers['content-length'] ?? 0)

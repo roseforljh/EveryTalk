@@ -108,7 +108,8 @@ export function modelRequest(config: JsonObject, messages: StoredRecord[], syste
   const capability = modelCapabilities(config)
   const parameters = isObject(config.modelParameters) ? config.modelParameters : {}
   const model = String(config.model ?? '')
-  const address = String(config.address ?? '')
+  // 安卓地址留空时回退到 GOOGLE_API_BASE_URL / DEFAULT_OPENAI_API_BASE_URL，两者都是公开官方地址。
+  const address = String(config.address ?? '').trim() || (protocol === 'gemini' ? 'https://generativelanguage.googleapis.com' : protocol === 'anthropic' ? '' : 'https://api.openai.com')
   if (!address || !model || typeof config.apiKey !== 'string' || !config.apiKey.trim()) throw new Error('请先配置模型地址、模型名和 API Key')
   const history = messages.filter(m => !m.deleted && !m.payload.isError).map(m => ({ role: m.payload.sender === 'User' ? 'user' : 'assistant', content: String(m.payload.text ?? '') }))
   const images = attachments.filter(item => /^image\/[a-z0-9.+-]+$/i.test(item.mime) && /^data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=]+$/i.test(item.dataUrl))
@@ -121,34 +122,119 @@ export function modelRequest(config: JsonObject, messages: StoredRecord[], syste
   const anthropicHistory = history.map((item, index) => index === lastUser && images.length > 0
     ? { ...item, content: [{ type: 'text', text: item.content }, ...images.map(image => { const [, value] = image.dataUrl.split(',', 2); return { type: 'image', source: { type: 'base64', media_type: image.mime, data: value } } })] }
     : item)
-  let target: string, body: JsonObject
-  const outputLimit = typeof config.outputLimit === 'number' ? config.outputLimit : undefined
-  if (protocol === 'responses') {
-    target = resolveModelEndpoint(protocol, address, model)
-    body = { model, stream: true, input: history.map((item, index) => ({ role: item.role, content: [{ type: item.role === 'assistant' ? 'output_text' : 'input_text', text: item.content }, ...(index === lastUser ? images.map(image => ({ type: 'input_image', image_url: image.dataUrl })) : [])] })), ...(system ? { instructions: system } : {}), ...(outputLimit ? { max_output_tokens: outputLimit } : {}) }
-  } else if (protocol === 'anthropic') {
-    target = resolveModelEndpoint(protocol, address, model)
-    body = { model, stream: true, messages: anthropicHistory, max_tokens: outputLimit ?? 4096, ...(system ? { system } : {}) }
-  } else if (protocol === 'gemini') {
-    target = resolveModelEndpoint(protocol, address, model)
-    body = { contents: history.map((m, index) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }, ...(index === lastUser ? images.map(image => { const [, data] = image.dataUrl.split(',', 2); return { inline_data: { mime_type: image.mime, data } } }) : [])] })),
-      ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}), generationConfig: { ...(outputLimit ? { maxOutputTokens: outputLimit } : {}) } }
-  } else {
-    target = resolveModelEndpoint(protocol, address, model)
-    body = { model, stream: true, messages: [...(system ? [{ role: 'system', content: system }] : []), ...openAiHistory], ...(outputLimit ? { max_tokens: outputLimit } : {}) }
-  }
+  const target = resolveModelEndpoint(protocol, address, model)
+  let body: JsonObject
+  // 与安卓 DEFAULT_MAX_OUTPUT_TOKENS 一致，未配置时也发送上限。
+  const outputLimit = typeof config.outputLimit === 'number' && config.outputLimit > 0 ? config.outputLimit : 4096
   // 采样参数统一使用服务端默认值，旧配置中的温度和 Top P 不再进入任何协议请求。
-  if (capability.reasoning !== false) {
-    // 安卓兼容接口把思考程度存为自定义参数；优先读取同一字段，避免跨端选项与请求不一致。
-    const customEffort = protocol === 'openai' && Array.isArray(parameters.customParameters) ? parameters.customParameters.find(item => isObject(item) && item.name === 'reasoning_effort') : undefined
-    const effort = isObject(customEffort) ? customEffort.enabled === false ? '' : String(customEffort.value ?? '') : String(parameters.reasoningMode === 'DISABLED' ? 'none' : parameters.reasoningEffort ?? '')
-    const budget = typeof parameters.thoughtBudget === 'number' ? parameters.thoughtBudget : 2048
-    if (effort && protocol === 'responses') body.reasoning = { effort }
-    if (effort && protocol === 'openai') body.reasoning_effort = effort
-    if (effort && effort !== 'none' && protocol === 'anthropic') body.thinking = { type: 'enabled', budget_tokens: Math.min(budget, (outputLimit ?? 4096) - 1) }
-    if (effort && protocol === 'gemini' && isObject(body.generationConfig)) body.generationConfig.thinkingConfig = /gemini-3/i.test(model) && parameters.reasoningMode !== 'BUDGET' ? { thinkingLevel: effort === 'none' ? 'minimal' : effort } : { thinkingBudget: effort === 'none' ? 0 : budget }
+  const thinking = capability.reasoning === false ? undefined : thinkingConfig(protocol, parameters, model)
+  if (protocol === 'responses') {
+    body = { model, stream: true, input: history.map((item, index) => ({ role: item.role, content: [{ type: item.role === 'assistant' ? 'output_text' : 'input_text', text: item.content }, ...(index === lastUser ? images.map(image => ({ type: 'input_image', image_url: image.dataUrl })) : [])] })), ...(system ? { instructions: system } : {}), max_output_tokens: outputLimit,
+      ...(thinking ? { reasoning: { effort: thinking.effort, summary: 'auto' } } : {}) }
+  } else if (protocol === 'anthropic') {
+    // 安卓 AnthropicDirectClient：程度模式用 adaptive，预算模式仅在 1024 ≤ 预算 < 上限时启用。
+    const budget = thinking?.mode === 'BUDGET' && thinking.budget >= 1024 && thinking.budget < outputLimit ? thinking.budget : undefined
+    body = { model, stream: true, messages: anthropicHistory, max_tokens: outputLimit, ...(system ? { system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }] } : {}),
+      ...(thinking?.mode === 'EFFORT' ? { thinking: { type: 'adaptive' }, output_config: { effort: thinking.effort } } : budget ? { thinking: { type: 'enabled', budget_tokens: budget } } : {}) }
+  } else if (protocol === 'gemini') {
+    body = { contents: history.map((m, index) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }, ...(index === lastUser ? images.map(image => { const [, data] = image.dataUrl.split(',', 2); return { inline_data: { mime_type: image.mime, data } } }) : [])] })),
+      ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}), generationConfig: { maxOutputTokens: outputLimit, ...(thinking?.gemini ? { thinkingConfig: thinking.gemini } : {}) }, safetySettings: geminiSafetySettings }
+  } else {
+    body = { model, stream: true, stream_options: { include_usage: true }, messages: [...(system ? [{ role: 'system', content: system }] : []), ...openAiHistory],
+      [openAiMaxTokensField(String(config.provider ?? ''), target)]: outputLimit, ...openAiCustomParameters(parameters) }
   }
   return { target, protocol, apiKey: config.apiKey, body }
+}
+
+/** 安卓 WebSearchSupport：Gemini 用原生 google_search，Qwen 兼容接口用 enable_search，其余走外部搜索工具。 */
+export function nativeWebSearch(config: JsonObject): 'gemini' | 'qwen' | undefined {
+  const model = String(config.model ?? '').toLowerCase()
+  const protocol = modelProtocol(config)
+  if (protocol === 'gemini' && (model.split('/').pop() ?? '').startsWith('gemini')) return 'gemini'
+  if (protocol === 'openai' && model.includes('qwen')) return 'qwen'
+  return undefined
+}
+
+/** 开启联网且模型支持原生搜索时，按安卓 GeminiDirectClient / OpenAIDirectClient 写入请求体。 */
+export function withNativeWebSearch(request: ReturnType<typeof modelRequest>, config: JsonObject): ReturnType<typeof modelRequest> {
+  const native = nativeWebSearch(config)
+  if (native === 'gemini') return { ...request, body: { ...request.body, tools: [{ google_search: {} }] } }
+  if (native === 'qwen') {
+    const search = { enable_search: true, search_options: { forced_search: true, search_strategy: 'max' } }
+    return { ...request, body: { ...request.body, ...search, extra_body: search } }
+  }
+  return request
+}
+
+/** 与安卓 reasoningBudgetForEffort 一致。 */
+function reasoningBudgetForEffort(effort: string): number {
+  return ({ none: 0, minimal: 0, low: 1024, medium: 8192, high: 24576, xhigh: 32768, max: 32768 } as Record<string, number>)[effort] ?? 8192
+}
+
+const thinkingLevels: Record<ModelProtocol, string[]> = {
+  responses: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+  anthropic: ['none', 'low', 'medium', 'high', 'max'],
+  gemini: ['none', 'minimal', 'low', 'medium', 'high'],
+  openai: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+}
+
+/** 安卓 ModelParameters.toThinkingConfig 的协议转换；兼容接口不走这里，思考程度由自定义参数发送。 */
+function thinkingConfig(protocol: ModelProtocol, parameters: JsonObject, model: string): { mode: string; effort: string; budget: number; gemini?: JsonObject } | undefined {
+  if (protocol === 'openai') return undefined
+  const raw = String(parameters.reasoningEffort ?? '').trim().toLowerCase()
+  const effort = thinkingLevels[protocol].includes(raw) ? raw : 'medium'
+  const mode = String(parameters.reasoningMode ?? 'EFFORT')
+  const budget = typeof parameters.thoughtBudget === 'number' ? parameters.thoughtBudget : 2048
+  if (protocol === 'responses') return mode === 'DISABLED' ? { mode: 'EFFORT', effort: 'none', budget } : { mode: 'EFFORT', effort, budget }
+  if (protocol === 'anthropic') return mode === 'DISABLED' || effort === 'none' ? undefined : { mode, effort, budget }
+  const level = model.toLowerCase().includes('gemini-3')
+  const geminiMode = effort === 'none' ? 'DISABLED' : mode
+  const gemini = geminiMode === 'DISABLED' ? { includeThoughts: false, ...(level ? { thinkingLevel: 'minimal' } : { thinkingBudget: 0 }) }
+    : geminiMode === 'BUDGET' ? { includeThoughts: true, thinkingBudget: budget }
+    : { includeThoughts: true, ...(level ? { thinkingLevel: effort } : { thinkingBudget: reasoningBudgetForEffort(effort) }) }
+  return { mode: geminiMode, effort, budget, gemini }
+}
+
+/** 与安卓 PiOpenAIChatMessageAdapter.maxTokensField 一致：少数兼容服务仍只认 max_tokens。 */
+export function openAiMaxTokensField(provider: string, endpoint: string): string {
+  const id = provider.toLowerCase(), url = endpoint.toLowerCase()
+  const legacy = ['zai', 'zai-coding-cn', 'together', 'moonshotai', 'moonshotai-cn', 'cloudflare-ai-gateway', 'nvidia', 'ant-ling', 'deepseek'].includes(id) ||
+    ['chutes.ai', 'api.z.ai', 'open.bigmodel.cn', 'api.together.ai', 'api.together.xyz', 'api.moonshot.', 'gateway.ai.cloudflare.com', 'integrate.api.nvidia.com', 'api.ant-ling.com', 'deepseek.com'].some(host => url.includes(host))
+  return legacy ? 'max_tokens' : 'max_completion_tokens'
+}
+
+const reservedParameterNames = new Set(['model', 'messages', 'input', 'stream', 'tools', 'tool_choice', 'previous_response_id', 'max_tokens', 'max_completion_tokens', 'max_output_tokens'])
+
+/** 与安卓 openAICompatibleRequestParameters 一致：未保存时默认 reasoning_effort=medium，按类型校验后平铺进请求体。 */
+export function openAiCustomParameters(parameters: JsonObject): JsonObject {
+  const resolved = isObject(parameters.resolvedCapability) ? parameters.resolvedCapability : {}
+  const list = Array.isArray(parameters.customParameters) ? parameters.customParameters.filter(isObject) : [{ name: 'reasoning_effort', value: 'medium', type: 'STRING', enabled: true }]
+  const enabled = list.filter(item => {
+    const name = String(item.name ?? '').trim().toLowerCase()
+    return item.enabled !== false && !['temperature', 'top_p', 'topp'].includes(name) && !(resolved.supportsReasoning === false && name === 'reasoning_effort')
+  })
+  const result: JsonObject = {}
+  const seen = new Set<string>()
+  for (const item of enabled) {
+    const name = String(item.name ?? '').trim()
+    if (!name) throw new Error('参数名不能为空')
+    if (seen.has(name.toLowerCase())) throw new Error(`参数名不能重复：${name.toLowerCase()}`)
+    if (reservedParameterNames.has(name.toLowerCase())) throw new Error(`参数 ${name} 由应用管理，不能覆盖`)
+    seen.add(name.toLowerCase())
+    const value = String(item.value ?? '')
+    if (item.type === 'NUMBER') {
+      const parsed: unknown = (() => { try { return JSON.parse(value.trim()) } catch { return undefined } })()
+      if (typeof parsed !== 'number') throw new Error(`参数 ${name} 需要填写有效数字`)
+      result[name] = parsed
+    } else if (item.type === 'BOOLEAN') {
+      const flag = value.trim().toLowerCase()
+      if (flag !== 'true' && flag !== 'false') throw new Error(`参数 ${name} 需要填写 true 或 false`)
+      result[name] = flag === 'true'
+    } else if (item.type === 'JSON') {
+      try { result[name] = JSON.parse(value) } catch { throw new Error(`参数 ${name} 不是有效 JSON`) }
+    } else result[name] = value
+  }
+  return result
 }
 
 /** 生成图片只使用 Android 已有的 Gemini 和 OpenAI 兼容 JSON 合同。 */
@@ -165,24 +251,30 @@ export function imageRequest(config: JsonObject, prompt: string, attachments: Mo
   const inferenceSteps = config.inferenceSteps ?? config.numInferenceSteps
   const protocol = imageProtocol(config)
   if (protocol === 'unsupported') throw new Error('当前 API 协议未接入图片生成，请在 API 配置中选择支持图片生成的接口。')
-  const model = String(config.model ?? ''), address = String(config.address ?? '')
-  if (!address || !model || typeof config.apiKey !== 'string' || !config.apiKey.trim()) throw new Error('请先配置图片模型地址、模型名和 API Key')
-  const exactAddress = address.trim().replace(/#$/, '').replace(/\/+$/, '')
+  const model = String(config.model ?? ''), provider = String(config.provider ?? '').toLowerCase()
+  // 与安卓 ApiClient 的 isSeedream / isSiliconFlow 判断一致。
+  const seedream = provider.includes('seedream') || /doubao|seedream/i.test(model)
+  const siliconFlow = provider.includes('silicon') || String(config.address ?? '').includes('siliconflow.cn')
+  // 地址留空时与安卓相同：Seedream 用火山方舟，Gemini 用官方地址，其余用 OpenAI 官方地址。
+  const address = String(config.address ?? '').trim() || (seedream ? 'https://ark.cn-beijing.volces.com/api/v3' : protocol === 'gemini' ? 'https://generativelanguage.googleapis.com' : protocol === 'openai' ? 'https://api.openai.com' : '')
+  const apiKey = typeof config.apiKey === 'string' ? config.apiKey.trim() : ''
+  // Modal Z-Image 无需密钥；Qwen 编辑使用 x-api-key。
+  if (!address || !model || (!apiKey && protocol !== 'modal')) throw new Error('请先配置图片模型地址、模型名和 API Key')
+  // Modal/Qwen 地址可以逗号分隔多个，服务端按顺序重试。
+  const exactAddress = address.split(',').map(item => item.trim().replace(/#$/, '').replace(/\/+$/, '')).filter(Boolean).join(',')
   if (protocol === 'modal') {
-    const body: JsonObject = { prompt }
+    const body: JsonObject = { prompt, numInferenceSteps: Number.isSafeInteger(inferenceSteps) ? inferenceSteps : 4 }
     if (typeof config.imageSize === 'string' && config.imageSize.trim()) body.imageSize = config.imageSize.trim()
     if (typeof config.aspectRatio === 'string' && config.aspectRatio.trim()) body.aspectRatio = config.aspectRatio.trim()
-    if (Number.isSafeInteger(inferenceSteps)) body.numInferenceSteps = inferenceSteps
-    if (typeof config.guidanceScale === 'number') body.guidanceScale = config.guidanceScale
-    return { protocol, apiKey: config.apiKey, target: exactAddress, body }
+    return { protocol, apiKey, target: exactAddress, body }
   }
   if (protocol === 'qwen') {
     const image = attachments[0]
     if (!image) throw new Error('Qwen 图像编辑需要至少一张参考图片')
     const [, data] = image.dataUrl.split(',', 2)
-    return { protocol, apiKey: config.apiKey, target: exactAddress, body: {
-      image_base64: data, prompt, ...(Number.isSafeInteger(inferenceSteps) ? { num_inference_steps: inferenceSteps } : {}),
-      ...(typeof config.guidanceScale === 'number' ? { guidance_scale: config.guidanceScale } : {}),
+    return { protocol, apiKey, target: exactAddress, body: {
+      image_base64: data, prompt, steps: Number.isSafeInteger(inferenceSteps) ? inferenceSteps : 30,
+      guidance_scale: typeof config.guidanceScale === 'number' ? config.guidanceScale : 7.5,
     } }
   }
   if (protocol === 'gemini') {
@@ -192,33 +284,79 @@ export function imageRequest(config: JsonObject, prompt: string, attachments: Mo
     const generationConfig: JsonObject = { responseModalities: ['IMAGE', 'TEXT'] }
     const aspectRatio = typeof config.aspectRatio === 'string' && /^(?:1:1|2:3|3:2|3:4|4:3|4:5|5:4|9:16|16:9|21:9)$/.test(config.aspectRatio) ? config.aspectRatio : undefined
     const configuredImageSize = config.geminiImageSize ?? config.imageSize
-    const imageSize = typeof configuredImageSize === 'string' && /^(?:1K|2K|4K)$/i.test(configuredImageSize) && /gemini-3.*image/i.test(model) ? configuredImageSize.toUpperCase() : undefined
+    // 与安卓 isGemini3ProImage 一致，其他 Gemini 图片模型收到 imageSize 会报 400。
+    const imageSize = typeof configuredImageSize === 'string' && /^(?:1K|2K|4K)$/i.test(configuredImageSize) && model.toLowerCase().includes('gemini-3-pro-image') ? configuredImageSize.toUpperCase() : undefined
     if (aspectRatio || imageSize) generationConfig.imageConfig = { ...(aspectRatio ? { aspectRatio } : {}), ...(imageSize ? { imageSize } : {}) }
-    return { protocol, apiKey: config.apiKey, target: target.toString(), body: { contents: [{ role: 'user', parts }], generationConfig } }
+    return { protocol, apiKey, target: target.toString(), body: { contents: [{ role: 'user', parts }], generationConfig, safetySettings: geminiSafetySettings } }
+  }
+  const size = requestImageSize(config, model)
+  if (seedream) {
+    // 安卓 Seedream 始终走 generations，参考图作为 image 数组发送。
+    const target = resolveModelEndpoint('openai', address, model).replace(/\/chat\/completions(?=\?|$)/, '/images/generations')
+    return { protocol, apiKey, target, body: { model, prompt, response_format: 'url', watermark: config.watermark === true,
+      size: seedreamSize(size && size !== '1024x1024' ? size : '2K', typeof config.aspectRatio === 'string' ? config.aspectRatio : ''),
+      ...(attachments.length ? { image: attachments.map(image => image.dataUrl) } : {}) } }
   }
   if (attachments.length > 1) throw new Error('OpenAI 图像编辑目前只支持一张参考图片')
   const edit = attachments.length === 1
   const target = resolveModelEndpoint('openai', address, model).replace(/\/chat\/completions(?=\?|$)/, edit ? '/images/edits' : '/images/generations')
-  const providerHint = [config.provider, config.model, config.address].map(value => String(value ?? '')).join(' ').toLowerCase()
-  const siliconFlow = /siliconflow|硅基流动/.test(providerHint)
-  const seedream = /seedream|doubao|豆包|即梦/.test(providerHint)
-  if (attachments.length && !seedream && !edit) throw new Error('当前图片接口不支持参考图编辑')
   const body: JsonObject = { model, prompt, ...(edit ? { image: attachments[0]?.dataUrl } : {}) }
-  if (typeof config.imageSize === 'string' && config.imageSize.trim()) body[siliconFlow ? 'image_size' : 'size'] = config.imageSize.trim()
+  if (size) body[siliconFlow ? 'image_size' : 'size'] = size
   if (typeof config.batchSize === 'number') body[siliconFlow ? 'batch_size' : 'n'] = config.batchSize
   if (siliconFlow && typeof inferenceSteps === 'number') body.num_inference_steps = inferenceSteps
   if (siliconFlow && typeof config.guidanceScale === 'number') body.guidance_scale = config.guidanceScale
   if (typeof config.quality === 'string' && config.quality.trim()) body.quality = config.quality.trim()
-  if (seedream) { body.response_format = 'url'; body.watermark = config.watermark === true }
-  if (seedream && attachments.length) body.image = attachments.map(image => image.dataUrl)
-  return { protocol, apiKey: config.apiKey, target, body }
+  return { protocol, apiKey, target, body }
+}
+
+// 与安卓 AiContentSafetyPolicy.geminiSafetySettings 一致，聊天和生图共用。
+const geminiSafetySettings = ['HARM_CATEGORY_HARASSMENT', 'HARM_CATEGORY_HATE_SPEECH', 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'HARM_CATEGORY_DANGEROUS_CONTENT'].map(category => ({ category, threshold: 'BLOCK_MEDIUM_AND_ABOVE' }))
+
+// 以下尺寸表与安卓 ImageRatio.DEFAULT_RATIOS / ImageGenCapabilities 保持一致。
+const ratioPixels: Record<string, string> = { '1:1': '1024x1024', '2:3': '832x1248', '3:2': '1248x832', '3:4': '864x1184', '4:3': '1184x864', '1:2': '720x1440', '4:5': '896x1152', '5:4': '1152x896', '9:16': '768x1344', '16:9': '1344x768', '21:9': '1536x672' }
+const qwenSizes: Record<string, string> = { '1:1': '1328x1328', '16:9': '1664x928', '9:16': '928x1664', '4:3': '1472x1140', '3:4': '1140x1472', '3:2': '1584x1056', '2:3': '1056x1584' }
+const kolorsSizes: Record<string, string> = { '1:1': '1024x1024', '3:4': '960x1280', '1:2': '720x1440', '9:16': '720x1280' }
+const gptImageSizes: Record<string, string> = { '1:1': '1024x1024', '3:2': '1536x1024', '2:3': '1024x1536', '16:9': '2048x1152', '9:16': '1152x2048', '4:3': '2048x1536', '3:4': '1536x2048' }
+const seedreamSizes: Record<'2K' | '4K', Record<string, string>> = {
+  '2K': { '1:1': '2048x2048', '4:3': '2304x1728', '3:4': '1728x2304', '16:9': '2560x1440', '9:16': '1440x2560', '3:2': '2496x1664', '2:3': '1664x2496', '21:9': '3024x1296' },
+  '4K': { '1:1': '4096x4096', '4:3': '4608x3456', '3:4': '3456x4608', '16:9': '5120x2880', '9:16': '2880x5120', '3:2': '4992x3328', '2:3': '3328x4992', '21:9': '6048x2592' },
+}
+
+/** 安卓 ImageGenCapabilities.detectFamily + resolveRequestImageSize：按比例换算各家族实际尺寸。 */
+export function requestImageSize(config: JsonObject, model: string): string | undefined {
+  let family = 'unknown'
+  for (const value of [model, config.provider, config.address]) {
+    const name = String(value ?? '').toLowerCase()
+    family = /z-image-turbo|z_image_turbo/.test(name) ? 'modal' : /gemini|google/.test(name) ? 'gemini' : /doubao|seedream|volces/.test(name) ? 'seedream'
+      : name.includes('qwen') ? 'qwen' : /kolors|kwai|siliconflow/.test(name) ? 'kolors' : /gpt-image|gpt_image|chatgpt-image/.test(name) ? 'gpt-image' : 'unknown'
+    if (family !== 'unknown') break
+  }
+  const configured = typeof config.imageSize === 'string' ? config.imageSize.trim() : ''
+  const fallback = configured && !configured.includes('<') ? configured : '1024x1024'
+  const ratio = typeof config.aspectRatio === 'string' && ratioPixels[config.aspectRatio.trim()] ? config.aspectRatio.trim() : undefined
+  if (family === 'kolors') return (ratio && kolorsSizes[ratio]) || fallback
+  if (family === 'qwen') return model.toLowerCase().includes('edit') ? undefined : (ratio && qwenSizes[ratio]) || '1328x1328'
+  if (family === 'gpt-image') return ratio ? gptImageSizes[ratio] ?? fallback : 'auto'
+  if (family === 'unknown') return ratio ? ratioPixels[ratio] : fallback
+  return fallback
+}
+
+/** 安卓 mapSeedreamSize：无比例时保留足够大的自定义尺寸，否则按清晰度和比例查推荐尺寸。 */
+export function seedreamSize(size: string, aspectRatio: string): string {
+  const normalized = size.trim().toLowerCase()
+  const [width = 0, height = 0] = normalized.split('x').map(Number)
+  const dimensions = normalized.split('x').length === 2 && width > 0 && height > 0
+  if (dimensions && !aspectRatio.trim() && width * height >= 3_686_400) return normalized
+  const quality = normalized === '4k' || (dimensions && width * height > 2048 * 2048) ? '4K' : '2K'
+  return seedreamSizes[quality][aspectRatio.trim()] ?? quality
 }
 
 /** 图片接口返回已落地的数据 URL；正文和图片都在成功后才进入同步记录。 */
 export async function generateImage(session: AuthSession, request: ReturnType<typeof imageRequest>, signal: AbortSignal, refreshSession?: () => Promise<AuthSession>): Promise<ImageResult> {
   const response = await authenticatedFetch(session, '/api/image', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request), signal, cache: 'no-store' }, refreshSession)
   const value: unknown = await response.json().catch(() => undefined)
-  if (!response.ok || !isObject(value)) throw new Error(isObject(value) && typeof value.error === 'string' ? value.error : `图片生成失败（HTTP ${response.status}）`)
+  // Modal/Qwen 长任务以 200 保活响应，失败时正文携带 error。
+  if (!response.ok || !isObject(value) || typeof value.error === 'string') throw new Error(isObject(value) && typeof value.error === 'string' ? value.error : `图片生成失败（HTTP ${response.status}）`)
   const images = Array.isArray(value.images) ? value.images.filter((item): item is string => typeof item === 'string' && /^data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=]+$/i.test(item)) : []
   if (!images.length) throw new Error('图片服务没有返回有效图片')
   return { images, text: typeof value.text === 'string' ? value.text : '' }
@@ -238,7 +376,7 @@ export async function generate(session: AuthSession, request: ReturnType<typeof 
     const calls = turn.calls()
     if (!calls.length) return { ...result, reasoning: reasoning + result.reasoning }
     if (!tools) throw new Error('本轮没有授权使用模型工具')
-    if (round === 7) throw new Error('历史搜索轮数过多，请提供更具体的关键词或日期')
+    if (round === 7) throw new Error('工具调用轮数过多，请把问题说得更具体')
     const outputs: JsonObject[] = []
     for (const call of calls) { signal.throwIfAborted(); outputs.push(await tools.execute(call)) }
     body = turn.continue(body, result, calls, outputs)

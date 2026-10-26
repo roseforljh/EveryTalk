@@ -131,7 +131,7 @@ export function SettingsPanel({ records, onClose, saveSetting, saveMemory, error
         }}>
           {tab === 'models' && <>
             <label>名称<input required value={name} onChange={e => setName(e.target.value)} placeholder="我的模型" /></label>
-            <label>模型地址<input required type="url" value={address} onChange={e => setAddress(e.target.value)} placeholder="https://api.openai.com/v1" /></label>
+            <label>模型地址<input type="url" value={address} onChange={e => setAddress(e.target.value)} placeholder="留空使用 OpenAI / Gemini 官方地址" /></label>
             <label>模型名称<input required list="et-model-catalog" value={model} onChange={e => {
               const id = e.target.value; setModel(id)
               setParameterConfig(current => withModelId(current, id, catalog))

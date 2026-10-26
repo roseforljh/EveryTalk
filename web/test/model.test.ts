@@ -35,7 +35,8 @@ describe('安卓模型端点解析兼容性', () => {
     expect(gemini.body.generationConfig).toEqual({ responseModalities: ['IMAGE', 'TEXT'] })
     const openai = imageRequest({ address: 'https://api.example.com/v1', model: 'gpt-image-1', apiKey: 'secret' }, '画一只猫')
     expect(openai.target).toBe('https://api.example.com/v1/images/generations')
-    expect(openai.body).toEqual({ model: 'gpt-image-1', prompt: '画一只猫' })
+    // 安卓 GPT_IMAGE 家族未选比例时发送 size=auto。
+    expect(openai.body).toEqual({ model: 'gpt-image-1', prompt: '画一只猫', size: 'auto' })
   })
 
   test('图片生成请求保留 Gemini 3 尺寸和宽高比参数', () => {
@@ -56,10 +57,15 @@ describe('安卓模型端点解析兼容性', () => {
       imageSize: '2048x2048', batchSize: 2, quality: 'high', watermark: true,
     }, '改成水彩画', [attachment])
     expect(seedream.protocol).toBe('openai')
+    // 安卓 Seedream 带参考图仍走 generations，不发送 n/quality。
+    expect(seedream.target).toBe('https://api.example.com/v1/images/generations')
     expect(seedream.body).toEqual({
-      model: 'doubao-seedream-4.0', prompt: '改成水彩画', size: '2048x2048', n: 2, quality: 'high',
+      model: 'doubao-seedream-4.0', prompt: '改成水彩画', size: '2048x2048',
       response_format: 'url', watermark: true, image: [attachment.dataUrl],
     })
+    const seedreamRatio = imageRequest({ model: 'doubao-seedream-4.5', apiKey: 'secret', provider: 'Seedream', modelParameters: { imageAspectRatio: '16:9' } }, '海报', [attachment, attachment])
+    expect(seedreamRatio.target).toBe('https://ark.cn-beijing.volces.com/api/v3/images/generations')
+    expect(seedreamRatio.body).toMatchObject({ size: '2560x1440', image: [attachment.dataUrl, attachment.dataUrl] })
 
     const qwen = imageRequest({
       address: 'https://qwen.example.modal.run/generate', model: 'qwen-image-edit', apiKey: 'secret', provider: 'Qwen',
@@ -67,14 +73,14 @@ describe('安卓模型端点解析兼容性', () => {
     }, '去掉背景', [attachment])
     expect(imageProtocol({ address: 'https://qwen.example.modal.run/generate', model: 'qwen-image-edit' })).toBe('qwen')
     expect(imageProtocol({ channel: 'OpenAI兼容', model: 'qwen-image-edit' })).toBe('openai')
-    expect(qwen.body).toEqual({ image_base64: 'AQID', prompt: '去掉背景', num_inference_steps: 20, guidance_scale: 4 })
+    expect(qwen.body).toEqual({ image_base64: 'AQID', prompt: '去掉背景', steps: 20, guidance_scale: 4 })
 
     const modal = imageRequest({
-      address: 'https://example.modal.run/generate', model: 'z-image-turbo', apiKey: 'secret', provider: 'Modal',
+      address: 'https://example.modal.run/generate', model: 'z-image-turbo', provider: 'Modal',
       imageSize: '768x1024', numInferenceSteps: 8, guidanceScale: 1.5,
     }, '生成海报')
     expect(imageProtocol({ address: 'https://example.modal.run/generate', model: 'z-image-turbo' })).toBe('modal')
-    expect(modal.body).toEqual({ prompt: '生成海报', imageSize: '768x1024', numInferenceSteps: 8, guidanceScale: 1.5 })
+    expect(modal.body).toEqual({ prompt: '生成海报', imageSize: '768x1024', numInferenceSteps: 8 })
   })
 
   test('OpenAI 图片参考图切换到 images/edits multipart 合同', () => {

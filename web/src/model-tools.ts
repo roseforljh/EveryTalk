@@ -13,10 +13,25 @@ export interface ModelTools {
 /** 把同一份本机工具定义转成供应商原生合同，模型仍自行决定是否调用。 */
 export function withModelTools(body: JsonObject, protocol: ModelProtocol, definitions: ModelTools['definitions']): JsonObject {
   // 与 Android 保持一致：完整 JSON Schema 必须走 parametersJsonSchema，避免额外字段被 Gemini 的 Schema 子集拒绝。
-  if (protocol === 'gemini') return { ...body, tools: [{ functionDeclarations: definitions.map(({ name, description, parameters }) => ({ name, description, parametersJsonSchema: parameters })) }] }
+  // Gemini 原生 google_search 已放在 body.tools 中，函数声明需要追加而不是覆盖。
+  if (protocol === 'gemini') return { ...body, tools: [...(Array.isArray(body.tools) ? body.tools : []), { functionDeclarations: definitions.map(({ name, description, parameters }) => ({ name, description, parametersJsonSchema: parameters })) }] }
   if (protocol === 'anthropic') return { ...body, tools: definitions.map(({ name, description, parameters }) => ({ name, description, input_schema: parameters })) }
   if (protocol === 'responses') return { ...body, include: [...new Set([...(Array.isArray(body.include) ? body.include : []), 'reasoning.encrypted_content'])], tools: definitions.map(tool => ({ type: 'function', ...tool, strict: false })) }
   return { ...body, tools: definitions.map(tool => ({ type: 'function', function: tool })) }
+}
+
+/** 合并多组本机工具，按名称分派到所属工具组。 */
+export function combineTools(...groups: (ModelTools | undefined)[]): ModelTools {
+  const active = groups.filter((group): group is ModelTools => group !== undefined)
+  return {
+    definitions: active.flatMap(group => group.definitions),
+    validate: async () => { for (const group of active) await group.validate() },
+    execute: async call => {
+      const owner = active.find(group => group.definitions.some(definition => definition.name === call.name))
+      if (!owner) throw new Error(`模型调用了未注册的工具：${call.name}`)
+      return owner.execute(call)
+    },
+  }
 }
 
 /**
@@ -81,7 +96,7 @@ export class ModelToolTurn {
   private arguments(value: unknown): JsonObject {
     let parsed: unknown = value
     if (typeof value === 'string') {
-      try { parsed = JSON.parse(value) } catch { throw new Error('模型工具参数不是完整 JSON，本轮搜索未执行') }
+      try { parsed = JSON.parse(value) } catch { throw new Error('模型工具参数不是完整 JSON，本轮工具未执行') }
     }
     if (!isObject(parsed)) throw new Error('模型工具参数必须是对象')
     return parsed

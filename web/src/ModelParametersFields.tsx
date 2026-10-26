@@ -25,9 +25,10 @@ export function ModelParametersFields({ config, onChange, catalog, loading, erro
   const matched = findCatalogModel(catalog, String(config.model ?? ''), String(config.provider ?? ''))
   const imageOutput = capability.output.includes('image')
   const textOutput = capability.output.includes('text')
-  const customParameters = Array.isArray(parameters.customParameters) ? parameters.customParameters : []
-  const customEffort = customParameters.find(item => isObject(item) && item.name === 'reasoning_effort')
-  const effort = protocol === 'OPENAI_COMPATIBLE' && isObject(customEffort) ? customEffort.enabled === false ? 'none' : String(customEffort.value) : String(parameters.reasoningMode === 'DISABLED' ? 'none' : parameters.reasoningEffort ?? 'medium')
+  // 与安卓一致：兼容接口未保存自定义参数时默认 reasoning_effort=medium。
+  const customParameters = Array.isArray(parameters.customParameters) ? parameters.customParameters : [{ name: 'reasoning_effort', value: 'medium', type: 'STRING', enabled: true }]
+  const customEffort = customParameters.find(item => isObject(item) && String(item.name).trim().toLowerCase() === 'reasoning_effort')
+  const effort = protocol === 'OPENAI_COMPATIBLE' ? isObject(customEffort) && customEffort.enabled !== false ? String(customEffort.value) : 'none' : String(parameters.reasoningMode === 'DISABLED' ? 'none' : parameters.reasoningEffort ?? 'medium')
   const patch = (values: JsonObject): void => onChange({ ...config, ...values })
   const patchParameters = (values: JsonObject): void => patch({ modelParameters: { ...parameters, ...values } })
   const imageParameterNames: Record<string, string> = { aspectRatio: 'imageAspectRatio', quality: 'imageQuality', batchSize: 'imageBatchSize' }
@@ -63,10 +64,14 @@ export function ModelParametersFields({ config, onChange, catalog, loading, erro
       <label>上下文窗口 tokens<input type="number" min="2" max="10000000" value={String(parameters.contextLimit ?? 128000)} onChange={event => patchParameters({ contextLimit: Number(event.target.value) })} /></label>
       <label>思考程度<select value={effort} onChange={event => {
         const value = event.target.value
-        // 与安卓兼容接口的自定义参数同步更新，只替换思考字段，保留其他参数。
-        const next = customParameters.filter(item => !isObject(item) || item.name !== 'reasoning_effort')
-        patchParameters({ reasoningEffort: value, reasoningMode: value === 'none' ? 'DISABLED' : 'EFFORT', ...(protocol === 'OPENAI_COMPATIBLE' ? { customParameters: [...next, { name: 'reasoning_effort', value, type: 'STRING', enabled: true }] } : {}) })
-      }}>{(protocol === 'ANTHROPIC' ? ['none', 'low', 'medium', 'high', 'max'] : protocol === 'GEMINI' ? ['none', 'minimal', 'low', 'medium', 'high'] : ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']).concat(effort).filter((value, index, values) => values.indexOf(value) === index).map(value => <option key={value} value={value}>{value}</option>)}</select></label>
+        // 与安卓 applyThinkingLevelSelection 一致：兼容接口原位替换思考参数，保留其他参数和顺序。
+        const effortParameter = { name: 'reasoning_effort', value, type: 'STRING', enabled: true }
+        const replaced = customParameters.map(item => isObject(item) && String(item.name).trim().toLowerCase() === 'reasoning_effort' ? effortParameter : item)
+          .filter((item, index, items) => item !== effortParameter || items.indexOf(effortParameter) === index)
+        const next = replaced.includes(effortParameter) ? replaced : [...replaced, effortParameter]
+        patchParameters(protocol === 'OPENAI_COMPATIBLE' ? { reasoningEffort: value, reasoningMode: 'EFFORT', customParameters: next }
+          : { reasoningEffort: value, reasoningMode: value === 'none' && protocol !== 'CODEX' ? 'DISABLED' : 'EFFORT' })
+      }}>{(protocol === 'ANTHROPIC' ? ['none', 'low', 'medium', 'high', 'max'] : protocol === 'GEMINI' ? ['none', 'minimal', 'low', 'medium', 'high'] : protocol === 'CODEX' ? ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] : ['none', 'low', 'medium', 'high', 'xhigh', 'max']).concat(effort).filter((value, index, values) => values.indexOf(value) === index).map(value => <option key={value} value={value}>{value}</option>)}</select></label>
       {['ANTHROPIC', 'GEMINI'].includes(protocol) && <label>思考预算 tokens<input type="number" min="1024" max="10000000" step="1" value={String(parameters.thoughtBudget ?? 2048)} onChange={event => patchParameters({ thoughtBudget: Number(event.target.value), reasoningMode: 'BUDGET' })} /></label>}
     </div></section>}
     {imageOutput && <section className="et-parameter-section"><h4>图片生成 <small>{format === 'qwen' ? '需上传参考图' : ''}</small></h4>{format === 'unsupported' && <p>当前 API 协议未接入图片生成，请在 API 配置中选择支持图片生成的接口。</p>}<div className="et-parameter-grid">{imageParameterKeys(format).map(key => {

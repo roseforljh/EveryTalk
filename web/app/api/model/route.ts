@@ -15,17 +15,21 @@ async function backendModelProxy(input: Record<string, unknown>, authorization: 
     if ((base.protocol !== 'https:') && !['localhost', '127.0.0.1'].includes(base.hostname)) return undefined
     if (base.username || base.password || base.search || base.hash) return undefined
   } catch { return undefined }
+  // 30 秒只限制拿到响应头；流式正文可能持续数分钟，超时计时器拿到响应后立即清除。
+  const connect = new AbortController()
+  const timer = setTimeout(() => connect.abort(), 30_000)
   try {
     const response = await fetch(new URL('/v1/chat', base), {
       method: 'POST', headers: { Authorization: authorization, 'Content-Type': 'application/json' },
-      body: JSON.stringify(input), cache: 'no-store', redirect: 'error', signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
+      body: JSON.stringify(input), cache: 'no-store', redirect: 'error', signal: AbortSignal.any([signal, connect.signal]),
     })
+    clearTimeout(timer)
     if (response.status === 501) { await response.body?.cancel().catch(() => undefined); return undefined }
     const headers = new Headers({ 'Cache-Control': 'private,no-store', 'X-Content-Type-Options': 'nosniff' })
     const contentType = response.headers.get('content-type')
     if (contentType) headers.set('Content-Type', contentType)
     return new Response(response.body, { status: response.status, headers })
-  } catch { return undefined }
+  } catch { return undefined } finally { clearTimeout(timer) }
 }
 
 /** 登录用户的模型流式中转。验证同一 Supabase 账号后才接受请求，不保存 API Key 和消息。 */
@@ -57,6 +61,6 @@ export async function POST(request: Request): Promise<Response> {
     const requestInput = { target: input.target, protocol: String(protocol), apiKey: input.apiKey, body: input.body }
     const backend = await backendModelProxy(requestInput, authorization, request.signal)
     if (backend) return backend
-    return await modelUpstream(target, headers, JSON.stringify(input.body), AbortSignal.any([request.signal, AbortSignal.timeout(180_000)]))
+    return await modelUpstream(target, headers, JSON.stringify(input.body), request.signal)
   } catch { return fail('无法连接模型服务，请检查公网 HTTPS 地址、网络和模型配置', 502) }
 }

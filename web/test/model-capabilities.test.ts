@@ -37,12 +37,31 @@ describe('models.dev 能力与参数', () => {
   test('Responses、Anthropic、Gemini 的思考与输出参数分别编码', () => {
     const responses = modelRequest({ ...config, outputLimit: 1024, modelParameters: { protocolOverride: 'CODEX', reasoningEffort: 'high' } }, [], 'system')
     expect(responses.target).toBe('https://api.example/v1/responses')
-    expect(responses.body).toMatchObject({ max_output_tokens: 1024, reasoning: { effort: 'high' }, instructions: 'system', input: [] })
+    expect(responses.body).toMatchObject({ max_output_tokens: 1024, reasoning: { effort: 'high', summary: 'auto' }, instructions: 'system', input: [] })
     expect(responses.body).not.toHaveProperty('messages')
+    // 安卓 AnthropicDirectClient：程度模式走 adaptive，预算模式才发 budget_tokens。
     const anthropic = modelRequest({ ...config, modelParameters: { protocolOverride: 'ANTHROPIC', reasoningEffort: 'high', thoughtBudget: 2048 } }, [], '')
-    expect(anthropic.body.thinking).toEqual({ type: 'enabled', budget_tokens: 2048 })
+    expect(anthropic.body).toMatchObject({ max_tokens: 4096, thinking: { type: 'adaptive' }, output_config: { effort: 'high' } })
+    const budget = modelRequest({ ...config, modelParameters: { protocolOverride: 'ANTHROPIC', reasoningMode: 'BUDGET', thoughtBudget: 2048 } }, [], '')
+    expect(budget.body.thinking).toEqual({ type: 'enabled', budget_tokens: 2048 })
     const gemini = modelRequest({ ...config, model: 'gemini-3-pro', modelParameters: { protocolOverride: 'GEMINI', reasoningEffort: 'high' } }, [], '')
-    expect(gemini.body.generationConfig).toEqual({ thinkingConfig: { thinkingLevel: 'high' } })
+    expect(gemini.body.generationConfig).toEqual({ maxOutputTokens: 4096, thinkingConfig: { includeThoughts: true, thinkingLevel: 'high' } })
+    const legacyGemini = modelRequest({ ...config, model: 'gemini-2.5-flash', modelParameters: { protocolOverride: 'GEMINI', reasoningEffort: 'high' } }, [], '')
+    expect(legacyGemini.body.generationConfig).toEqual({ maxOutputTokens: 4096, thinkingConfig: { includeThoughts: true, thinkingBudget: 24576 } })
+  })
+
+  test('OpenAI 兼容接口按安卓规则发送输出上限和自定义参数', () => {
+    const fallback = modelRequest(config, [], '')
+    expect(fallback.body).toMatchObject({ max_completion_tokens: 4096, reasoning_effort: 'medium', stream_options: { include_usage: true } })
+    expect(modelRequest({ ...config, address: 'https://api.deepseek.com' }, [], '').body).toHaveProperty('max_tokens', 4096)
+    const custom = modelRequest({ ...config, modelParameters: { customParameters: [
+      { name: 'reasoning_effort', value: 'high', type: 'STRING', enabled: true }, { name: 'seed', value: '7', type: 'NUMBER', enabled: true },
+      { name: 'enable_thinking', value: 'TRUE', type: 'BOOLEAN', enabled: true }, { name: 'extra', value: '{"a":1}', type: 'JSON', enabled: true },
+      { name: 'off', value: 'x', type: 'STRING', enabled: false },
+    ] } }, [], '')
+    expect(custom.body).toMatchObject({ reasoning_effort: 'high', seed: 7, enable_thinking: true, extra: { a: 1 } })
+    expect(custom.body).not.toHaveProperty('off')
+    expect(() => modelRequest({ ...config, modelParameters: { customParameters: [{ name: 'max_tokens', value: '1', type: 'NUMBER', enabled: true }] } }, [], '')).toThrow('由应用管理')
   })
 
   test('所有文本接口忽略历史采样覆盖并使用模型接口默认值', () => {

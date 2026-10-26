@@ -9,6 +9,7 @@ export const dynamic = 'force-dynamic'
 
 const MAX_REQUEST_BYTES = 4 * 1024 * 1024
 const MAX_RESPONSE_BYTES = 64 * 1024 * 1024
+const MODAL_TIMEOUT_MS = 1_800_000
 const isProtocol = (value: unknown): value is ImageProtocol => value === 'openai' || value === 'gemini' || value === 'qwen' || value === 'modal'
 
 async function readAtMost(response: Response, maxBytes: number): Promise<string> {
@@ -116,11 +117,10 @@ export async function POST(request: Request): Promise<Response> {
     if (!isObject(input) || !isProtocol(input.protocol) || typeof input.target !== 'string' || typeof input.apiKey !== 'string' || input.apiKey.length > 8192 || /[\r\n]/.test(input.apiKey) || !isObject(input.body)) return fail('图片请求格式无效', 400)
     // 内置模型复用安卓同名服务端环境变量，严格覆盖客户端传来的协议、地址和密钥。
     if (input.builtinModel !== undefined) {
-      const firstUrl = (value: string | undefined): string => value?.split(',').map(item => item.trim()).find(Boolean) ?? ''
       if (input.builtinModel === 'z-image-turbo-modal') {
-        input.protocol = 'modal'; input.target = firstUrl(process.env.VITE_API_URLS)
+        input.protocol = 'modal'; input.target = process.env.VITE_API_URLS ?? ''
       } else if (input.builtinModel === 'qwen-image-edit-modal') {
-        input.protocol = 'qwen'; input.target = firstUrl(process.env.QWEN_EDIT_API_URLS); input.apiKey = process.env.QWEN_EDIT_API_SECRET ?? ''
+        input.protocol = 'qwen'; input.target = process.env.QWEN_EDIT_API_URLS ?? ''; input.apiKey = process.env.QWEN_EDIT_API_SECRET ?? ''
       } else if (input.builtinModel === 'Kwai-Kolors/Kolors') {
         input.protocol = 'openai'; input.target = process.env.SILICONFLOW_IMAGE_API_URL ?? 'https://api.siliconflow.cn/v1/images/generations'
         input.apiKey = process.env.SILICONFLOW_API_KEY ?? ''; input.body.model = 'Kwai-Kolors/Kolors'
@@ -128,27 +128,57 @@ export async function POST(request: Request): Promise<Response> {
         if (input.body.image) return fail('Kolors 不支持参考图编辑，请选择 Qwen Image Edit', 422)
         if (!input.apiKey) return fail('服务端尚未配置默认 Kolors 服务', 503)
       } else return fail('内置模型无效', 400)
-      if (!input.target) return fail('服务端尚未配置此默认图片服务', 503)
+      if (!String(input.target).split(',').some(item => item.trim())) return fail('服务端尚未配置此默认图片服务', 503)
     }
     // 修改过的未知输入必须重新缩窄类型，后面的请求只能使用这四种图片协议。
     if (!isProtocol(input.protocol) || typeof input.target !== 'string' || typeof input.apiKey !== 'string') return fail('图片配置无效', 400)
-    const target = new URL(input.target)
-    if (input.protocol === 'modal') {
-      // Modal Z-Image-Turbo 使用 GET 查询参数并直接返回图片字节，
-      // 复用固定公网地址和大小校验，避免把任意 URL 代理给浏览器。
-      const prompt = typeof input.body.prompt === 'string' ? input.body.prompt : ''
+    if (input.protocol === 'modal' || input.protocol === 'qwen') {
+      // 与安卓一致：多个 Modal 地址按顺序重试，单次最长等待 30 分钟（冷启动和长任务）。
+      const urls = input.target.split(',').map(item => item.trim()).filter(Boolean).slice(0, 8)
+      const protocol = input.protocol, apiKey = input.apiKey, payload = input.body
+      const prompt = typeof payload.prompt === 'string' ? payload.prompt : ''
       if (!prompt || prompt.length > 2000) return fail('图片提示词无效', 422)
-      target.searchParams.set('prompt', prompt)
-      const dimensions = modalImageDimensions(input.body.imageSize, input.body.aspectRatio)
-      const width = dimensions.width
-      const height = dimensions.height
-      target.searchParams.set('width', String(width)); target.searchParams.set('height', String(height))
-      if (Number.isSafeInteger(input.body.numInferenceSteps)) target.searchParams.set('steps', String(input.body.numInferenceSteps))
-      if (typeof input.body.guidanceScale === 'number') target.searchParams.set('guidance_scale', String(input.body.guidanceScale))
-      const image = await publicImageData(target.toString(), request.signal, MAX_RESPONSE_BYTES)
-      return Response.json({ images: [image] }, { headers: { 'Cache-Control': 'private,no-store', 'X-Content-Type-Options': 'nosniff' } })
+      const run = async (): Promise<Record<string, unknown>> => {
+        let lastError = '图片服务没有可用地址'
+        for (const url of urls) {
+          request.signal.throwIfAborted()
+          try {
+            const target = new URL(url)
+            if (protocol === 'modal') {
+              // Modal Z-Image-Turbo 使用 GET 查询参数并直接返回图片字节，
+              // 复用固定公网地址和大小校验，避免把任意 URL 代理给浏览器。
+              const { width, height } = modalImageDimensions(payload.imageSize, payload.aspectRatio)
+              target.searchParams.set('prompt', prompt)
+              target.searchParams.set('width', String(width)); target.searchParams.set('height', String(height))
+              target.searchParams.set('steps', String(Number.isSafeInteger(payload.numInferenceSteps) ? payload.numInferenceSteps : 4))
+              return { images: [await publicImageData(target.toString(), request.signal, MAX_RESPONSE_BYTES, MODAL_TIMEOUT_MS)] }
+            }
+            const upstream = await modelUpstream(target, { 'x-api-key': apiKey }, JSON.stringify(payload), request.signal, 'application/json', MODAL_TIMEOUT_MS)
+            if (!upstream.ok) { await upstream.body?.cancel().catch(() => undefined); lastError = `图片供应商请求失败（HTTP ${upstream.status}）`; continue }
+            return await parseImages('qwen', await readAtMost(upstream, MAX_RESPONSE_BYTES), request.signal)
+          } catch (error) {
+            if (request.signal.aborted) throw error
+            lastError = error instanceof Error ? error.message : '无法连接图片服务'
+          }
+        }
+        return { error: lastError }
+      }
+      // Cloudflare 代理 100 秒无数据会断开；JSON 前置空白合法，每 15 秒写一个空格保活。
+      const encoder = new TextEncoder()
+      let timer: ReturnType<typeof setInterval> | undefined
+      const stream = new ReadableStream<Uint8Array>({ start(controller) {
+        timer = setInterval(() => { try { controller.enqueue(encoder.encode(' ')) } catch { clearInterval(timer) } }, 15_000)
+        // start 不等待生成结束，保活空格才能在生成期间立即发出。
+        void (async () => {
+          try { controller.enqueue(encoder.encode(JSON.stringify(await run()))) }
+          catch (error) { try { controller.enqueue(encoder.encode(JSON.stringify({ error: error instanceof Error ? error.message : '图片生成已取消' }))) } catch { /* 浏览器已断开 */ } }
+          finally { clearInterval(timer); try { controller.close() } catch { /* 已取消 */ } }
+        })()
+      }, cancel() { clearInterval(timer) } })
+      return new Response(stream, { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'private,no-store', 'X-Content-Type-Options': 'nosniff', 'X-Accel-Buffering': 'no' } })
     }
-    const headers: Record<string, string> = input.protocol === 'gemini' ? { 'x-goog-api-key': input.apiKey } : input.protocol === 'qwen' ? { 'x-api-key': input.apiKey } : { Authorization: `Bearer ${input.apiKey}` }
+    const target = new URL(input.target)
+    const headers: Record<string, string> = input.protocol === 'gemini' ? { 'x-goog-api-key': input.apiKey } : { Authorization: `Bearer ${input.apiKey}` }
     const edit = input.protocol === 'openai' && typeof input.body.image === 'string'
     const multipart = edit ? openAiEditBody(input.body) : undefined
     const upstream = await modelUpstream(target, headers, multipart?.bytes ?? JSON.stringify(input.body), AbortSignal.any([request.signal, AbortSignal.timeout(180_000)]), multipart?.contentType)
