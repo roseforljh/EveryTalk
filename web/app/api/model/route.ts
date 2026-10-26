@@ -58,7 +58,8 @@ export async function POST(request: Request): Promise<Response> {
     const headers: Record<string, string> = protocol === 'anthropic'
       ? { 'x-api-key': input.apiKey, 'anthropic-version': '2023-06-01' }
       : protocol === 'gemini' ? { 'x-goog-api-key': input.apiKey } : { Authorization: `Bearer ${input.apiKey}` }
-    const requestInput = { target: input.target, protocol: String(protocol), apiKey: input.apiKey, body: input.body }
+    // 后端只按协议选择鉴权头，Responses 与 OpenAI 同为 Bearer，按 openai 交给后端，避免被 422 拒绝。
+    const requestInput = { target: input.target, protocol: protocol === 'responses' ? 'openai' : String(protocol), apiKey: input.apiKey, body: input.body }
     const backend = await backendModelProxy(requestInput, authorization, request.signal)
     if (backend) return backend
     return await modelUpstream(target, headers, JSON.stringify(input.body), request.signal)
