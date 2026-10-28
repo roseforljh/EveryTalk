@@ -68,7 +68,9 @@ export class SyncClient {
   private userId = "";
   private namespace = "";
 
-  constructor(private readonly baseUrl = apiBaseUrl, private readonly fetcher: SyncFetcher = fetch) {}
+  // 浏览器的 fetch 不能脱离 window 调用，否则 Chrome 抛 Illegal invocation。
+  constructor(private readonly baseUrl = apiBaseUrl,
+    private readonly fetcher: SyncFetcher = (input, init) => fetch(input, init)) {}
 
   open(userId: string): Promise<void> {
     if (this.abort.signal.aborted) return Promise.reject(new Error("工作区已关闭"));
