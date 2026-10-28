@@ -1,7 +1,7 @@
 /* eslint-disable @next/next/no-img-element */
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { ArrowUp, Check, ChevronDown, Copy, FileDown, Flag, LogOut, Menu, MessageSquare, Mic, MoreHorizontal, Paperclip, Pin, Plus, RefreshCw, Search, Settings, Square, Trash2, Volume2, X } from 'lucide-react'
 import { ThemeToggle } from '@/components/ui/ThemeProvider'
@@ -152,6 +152,11 @@ export function Workspace({ session, onSignOut }: { session: AuthSession; onSign
   useEffect(() => () => { controller.current?.abort(); recognition.current?.stop(); window.speechSynthesis?.cancel() }, [])
   useEffect(() => { setFileSharing(typeof navigator.share === 'function' && typeof navigator.canShare === 'function') }, [])
   useEffect(() => { messagesEnd.current?.scrollIntoView({ block: 'end', behavior: 'instant' }) }, [messages.length, streaming?.text, activeId])
+  // 受控草稿写回 DOM 后再显示末尾，覆盖长文本粘贴和末尾换行；在中间编辑或选中文字时保留浏览器行为。
+  useLayoutEffect(() => {
+    const editor = input.current
+    if (editor && editor.selectionStart === draft.length && editor.selectionEnd === draft.length) editor.scrollTop = editor.scrollHeight
+  }, [draft])
   useEffect(() => { setRename(false); setMenu(false); setHistory(undefined) }, [activeId])
 
   const run = async (work: () => Promise<void>): Promise<void> => {

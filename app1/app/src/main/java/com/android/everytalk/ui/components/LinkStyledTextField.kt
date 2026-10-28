@@ -7,6 +7,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -136,6 +137,21 @@ internal fun LinkStyledTextField(
     val measurer = rememberTextMeasurer()
     val lineHeight = measurer.measure("Hg", style = textStyle).size.height
     val maxHeight = with(LocalDensity.current) { (lineHeight * maxLines).toDp() }
+    // 外层容器同时滚动文字和图标，BasicTextField 的内部滚动无法带动它。
+    // 等新文字完成布局后按变换后的光标坐标滚动；只响应编辑和选区变化，手动翻看时不抢回位置。
+    LaunchedEffect(value, layout, scroll.maxValue, scroll.viewportSize) {
+        val current = layout ?: return@LaunchedEffect
+        if (current.layoutInput.text != transformed.text || scroll.viewportSize == 0) return@LaunchedEffect
+        val cursor = current.getCursorRect(transformed.offsetMapping.originalToTransformed(value.selection.end))
+        val target = when {
+            // 最后一行的字体留白可能超出光标矩形；末尾输入直接到底，避免换行后仍残留一小截。
+            value.selection.collapsed && value.selection.end == value.text.length -> scroll.maxValue
+            cursor.top < scroll.value -> cursor.top.toInt()
+            cursor.bottom > scroll.value + scroll.viewportSize -> kotlin.math.ceil(cursor.bottom).toInt() - scroll.viewportSize
+            else -> return@LaunchedEffect
+        }
+        scroll.scrollTo(target.coerceIn(0, scroll.maxValue))
+    }
     BasicTextField(
         value = value,
         onValueChange = onValueChange,

@@ -1,6 +1,7 @@
 package com.android.everytalk.ui.components
 
 import android.app.Application
+import android.content.ClipData
 import android.content.ClipboardManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -16,10 +17,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
@@ -187,6 +190,59 @@ class LinkStyledTextFieldTest {
                 assertTrue("$site 在深色=$isDark 时必须实际绘出图标", drawn > 5)
             }
         }
+    }
+
+    @Test
+    fun `粘贴长文本和末尾换行自动显示底部且选区回到开头时跟随`() {
+        val value = mutableStateOf(TextFieldValue(""))
+        composeRule.setContent {
+            MaterialTheme {
+                LinkStyledTextField(
+                    value = value.value,
+                    onValueChange = { value.value = it },
+                    modifier = Modifier.width(200.dp).testTag("editor"),
+                )
+            }
+        }
+        val editor = composeRule.onNodeWithTag("editor")
+        editor.performClick()
+        val raw = (1..40).joinToString("\n") { "第 $it 行 https://github.com" }
+        val clipboard = ApplicationProvider.getApplicationContext<Application>().getSystemService(ClipboardManager::class.java)
+        composeRule.runOnIdle { clipboard.setPrimaryClip(ClipData.newPlainText("长文本", raw)) }
+        editor.performSemanticsAction(SemanticsActions.PasteText) { it() }
+        composeRule.waitForIdle()
+
+        fun assertAtBottom() {
+            val range = composeRule.onAllNodes(
+                SemanticsMatcher.keyIsDefined(SemanticsProperties.VerticalScrollAxisRange),
+                useUnmergedTree = true,
+            ).fetchSemanticsNodes().single().config[SemanticsProperties.VerticalScrollAxisRange]
+            assertTrue("长草稿必须能滚动", range.maxValue() > 0f)
+            assertEquals("必须显示粘贴或换行后的末尾", range.maxValue(), range.value(), 1f)
+        }
+
+        composeRule.runOnIdle { assertEquals(raw, value.value.text) }
+        assertAtBottom()
+        val scrollContainer = composeRule.onAllNodes(
+            SemanticsMatcher.keyIsDefined(SemanticsProperties.VerticalScrollAxisRange),
+            useUnmergedTree = true,
+        )[0]
+        scrollContainer.performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, -100f) }
+        composeRule.waitForIdle()
+        val manuallyScrolled = scrollContainer.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
+        assertTrue("手动翻看时不能被拉回末尾", manuallyScrolled.value() < manuallyScrolled.maxValue())
+        editor.performTextInput("\n")
+        composeRule.waitForIdle()
+        composeRule.runOnIdle { assertEquals(raw + "\n", value.value.text) }
+        assertAtBottom()
+
+        editor.performSemanticsAction(SemanticsActions.SetSelection) { it(0, 0, true) }
+        composeRule.waitForIdle()
+        val range = composeRule.onAllNodes(
+            SemanticsMatcher.keyIsDefined(SemanticsProperties.VerticalScrollAxisRange),
+            useUnmergedTree = true,
+        ).fetchSemanticsNodes().single().config[SemanticsProperties.VerticalScrollAxisRange]
+        assertEquals("移动光标到开头时仍能正常编辑", 0f, range.value(), 1f)
     }
 
     @Test
