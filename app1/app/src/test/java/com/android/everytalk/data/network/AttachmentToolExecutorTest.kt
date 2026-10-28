@@ -11,6 +11,7 @@ import com.android.everytalk.data.DataClass.ModelTokenLimits
 import com.android.everytalk.data.DataClass.PartsApiMessage
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.computer.ComputerToolCatalog
+import com.android.everytalk.data.computer.ComputerAttachmentBridge
 import com.android.everytalk.models.ATTACHMENT_CONTENT_PAGE_MARKER
 import com.android.everytalk.models.ATTACHMENT_MANIFEST_MARKER
 import com.android.everytalk.models.SelectedMediaItem
@@ -236,6 +237,76 @@ class AttachmentToolExecutorTest {
         } finally {
             outsideFile.delete()
         }
+    }
+
+    @Test
+    fun `服务器模式任意文件原样可上传且不受本地解析和内联大小限制`() = runTest {
+        val zipFile = File(attachmentDir, "archive.zip")
+        java.util.zip.ZipOutputStream(zipFile.outputStream()).use { zip ->
+            zip.putNextEntry(java.util.zip.ZipEntry("说明.txt"))
+            zip.write("由AI决定是否解压".toByteArray())
+            zip.closeEntry()
+        }
+        val attachments = listOf("archive.zip" to "application/zip", "archive.7z" to "application/x-7z-compressed",
+            "unknown.custom" to "application/octet-stream", "clip.mp4" to "video/mp4", "large.pdf" to "application/pdf")
+            .mapIndexed { index, (name, mime) ->
+                val file = File(attachmentDir, name)
+                if (!file.exists()) file.writeBytes(byteArrayOf(0, 1, -1, 42))
+                if (name == "large.pdf" || name == "clip.mp4") java.io.RandomAccessFile(file, "rw").use { it.setLength(21L * 1024 * 1024) }
+                SelectedMediaItem.GenericFile(Uri.fromFile(file), "raw-$index", name, mime, file.absolutePath)
+            }
+        for (model in listOf("test-model", "qwen-test", "gemini-test")) {
+            val result = buildDirectMultimodalRequest(
+                request = ChatRequest(messages = listOf(SimpleTextApiMessage(role = "user", content = "自行处理这些文件")),
+                    provider = "test", channel = "OpenAI兼容", apiAddress = "https://example.com/v1", apiKey = "",
+                    model = model, tools = ComputerToolCatalog.definitions()),
+                attachments = attachments, context = context,
+            )
+            val parts = (result.messages.single() as PartsApiMessage).parts
+            val text = parts.filterIsInstance<ApiContentPart.Text>().joinToString("\n") { it.text }
+            assertTrue(parts.none { it is ApiContentPart.InlineData })
+            assertTrue(ATTACHMENT_CONTENT_PAGE_MARKER !in text)
+            attachments.forEach { attachment ->
+                assertTrue("attachment_id: ${attachment.id}" in text)
+                assertTrue("name: ${attachment.displayName}" in text)
+            }
+            assertEquals(attachments.size, Regex("upload_with: upload").findAll(text).count())
+        }
+        val bridge = ComputerAttachmentBridge(context, { id -> if (id == "session") attachments else emptyList() })
+        for (attachment in attachments) {
+            val source = requireNotNull(bridge.resolveUpload("session", attachment.id))
+            assertEquals(attachment.displayName, source.displayName)
+            assertEquals(attachment.mimeType, source.mimeType)
+            assertEquals(File(requireNotNull(attachment.filePath)).length(), source.size)
+            // 流式比较验证压缩包、二进制和大文件字节均未被文本转换或截断。
+            File(requireNotNull(attachment.filePath)).inputStream().use { expected ->
+                source.openStream().use { actual ->
+                    val expectedDigest = java.security.MessageDigest.getInstance("SHA-256")
+                    val actualDigest = java.security.MessageDigest.getInstance("SHA-256")
+                    java.security.DigestInputStream(expected, expectedDigest).use { it.copyTo(java.io.OutputStream.nullOutputStream()) }
+                    java.security.DigestInputStream(actual, actualDigest).use { it.copyTo(java.io.OutputStream.nullOutputStream()) }
+                    org.junit.Assert.assertArrayEquals(expectedDigest.digest(), actualDigest.digest())
+                }
+            }
+            assertNull(bridge.resolveUpload("other-session", attachment.id))
+        }
+    }
+
+    @Test
+    fun `本地无法预读压缩包时仍保留附件并发送原消息`() = runTest {
+        val file = File(attachmentDir, "archive.7z").apply { writeBytes(byteArrayOf(0, -1, 42)) }
+        val attachment = SelectedMediaItem.GenericFile(Uri.fromFile(file), "unsupported-local", file.name,
+            "application/x-7z-compressed", file.absolutePath)
+        val result = buildDirectMultimodalRequest(
+            request = ChatRequest(messages = listOf(SimpleTextApiMessage(role = "user", content = "看看这个文件")),
+                provider = "test", channel = "OpenAI兼容", apiAddress = "https://example.com/v1", apiKey = "", model = "test-model"),
+            attachments = listOf(attachment), context = context,
+        )
+        val text = (result.messages.single() as PartsApiMessage).parts.filterIsInstance<ApiContentPart.Text>().joinToString("\n") { it.text }
+        assertTrue("看看这个文件" in text)
+        assertTrue("attachment_id: ${attachment.id}" in text)
+        assertTrue("原文件仍保留" in text)
+        assertTrue(ATTACHMENT_CONTENT_PAGE_MARKER !in text)
     }
 
     @Test

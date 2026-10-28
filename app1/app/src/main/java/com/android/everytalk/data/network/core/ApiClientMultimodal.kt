@@ -109,12 +109,13 @@ internal suspend fun buildDirectMultimodalRequest(
             }
             is com.android.everytalk.models.SelectedMediaItem.GenericFile -> {
                 val mime = item.mimeType
+                if (workspaceUploadEnabled) {
+                    // 服务器 Agent 接收原文件，不以客户端的文本解析能力决定能否发送。
+                    // ZIP、7z、未知二进制及大文档均只提供附件句柄，由 AI 调用 upload 后自行选择处理方式。
+                    documentTexts += item.toAttachmentContextParts(uploadWith = ComputerToolNames.UPLOAD)
+                    return@forEach
+                }
                 if (isImageMime(mime) || isAudioMime(mime) || isVideoMime(mime)) {
-                    if (workspaceUploadEnabled) {
-                        documentTexts += item.toAttachmentContextParts(
-                            uploadWith = ComputerToolNames.UPLOAD,
-                        ).first()
-                    }
                     val bytes = readInlineAttachmentBytes(
                         context,
                         item.uri,
@@ -179,24 +180,31 @@ internal suspend fun buildDirectMultimodalRequest(
                             )
                         }
                     } else {
-                        val page = DocumentProcessor.extractTextPage(
-                            context = context,
-                            uri = item.uri,
-                            mimeType = mime,
-                            offsetChars = 0,
-                            maxOutputChars = maxDocumentCharsPerAttachment.coerceAtLeast(1),
-                        )
-                        if (page == null || page.content.isBlank()) {
-                            throw IOException("文件 ${item.displayName} 未提取到可用文本")
+                        // 文本预读只是辅助：解析不支持、文件为空或解析失败都不能拦截整条消息。
+                        // 原附件仍保留在会话中，模型据实际工具能力决定后续处理，取消操作必须继续向上传播。
+                        val page = try {
+                            DocumentProcessor.extractTextPage(
+                                context = context,
+                                uri = item.uri,
+                                mimeType = mime,
+                                offsetChars = 0,
+                                maxOutputChars = maxDocumentCharsPerAttachment.coerceAtLeast(1),
+                            )
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (_: Exception) {
+                            null
                         }
                         documentTexts.addAll(
                             item.toAttachmentContextParts(
-                                content = page.content,
-                                nextOffset = page.nextOffset,
-                                contentComplete = !page.truncated,
-                                uploadWith = ComputerToolNames.UPLOAD.takeIf { workspaceUploadEnabled },
+                                content = page?.content,
+                                nextOffset = page?.nextOffset,
+                                contentComplete = page?.let { !it.truncated },
                             )
                         )
+                        if (page == null || page.content.isBlank()) {
+                            documentTexts += "附件 ${item.id} 未生成可读文本预览，原文件仍保留在会话中，内容尚未读取。请根据可用工具和实际读取结果判断如何处理，不要仅凭扩展名认定文件不可用。"
+                        }
                     }
                 }
             }

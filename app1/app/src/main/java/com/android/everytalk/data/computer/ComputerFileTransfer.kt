@@ -252,7 +252,9 @@ class ComputerFileTransfer {
                     val flags = if (overwrite) {
                         EnumSet.of(RenameFlags.OVERWRITE, RenameFlags.ATOMIC)
                     } else {
-                        EnumSet.of(RenameFlags.ATOMIC)
+                        // SFTP v3 的标准 rename 自带“不覆盖”语义。单独传 ATOMIC 会被 SSHJ 拒绝，
+                        // 即使服务端支持 OpenSSH 原子重命名扩展，也不能用会覆盖目标的扩展冒充此操作。
+                        EnumSet.noneOf(RenameFlags::class.java)
                     }
                     sftp.rename(temporary, target, flags)
                     ComputerStreamTransferResult(
