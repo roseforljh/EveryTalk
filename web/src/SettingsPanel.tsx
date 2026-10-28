@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { Plus, X, Check, ChevronRight } from 'lucide-react'
+import { apiBaseUrl } from './auth'
 import { isObject } from './sync-core'
 import { isBuiltinModel } from './builtin-models'
 import { ModelIcon } from './ModelIcon'
@@ -39,7 +40,7 @@ export function SettingsPanel({ records, onClose, saveSetting, saveMemory, error
   useEffect(() => {
     const abort = new AbortController()
     setCatalogLoading(true); setCatalogError('')
-    void fetch('/api/model-catalog', { signal: abort.signal }).then(async response => {
+    void fetch(`${apiBaseUrl}/v1/model-catalog`, { signal: abort.signal }).then(async response => {
       const value: unknown = await response.json()
       if (!response.ok || !isObject(value) || !Array.isArray(value.models)) throw new Error('目录暂不可用，可手动配置或稍后刷新')
       setCatalog(value.models as unknown as CatalogModel[])

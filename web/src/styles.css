@@ -213,3 +213,29 @@
 @media(min-width:1500px){.et-sidebar{width:275px}.et-messages,.et-composer-area{max-width:880px}}
 @media(max-width:760px){.et-sidebar{position:fixed;inset:0 auto 0 0;z-index:31;transform:translateX(-100%);transition:transform .2s;width:260px}.et-sidebar.is-open{transform:none}.et-mobile-only{display:inline-flex!important}.et-nav-scrim{display:block!important;position:fixed;inset:0;z-index:30;background:#0006!important;border-radius:0!important}.et-chat-header{height:57px;padding:0 13px}.et-header-actions{gap:5px}.et-sync-status span{display:none}.et-messages{padding:20px 19px}.et-message-text{font-size:13px}.et-composer-area{padding:0 12px 12px}.et-model-select select{max-width:160px!important}.et-welcome h2{font-size:23px}.et-suggestions{flex-direction:column;width:100%;max-width:250px}.et-suggestions button{justify-content:space-between}.et-banner{padding:9px 13px}.et-modal-backdrop{padding:10px}.et-settings{max-height:95dvh}.et-settings-body{padding:17px}.et-setting-row small{max-width:260px}.et-message-tools{opacity:.6}.et-login-brand{left:22px;top:22px}}
 @media(prefers-reduced-motion:reduce){.et-app *{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+/* 监控面板沿用工作区的黑白变量与细线风格。 */
+.et-admin{min-height:100dvh}
+.et-admin-head{height:64px;display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:1px solid var(--line);padding:0 25px;position:sticky;top:0;background:var(--bg);z-index:5}
+.et-admin-range{display:flex;border:1px solid var(--line);border-radius:8px;padding:2px}
+.et-app .et-admin-range button{font-size:11px;padding:4px 10px;color:var(--muted)}
+.et-app .et-admin-range button.selected{background:var(--soft);color:var(--fg)}
+.et-app .et-admin-head .et-outline{font-size:11px}
+.et-admin-body{max-width:1180px;margin:0 auto;padding:32px 25px 60px;display:flex;flex-direction:column;gap:14px}
+.et-admin-body h1{font-size:26px;font-weight:500}
+.et-admin-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:8px}
+.et-admin-tile{border:1px solid var(--line);border-radius:12px;background:var(--surface);padding:14px 16px;display:flex;flex-direction:column;gap:6px}
+.et-admin-tile strong{font-size:22px;font-weight:550;font-variant-numeric:tabular-nums}
+.et-admin-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,460px),1fr));gap:14px}
+.et-admin-panel{border:1px solid var(--line);border-radius:12px;background:var(--surface);padding:16px 18px;min-width:0}
+.et-admin-panel h2{font-size:13px;font-weight:500;margin-bottom:12px!important}
+.et-admin-panel svg{width:100%;height:auto;display:block}
+.et-admin-bar{fill:var(--muted);opacity:.75}
+.et-admin-bar.active{fill:var(--fg);opacity:1}
+.et-admin-axis{stroke:var(--line);stroke-width:1}
+.et-admin-tick{fill:var(--muted);font-size:10px}
+.et-admin-table{overflow:auto;max-height:420px}
+.et-admin-table table{width:100%;border-collapse:collapse;font-size:12px;font-variant-numeric:tabular-nums}
+.et-admin-table th{position:sticky;top:0;background:var(--surface);color:var(--muted);font-weight:500;text-align:left;font-size:11px}
+.et-admin-table th,.et-admin-table td{padding:7px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+.et-admin-table td:first-child{max-width:260px;overflow:hidden;text-overflow:ellipsis}
+@media(max-width:640px){.et-admin-head{padding:0 14px}.et-admin-body{padding:24px 14px 48px}}

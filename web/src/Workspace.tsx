@@ -8,7 +8,7 @@ import { ThemeToggle } from '@/components/ui/ThemeProvider'
 import { builtinModels, isBuiltinModel, withBuiltinModels } from './builtin-models'
 import { SettingsPanel } from './SettingsPanel'
 import { ModelIcon } from './ModelIcon'
-import { authClient, authenticatedFetch } from './auth'
+import { authClient, authenticatedFetch, apiBaseUrl } from './auth'
 import { useWorkspaceSync } from './use-workspace-sync'
 import { useFileDownloads } from './use-file-downloads'
 import { MessageFileLink, MessageFileText, messageFileParts } from './MessageFileLink'
@@ -382,7 +382,7 @@ export function Workspace({ session, onSignOut }: { session: AuthSession; onSign
     setReport({ ...report, sending: true })
     try {
       const imageCount = records.filter(r => r.entity === 'attachments' && !r.deleted && r.payload.messageId === message.id && str(r.payload.kind) === 'image' && (!r.payload.chunkCount || r.payload.chunkIndex === 0)).length
-      const response = await authenticatedFetch(sessionRef.current, '/api/report', { method: 'POST', headers: { 'Content-Type': 'application/json' }, cache: 'no-store', body: JSON.stringify({
+      const response = await authenticatedFetch(sessionRef.current, `${apiBaseUrl}/v1/report`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, cache: 'no-store', body: JSON.stringify({
         messageId: message.id, category: report.category, details: report.details, messageText: str(message.payload.text), imageCount,
         isImageGeneration: message.payload.outputType === 'image', modelName: str(message.payload.modelName), providerName: str(message.payload.providerName),
       }) }, refreshSession)

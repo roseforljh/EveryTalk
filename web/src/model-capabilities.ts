@@ -46,30 +46,6 @@ export function modelCapabilities(config: JsonObject): { input: string[]; output
 }
 
 /** 解析固定的 models.dev 公开目录，仅保留参数面板需要的字段，不收集用户配置。 */
-export function parseModelsDevCatalog(value: unknown): CatalogModel[] {
-  if (!isObject(value)) return []
-  const result: CatalogModel[] = []
-  for (const [provider, entry] of Object.entries(value)) {
-    if (!isObject(entry) || !isObject(entry.models)) continue
-    for (const [key, item] of Object.entries(entry.models)) {
-      if (!isObject(item)) continue
-      const modalities = isObject(item.modalities) ? item.modalities : {}
-      const limit = isObject(item.limit) ? item.limit : {}
-      const positive = (input: unknown): number | undefined => typeof input === 'number' && Number.isSafeInteger(input) && input > 0 && input <= 10_000_000 ? input : undefined
-      result.push({
-        id: String(item.id ?? key), name: String(item.name ?? key), provider,
-        input: normalizeModalities(modalities.input), output: normalizeModalities(modalities.output),
-        reasoning: typeof item.reasoning === 'boolean' ? item.reasoning : undefined,
-        temperature: typeof item.temperature === 'boolean' ? item.temperature : undefined,
-        toolCall: typeof item.tool_call === 'boolean' ? item.tool_call : undefined,
-        context: positive(limit.context), maxOutput: positive(limit.output),
-        efforts: Array.isArray(item.reasoning_options) ? [...new Set(item.reasoning_options.flatMap(option => isObject(option) && option.type === 'effort' && Array.isArray(option.values) ? option.values.filter((v): v is string => typeof v === 'string') : []))] : [],
-      })
-    }
-  }
-  return result
-}
-
 /** 优先精确 ID 和对应供应商，只有唯一模型身份时才回退到去掉供应商前缀的 ID。 */
 export function findCatalogModel(catalog: CatalogModel[], model: string, provider = ''): CatalogModel | undefined {
   const id = model.trim().toLowerCase().replace(/^models\//, '')

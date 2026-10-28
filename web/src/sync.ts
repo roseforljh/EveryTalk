@@ -1,4 +1,4 @@
-import { authConfig, syncBaseUrl } from "./auth";
+import { authConfig, apiBaseUrl } from "./auth";
 import { isObject, isPermanentSyncFailure } from "./sync-core";
 import { SyncStore } from "./sync-store";
 import type { DownloadPreferences } from './file-downloads';
@@ -68,7 +68,7 @@ export class SyncClient {
   private userId = "";
   private namespace = "";
 
-  constructor(private readonly baseUrl = syncBaseUrl, private readonly fetcher: SyncFetcher = fetch) {}
+  constructor(private readonly baseUrl = apiBaseUrl, private readonly fetcher: SyncFetcher = fetch) {}
 
   open(userId: string): Promise<void> {
     if (this.abort.signal.aborted) return Promise.reject(new Error("工作区已关闭"));

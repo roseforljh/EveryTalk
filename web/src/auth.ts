@@ -7,7 +7,8 @@ export const authConfig = {
   url: process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/\/$/, "") ?? "",
   key: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim() ?? "",
 };
-export const syncBaseUrl = process.env.NEXT_PUBLIC_SYNC_BASE_URL?.trim().replace(/\/$/, "") ?? "";
+/** 独立部署的后端地址；网页本身不再提供任何服务端接口。 */
+export const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL?.trim().replace(/\/$/, "") ?? "";
 
 /** 只允许公开浏览器 Key；拒绝管理员密钥，不能把它们打包到网页。 */
 export function configuredAuth(): boolean {

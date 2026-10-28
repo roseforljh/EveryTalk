@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { imageProtocol, imageRequest, modalImageDimensions, modelProtocol, modelRequest, resolveModelEndpoint } from '../src/model'
+import { imageProtocol, imageRequest, modelProtocol, modelRequest, resolveModelEndpoint } from '../src/model'
 
 describe('安卓模型端点解析兼容性', () => {
   test('OpenAI 兼容地址保留版本路径和查询参数', () => {
@@ -90,9 +90,4 @@ describe('安卓模型端点解析兼容性', () => {
     expect(request.body.prompt).toBe('修改这张图')
   })
 
-  test('Modal 尺寸换算与 Android 的宽高比规则一致', () => {
-    expect(modalImageDimensions('2K', '16:9')).toEqual({ width: 2048, height: 1152 })
-    expect(modalImageDimensions('HD', 'HD 4:3')).toEqual({ width: 1024, height: 1024 })
-    expect(modalImageDimensions('768x1024', '')).toEqual({ width: 768, height: 1024 })
-  })
 })

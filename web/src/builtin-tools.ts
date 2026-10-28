@@ -1,12 +1,12 @@
-import { authenticatedFetch } from './auth'
+import { authenticatedFetch, apiBaseUrl } from './auth'
 import { isObject } from './sync-core'
 import { readSearchResults, type SearchResult } from './search'
 import type { ModelTools } from './model-tools'
 import type { AuthSession, JsonObject } from './types'
 
-/** 通过同源登录代理执行一次搜索，搜索密钥只在内存和当前请求中存在。 */
+/** 通过后端登录接口执行一次搜索，搜索密钥只在内存和当前请求中存在。 */
 export async function requestWebSearch(session: AuthSession, provider: string, apiKey: string, query: string, signal: AbortSignal, refreshSession?: () => Promise<AuthSession>): Promise<SearchResult[]> {
-  const response = await authenticatedFetch(session, '/api/search', {
+  const response = await authenticatedFetch(session, `${apiBaseUrl}/v1/search`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ provider, apiKey, query }), signal, cache: 'no-store',
   }, refreshSession)
@@ -68,7 +68,7 @@ export function builtinTools(options: {
       if (call.name === 'webfetch') {
         const url = typeof call.arguments.url === 'string' ? call.arguments.url : ''
         const maxChars = typeof call.arguments.max_chars === 'number' ? call.arguments.max_chars : undefined
-        const response = await authenticatedFetch(options.session(), '/api/webfetch', {
+        const response = await authenticatedFetch(options.session(), `${apiBaseUrl}/v1/webfetch`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url, maxChars }), signal: options.signal, cache: 'no-store',
         }, options.refreshSession)
         const body: unknown = await response.json().catch(() => undefined)

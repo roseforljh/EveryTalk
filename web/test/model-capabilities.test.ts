@@ -2,17 +2,17 @@ import { describe, expect, test } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { ModelParametersFields } from '../src/ModelParametersFields'
-import { findCatalogModel, imageParameterKeys, modelCapabilities, normalizeModalities, parseModelsDevCatalog, withCatalogModel, withModelId } from '../src/model-capabilities'
+import { findCatalogModel, imageParameterKeys, modelCapabilities, normalizeModalities, withCatalogModel, type CatalogModel, withModelId } from '../src/model-capabilities'
 import { generate, imageProtocol, imageRequest, modelProtocol, modelRequest } from '../src/model'
 import type { JsonObject } from '../src/types'
 
 const config = { address: 'https://api.example/v1', apiKey: 'test-key', model: 'model-a' }
 
 describe('models.dev 能力与参数', () => {
-  test('解析原始目录和 MIME 模态，保留未知模型能力', () => {
-    const catalog = parseModelsDevCatalog({ vendor: { models: { 'model-a': { modalities: { input: ['text', 'image/png', 'audio/wav', 'application/pdf'], output: ['text'] }, reasoning: false, temperature: false, tool_call: true, limit: { context: 32000, output: 8000 }, reasoning_options: [{ type: 'effort', values: ['low', 'high'] }] } } } })
-    expect(catalog).toHaveLength(1)
-    expect(catalog[0]).toMatchObject({ input: ['text', 'image', 'audio', 'pdf'], output: ['text'], reasoning: false, temperature: false, context: 32000, maxOutput: 8000, efforts: ['low', 'high'] })
+  test('MIME 模态归并，保留未知模型能力', () => {
+    // 目录由后端 /v1/model-catalog 解析，这里直接使用解析后的结构。
+    const catalog: CatalogModel[] = [{ id: 'model-a', name: 'model-a', provider: 'vendor', input: ['text', 'image', 'audio', 'pdf'], output: ['text'],
+      reasoning: false, temperature: false, toolCall: true, context: 32000, maxOutput: 8000, efforts: ['low', 'high'] }]
     expect(normalizeModalities(['video/mp4', 'video', 'decision'])).toEqual(['video', 'decision'])
     const manual = withCatalogModel({ ...config, modelParameters: { inputModalities: ['text'], outputModalities: ['image'] } }, catalog[0])
     expect(modelCapabilities(manual)).toMatchObject({ input: ['text'], output: ['image'], reasoning: false })

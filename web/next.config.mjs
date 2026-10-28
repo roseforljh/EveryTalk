@@ -16,7 +16,6 @@ if (publicKey) {
   try { anonymous = JSON.parse(Buffer.from(publicKey.split('.')[1], 'base64url').toString()).role === 'anon' } catch {}
   if (!publicKey.startsWith('sb_publishable_') && !anonymous) throw new Error('网页只能使用 Supabase publishable 或 anon Key')
 }
-process.env.EVERYTALK_SYNC_BASE_URL ??= properties.get('EVERYTALK_SYNC_BASE_URL') ?? ''
 
 export default {
   reactStrictMode: true,
@@ -27,7 +26,8 @@ export default {
   env: {
     NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL ?? properties.get('SUPABASE_URL') ?? '',
     NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: publicKey,
-    NEXT_PUBLIC_SYNC_BASE_URL: '/api/cloud',
+    // 网页是纯前端，所有接口直接请求独立部署的后端。
+    NEXT_PUBLIC_API_BASE_URL: process.env.NEXT_PUBLIC_API_BASE_URL ?? properties.get('EVERYTALK_SYNC_BASE_URL') ?? '',
   },
   images: { formats: ['image/avif', 'image/webp'], remotePatterns: [{ protocol: 'https', hostname: 'qone.kuz7.com' }] },
 }

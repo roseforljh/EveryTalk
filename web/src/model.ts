@@ -1,5 +1,5 @@
 import { isObject } from './sync-core'
-import { authenticatedFetch } from './auth'
+import { authenticatedFetch, apiBaseUrl } from './auth'
 import type { AuthSession, JsonObject, StoredRecord } from './types'
 import { modelCapabilities, parameterProtocol } from './model-capabilities'
 import { ModelToolTurn, withModelTools, type ModelTools } from './model-tools'
@@ -38,35 +38,6 @@ export function imageProtocol(config: JsonObject): ImageProtocol {
   if (/\/v1beta(?:[/?]|$)/.test(endpoint) || endpoint.includes('generativelanguage.googleapis.com')) return 'gemini'
   const protocol = parameterProtocol(config)
   return protocol === 'GEMINI' ? 'gemini' : protocol === 'OPENAI_COMPATIBLE' ? 'openai' : 'unsupported'
-}
-
-/**
- * 按 Android 的 Modal 尺寸合同把配置换成安全的像素宽高。
- * 显式的 `宽x高` 仍然保留，2K/HD 和宽高比组合则使用 Android 同样的映射。
- */
-export function modalImageDimensions(imageSize: unknown, aspectRatio: unknown): { width: number; height: number } {
-  const sizeText = typeof imageSize === 'string' ? imageSize.trim().toLowerCase() : ''
-  const ratioText = typeof aspectRatio === 'string' ? aspectRatio.trim().toUpperCase() : ''
-  const explicit = /^(\d{2,4})x(\d{2,4})$/.exec(sizeText)
-  const supportedRatios = new Set(['1:1', '16:9', '9:16', '4:3'])
-  const ratioInAspect = /^(2K|4K|HD|1K)\s*(1:1|16:9|9:16|4:3)?$/.exec(ratioText)
-  const ratio = ratioInAspect?.[2] ?? (supportedRatios.has(ratioText) ? ratioText : '1:1')
-  const selectedSize = (ratioInAspect?.[1] ?? sizeText).toLowerCase()
-  const size = selectedSize === 'hd' || selectedSize === '1k' || sizeText === '1024x1024' ? 'hd' : '2k'
-  let width: number
-  let height: number
-  if (explicit && !ratioInAspect && !supportedRatios.has(ratioText)) {
-    width = Number(explicit[1]); height = Number(explicit[2])
-  } else {
-    const base = size === 'hd' ? 1024 : 2048
-    const dimensions: Record<string, [number, number]> = {
-      '1:1': [base, base], '16:9': [base, Math.round(base * 9 / 16)],
-      '9:16': [Math.round(base * 9 / 16), base], '4:3': [base, Math.round(base * 3 / 4)],
-    }
-    ;[width, height] = dimensions[ratio] ?? dimensions['1:1']
-    if (size === 'hd' && ratio === '4:3') { width = 1024; height = 1024 }
-  }
-  return { width: Math.max(256, Math.min(2048, Math.floor(width / 8) * 8)), height: Math.max(256, Math.min(2048, Math.floor(height / 8) * 8)) }
 }
 
 /** 与安卓 LlmEndpointResolver 对齐：保留查询参数，识别已填写的完整接口地址。 */
@@ -353,7 +324,7 @@ export function seedreamSize(size: string, aspectRatio: string): string {
 
 /** 图片接口返回已落地的数据 URL；正文和图片都在成功后才进入同步记录。 */
 export async function generateImage(session: AuthSession, request: ReturnType<typeof imageRequest>, signal: AbortSignal, refreshSession?: () => Promise<AuthSession>): Promise<ImageResult> {
-  const response = await authenticatedFetch(session, '/api/image', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request), signal, cache: 'no-store' }, refreshSession)
+  const response = await authenticatedFetch(session, `${apiBaseUrl}/v1/image`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request), signal, cache: 'no-store' }, refreshSession)
   const value: unknown = await response.json().catch(() => undefined)
   // Modal/Qwen 长任务以 200 保活响应，失败时正文携带 error。
   if (!response.ok || !isObject(value) || typeof value.error === 'string') throw new Error(isObject(value) && typeof value.error === 'string' ? value.error : `图片生成失败（HTTP ${response.status}）`)
@@ -388,7 +359,7 @@ export async function generate(session: AuthSession, request: ReturnType<typeof 
 
 /** SSE 支持跨网络块、CRLF 和最后一帧；草稿仅在内存中，成功定稿后才能入同步队列。 */
 async function generateTurn(session: AuthSession, request: ReturnType<typeof modelRequest>, signal: AbortSignal, onDelta: (result: ModelResult) => void, refreshSession: (() => Promise<AuthSession>) | undefined, toolTurn: ModelToolTurn): Promise<ModelResult> {
-  const response = await authenticatedFetch(session, '/api/model', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request), signal, cache: 'no-store' }, refreshSession)
+  const response = await authenticatedFetch(session, `${apiBaseUrl}/v1/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request), signal, cache: 'no-store' }, refreshSession)
   if (!response.ok) throw new Error(`模型请求失败（HTTP ${response.status}），请检查密钥、余额和模型名称`)
   const result: ModelResult = { text: '', reasoning: '' }
   let ended = false
