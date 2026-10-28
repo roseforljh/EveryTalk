@@ -3,6 +3,7 @@ package com.android.everytalk.data.database
 import android.content.Context
 import androidx.room.withTransaction
 import com.android.everytalk.data.DataClass.isBuiltinModel
+import com.android.everytalk.data.DataClass.builtinModelId
 import com.android.everytalk.data.DataClass.withBuiltinImageModels
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.Message
@@ -60,6 +61,8 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
     private val voiceConfigDao = database.voiceConfigDao()
     private val chatDao = database.chatDao()
     private val settingsDao = database.settingsDao()
+    /** 界面最近一次拿到或保存的配置 ID，按 text/image/voice 分开；同步刚加进库、界面还没看到的条目不在其中。 */
+    private val shownConfigIds = java.util.concurrent.ConcurrentHashMap<String, Set<String>>()
 
     /** 仅由启动加载流程调用，不能在普通打开历史时把仍在运行的草稿提前定稿。 */
     suspend fun recoverInterruptedDrafts() = database.withTransaction {
@@ -79,13 +82,17 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
     // --- Api Configs --- 
     suspend fun loadApiConfigs(): List<ApiConfig> {
         return apiConfigDao.getConfigs(isImageGen = false).map { it.toApiConfig() }
+            .also { shownConfigIds["text"] = it.map(ApiConfig::id).toSet() }
     }
 
-    suspend fun saveApiConfigs(configs: List<ApiConfig>) = database.withTransaction {
-        val removed = apiConfigDao.getConfigs(false).map { it.id }.toSet() - configs.map { it.id }.toSet()
+    suspend fun saveApiConfigs(configs: List<ApiConfig>, reviveDeleted: Boolean = false) = database.withTransaction {
+        val storedConfigs = apiConfigDao.getConfigs(false).map { it.toApiConfig() }
+        val stored = storedConfigs.map { it.id }.toSet()
+        val kept = configs.reconcileWithSync("text", "api_configs", storedConfigs, reviveDeleted, ApiConfig::id)
+        val removed = stored - kept.map { it.id }.toSet()
         apiConfigDao.replaceConfigs(
             isImageGen = false,
-            configs = configs.map { it.toEntity(isImageGenConfig = false) },
+            configs = kept.map { it.toEntity(isImageGenConfig = false) },
         )
         recordRemovedSettings("api_configs", removed)
         captureSyncSettings()
@@ -93,13 +100,15 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
 
     suspend fun loadImageGenApiConfigs(): List<ApiConfig> {
         return withBuiltinImageModels(apiConfigDao.getConfigs(isImageGen = true).map { it.toApiConfig() })
+            .also { shownConfigIds["image"] = it.map(ApiConfig::id).toSet() }
     }
 
-    suspend fun saveImageGenApiConfigs(configs: List<ApiConfig>) = database.withTransaction {
+    suspend fun saveImageGenApiConfigs(configs: List<ApiConfig>, reviveDeleted: Boolean = false) = database.withTransaction {
         val stored = apiConfigDao.getConfigs(true).map { it.toApiConfig() }
-        // 清空和导入同样保留已有内置 ID；缺失的模型再用稳定 ID 补齐。
+        val configs = configs.reconcileWithSync("image", "api_configs", stored, reviveDeleted, ApiConfig::id)
+        // 旧 ID 是历史会话及远端选择的别名，不能直接删除；对外列表统一由加载入口按内置身份合并。
         val protected = stored.filter { it.isBuiltinModel() && configs.none { candidate -> candidate.id == it.id } }
-        val complete = withBuiltinImageModels(configs + protected)
+        val complete = (configs + protected + withBuiltinImageModels(configs + protected)).distinctBy { it.id }
         val removed = stored.map { it.id }.toSet() - complete.map { it.id }.toSet()
         apiConfigDao.replaceConfigs(
             isImageGen = true,
@@ -120,11 +129,15 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
     // --- Voice Backend Configs ---
     suspend fun loadVoiceBackendConfigs(): List<VoiceBackendConfig> {
         return voiceConfigDao.getAll().map { it.toVoiceBackendConfig() }
+            .also { shownConfigIds["voice"] = it.map(VoiceBackendConfig::id).toSet() }
     }
 
-    suspend fun saveVoiceBackendConfigs(configs: List<VoiceBackendConfig>) = database.withTransaction {
-        val removed = voiceConfigDao.getAll().map { it.id }.toSet() - configs.map { it.id }.toSet()
-        voiceConfigDao.replaceAll(configs.map { it.toEntity() })
+    suspend fun saveVoiceBackendConfigs(configs: List<VoiceBackendConfig>, reviveDeleted: Boolean = false) = database.withTransaction {
+        val storedConfigs = voiceConfigDao.getAll().map { it.toVoiceBackendConfig() }
+        val stored = storedConfigs.map { it.id }.toSet()
+        val kept = configs.reconcileWithSync("voice", "voice_configs", storedConfigs, reviveDeleted, VoiceBackendConfig::id)
+        val removed = stored - kept.map { it.id }.toSet()
+        voiceConfigDao.replaceAll(kept.map { it.toEntity() })
         recordRemovedSettings("voice_configs", removed)
         captureSyncSettings()
     }
@@ -134,10 +147,10 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
     }
 
     // --- Settings / Key-Value ---
-    suspend fun loadSelectedConfigId(): String? = settingsDao.getValue("selected_api_config_id")
+    suspend fun loadSelectedConfigId(): String? = settingsDao.getValue("selected_api_config_id")?.let { builtinModelAliases()[it] ?: it }
     suspend fun saveSelectedConfigId(id: String?) = saveSetting("selected_api_config_id", id)
 
-    suspend fun loadSelectedImageGenConfigId(): String? = settingsDao.getValue("selected_image_gen_config_id")
+    suspend fun loadSelectedImageGenConfigId(): String? = settingsDao.getValue("selected_image_gen_config_id")?.let { builtinModelAliases()[it] ?: it }
     suspend fun saveSelectedImageGenConfigId(id: String?) = saveSetting("selected_image_gen_config_id", id)
 
     suspend fun loadSelectedVoiceConfigId(): String? = settingsDao.getValue("selected_voice_config_id")
@@ -201,6 +214,37 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
 
     /** 在用户实际保存时封存逐条内容和修改时间，离线期间也记录；这里不发网络请求。 */
     private suspend fun captureSyncSettings() = com.android.everytalk.data.sync.captureSyncSettings(applicationContext, database)
+
+    /**
+     * 界面持有的整表列表可能早于同步刷新，两个方向都要挡住：
+     * 同步已删除（库中已无且留有墓碑）的条目不能被旧列表写回，否则投影会复活墓碑；
+     * 同步刚加进库、界面还没拿到的条目不在列表里也不能算用户删除，否则会给所有设备发墓碑。
+     * 导入、回滚按传入列表原样恢复，传 reviveDeleted。
+     */
+    /**
+     * 同步刷新读库期间界面列表被改过时，读到的结果会被丢弃；这里改记界面实际持有的 ID，
+     * 并稍后重读一次，让刚同步来的条目最终显示出来。
+     */
+    fun rememberShownConfigIds(scope: String, ids: List<String>) {
+        shownConfigIds[scope] = ids.toSet()
+        com.android.everytalk.data.sync.SyncLocalChanges.notifyChanged()
+    }
+
+    private suspend fun <T> List<T>.reconcileWithSync(
+        scope: String, kind: String, stored: List<T>, reviveDeleted: Boolean, id: (T) -> String,
+    ): List<T> {
+        val ids = map(id).toSet()
+        val storedIds = stored.map(id).toSet()
+        val shown = shownConfigIds[scope].orEmpty()
+        val stale = if (reviveDeleted) emptyList()
+            else filter { id(it) !in storedIds && settingsDao.getUserSetting(kind, id(it))?.deleted == true }
+        val unseen = if (reviveDeleted) emptyList() else stored.filter { id(it) !in ids && id(it) !in shown }
+        val result = filterNot { it in stale } + unseen
+        shownConfigIds[scope] = ids - stale.map(id).toSet()
+        // 让界面按数据库重新加载：去掉已删除的条目，补上刚同步来的条目。
+        if (stale.isNotEmpty() || unseen.isNotEmpty()) com.android.everytalk.data.sync.SyncLocalChanges.notifyChanged()
+        return result
+    }
 
     /** 删除只写对应逻辑记录的墓碑，不能把整张设置表当作本次保存的范围。 */
     private suspend fun recordRemovedSettings(kind: String, keys: Set<String>) {
@@ -665,6 +709,7 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
     
     suspend fun loadConversationApiConfigIds(): Map<String, String> {
         val jsonString = settingsDao.getValue("conversation_api_config_ids")
+        val aliases = builtinModelAliases()
         return if (jsonString != null) {
             try {
                 json.decodeFromString(
@@ -673,13 +718,22 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
                         String.serializer()
                     ),
                     jsonString
-                )
+                ).mapValues { (_, configId) -> aliases[configId] ?: configId }
             } catch (e: Exception) {
                 emptyMap()
             }
         } else {
             emptyMap()
         }
+    }
+
+    /** 同步记录保留原始 ID；读取选择时把旧 ID 解析到当前列表代表项，不改写或丢弃历史数据。 */
+    private suspend fun builtinModelAliases(): Map<String, String> {
+        val stored = apiConfigDao.getConfigs(true).map { it.toApiConfig() }
+        val retained = withBuiltinImageModels(stored).filter { it.isBuiltinModel() }.associateBy { it.builtinModelId() }
+        return stored.mapNotNull { config ->
+            retained[config.builtinModelId()]?.let { config.id to it.id }
+        }.toMap()
     }
 
     suspend fun saveConversationApiConfigIds(mapping: Map<String, String>) {

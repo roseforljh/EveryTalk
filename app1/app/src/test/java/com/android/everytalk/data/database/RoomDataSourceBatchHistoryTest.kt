@@ -13,6 +13,11 @@ import io.mockk.every
 import io.mockk.mockkObject
 import io.mockk.unmockkObject
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import com.android.everytalk.data.sync.RoomSyncStore
+import com.android.everytalk.data.sync.PullResponse
+import com.android.everytalk.data.sync.SyncRecord
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -168,6 +173,45 @@ class RoomDataSourceBatchHistoryTest {
         assertEquals(3, retained.size)
         assertTrue(retained.any { it.id == "legacy-default" })
         assertEquals(3, database.apiConfigDao().getConfigs(true).size)
+    }
+
+    @Test
+    fun `云端新旧默认ID合并后只展示一项且历史选择仍指向原模型`() = runBlocking {
+        val defaults = com.android.everytalk.data.DataClass.builtinImageModels
+        val legacy = defaults.map { it.copy(id = "legacy-${it.id}", provider = " Default ") }
+        val custom = defaults.first().copy(id = "custom", provider = "我的服务")
+        database.apiConfigDao().insertConfigs((legacy + defaults + custom).map { it.toEntity(isImageGenConfig = true) })
+        dataSource.saveSelectedConfigId(legacy[1].id)
+        dataSource.saveSelectedImageGenConfigId(legacy[2].id)
+        dataSource.saveConversationApiConfigIds(mapOf("chat-qwen" to legacy[1].id, "chat-custom" to custom.id))
+
+        repeat(2) {
+            val loaded = dataSource.loadImageGenApiConfigs()
+            assertEquals(4, loaded.size)
+            assertEquals(defaults.map { it.id }.toSet() + custom.id, loaded.map { it.id }.toSet())
+            assertEquals(defaults[1].id, dataSource.loadSelectedConfigId())
+            assertEquals(defaults[2].id, dataSource.loadSelectedImageGenConfigId())
+            assertEquals(mapOf("chat-qwen" to defaults[1].id, "chat-custom" to custom.id), dataSource.loadConversationApiConfigIds())
+            dataSource.saveImageGenApiConfigs(loaded)
+        }
+        // 旧 ID 仅作为别名保留，清空自定义项或重复拉取不能让它再次出现在模型列表里。
+        dataSource.clearImageGenApiConfigs()
+        assertEquals(3, dataSource.loadImageGenApiConfigs().size)
+        assertTrue(database.apiConfigDao().getConfigs(true).any { it.id == legacy[1].id })
+        val anotherDevice = defaults[1].copy(id = "another-device-qwen")
+        val remote = SyncRecord("user_settings", java.util.UUID.randomUUID().toString(), buildJsonObject {
+            put("kind", "api_configs"); put("key", anotherDevice.id)
+            put("value", buildJsonObject {
+                put("provider", anotherDevice.provider); put("model", anotherDevice.model)
+                put("name", anotherDevice.name); put("imageConfig", true)
+            })
+        }, updatedAt = "2026-10-25T00:00:00Z", deleted = false, serverSeq = 1)
+        val store = RoomSyncStore(database)
+        store.applyPullPage(PullResponse(listOf(remote), 1, false, 0))
+        store.applyPullPage(PullResponse(listOf(remote.copy(serverSeq = 2)), 2, false, 0))
+        dataSource.saveSelectedConfigId(anotherDevice.id)
+        assertEquals(3, dataSource.loadImageGenApiConfigs().size)
+        assertEquals(defaults[1].id, dataSource.loadSelectedConfigId())
     }
 
     private lateinit var database: AppDatabase

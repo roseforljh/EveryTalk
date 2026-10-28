@@ -211,13 +211,23 @@ internal class SyncCredentialSynchronizer(
                             val config = syncJson.decodeFromJsonElement(CloudflareComputerConfigEntity.serializer(), bundle.getValue("config"))
                             val auth = syncJson.decodeFromJsonElement(CloudflareAuthorizationEntity.serializer(), bundle.getValue("authorization"))
                             require(config.computerId == row.key && config.authorizationId == auth.authorizationId)
-                            credentials.saveAgentAuthorization(auth.credentialReference, bundle.getValue("material").jsonPrimitive.content.toCharArray())
-                            db.withTransaction {
-                                db.computerDao().upsertCloudflareAuthorization(auth)
-                                db.computerDao().upsertCloudflareConfig(config)
-                                db.computerDao().getComputer(row.key)?.let { computer -> db.computerDao().upsertComputer(computer.copy(
-                                    providerConfigRef = config.computerId, credentialState = ComputerCredentialState.ORIGINAL_ENCRYPTED.name,
-                                    status = ComputerStatus.DISCONNECTED.name, lastErrorCode = null)) }
+                            val material = bundle.getValue("material").jsonPrimitive.content.toCharArray()
+                            // 与 SSH 凭据相同：本机已是同一份授权时不重写，否则其他字段的同步或本机上传回显都会把可用服务器打回不可用。
+                            val localConfig = db.computerDao().getCloudflareConfig(row.key)
+                            val localAuth = localConfig?.let { db.computerDao().getCloudflareAuthorization(it.authorizationId) }
+                            val localMaterial = localAuth?.let { credentials.loadAgentAuthorization(it.credentialReference) }
+                            val unchanged = localConfig == config && localAuth == auth && localMaterial != null && localMaterial.contentEquals(material)
+                            localMaterial?.fill('\u0000')
+                            if (unchanged) material.fill('\u0000') else {
+                                credentials.saveAgentAuthorization(auth.credentialReference, material)
+                                db.withTransaction {
+                                    db.computerDao().upsertCloudflareAuthorization(auth)
+                                    db.computerDao().upsertCloudflareConfig(config)
+                                    // Cloudflare 没有 SSH 探测，授权有效即可用；Token 失效时由调用路径转为 AUTHORIZATION_REQUIRED。
+                                    db.computerDao().getComputer(row.key)?.let { computer -> db.computerDao().upsertComputer(computer.copy(
+                                        providerConfigRef = config.computerId, credentialState = ComputerCredentialState.ORIGINAL_ENCRYPTED.name,
+                                        status = if (auth.revoked) ComputerStatus.AUTHORIZATION_REQUIRED.name else ComputerStatus.READY.name, lastErrorCode = null)) }
+                                }
                             }
                         }
                     }

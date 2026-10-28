@@ -516,15 +516,15 @@ class DataPersistenceManager(
         }
     }
 
-    suspend fun saveApiConfigs(configsToSave: List<ApiConfig>, isImageGen: Boolean = false) {
+    suspend fun saveApiConfigs(configsToSave: List<ApiConfig>, isImageGen: Boolean = false, reviveDeleted: Boolean = false) {
         withContext(Dispatchers.IO) {
             if (isImageGen) {
                 Log.d(TAG, "saveApiConfigs: 保存 ${configsToSave.size} 个图像生成 API 配置到 RoomDataSource...")
-                roomDataSource.saveImageGenApiConfigs(configsToSave)
+                roomDataSource.saveImageGenApiConfigs(configsToSave, reviveDeleted)
                 Log.i(TAG, "saveApiConfigs: 图像生成 API 配置已通过 RoomDataSource 保存。")
             } else {
                 Log.d(TAG, "saveApiConfigs: 保存 ${configsToSave.size} 个 API 配置到 RoomDataSource...")
-                roomDataSource.saveApiConfigs(configsToSave)
+                roomDataSource.saveApiConfigs(configsToSave, reviveDeleted)
                 Log.i(TAG, "saveApiConfigs: API 配置已通过 RoomDataSource 保存。")
             }
         }
@@ -563,17 +563,17 @@ class DataPersistenceManager(
                         // 所引用模型尚未到达时保留绑定但不显示另一份旧模型，下一页配置到达后再应用。
                         stateHolder._selectedApiConfig.value = (text + images).find { it.id == activeModelId }
                     }
-                }
+                } else roomDataSource.rememberShownConfigIds("text", stateHolder._apiConfigs.value.map { it.id })
                 if (stateHolder._imageGenApiConfigs.value == imageBefore) {
                     stateHolder._imageGenApiConfigs.value = images
                     stateHolder._selectedImageGenApiConfig.value = images.find { it.id == selectedImage }
                         ?: stateHolder._selectedImageGenApiConfig.value?.takeIf { current -> selectedImage != null && images.any { it.id == current.id } }
-                }
+                } else roomDataSource.rememberShownConfigIds("image", stateHolder._imageGenApiConfigs.value.map { it.id })
                 if (stateHolder._voiceBackendConfigs.value == voiceBefore) {
                     stateHolder._voiceBackendConfigs.value = voice
                     stateHolder._selectedVoiceConfig.value = voice.find { it.id == selectedVoice }
                         ?: stateHolder._selectedVoiceConfig.value?.takeIf { current -> selectedVoice != null && voice.any { it.id == current.id } }
-                }
+                } else roomDataSource.rememberShownConfigIds("voice", stateHolder._voiceBackendConfigs.value.map { it.id })
                 // IO 读取期间用户可能刚改了标签或模型，旧读取结果不能覆盖这次操作。
                 if (stateHolder.conversationApiConfigIds.value == modelsBefore) {
                     stateHolder.conversationApiConfigIds.value = models
@@ -1078,10 +1078,10 @@ class DataPersistenceManager(
     /**
      * 保存语音后端配置列表
      */
-    suspend fun saveVoiceBackendConfigs(configs: List<VoiceBackendConfig>) {
+    suspend fun saveVoiceBackendConfigs(configs: List<VoiceBackendConfig>, reviveDeleted: Boolean = false) {
         withContext(Dispatchers.IO) {
             try {
-                roomDataSource.saveVoiceBackendConfigs(configs)
+                roomDataSource.saveVoiceBackendConfigs(configs, reviveDeleted)
                 Log.d(TAG, "saveVoiceBackendConfigs: 已保存 ${configs.size} 个语音配置")
             } catch (e: Exception) {
                 e.rethrowIfCancellation()

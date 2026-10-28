@@ -13,8 +13,8 @@ import com.android.everytalk.data.database.entities.UserSettingEntity
 
 @Dao
 interface SettingsDao {
-    /** 只观察同步控制键，不向 UI 暴露模型密钥设置。 */
-    @Query("SELECT * FROM system_settings WHERE `key` LIKE 'sync_%'")
+    /** 页面只需要三个状态键和失败提示，不能加载数千条附件缓存及内部同步清单。 */
+    @Query("SELECT * FROM system_settings WHERE `key` IN ('sync_epoch_decision_required', 'sync_last_success_at', 'sync_paused_after_cloud_reset') OR `key` GLOB 'sync_rejected:*'")
     fun observeSyncControl(): kotlinx.coroutines.flow.Flow<List<SystemSettingEntity>>
 
     @Query("SELECT COUNT(*) FROM system_settings WHERE `key` LIKE 'sync_rejected:%'")
@@ -93,8 +93,21 @@ interface SettingsDao {
     @Query("DELETE FROM system_settings WHERE `key` = :key")
     suspend fun deleteSetting(key: String)
 
-    @Query("SELECT * FROM system_settings WHERE `key` LIKE :prefix || '%'")
-    suspend fun getByPrefix(prefix: String): List<SystemSettingEntity>
+    /** 按主键分批读取内部清单，避免 Room 的单次结果超过设备 CursorWindow 容量。 */
+    @Query("SELECT * FROM system_settings WHERE substr(`key`, 1, length(:prefix)) = :prefix AND (:afterKey IS NULL OR `key` > :afterKey) ORDER BY `key` LIMIT 128")
+    suspend fun getPrefixPage(prefix: String, afterKey: String?): List<SystemSettingEntity>
+
+    /** 前缀按字面匹配，下划线和百分号不能被当成 SQL 通配符。 */
+    suspend fun getByPrefix(prefix: String): List<SystemSettingEntity> {
+        val rows = mutableListOf<SystemSettingEntity>()
+        var afterKey: String? = null
+        do {
+            val page = getPrefixPage(prefix, afterKey)
+            rows.addAll(page)
+            afterKey = page.lastOrNull()?.key
+        } while (page.size == 128)
+        return rows
+    }
 
     // Pinned Items
     @Query("SELECT id FROM pinned_items WHERE isImageGeneration = :isImageGen")

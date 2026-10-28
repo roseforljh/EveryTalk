@@ -3,6 +3,7 @@ package com.android.everytalk.data.sync
 import android.app.Application
 import android.content.Context
 import androidx.room.Room
+import androidx.room.withTransaction
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.android.everytalk.data.DataClass.Message
@@ -11,6 +12,7 @@ import com.android.everytalk.data.auth.SyncAccountBindingStore
 import com.android.everytalk.data.database.AppDatabase
 import com.android.everytalk.data.database.entities.*
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.test.resetMain
@@ -26,6 +28,52 @@ import java.util.UUID
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [34], application = Application::class)
 class SyncEngineTest {
+    @Test fun `同步页面不读取内部缓存且前缀清单超过窗口大小仍完整返回`() = runBlocking {
+        val db = device()
+        val dao = db.settingsDao()
+        db.withTransaction {
+            repeat(4096) { index ->
+                dao.insertSetting(SystemSettingEntity("sync_resource_meta:${index.toString().padStart(5, '0')}", "资料".repeat(400)))
+            }
+            dao.insertSetting(SystemSettingEntity("syncXresourceXmeta:wrong", "不应匹配下划线前缀"))
+            dao.insertSetting(SystemSettingEntity(SyncStateStore.KEY_LAST_SYNC_AT, "123"))
+            dao.insertSetting(SystemSettingEntity(SyncStateStore.KEY_EPOCH_DECISION, "2"))
+            dao.insertSetting(SystemSettingEntity(SyncStateStore.KEY_RESET_PAUSED, "true"))
+            dao.insertSetting(SystemSettingEntity("sync_rejected:attachments:test", "INVALID_CHANGE"))
+        }
+        val rows = dao.getByPrefix("sync_resource_meta:")
+        assertEquals(4096, rows.size)
+        assertEquals(4096, rows.map { it.key }.toSet().size)
+        assertEquals("sync_resource_meta:04095", rows.last().key)
+        assertEquals(1, dao.getByPrefix("syncXresourceXmeta:").size)
+        val controls = dao.observeSyncControl().first()
+        assertEquals(setOf(SyncStateStore.KEY_LAST_SYNC_AT, SyncStateStore.KEY_EPOCH_DECISION,
+            SyncStateStore.KEY_RESET_PAUSED, "sync_rejected:attachments:test"), controls.map { it.key }.toSet())
+    }
+
+    @Test fun `已删除父消息的附件不再排队且清理旧失败提示保留存活附件`() = runBlocking {
+        val db = device(); val session = seed(db)
+        val parent = db.chatDao().getMessageByUuid(message("local-0", session).uuid)!!
+        db.chatDao().writeMessages(listOf(parent.copy(deleted = true, syncStatus = SyncStatus.SYNCED)))
+        val deletedAttachment = SyncAttachmentEntity(UUID.randomUUID().toString(), session.uuid, parent.uuid,
+            "文档.zip", "application/zip", 10, "a".repeat(64), kind = "file", syncStatus = SyncStatus.LOCAL_ONLY)
+        val liveAttachment = deletedAttachment.copy(id = UUID.randomUUID().toString(), messageId = UUID.randomUUID().toString(), syncStatus = SyncStatus.PENDING)
+        db.syncAttachmentDao().upsert(deletedAttachment); db.syncAttachmentDao().upsert(liveAttachment)
+        val marker = "sync_rejected:attachments:${deletedAttachment.id}"
+        db.settingsDao().insertSetting(SystemSettingEntity(marker, "message_deleted"))
+        val store = RoomSyncStore(db)
+        val batch = store.pendingBatch()
+        assertFalse(batch.any { it.change.id == deletedAttachment.id })
+        assertTrue(db.syncAttachmentDao().get(deletedAttachment.id)!!.deleted)
+        assertNull(db.settingsDao().getValue(marker))
+        val sent = batch.single { it.change.id == liveAttachment.id }
+        store.applyPush(PushResponse(listOf(PushResult(0, "attachments", liveAttachment.id, "rejected",
+            error = SyncError("message_deleted", "父消息已删除")))), listOf(sent))
+        assertTrue(db.syncAttachmentDao().get(liveAttachment.id)!!.deleted)
+        assertEquals(SyncStatus.SYNCED, db.syncAttachmentDao().get(liveAttachment.id)!!.syncStatus)
+        assertNull(db.settingsDao().getValue("sync_rejected:attachments:${liveAttachment.id}"))
+    }
+
     private class Binding(var accountId: String? = null) : SyncAccountBindingStore {
         override suspend fun readBoundAccountId(): String? = accountId
         override suspend fun bindTo(accountId: String) { this.accountId = accountId }
@@ -279,6 +327,38 @@ class SyncEngineTest {
         run(b, api); run(a, api)
         assertNull(a.mcpConfigDao().getConfigById("mcp-demo"))
         assertTrue(RoomSyncStore(a).pendingBatch().isEmpty())
+    }
+
+    @Test fun `界面旧列表保存不能复活已同步删除的配置`() = runBlocking {
+        val db = device()
+        val source = com.android.everytalk.data.database.RoomDataSource(ApplicationProvider.getApplicationContext(), db)
+        val config = com.android.everytalk.data.DataClass.ApiConfig("https://api.example/v1", "key", "model", "我的服务", id = "cfg-1", name = "模型")
+        source.saveApiConfigs(listOf(config))
+        source.saveApiConfigs(emptyList())
+        source.saveApiConfigs(listOf(config))
+        assertTrue(source.loadApiConfigs().isEmpty())
+        assertTrue(db.settingsDao().getUserSetting("api_configs", "cfg-1")!!.deleted)
+        source.saveApiConfigs(listOf(config), reviveDeleted = true)
+        assertEquals(listOf("cfg-1"), source.loadApiConfigs().map { it.id })
+        // 同步刚加进库、界面还没拿到的配置，不能被旧列表当成删除。
+        db.apiConfigDao().insertConfigs(listOf(config.copy(id = "cfg-remote").toEntity()))
+        source.saveApiConfigs(listOf(config))
+        assertEquals(setOf("cfg-1", "cfg-remote"), source.loadApiConfigs().map { it.id }.toSet())
+        assertFalse(db.settingsDao().getUserSetting("api_configs", "cfg-remote")!!.deleted)
+    }
+
+    @Test fun `同步前的后台投影不复活墓碑也不按当前时间盖过别处修改`() = runBlocking {
+        val db = device()
+        val config = com.android.everytalk.data.DataClass.ApiConfig("https://api.example/v1", "key", "model", "我的服务", id = "cfg-1", name = "模型")
+        db.apiConfigDao().insertConfigs(listOf(config.toEntity()))
+        SyncSettingsProjector(db).refresh()
+        val captured = db.settingsDao().getUserSetting("api_configs", "cfg-1")!!.updatedAt
+        db.apiConfigDao().insertConfigs(listOf(config.copy(name = "后台差异").toEntity()))
+        SyncSettingsProjector(db, background = true).refresh()
+        assertEquals(captured + 1, db.settingsDao().getUserSetting("api_configs", "cfg-1")!!.updatedAt)
+        SyncSettingsProjector(db).markDeleted("api_configs", "cfg-1")
+        SyncSettingsProjector(db, background = true).refresh()
+        assertTrue(db.settingsDao().getUserSetting("api_configs", "cfg-1")!!.deleted)
     }
 
     @Test fun `两设备保留各自历史且拉取不产生回传`() = runBlocking {

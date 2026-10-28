@@ -62,7 +62,8 @@ internal class RoomSyncStore(
 
     /** 先封存本机设置变更再拉取，防止首个远端分页重建列表时抹掉游客的分组和置顶。 */
     override suspend fun prepareForSync() = database.withTransaction {
-        SyncSettingsProjector(database, secrets, userId, state.readSecretsEpoch().coerceAtLeast(0L)).refresh()
+        retireDeletedParentAttachments()
+        SyncSettingsProjector(database, secrets, userId, state.readSecretsEpoch().coerceAtLeast(0L), background = true).refresh()
         if (settings.getValue("sync_projection_recovery_version") != "5") {
             // 仅重放远端快照，修复旧版漏应用的行。不能在没有服务器对账证据时
             // 把 LOCAL_ONLY 或所有配置强制改成待上传，否则会突破用户的数据保留决定。
@@ -83,6 +84,7 @@ internal class RoomSyncStore(
             secrets = secrets,
             userId = userId,
             secretsEpoch = state.readSecretsEpoch().coerceAtLeast(0L),
+            background = true,
         ).refresh()
     }
 
@@ -169,10 +171,12 @@ internal class RoomSyncStore(
     private suspend fun restoreComputer(setting: UserSettingEntity, value: JsonObject) {
         val old = database.computerDao().getAllSnapshot().firstOrNull { it.id == setting.key }
         fun text(name: String, fallback: String = "") = value[name]?.jsonPrimitive?.contentOrNull ?: fallback
+        // 同步来的服务器在别的设备上已配置完成：标为待检测，凭据和 Host Key 恢复后由后台自动检测转为 READY。
         val base = old ?: com.android.everytalk.data.computer.Computer(
             id = setting.key, displayName = text("displayName"), host = text("host"), port = 22,
             username = text("username"), authKind = com.android.everytalk.data.computer.ComputerAuthKind.PASSWORD,
             runMode = com.android.everytalk.data.computer.ComputerRunMode.DIRECT,
+            status = com.android.everytalk.data.computer.ComputerStatus.DISCONNECTED,
         ).toEntity(syncJson)
         database.computerDao().upsertComputer(base.copy(
             displayName = text("displayName", base.displayName), provider = text("provider", base.provider),
@@ -331,11 +335,13 @@ internal class RoomSyncStore(
 
     override suspend fun pendingBatch(maxItems: Int): List<PendingChangeSnapshot> {
         require(maxItems in 1..500)
+        retireDeletedParentAttachments()
         SyncSettingsProjector(
             database = database,
             secrets = secrets,
             userId = userId,
             secretsEpoch = state.readSecretsEpoch().coerceAtLeast(0L),
+            background = true,
         ).refresh()
         // 若整批都是超限记录，继续取后面的合法条目，不能让坏数据饿死后续历史。
         while (true) {
@@ -484,6 +490,12 @@ internal class RoomSyncStore(
                 if (code == "session_deleted" && s.entity == SyncEntity.MESSAGES) {
                     chat.discardMessageByUuid(s.change.id)
                     settings.deleteSetting(rejectionKey(s))
+                } else if (code == "message_deleted" && s.entity == SyncEntity.ATTACHMENTS) {
+                    // 云端父消息已删除，不能把附件当成永久同步失败，也不能重试使它复活。
+                    if (stillCurrent(s)) attachments.get(s.change.id)?.let {
+                        attachments.upsert(it.copy(deleted = true, syncStatus = SyncStatus.SYNCED))
+                        settings.deleteSetting(rejectionKey(s))
+                    }
                 } else if (code == "SECRETS_EPOCH_MISMATCH") {
                     // 保留 PENDING，下一轮先 pull 最新密钥代次或重新计算可选字段后再试。
                     // 这类错误不能进入永久失败列表，也不能让有效变更被整批阻塞。
@@ -526,6 +538,16 @@ internal class RoomSyncStore(
             SyncEntity.ATTACHMENTS -> attachments.markRejectedIfVersion(snapshot.change.id, snapshot.version)
         }
         settings.insertSetting(SystemSettingEntity(rejectionKey(snapshot), code))
+    }
+
+    /** 升级时也处理旧失败附件；仍存活的附件错误保留，不能掩盖实际传输失败。 */
+    private suspend fun retireDeletedParentAttachments() = database.withTransaction {
+        attachments.retireDeletedParentAttachments()
+        settings.getByPrefix("sync_rejected:attachments:").forEach { failure ->
+            if (attachments.get(failure.key.removePrefix("sync_rejected:attachments:"))?.deleted == true) {
+                settings.deleteSetting(failure.key)
+            }
+        }
     }
 
     /** 一页记录和 next_cursor 原子提交；任何写入失败都不推进游标，不静默丢弃数据。 */
@@ -748,6 +770,18 @@ internal class RoomSyncStore(
                     if (!builtin) database.apiConfigDao().deleteConfigById(key)
                 }
                 "voice_configs" -> database.voiceConfigDao().deleteById(key)
+                // 下面三类的本机数据存在键值设置里。墓碑到达时不清掉，下一次投影会把残留数据
+                // 当成新修改重新上传，删除就会在所有设备上复活。
+                "web_search_configs" -> settings.getValue("external_web_search_configs")?.let { raw ->
+                    runCatching { syncJson.decodeFromString<List<ExternalWebSearchProviderConfig>>(raw) }.getOrNull()
+                }?.let { rows ->
+                    settings.insertSetting(SystemSettingEntity("external_web_search_configs",
+                        syncJson.encodeToString(rows.filterNot { it.providerId == key })))
+                }
+                "voice_custom_models" -> key.split(':', limit = 2).takeIf { it.size == 2 }?.let { (kindPart, platform) ->
+                    settings.deleteSetting("custom_models_${kindPart}_$platform")
+                }
+                "voice_llm_platforms" -> settings.deleteSetting("voice_llm_platform:$key")
                 "mcp_servers" -> database.mcpConfigDao().deleteConfigById(
                     old?.value?.let { runCatching { syncJson.parseToJsonElement(it).jsonObject["localId"]?.jsonPrimitive?.contentOrNull }.getOrNull() } ?: key)
                 "skills" -> database.skillDao().delete(key)

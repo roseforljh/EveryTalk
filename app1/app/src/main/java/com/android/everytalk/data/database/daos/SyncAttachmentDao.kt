@@ -8,6 +8,17 @@ import com.android.everytalk.data.database.entities.SyncAttachmentEntity
 
 @Dao
 interface SyncAttachmentDao {
+    /** 父消息/会话的墓碑已是云端事实，停止上传其附件；仅更新元数据，不删除本地文件。 */
+    @Query("""
+        UPDATE sync_attachments SET deleted = 1, sync_status = 'SYNCED'
+        WHERE deleted = 0 AND (
+            EXISTS (SELECT 1 FROM messages m WHERE m.uuid = sync_attachments.messageId AND m.deleted = 1)
+            OR EXISTS (SELECT 1 FROM chat_sessions s WHERE s.uuid = sync_attachments.sessionId AND s.deleted = 1)
+            OR EXISTS (SELECT 1 FROM system_settings s WHERE s.`key` = 'sync_message_deleted:' || sync_attachments.messageId)
+        )
+    """)
+    suspend fun retireDeletedParentAttachments(): Int
+
     @Query("SELECT * FROM sync_attachments WHERE sync_status = 'PENDING' ORDER BY updated_at LIMIT :limit")
     suspend fun getPending(limit: Int): List<SyncAttachmentEntity>
 

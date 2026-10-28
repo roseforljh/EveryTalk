@@ -84,11 +84,11 @@ internal suspend fun SettingsController.rollbackStateInternal(backup: BackupStat
         stateHolder.conversationGroupComputerIds.value = backup.conversationGroupComputerIds
         
         // 恢复持久化数据
-        persistenceManager.saveApiConfigs(backup.apiConfigs, isImageGen = false)
-        persistenceManager.saveApiConfigs(backup.imageGenApiConfigs, isImageGen = true)
+        persistenceManager.saveApiConfigs(backup.apiConfigs, isImageGen = false, reviveDeleted = true)
+        persistenceManager.saveApiConfigs(backup.imageGenApiConfigs, isImageGen = true, reviveDeleted = true)
         persistenceManager.saveSelectedConfigIdentifier(backup.selectedApiConfig?.id, isImageGen = false)
         persistenceManager.saveSelectedConfigIdentifier(backup.selectedImageGenApiConfig?.id, isImageGen = true)
-        persistenceManager.saveVoiceBackendConfigs(backup.voiceBackendConfigs)
+        persistenceManager.saveVoiceBackendConfigs(backup.voiceBackendConfigs, reviveDeleted = true)
         persistenceManager.saveSelectedVoiceConfigId(backup.selectedVoiceConfig?.id)
         historyManager.persistHistoryListDirectly(isImageGeneration = false)
         historyManager.persistHistoryListDirectly(isImageGeneration = true)
@@ -239,7 +239,7 @@ internal suspend fun SettingsController.importApiConfigsInternal(settings: Expor
         }
 
         stateHolder._apiConfigs.value = mergedMainConfigs
-        persistenceManager.saveApiConfigs(mergedMainConfigs, isImageGen = false)
+        persistenceManager.saveApiConfigs(mergedMainConfigs, isImageGen = false, reviveDeleted = true)
 
         // 选中项：优先保持原来的 id，如不存在则选第一个，都不存在则为null
         val previousSelectedMainId = stateHolder._selectedApiConfig.value?.id
@@ -280,7 +280,7 @@ internal suspend fun SettingsController.importApiConfigsInternal(settings: Expor
         }
 
         stateHolder._imageGenApiConfigs.value = mergedImageConfigs
-        persistenceManager.saveApiConfigs(mergedImageConfigs, isImageGen = true)
+        persistenceManager.saveApiConfigs(mergedImageConfigs, isImageGen = true, reviveDeleted = true)
 
         val previousSelectedImageId = stateHolder._selectedImageGenApiConfig.value?.id
         val newSelectedImage = when {
@@ -369,7 +369,7 @@ internal suspend fun SettingsController.importVoiceConfigsInternal(settings: Exp
 
             stateHolder._voiceBackendConfigs.value = mergedConfigs
             stateHolder._selectedVoiceConfig.value = newSelected
-            persistenceManager.saveVoiceBackendConfigs(mergedConfigs)
+            persistenceManager.saveVoiceBackendConfigs(mergedConfigs, reviveDeleted = true)
             persistenceManager.saveSelectedVoiceConfigId(newSelected?.id)
             
             Log.i(TAG, "语音配置导入完成: 合并后总数 ${mergedConfigs.size}")

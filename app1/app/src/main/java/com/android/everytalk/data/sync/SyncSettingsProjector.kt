@@ -30,6 +30,11 @@ internal class SyncSettingsProjector(
     private val secrets: SyncSecretManager? = null,
     private val userId: String? = null,
     private val secretsEpoch: Long = 0L,
+    /**
+     * 同步流程自己触发的投影。用户保存时已经按当时时间封存过，这里冒出的差异只来自
+     * 密钥解锁、版本升级或清空同步记录，不能按"现在"盖过其他设备的修改或删除。
+     */
+    private val background: Boolean = false,
 ) {
     private val settings = database.settingsDao()
     private val sessions = database.chatDao()
@@ -307,10 +312,12 @@ internal class SyncSettingsProjector(
         kind: String,
         key: String,
         value: JsonObject,
-        modifiedAt: Long = System.currentTimeMillis(),
+        modifiedAt: Long? = null,
         syncStatus: String = SyncStatus.PENDING,
     ) {
         val old = settings.getUserSetting(kind, key)
+        // 后台投影不能复活墓碑；只有业务表自带的修改时间晚于删除，才说明用户确实重新创建过。
+        if (background && old?.deleted == true && (modifiedAt ?: 0L) <= old.updatedAt) return
         val merged = preserveEncryptedLeaves(old?.value, value)
         val raw = merged.toString()
         fun withToggleDefaults(element: JsonElement): JsonElement =
@@ -321,7 +328,8 @@ internal class SyncSettingsProjector(
         // 服务端会排序 JSON 属性，并可能把 0.0 写成 0；这些变化不代表用户修改了配置。
         // 同样，旧云端缺省的 false 和显式 false 等价，不能在拉取后制造“本地修改”。
         if (old != null && !old.deleted && syncSettingValuesEqual(withToggleDefaults(syncJson.parseToJsonElement(old.value)), withToggleDefaults(merged))) return
-        settings.upsertUserSettings(listOf(UserSettingEntity(kind, key, raw, old?.uuid ?: localSyncUuid("user_settings", "$kind:$key"), maxOf(modifiedAt, (old?.updatedAt ?: 0L) + 1), false, syncStatus)))
+        settings.upsertUserSettings(listOf(UserSettingEntity(kind, key, raw, old?.uuid ?: localSyncUuid("user_settings", "$kind:$key"),
+            maxOf(modifiedAt ?: if (background) 0L else System.currentTimeMillis(), (old?.updatedAt ?: 0L) + 1), false, syncStatus)))
     }
 
     /** 未解锁时保留已有密文，防止后台投影把已同步凭据清空。 */

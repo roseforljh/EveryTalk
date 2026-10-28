@@ -30,7 +30,11 @@ internal object SyncInventoryDiagnostic {
             fun tag(value: String): String = java.security.MessageDigest.getInstance("SHA-256")
                 .digest(value.toByteArray(Charsets.UTF_8)).take(8).joinToString("") { "%02x".format(it) }
             val rows = mutableListOf<String>()
-            database.openHelper.readableDatabase.query("""
+            // 每行采样最多约 60KB，一次查全表必然撑爆 CursorWindow；按唯一 uuid 分页，每页远低于 2MB。
+            var lastUuid = ""
+            do {
+                var pageRows = 0
+                database.openHelper.readableDatabase.query("""
                 SELECT m.uuid, s.uuid, m.deleted, s.deleted, m.sync_status, m.ever_synced,
                        m.isPlaceholderName, m.sender, length(m.text), length(m.reasoning),
                        substr(m.text, 1, 4096), substr(m.text, -4096),
@@ -38,11 +42,14 @@ internal object SyncInventoryDiagnostic {
                        substr(m.contentParts, 1, 2048), substr(m.executionTrace, 1, 2048),
                        CASE WHEN m.id LIKE 'cloud:%' THEN 1 ELSE 0 END
                 FROM messages m LEFT JOIN chat_sessions s ON s.id=m.sessionId
-                WHERE s.id NOT IN ('last_open_chat_v1','last_open_image_generation_v1')
-                   OR s.id IS NULL
+                WHERE (s.id NOT IN ('last_open_chat_v1','last_open_image_generation_v1') OR s.id IS NULL)
+                  AND m.uuid > ?
                 ORDER BY m.uuid
-            """.trimIndent()).use { cursor ->
+                LIMIT 16
+            """.trimIndent(), arrayOf<Any>(lastUuid)).use { cursor ->
                 while (cursor.moveToNext()) rows += buildString {
+                    pageRows++
+                    lastUuid = cursor.getString(0)
                     append(tag(cursor.getString(0))); append('/'); append(tag(cursor.getString(1).orEmpty()))
                     // 只输出删除、同步状态、发送者和长度；10..15 是正文采样列，只能参与哈希，不能写入日志。
                     for (column in 2..9) { append('/'); append(cursor.getString(column) ?: "-") }
@@ -52,6 +59,7 @@ internal object SyncInventoryDiagnostic {
                     append('/'); append(cursor.getString(16) ?: "-")
                 }
             }
+            } while (pageRows == 16)
             val digest = tag(rows.joinToString("\n"))
             if (digest != previous) {
                 syncDiagnostic("inventory v=2 digest=$digest rows=${rows.size} columns=message/session/md/sd/status/ever/placeholder/sender/textChars/reasoningChars/textHash/reasoningHash/bodyPartsHash/cloud")
@@ -99,6 +107,10 @@ internal class SyncEngine(
             store.reservePush(pending)
             val response = api.push(pending.map { it.change })
             syncDiagnostic("push results=${response.results.groupingBy { it.status }.eachCount()}")
+            // 仅输出合同错误码及数量，排查逐条拒绝时无需暴露 ID、正文或凭据。
+            val rejections = response.results.mapNotNull { it.error?.code }
+                .map { it.takeIf { code -> code.matches(Regex("[A-Za-z_]{1,64}")) } ?: "UNKNOWN_ERROR" }
+            if (rejections.isNotEmpty()) syncDiagnostic("push rejected=${rejections.groupingBy { it }.eachCount()}")
             // 退出/换账号发生后，响应不允许写入新的账号快照。
             if (!canSync()) return@withLock SyncRunResult.Disabled
             store.applyPush(response, pending)
