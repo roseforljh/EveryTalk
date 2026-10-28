@@ -51,7 +51,8 @@ object GeminiDirectClient {
         )
         var terminalSent = false
         try {
-            client.preparePost(url) {
+            val payload = withContext(Dispatchers.Default) { buildGeminiPayload(request) }
+            client.streamModel(url, {
                 url {
                     // Gemini 使用查询参数鉴权。覆盖同名参数，避免用户地址中已有 key 时重复发送。
                     parameters.remove("key")
@@ -60,15 +61,15 @@ object GeminiDirectClient {
                     parameters.append("alt", "sse")
                 }
                 contentType(ContentType.Application.Json)
-                setBody(withContext(Dispatchers.Default) { buildGeminiPayload(request) })
+                setBody(payload)
                 configureSSERequest()
-            }.execute { response ->
+            }) { response ->
                 if (!response.status.isSuccess()) {
                     val result = NetworkUtils.handleApiError(response.status, response.readErrorTextAtMost(), "Gemini")
                     terminalSent = true
                     send(result.error)
                     send(result.finish)
-                    return@execute
+                    return@streamModel
                 }
                 val parsed = parseGeminiSSEStreamWithToolCapture(
                     channel = response.bodyAsChannel(),

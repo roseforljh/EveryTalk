@@ -60,12 +60,12 @@ object OpenAIDirectClient {
         )
         var terminalSent = false
         try {
-            client.preparePost(url) {
+            client.streamModel(url, {
                 contentType(ContentType.Application.Json)
                 setBody(buildOpenAIPayload(effectiveRequest))
                 header(HttpHeaders.Authorization, "Bearer ${effectiveRequest.apiKey}")
                 configureSSERequest()
-            }.execute { response ->
+            }) { response ->
                 if (!response.status.isSuccess()) {
                     val errorBody = response.readErrorTextAtMost()
                     val automaticUsage = !effectiveRequest.customModelParameters.orEmpty().containsKey("stream_options")
@@ -82,7 +82,7 @@ object OpenAIDirectClient {
                             type = "retryable_network",
                         ))
                         send(AppStreamEvent.Finish("connection_failed"))
-                        return@execute
+                        return@streamModel
                     }
                     val result = NetworkUtils.handleApiError(
                         response.status,
@@ -92,7 +92,7 @@ object OpenAIDirectClient {
                     terminalSent = true
                     send(result.error)
                     send(result.finish)
-                    return@execute
+                    return@streamModel
                 }
                 val parsed = parseOpenAISSEStreamWithTools(
                     channel = response.bodyAsChannel(),

@@ -20,6 +20,8 @@ internal class AuthRuntime private constructor(context: Context) {
 
     companion object {
         @Volatile private var instance: AuthRuntime? = null
+        /** 网络层没有 Context；进程内尚未创建认证实例时视为未登录。 */
+        fun current(): AuthRuntime? = instance
         fun get(context: Context): AuthRuntime = instance ?: synchronized(this) {
             instance ?: AuthRuntime(context.applicationContext).also { instance = it }
         }

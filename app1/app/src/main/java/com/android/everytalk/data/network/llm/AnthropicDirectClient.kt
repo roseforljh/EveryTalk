@@ -65,7 +65,7 @@ object AnthropicDirectClient {
             val preserveRestoredCompaction = hasRestoredAnthropicCompaction(request)
             val resetNativeStateAfterCompletion = preserveRestoredCompaction && !nativeContextManagementEnabled
             var parsed: AnthropicParseResult? = null
-            client.preparePost(resolveMessagesUrl(request.apiAddress)) {
+            client.streamModel(resolveMessagesUrl(request.apiAddress), {
                     contentType(ContentType.Application.Json)
                     header("x-api-key", request.apiKey.filterNot(Char::isWhitespace))
                     header("anthropic-version", ANTHROPIC_VERSION)
@@ -80,7 +80,7 @@ object AnthropicDirectClient {
                             allowRestoredCompaction = nativeContextManagementEnabled || preserveRestoredCompaction,
                         ),
                     )
-                }.execute { response ->
+                }) { response ->
                     if (!response.status.isSuccess()) {
                         val errorBody = response.readErrorTextAtMost().orEmpty()
                         if (
@@ -98,13 +98,13 @@ object AnthropicDirectClient {
                                 ),
                             )
                             send(AppStreamEvent.Finish("connection_failed"))
-                            return@execute
+                            return@streamModel
                         }
                         val result = NetworkUtils.handleApiError(response.status, errorBody, "Anthropic")
                         terminalSent = true
                         send(result.error)
                         send(result.finish)
-                        return@execute
+                        return@streamModel
                     }
                     parsed = parseAnthropicSse(response.bodyAsChannel()) { send(it) }
                 }

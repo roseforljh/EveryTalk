@@ -46,7 +46,7 @@ object OpenAIResponsesClient {
                     request = request,
                     allowRestoredCompaction = nativeContextManagementEnabled,
                 )
-            client.preparePost(endpoint) {
+            client.streamModel(endpoint, {
                     contentType(ContentType.Application.Json)
                     setBody(
                         buildResponsesPayloadFromInput(
@@ -57,7 +57,7 @@ object OpenAIResponsesClient {
                     )
                     header(HttpHeaders.Authorization, "Bearer ${request.apiKey}")
                     configureSSERequest()
-                }.execute { response ->
+                }) { response ->
                     if (!response.status.isSuccess()) {
                         val errorBody = response.readErrorTextAtMost().orEmpty()
                         if (
@@ -75,7 +75,7 @@ object OpenAIResponsesClient {
                                 ),
                             )
                             send(AppStreamEvent.Finish("connection_failed"))
-                            return@execute
+                            return@streamModel
                         }
                         val result = NetworkUtils.handleApiError(
                             response.status,
@@ -85,7 +85,7 @@ object OpenAIResponsesClient {
                         terminalSent = true
                         send(result.error)
                         send(result.finish)
-                        return@execute
+                        return@streamModel
                     }
                     parsed = parseResponsesSSEStream(
                         channel = response.bodyAsChannel(),

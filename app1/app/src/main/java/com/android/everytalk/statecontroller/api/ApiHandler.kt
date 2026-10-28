@@ -1693,6 +1693,11 @@ class ApiHandler(
                     }
                 }
                 if (requestBody.imageGenRequest != null) {
+                    // 生图不走 AgentRunCoordinator，单独登记前台服务，切后台或熄屏时进程和网络不被系统冻结。
+                    // 系统拒绝启动前台服务时照常生图，只是失去后台保活。
+                    val foregroundActivity = runCatching {
+                        com.android.everytalk.service.ComputerConnectionServiceController.acquireAgentRun(context)
+                    }.getOrNull()
                     try {
                         val response = ApiClient.generateImage(requestBody)
                         logger.debug(
@@ -1711,6 +1716,8 @@ class ApiHandler(
                             persistImageGenerationResult(requestConversationId, aiMessageId, null, e, isImageGeneration)
                         }
                         // 不再调用 onRequestFailed，避免 Snackbar 弹出
+                    } finally {
+                        runCatching { foregroundActivity?.close() }
                     }
                } else {
                 logger.debug("Agent run started for message $aiMessageId")
