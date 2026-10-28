@@ -33,6 +33,18 @@ import java.util.concurrent.atomic.AtomicInteger
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = android.app.Application::class)
 class McpClientManagerRecoveryTest {
+    @Test fun `传输包装后的授权失效仍归类为认证错误并显示重新登录`() = runBlocking {
+        val manager = McpClientManager(connectClient = { _, _ ->
+            throw IllegalStateException("Error connecting to transport", McpAuthorizationRequiredException(McpOAuthProvider.NOTION))
+        })
+        try {
+            manager.addServer(testConfig)
+            val state = manager.serverStates.value.getValue(testConfig.id)
+            assertEquals("AUTH_ERROR", (state.status as McpStatus.Error).failureType)
+            assertTrue(state.errorMessage.orEmpty().contains("重新登录"))
+        } finally { manager.close() }
+    }
+
 
     private val testConfig = McpServerConfig.SseTransportServer(
         id = "recovery-server",

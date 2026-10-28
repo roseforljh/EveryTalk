@@ -99,6 +99,7 @@ private enum class McpFailureType {
 }
 
 private fun classifyFailureType(error: Throwable): McpFailureType {
+    if (generateSequence(error) { it.cause }.any { it is McpAuthorizationRequiredException }) return McpFailureType.AUTH_ERROR
     val message = error.message.orEmpty().lowercase()
     return when {
         "401" in message || "403" in message || "unauthorized" in message || "forbidden" in message -> McpFailureType.AUTH_ERROR
@@ -349,12 +350,14 @@ class McpClientManager(
             return
         }
         val failureType = classifyFailureType(error)
+        val message = generateSequence(error) { it.cause }
+            .filterIsInstance<McpAuthorizationRequiredException>().firstOrNull()?.message ?: error.message
         updateServerState(config.id) { currentState ->
             McpServerState(
                 config = config,
-                status = McpStatus.Error(error.message ?: "Connection failed", failureType.name),
+                status = McpStatus.Error(message ?: "Connection failed", failureType.name),
                 tools = currentState?.tools.orEmpty(),
-                errorMessage = error.message
+                errorMessage = message
             )
         }
     }

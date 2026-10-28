@@ -87,6 +87,13 @@ internal data class McpAuthorizationSecret(
     val clientId: String,
 )
 
+/** 只保留受控错误码，不能把 OAuth 响应正文中的凭据带入日志或界面。 */
+internal class McpOAuthRequestException(val status: Int, val code: String?) :
+    IllegalStateException("MCP OAuth 请求失败（HTTP $status${code?.let { "，$it" }.orEmpty()}）")
+
+internal class McpAuthorizationRequiredException(provider: McpOAuthProvider) :
+    IllegalStateException("${provider.displayName} 授权已失效，请重新登录")
+
 @Serializable
 private data class PendingMcpOAuth(
     val state: String, val verifier: String, val clientId: String, val createdAt: Long,
@@ -215,6 +222,7 @@ class McpOAuthManager(
                 append("code_verifier", pending.verifier)
             })
             secrets.write("token:${provider.key}", json.encodeToString(token))
+            secrets.remove("rejected-token:${provider.key}")
             provider
         }
     }
@@ -225,15 +233,34 @@ class McpOAuthManager(
         return locks.getValue(provider).withLock {
             val previous = secrets.read("token:${provider.key}")?.let { json.decodeFromString<McpAuthorizationSecret>(it) }
                 ?: error("请先登录 ${provider.displayName}")
+            // 失败标记只在本机保存，不改写会同步给其他设备的 token。新凭据具有不同摘要，立即恢复可用。
+            val rejectedKey = "rejected-token:${provider.key}"
+            val fingerprint = Base64.getUrlEncoder().withoutPadding().encodeToString(
+                MessageDigest.getInstance("SHA-256").digest(json.encodeToString(previous).toByteArray(Charsets.UTF_8)),
+            )
+            if (secrets.read(rejectedKey) == fingerprint) throw McpAuthorizationRequiredException(provider)
             if (previous.expiresAtMillis == null || previous.expiresAtMillis > now() + 60_000L) {
                 return@withLock previous.accessToken
             }
             val refresh = previous.refreshToken ?: error("授权已过期，请重新登录 ${provider.displayName}")
-            val refreshed = exchange(provider, previous.clientId, Parameters.build {
-                append("grant_type", "refresh_token")
-                append("refresh_token", refresh)
-            }).let { it.copy(refreshToken = it.refreshToken ?: refresh) }
+            val refreshed = try {
+                exchange(provider, previous.clientId, Parameters.build {
+                    append("grant_type", "refresh_token")
+                    append("refresh_token", refresh)
+                }).let { it.copy(refreshToken = it.refreshToken ?: refresh) }
+            } catch (error: McpOAuthRequestException) {
+                // 失效刷新令牌无法靠重连恢复；持久标记避免每次请求或重启继续发送同一无效授权。
+                // 限流、超时和服务器错误不改变登录状态，交给原有重试流程处理。
+                if (error.status in setOf(400, 401) && error.code in setOf(
+                        "invalid_grant", "invalid_client", "authorization_failed", "bad_refresh_token", "invalid_refresh_token",
+                    )) {
+                    secrets.write(rejectedKey, fingerprint)
+                    throw McpAuthorizationRequiredException(provider)
+                }
+                throw error
+            }
             secrets.write("token:${provider.key}", json.encodeToString(refreshed))
+            secrets.remove(rejectedKey)
             refreshed.accessToken
         }
     }
@@ -241,6 +268,7 @@ class McpOAuthManager(
     suspend fun logout(provider: McpOAuthProvider) = locks.getValue(provider).withLock {
         secrets.remove("pending:${provider.key}")
         secrets.remove("token:${provider.key}")
+        secrets.remove("rejected-token:${provider.key}")
     }
 
     /** 固定官方注册端点 + PKCE 公共客户端，不在 APK 内嵌 client secret。 */
@@ -287,10 +315,16 @@ class McpOAuthManager(
                 headers.append("Accept", "application/json")
                 setBody(body)
             }.execute { response ->
-                if (response.status.value !in 200..299) error("MCP OAuth 请求失败（HTTP ${response.status.value}）")
                 val raw = response.readTextAtMost(128L * 1024)
-                try { json.parseToJsonElement(raw).jsonObject }
-                catch (_: IllegalArgumentException) { error("MCP OAuth 响应格式无效") }
+                val payload = runCatching { json.parseToJsonElement(raw).jsonObject }.getOrNull()
+                val code = (payload?.get("error") as? JsonPrimitive)?.contentOrNull?.takeIf {
+                    it in setOf("invalid_grant", "invalid_client", "authorization_failed", "bad_refresh_token",
+                        "invalid_refresh_token", "invalid_request", "unsupported_grant_type", "temporarily_unavailable", "server_error")
+                }
+                if (response.status.value !in 200..299 || payload?.containsKey("error") == true) {
+                    throw McpOAuthRequestException(response.status.value, code)
+                }
+                payload ?: error("MCP OAuth 响应格式无效")
             }
         }
     }

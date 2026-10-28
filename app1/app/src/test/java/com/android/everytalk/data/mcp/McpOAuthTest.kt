@@ -10,11 +10,73 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.*
 import org.junit.Assert.*
 import org.junit.Test
 
 class McpOAuthTest {
+    @Test fun `失效刷新授权跨重启停止重试并允许重新登录且临时失败保留授权`() = runTest {
+        for (provider in listOf(McpOAuthProvider.GITHUB, McpOAuthProvider.NOTION)) {
+            val store = MemorySecrets()
+            var calls = 0
+            var fail = true
+            var time = 100_000L
+            val client = HttpClient(MockEngine(MockEngineConfig().apply {
+                dispatcher = StandardTestDispatcher(testScheduler)
+                addHandler { request ->
+                    if (request.url.encodedPath == "/register") {
+                        respond("""{"client_id":"client"}""", HttpStatusCode.Created, headersOf("Content-Type", "application/json"))
+                    } else {
+                        calls++
+                        if (fail) respond("""{"error":"invalid_grant","error_description":"private-token-must-not-leak"}""",
+                            HttpStatusCode.BadRequest, headersOf("Content-Type", "application/json"))
+                        else respond("""{"access_token":"new-access","refresh_token":"new-refresh","expires_in":120}""",
+                            HttpStatusCode.OK, headersOf("Content-Type", "application/json"))
+                    }
+                }
+            }))
+            try {
+                val original = Json.encodeToString(McpAuthorizationSecret("expired", "old-refresh", 1, "client"))
+                store.write("token:${provider.key}", original)
+                val initial = McpOAuthManager(store, client, "client", now = { time })
+                val error = runCatching { initial.accessTokenFor(provider.defaultConfig()) }.exceptionOrNull()
+                assertTrue(error is McpAuthorizationRequiredException)
+                assertFalse(error!!.message.orEmpty().contains("private-token"))
+                assertEquals(original, store.read("token:${provider.key}"))
+                val restarted = McpOAuthManager(store, client, "client", now = { time })
+                assertTrue(runCatching { restarted.accessTokenFor(provider.defaultConfig()) }.exceptionOrNull() is McpAuthorizationRequiredException)
+                assertEquals(1, calls)
+                // 另一台设备同步了新令牌时，本机旧的失败记录不能使它失效或触发额外网络请求。
+                store.write("token:${provider.key}", Json.encodeToString(McpAuthorizationSecret("other-device-access", "new-refresh", time + 120_000, "client")))
+                assertEquals("other-device-access", restarted.accessTokenFor(provider.defaultConfig()))
+                assertEquals(1, calls)
+                fail = false
+                val login = Url(restarted.start(provider))
+                restarted.consume("${provider.appRedirectUri}?code=code&state=${login.parameters["state"]}")
+                assertEquals("new-access", restarted.accessTokenFor(provider.defaultConfig()))
+            } finally { client.close() }
+        }
+        val store = MemorySecrets()
+        val original = Json.encodeToString(McpAuthorizationSecret("expired", "refresh", 1, "client"))
+        store.write("token:github", original)
+        var calls = 0
+        val client = HttpClient(MockEngine(MockEngineConfig().apply {
+            dispatcher = StandardTestDispatcher(testScheduler)
+            addHandler {
+                calls++
+                if (calls == 1) respond("""{"error":"server_error"}""", HttpStatusCode.ServiceUnavailable)
+                else respond("""{"access_token":"recovered","expires_in":3600}""", HttpStatusCode.OK)
+            }
+        }))
+        try {
+            val manager = McpOAuthManager(store, client, "client", now = { 100_000L })
+            assertTrue(runCatching { manager.accessTokenFor(McpOAuthProvider.GITHUB.defaultConfig()) }.exceptionOrNull() is McpOAuthRequestException)
+            assertEquals(original, store.read("token:github"))
+            assertEquals("recovered", manager.accessTokenFor(McpOAuthProvider.GITHUB.defaultConfig()))
+        } finally { client.close() }
+    }
+
     @Test fun `Gmail 使用离线授权且通过 Worker 交换 PKCE 和刷新令牌`() = runTest {
         val store = MemorySecrets()
         val provider = McpOAuthProvider.GMAIL
