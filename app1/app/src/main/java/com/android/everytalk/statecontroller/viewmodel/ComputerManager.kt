@@ -30,6 +30,7 @@ import com.android.everytalk.data.computer.resolveComputerToolContext
 import com.android.everytalk.data.computer.targetContexts
 import com.android.everytalk.data.database.entities.toModel
 import com.android.everytalk.data.computer.ComputerStatus
+import com.android.everytalk.data.computer.canAutoReconnect
 import com.android.everytalk.data.computer.ComputerToolExecutor
 import com.android.everytalk.data.computer.ComputerToolNames
 import com.android.everytalk.data.computer.ComputerWorkspace
@@ -485,6 +486,9 @@ class ComputerManager(
                 )
                 handleNetworkChanged()
             }
+            // 网络恢复或切换后，此前因断网失败的服务器重新获得一次自动检测机会。
+            autoReconnectAttempts.clear()
+            autoReconnect(computers.value)
         }
 
         override fun onLost(network: Network) {
@@ -520,6 +524,38 @@ class ComputerManager(
     val pendingPublicPreview: StateFlow<ComputerPublicPreviewRequest?> = _pendingPublicPreview.asStateFlow()
     val pendingHostCommand: StateFlow<ComputerHostCommandConfirmationRequest?> = _pendingHostCommand.asStateFlow()
 
+    /** 已自动检测过的状态快照；同一快照只试一次，失败转 OFFLINE 后再试一次即停，网络恢复时清空。 */
+    private val autoReconnectAttempts: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    /** 用户手动断开的服务器本进程内不自动重连，手动检测后解除。 */
+    private val userDisconnected: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    private fun autoReconnect(list: List<Computer>) {
+        list.filter { it.id !in userDisconnected }.forEach { computer ->
+            // 旧版同步会把 Cloudflare 目标误写成 DISCONNECTED；它没有 SSH 可探测，授权仍有效就直接恢复。
+            val cloudflare = computer.provider == ComputerProvider.CLOUDFLARE && computer.status == ComputerStatus.DISCONNECTED
+            if (!cloudflare && !computer.canAutoReconnect()) return@forEach
+            val attempt = "${computer.id}|${computer.status}|${computer.credentialState}|${computer.hostKeyFingerprint}"
+            if (!autoReconnectAttempts.add(attempt)) return@forEach
+            scope.launch(Dispatchers.IO) {
+                try {
+                    localRecovery.await()
+                    if (cloudflare) {
+                        val config = repository.dao().getCloudflareConfig(computer.id) ?: return@launch
+                        val authorization = repository.dao().getCloudflareAuthorization(config.authorizationId) ?: return@launch
+                        repository.dao().markCloudflareComputersAuthorized(authorization.authorizationId, authorization.generation, System.currentTimeMillis())
+                    } else {
+                        refreshComputer(computer.id)
+                    }
+                } catch (error: kotlinx.coroutines.CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    // 失败已由 refreshComputer 写成 OFFLINE/HOST_KEY_CHANGED，界面照常提示手动处理。
+                    AppLogger.warn("ComputerRuntime", "服务器自动重连检测失败：${error.javaClass.simpleName}")
+                }
+            }
+        }
+    }
+
     init {
         connectivityManager?.registerDefaultNetworkCallback(networkCallback)
         scope.launch(Dispatchers.IO) {
@@ -534,6 +570,8 @@ class ComputerManager(
                 throw error
             }
         }
+        // 同步写入、凭据恢复或进程中断后停在离线的服务器，在后台自动检测恢复。
+        scope.launch(Dispatchers.IO) { computers.collect(::autoReconnect) }
     }
 
     /** Agent 恢复前等待 ComputerExecution 从 RUNNING 收敛到 UNKNOWN。 */
@@ -931,6 +969,7 @@ class ComputerManager(
     }
 
     suspend fun refreshComputer(computerId: String): Computer {
+        userDisconnected.remove(computerId)
         clearComputerPreparations(computerId)
         val refreshed = repository.refreshComputer(computerId)
         previewManager.reconcileExpirations()
@@ -1066,6 +1105,7 @@ class ComputerManager(
     }
 
     suspend fun disconnect(computerId: String) {
+        userDisconnected.add(computerId)
         clearComputerPreparations(computerId)
         repository.disconnect(computerId)
     }

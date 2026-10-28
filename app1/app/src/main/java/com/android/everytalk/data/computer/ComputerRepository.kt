@@ -36,6 +36,16 @@ internal fun ComputerStatus.canAttemptExecutionRecovery(): Boolean = this in set
 /** 新工具调用只允许使用已就绪的服务器；旧任务恢复会显式使用 requireReady=false。 */
 internal fun ComputerStatus.canUseSshTools(): Boolean = this == ComputerStatus.READY
 
+/**
+ * 云同步恢复凭据、进程中断、断网或上次检测失败后，SSH 服务器会停在 DISCONNECTED/OFFLINE。
+ * 已有固定 Host Key 和登录凭据时允许后台自动重连检查，成功即恢复 READY，不必用户手动点检测。
+ */
+internal fun Computer.canAutoReconnect(): Boolean =
+    provider == ComputerProvider.SSH &&
+        status in setOf(ComputerStatus.DISCONNECTED, ComputerStatus.OFFLINE) &&
+        !hostKeyBlobBase64.isNullOrBlank() &&
+        credentialState != ComputerCredentialState.MISSING
+
 /** 只有受管 Container 任务会被 Wrapper 升级后的容器重建影响。 */
 internal fun hasActiveContainerExecution(executions: List<ComputerExecutionEntity>): Boolean =
     executions.any { execution ->

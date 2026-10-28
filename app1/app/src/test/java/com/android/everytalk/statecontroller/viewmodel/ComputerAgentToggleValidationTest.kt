@@ -5,8 +5,10 @@ import com.android.everytalk.data.computer.ComputerAuthKind
 import com.android.everytalk.data.computer.ComputerCredentialState
 import com.android.everytalk.data.computer.ComputerErrorCodes
 import com.android.everytalk.data.computer.ComputerException
+import com.android.everytalk.data.computer.ComputerProvider
 import com.android.everytalk.data.computer.ComputerRunMode
 import com.android.everytalk.data.computer.ComputerStatus
+import com.android.everytalk.data.computer.canAutoReconnect
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -55,6 +57,18 @@ class ComputerAgentToggleValidationTest {
         assertEquals(true, enabledIndex in 0 until launchIndex)
         assertEquals(true, launchIndex in 0 until prepareIndex)
         assertEquals(false, function.contains("_isAgentPreparing.value = true"))
+    }
+
+    @Test
+    fun `同步或断线后有凭据和HostKey的SSH服务器才自动重连检测`() {
+        val synced = testComputer(ComputerStatus.DISCONNECTED).copy(hostKeyBlobBase64 = "AAAA")
+        assertEquals(true, synced.canAutoReconnect())
+        assertEquals(true, synced.copy(status = ComputerStatus.OFFLINE).canAutoReconnect())
+        assertEquals(false, synced.copy(status = ComputerStatus.READY).canAutoReconnect())
+        assertEquals(false, synced.copy(status = ComputerStatus.HOST_KEY_CHANGED).canAutoReconnect())
+        assertEquals(false, synced.copy(hostKeyBlobBase64 = null).canAutoReconnect())
+        assertEquals(false, synced.copy(credentialState = ComputerCredentialState.MISSING).canAutoReconnect())
+        assertEquals(false, synced.copy(provider = ComputerProvider.CLOUDFLARE).canAutoReconnect())
     }
 
     private fun testComputer(status: ComputerStatus): Computer = Computer(
