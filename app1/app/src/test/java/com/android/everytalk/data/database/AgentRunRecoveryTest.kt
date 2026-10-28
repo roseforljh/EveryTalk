@@ -36,6 +36,18 @@ import org.robolectric.annotation.Config
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [34], application = android.app.Application::class)
 class AgentRunRecoveryTest {
+    @Test fun `终态快照清理不误报而活动任务缺失快照仍报告一次`() = runBlocking {
+        val dao = database.agentDao()
+        val completed = AgentRunEntity("finished", "session", "user", "assistant", null, null,
+            "COMPLETED", 0, null, 1, 1)
+        org.robolectric.shadows.ShadowLog.clear()
+        val store = AgentRunStore(dao)
+        org.junit.Assert.assertNull(store.decodeRequestSnapshot(completed))
+        assertTrue(org.robolectric.shadows.ShadowLog.getLogs().none { it.msg.contains("恢复快照") })
+        org.junit.Assert.assertNull(store.decodeRequestSnapshot(completed.copy(id = "active", status = "WAITING_MODEL")))
+        assertEquals(1, org.robolectric.shadows.ShadowLog.getLogs().count { it.msg.contains("恢复快照不存在") })
+    }
+
     private lateinit var database: AppDatabase
 
     @Before

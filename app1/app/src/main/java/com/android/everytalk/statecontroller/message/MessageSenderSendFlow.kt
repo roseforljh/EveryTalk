@@ -564,12 +564,12 @@ internal fun MessageSender.sendMessageInternal(
                     }
                 }
 
-                // 🔥 修复：使用带Context的toApiMessage方法获取真实MIME类型
-                val historyApiMessages = historyUiMessages.map { it.toApiMessage(uriToBase64Encoder, application) }.toMutableList()
+                // 图片统一经 encodeImageForModel 缩放并带回真实 MIME。
+                val historyApiMessages = historyUiMessages.map { it.toApiMessage(uriToBase64Encoder) }.toMutableList()
                 logApiMessages("historyApiMessages", historyApiMessages)
 
                 val currentUserApiMessage = if (isImageRequest) {
-                    newUserMessageForUi.toApiMessage(uriToBase64Encoder, application)
+                    newUserMessageForUi.toApiMessage(uriToBase64Encoder)
                 } else {
                     // 当前附件在上下文统计前统一注入，避免图片和音频重复。
                     SimpleTextApiMessage(

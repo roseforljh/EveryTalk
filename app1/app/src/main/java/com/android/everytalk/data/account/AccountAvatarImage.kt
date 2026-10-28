@@ -2,12 +2,9 @@ package com.android.everytalk.data.account
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.Matrix
-import android.media.ExifInterface
 import android.net.Uri
+import com.android.everytalk.util.image.decodeOrientedBitmap
 import java.io.ByteArrayOutputStream
-import java.io.ByteArrayInputStream
 
 private const val ACCOUNT_AVATAR_MAX_INPUT_BYTES = 8 * 1024 * 1024
 
@@ -25,31 +22,7 @@ internal fun readAccountAvatar(context: Context, uri: Uri): ByteArray {
 /** 独立校验与转换入口，允许用本地图片验证大小、解码和采样边界而不读取真实相册。 */
 internal fun prepareAccountAvatar(bytes: ByteArray): ByteArray {
     require(bytes.size in 1..ACCOUNT_AVATAR_MAX_INPUT_BYTES) { "请选择小于 8 MB 的图片" }
-    val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
-    require(options.outWidth > 0 && options.outHeight > 0 &&
-        options.outWidth.toLong() * options.outHeight <= 80_000_000) { "图片格式或尺寸无效" }
-    options.inJustDecodeBounds = false
-    options.inSampleSize = 1
-    while (maxOf(options.outWidth, options.outHeight) / options.inSampleSize > 512) options.inSampleSize *= 2
-    val decoded = requireNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)) { "图片格式或尺寸无效" }
-    // 手机照片常把方向保存在 EXIF 中；使用平台支持校正旋转和镜像，兼容最低 Android 8.1。
-    val orientation = runCatching { ExifInterface(ByteArrayInputStream(bytes))
-        .getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL) }.getOrDefault(1)
-    val matrix = Matrix().apply {
-        when (orientation) {
-            2 -> setScale(-1f, 1f)
-            3 -> setRotate(180f)
-            4 -> setScale(1f, -1f)
-            5 -> { setRotate(90f); postScale(-1f, 1f) }
-            6 -> setRotate(90f)
-            7 -> { setRotate(270f); postScale(-1f, 1f) }
-            8 -> setRotate(270f)
-        }
-    }
-    val bitmap = try { Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, matrix, true) }
-        catch (error: Exception) { decoded.recycle(); throw error }
-    if (bitmap !== decoded) decoded.recycle()
+    val bitmap = requireNotNull(decodeOrientedBitmap(bytes, 512)) { "图片格式或尺寸无效" }
     return try {
         ByteArrayOutputStream().use { output ->
             require(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) { "无法处理头像图片" }

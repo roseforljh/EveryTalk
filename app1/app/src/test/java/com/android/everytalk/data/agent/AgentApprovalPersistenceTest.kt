@@ -185,6 +185,40 @@ class AgentApprovalPersistenceTest {
     }
 
     @Test
+    fun `图片Base64拆块存储且恢复后内容一致`() = runBlocking {
+        database.chatDao().insertSession(ChatSessionEntity("session-image", 1L, 1L, false))
+        val image = "QUJD".repeat(300_000)
+        val parts = listOf(
+            com.android.everytalk.data.DataClass.ApiContentPart.Text("看图"),
+            com.android.everytalk.data.DataClass.ApiContentPart.InlineData(image, "image/png"),
+        )
+        val messages = listOf(
+            com.android.everytalk.data.DataClass.PartsApiMessage(id = "u1", role = "user", parts = parts),
+            com.android.everytalk.data.DataClass.PartsApiMessage(id = "u2", role = "user", parts = parts),
+        )
+        val run = store.createRun(
+            sessionId = "session-image",
+            userMessageId = "u2",
+            visibleAssistantMessageId = "assistant-image",
+            configIdSnapshot = "config-1",
+            request = ChatRequest(
+                messages = messages,
+                provider = "OpenAI",
+                channel = "OpenAI Chat Completions",
+                apiAddress = "https://example.test/v1",
+                apiKey = "secret",
+                model = "model-1",
+            ),
+        )
+        val jsonChunks = database.agentDao().getRunSnapshotChunkPage(run.id, -1, 100)
+        assertEquals(1, jsonChunks.size)
+
+        val restored = AgentRunStore(database.agentDao()).restoreChatRequest(run, "k")
+
+        assertEquals(messages, restored?.messages)
+    }
+
+    @Test
     fun `批准和拒绝都保留原toolCallId及冻结请求`() = runBlocking {
         seedRun()
         val record = approvalRecord()

@@ -1,5 +1,4 @@
 package com.android.everytalk.data.DataClass
-import android.content.Context
 import android.net.Uri
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.models.toAttachmentContextParts
@@ -11,15 +10,19 @@ import com.android.everytalk.ui.components.MarkdownPartSerializer
 import com.android.everytalk.data.network.TokenUsage
 import com.android.everytalk.data.skill.MessageSkillReference
 
+/** 发给模型的图片编码器：返回 Base64 和真实 MIME，见 encodeImageForModel。 */
+typealias ModelImageEncoder = (Uri) -> ApiContentPart.InlineData?
+
 private fun SelectedMediaItem.ImageFromBitmap.encodedDataOrNull(
-    uriEncoder: (Uri) -> String?,
-): String? = bitmapData.takeIf { it.isNotBlank() }
+    uriEncoder: ModelImageEncoder,
+): ApiContentPart.InlineData? = bitmapData.takeIf { it.isNotBlank() }
+    ?.let { ApiContentPart.InlineData(base64Data = it, mimeType = mimeType) }
     ?: filePath
         ?.takeIf { it.isNotBlank() }
         ?.let(::File)
         ?.takeIf { it.isFile && it.length() > 0L }
         ?.let { uriEncoder(Uri.fromFile(it)) }
-        ?.takeIf { it.isNotBlank() }
+        ?.takeIf { it.base64Data.isNotBlank() }
 
 @Serializable
 enum class Sender {
@@ -202,8 +205,7 @@ data class Message(
     override val role: String
         get() = sender.toRole()
     
-    // 转换为API消息 - 保留原方法兼容性
-    fun toApiMessage(uriEncoder: (Uri) -> String?): AbstractApiMessage {
+    fun toApiMessage(uriEncoder: ModelImageEncoder): AbstractApiMessage {
         val apiText = contentParts.toApiText(text)
         return if (attachments.isNotEmpty()) {
             val parts = mutableListOf<ApiContentPart>()
@@ -212,59 +214,8 @@ data class Message(
             }
             attachments.forEach { mediaItem ->
                 when (mediaItem) {
-                    is SelectedMediaItem.ImageFromUri -> {
-                        uriEncoder(mediaItem.uri)?.let { base64 ->
-                            // 🔥 修复：使用硬编码值作为后备，但优先使用真实MIME类型
-                            parts.add(ApiContentPart.InlineData(base64Data = base64, mimeType = mediaItem.mimeType))
-                        }
-                    }
-                    is SelectedMediaItem.ImageFromBitmap -> {
-                        mediaItem.encodedDataOrNull(uriEncoder)?.let { bitmapData ->
-                            parts.add(ApiContentPart.InlineData(base64Data = bitmapData, mimeType = mediaItem.mimeType))
-                        }
-                    }
-                    is SelectedMediaItem.GenericFile -> {
-                        parts.addAll(mediaItem.toAttachmentContextParts().map { ApiContentPart.Text(it) })
-                    }
-                    is SelectedMediaItem.Audio -> {
-                        mediaItem.base64DataOrNull()?.let { data ->
-                            parts.add(ApiContentPart.InlineData(base64Data = data, mimeType = mediaItem.mimeType))
-                        }
-                    }
-                }
-            }
-            PartsApiMessage(id = id, role = role, parts = parts, name = name)
-        } else {
-            SimpleTextApiMessage(id = id, role = role, content = contentParts.toApiText(text), name = name)
-        }
-    }
-
-    // 🔥 新增：接受Context的方法，用于获取真实MIME类型
-    fun toApiMessage(uriEncoder: (Uri) -> String?, context: Context): AbstractApiMessage {
-        val apiText = contentParts.toApiText(text)
-        return if (attachments.isNotEmpty()) {
-            val parts = mutableListOf<ApiContentPart>()
-            if (apiText.isNotBlank()) {
-                parts.add(ApiContentPart.Text(apiText))
-            }
-            attachments.forEach { mediaItem ->
-                when (mediaItem) {
-                    is SelectedMediaItem.ImageFromUri -> {
-                        uriEncoder(mediaItem.uri)?.let { base64 ->
-                            // 🔥 修复：从ContentResolver获取真实的MIME类型
-                            val actualMimeType = try {
-                                context.contentResolver.getType(mediaItem.uri) ?: mediaItem.mimeType
-                            } catch (e: Exception) {
-                                mediaItem.mimeType // 出错时使用默认值
-                            }
-                            parts.add(ApiContentPart.InlineData(base64Data = base64, mimeType = actualMimeType))
-                        }
-                    }
-                    is SelectedMediaItem.ImageFromBitmap -> {
-                        mediaItem.encodedDataOrNull(uriEncoder)?.let { bitmapData ->
-                            parts.add(ApiContentPart.InlineData(base64Data = bitmapData, mimeType = mediaItem.mimeType))
-                        }
-                    }
+                    is SelectedMediaItem.ImageFromUri -> uriEncoder(mediaItem.uri)?.let(parts::add)
+                    is SelectedMediaItem.ImageFromBitmap -> mediaItem.encodedDataOrNull(uriEncoder)?.let(parts::add)
                     is SelectedMediaItem.GenericFile -> {
                         parts.addAll(mediaItem.toAttachmentContextParts().map { ApiContentPart.Text(it) })
                     }

@@ -12,7 +12,6 @@ import androidx.lifecycle.viewModelScope
 import coil3.imageLoader
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.util.storage.FileManager
-import com.android.everytalk.util.image.ImageHandlingLimits
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.WebSearchResult
@@ -27,7 +26,6 @@ import com.android.everytalk.ui.screens.viewmodel.ConfigManager
 import com.android.everytalk.ui.screens.viewmodel.DataPersistenceManager
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
 import android.graphics.Bitmap
-import android.net.Uri
 import android.widget.Toast
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -89,7 +87,6 @@ import com.android.everytalk.data.network.OpenAIDirectClient
 import com.android.everytalk.data.network.OpenAIResponsesClient
 import com.android.everytalk.data.network.WebSearchSupport
 import com.android.everytalk.data.network.WebFetchToolExecutor
-import com.android.everytalk.util.storage.readAtMost
 import com.android.everytalk.util.ConversationNameHelper
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -161,21 +158,6 @@ import java.util.TimeZone
 
     internal fun AppViewModel.getScrollState(conversationId: String): ConversationScrollState? {
         return scrollStateController.getScrollState(conversationId)
-    }
-
-    internal fun AppViewModel.encodeUriAsBase64(uri: Uri): String? {
-        return try {
-            val inputStream = getApplication<Application>().contentResolver.openInputStream(uri)
-            inputStream?.use { stream ->
-                val bytes = readAtMost(stream, ImageHandlingLimits.USER_UPLOAD_MAX_BYTES)
-                android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Log.e("AppViewModel", "Failed to encode URI to Base64: $uri", e)
-            null
-        }
     }
 
     internal fun AppViewModel.clearAllCaches() {

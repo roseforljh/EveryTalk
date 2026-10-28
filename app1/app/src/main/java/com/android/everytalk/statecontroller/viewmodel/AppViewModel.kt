@@ -555,7 +555,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 historyManager = historyManager,
                 showSnackbar = ::showSnackbar,
                 triggerScrollToBottom = { triggerScrollToBottom() },
-                uriToBase64Encoder = { uri -> encodeUriAsBase64(uri) },
+                uriToBase64Encoder = { uri -> com.android.everytalk.util.image.encodeImageForModel(getApplication(), uri) },
                 getMcpDispatchCandidates = { mcpManager.getDispatchCandidates() },
                 getSelectedExternalWebSearchProvider = { selectedExternalWebSearchProvider },
                 getSelectedExternalWebSearchProviderApiKey = { selectedExternalWebSearchProviderApiKey },
@@ -1326,7 +1326,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                             }
                         }
                     } catch (error: CancellationException) { throw error }
-                    catch (_: Exception) { showSnackbar("同步数据已保存，界面刷新失败，请重新打开对话") }
+                    // 同步静默进行：刷新失败只记日志，下次同步通知会再刷新。
+                    catch (error: Exception) { Log.w("AppViewModel", "同步后刷新界面失败", error) }
                 }
             }
             if (!initialConfigPresent) {

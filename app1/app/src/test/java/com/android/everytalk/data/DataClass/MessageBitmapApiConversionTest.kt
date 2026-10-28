@@ -1,9 +1,7 @@
 package com.android.everytalk.data.DataClass
 
-import android.content.Context
 import android.net.Uri
 import com.android.everytalk.models.SelectedMediaItem
-import io.mockk.mockk
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -33,10 +31,6 @@ class MessageBitmapApiConversionTest {
 
         val apiMessages = listOf(
             message.toApiMessage(uriEncoder = { error("不应编码 URI") }) as PartsApiMessage,
-            message.toApiMessage(
-                uriEncoder = { error("不应编码 URI") },
-                context = mockk<Context>(relaxed = true),
-            ) as PartsApiMessage,
         )
 
         apiMessages.forEach { apiMessage ->
@@ -52,9 +46,9 @@ class MessageBitmapApiConversionTest {
             writeBytes(byteArrayOf(1, 2, 3))
         }
         val encodedUris = mutableListOf<Uri>()
-        val uriEncoder: (Uri) -> String? = { uri ->
+        val uriEncoder: ModelImageEncoder = { uri ->
             encodedUris += uri
-            "AQID"
+            ApiContentPart.InlineData("AQID", "image/png")
         }
         val message = Message(
             text = "",
@@ -71,10 +65,6 @@ class MessageBitmapApiConversionTest {
         try {
             val apiMessages = listOf(
                 message.toApiMessage(uriEncoder = uriEncoder) as PartsApiMessage,
-                message.toApiMessage(
-                    uriEncoder = uriEncoder,
-                    context = mockk<Context>(relaxed = true),
-                ) as PartsApiMessage,
             )
 
             apiMessages.forEach { apiMessage ->
@@ -82,7 +72,7 @@ class MessageBitmapApiConversionTest {
                 assertEquals("AQID", inlineData.base64Data)
                 assertEquals("image/png", inlineData.mimeType)
             }
-            assertEquals(listOf(Uri.fromFile(imageFile), Uri.fromFile(imageFile)), encodedUris)
+            assertEquals(listOf(Uri.fromFile(imageFile)), encodedUris)
         } finally {
             imageFile.delete()
         }
@@ -104,10 +94,6 @@ class MessageBitmapApiConversionTest {
 
         val apiMessages = listOf(
             message.toApiMessage(uriEncoder = { error("不应编码 URI") }) as PartsApiMessage,
-            message.toApiMessage(
-                uriEncoder = { error("不应编码 URI") },
-                context = mockk<Context>(relaxed = true),
-            ) as PartsApiMessage,
         )
 
         apiMessages.forEach { apiMessage ->

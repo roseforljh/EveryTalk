@@ -466,7 +466,7 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
     internal val historyManager: HistoryManager,
     internal val showSnackbar: (String) -> Unit,
     internal val triggerScrollToBottom: () -> Unit,
-    internal val uriToBase64Encoder: (Uri) -> String?,
+    internal val uriToBase64Encoder: com.android.everytalk.data.DataClass.ModelImageEncoder,
     internal val getMcpDispatchCandidates: () -> List<McpToolCandidate> = { emptyList() },
     internal val getSelectedExternalWebSearchProvider: () -> ExternalWebSearchProvider? = { null },
     internal val getSelectedExternalWebSearchProviderApiKey: () -> String = { "" },
@@ -797,19 +797,14 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
 
             // 为处理后的图片（现在拥有一个持久化的 URI）创建 API 内容部分
             if (shouldUsePartsApiMessage && processedItemForUi is SelectedMediaItem.ImageFromUri) {
-                val base64Data = uriToBase64Encoder(processedItemForUi.uri)
-                if (base64Data == null) {
+                val inlineData = uriToBase64Encoder(processedItemForUi.uri)
+                if (inlineData == null) {
                     withContext(Dispatchers.Main.immediate) {
                         showSnackbar("无法读取图片“$originalFileNameForHint”，请重新选择。")
                     }
                     return@withContext AttachmentProcessingResult(success = false)
                 }
-                apiContentParts.add(
-                    ApiContentPart.InlineData(
-                        mimeType = processedItemForUi.mimeType,
-                        base64Data = base64Data,
-                    ),
-                )
+                apiContentParts.add(inlineData)
             }
         }
         AttachmentProcessingResult(true, processedAttachmentsForUi, imageUriStringsForUi, apiContentParts)
