@@ -116,7 +116,8 @@ internal class ApiHandlerErrorController(
                         },
                         parts = if (safetyBlocked) emptyList() else msg.parts,
                         currentWebSearchStage = null,
-                        executionStatus = null,
+                        // 错误正文可能被 Agent 轨迹重建，过程组件必须独立保留可显示、已脱敏的原因。
+                        executionStatus = errorTextContent.removePrefix(errorVisualPrefix),
                         executionFinishedAt = System.currentTimeMillis(),
                     )
                     messageList[idx] = errorMsg

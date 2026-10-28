@@ -29,6 +29,7 @@ import com.android.everytalk.ui.screens.MainScreen.chat.core.expandStaticAiMessa
 import com.android.everytalk.ui.screens.MainScreen.chat.core.OrderedAiOutputSegment
 import com.android.everytalk.ui.screens.MainScreen.chat.core.orderedAiOutputSegments
 import com.android.everytalk.ui.screens.MainScreen.chat.core.executionTraceForProcessDisplay
+import com.android.everytalk.ui.screens.MainScreen.chat.core.executionGroupKey
 import com.mikepenz.markdown.model.State
 import com.mikepenz.markdown.model.parseMarkdown
 import kotlinx.coroutines.CoroutineScope
@@ -80,6 +81,7 @@ internal fun interleaveQueuedUserMessages(
                 insertBefore(when (item) {
                     is ChatListItem.AiMessageContentSegment -> item.segmentIndex
                     is ChatListItem.AiMessageProcessSegment -> item.segmentIndex
+                    is ChatListItem.AiMessageExecutionGroup -> item.segmentIndex
                     else -> Int.MAX_VALUE // 末尾边界在 footer/error 之前，不能落回整段回答之后。
                 })
                 add(item)
@@ -827,8 +829,10 @@ open class MessageItemsController(
         val replyIsStreaming = state is com.android.everytalk.ui.state.AiBubbleState.Connecting ||
             state is com.android.everytalk.ui.state.AiBubbleState.Reasoning ||
             state is com.android.everytalk.ui.state.AiBubbleState.Streaming
+        val narrativeSegments = mutableSetOf<Int>()
         val segments = orderedAiOutputSegments(
             trace = message.executionTrace,
+            narrativeSegments = narrativeSegments,
         ).toMutableList()
         // 编写阶段还没有完整工具记录。追加临时过程段，后续真实工具沿用同一列表位置；
         // 不把未执行的操作写入历史，停止或失败后也不会残留“正在编写”。
@@ -846,7 +850,11 @@ open class MessageItemsController(
             )
         }
         val lastProcessIndex = segments.indexOfLast { it is OrderedAiOutputSegment.Process }
-        val lastContentIndex = segments.indexOfLast { it is OrderedAiOutputSegment.Content }
+        // 流式期间旁白只是普通正文；回复结束后旁白和过程段一起归入总执行区。
+        val foldedNarratives: Set<Int> = if (replyIsStreaming) emptySet() else narrativeSegments
+        val lastContentIndex = segments.indices.lastOrNull {
+            segments[it] is OrderedAiOutputSegment.Content && it !in foldedNarratives
+        } ?: -1
         val processCount = segments.count { it is OrderedAiOutputSegment.Process }
         // 正文已经继续输出时，前一个过程段已经结束，不能继续沿用整条回复的计时器。
         val activeProcessIndex = lastProcessIndex.takeIf {
@@ -920,11 +928,58 @@ open class MessageItemsController(
             }
         }
         val processItemsBySegmentIndex = processItems.associateBy { it.segmentIndex }
+        // 回复结束后，同一用户指令阶段里连续的旁白和过程段归为一个总执行区。
+        // 组内各项原样保留（段序号、key 不变），只在最前面插入一个默认收起的标题。
+        val groupKeyBySegment = mutableMapOf<Int, String>()
+        if (!replyIsStreaming) {
+            val members = mutableListOf<Int>()
+            fun closeGroup() {
+                // 只有一项时外层标题和它自己的标题重复，不再包一层。
+                if (members.size > 1) {
+                    val key = executionGroupKey(message.id, members.first())
+                    members.forEach { groupKeyBySegment[it] = key }
+                }
+                members.clear()
+            }
+            if (-1 in processItemsBySegmentIndex) members += -1
+            segments.forEachIndexed { index, segment ->
+                if (segment is OrderedAiOutputSegment.Process || index in foldedNarratives) {
+                    members += index
+                } else {
+                    closeGroup()
+                }
+            }
+            closeGroup()
+        }
+        val pendingGroupHeaders = groupKeyBySegment.entries
+            .groupBy({ it.value }, { it.key })
+            .mapValues { (_, indexes) ->
+                val members = indexes.mapNotNull(processItemsBySegmentIndex::get)
+                ChatListItem.AiMessageExecutionGroup(
+                    messageId = message.id,
+                    segmentIndex = indexes.min(),
+                    steps = members.flatMap { member ->
+                        member.events.filterIsInstance<ExecutionTraceEvent.Tool>().map { it.step }
+                    },
+                    messageIsError = members.any { it.messageIsError },
+                    executionStartedAtMillis = members.mapNotNull { it.executionStartedAtMillis }.minOrNull(),
+                    executionFinishedAtMillis = members.mapNotNull { it.executionFinishedAtMillis }.maxOrNull(),
+                )
+            }
+            .toMutableMap()
 
         return buildList {
-            processItemsBySegmentIndex[-1]?.let(::add)
+            // 组内第一项出现前先放总执行区标题，返回该项所属的组。
+            fun groupKeyFor(segmentIndex: Int): String {
+                val key = groupKeyBySegment[segmentIndex].orEmpty()
+                pendingGroupHeaders.remove(key)?.let(::add)
+                return key
+            }
+            processItemsBySegmentIndex[-1]?.let { add(it.copy(executionGroupKey = groupKeyFor(-1))) }
             segments.forEachIndexed { segmentIndex, segment ->
-                processItemsBySegmentIndex[segmentIndex]?.let(::add)
+                processItemsBySegmentIndex[segmentIndex]?.let {
+                    add(it.copy(executionGroupKey = groupKeyFor(segmentIndex)))
+                }
                 when (segment) {
                     // 用户项由最终投影插入，避免缓存持有过期用户内容或重复气泡。
                     is OrderedAiOutputSegment.UserMessageBoundary -> Unit
@@ -957,6 +1012,7 @@ open class MessageItemsController(
                                 text = segment.text,
                                 isStreaming = isStreamingSegment,
                             ),
+                            executionGroupKey = groupKeyFor(segmentIndex),
                         )
                         // 仅历史回复使用静态分块。当前 Run 刚结束时继续保留原组件和滚动位置。
                         val preparation = if (allowLazyStaticRender && !replyIsStreaming) {
@@ -1013,8 +1069,12 @@ open class MessageItemsController(
 
             if (!replyIsStreaming && !message.isError) {
                 add(ChatListItem.AiMessageFooter(message))
-            } else if (message.isError && none { it is ChatListItem.AiMessageContentSegment }) {
-                add(ChatListItem.ErrorMessage(message.id, message.text))
+            } else if (message.isError) {
+                // 有正文时只追加失败说明，不能因已渲染内容段而吞掉错误，也不重复整段回答。
+                val errorText = if (any { it is ChatListItem.AiMessageContentSegment }) {
+                    message.executionStatus?.takeIf(String::isNotBlank) ?: message.text
+                } else message.text
+                add(ChatListItem.ErrorMessage(message.id, errorText))
             }
         }
     }

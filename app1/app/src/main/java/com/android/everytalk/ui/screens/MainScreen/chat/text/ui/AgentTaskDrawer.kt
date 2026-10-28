@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -119,6 +120,17 @@ internal fun AgentTaskOverlay(
     val scope = rememberCoroutineScope()
     val setDrawer: (Boolean) -> Unit = { target -> scope.launch { drawerState.animateTo(target, drawerSpring) } }
     var selectedId by rememberSaveable(sessionKey) { mutableStateOf<String?>(null) }
+    val pendingApproval = taskApprovalsForDisplay(tasks, approvals).firstOrNull()
+    var presentedApprovalId by rememberSaveable(sessionKey) { mutableStateOf<String?>(null) }
+    // 新审批不能只藏在右侧把手里：自动展开并切到申请所属服务器。
+    // 记住已展示的申请，用户主动收起后，同一申请的刷新不会再次抢走页面。
+    LaunchedEffect(sessionKey, pendingApproval?.approvalRequestId) {
+        val pending = pendingApproval ?: return@LaunchedEffect
+        if (pending.approvalRequestId == presentedApprovalId) return@LaunchedEffect
+        presentedApprovalId = pending.approvalRequestId
+        selectedId = pending.request.context.computerId
+        drawerState.animateTo(true, drawerSpring)
+    }
     val selected = tasks.firstOrNull { it.computerId == selectedId } ?: tasks.first()
     val taskStateHolder = rememberSaveableStateHolder()
     val needsAttention = tasks.any { it.phase == AgentTaskPhase.APPROVAL }
@@ -291,7 +303,12 @@ private fun TaskProcess(
     topContentPadding: Dp,
     onApproval: (PendingComputerToolApproval, AgentApprovalDecision, () -> Unit) -> Unit,
 ) {
-    LazyColumn(Modifier.fillMaxSize().testTag("agent-task-process-${task.computerId}"),
+    val listState = rememberLazyListState()
+    // 已经翻到过程底部时，新申请仍必须直接可见；审批卡固定排在服务器标题之后。
+    LaunchedEffect(approvals.firstOrNull()?.approvalRequestId) {
+        if (approvals.isNotEmpty()) listState.scrollToItem(1)
+    }
+    LazyColumn(Modifier.fillMaxSize().testTag("agent-task-process-${task.computerId}"), state = listState,
         contentPadding = PaddingValues(start = 16.dp, top = topContentPadding, end = 16.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {

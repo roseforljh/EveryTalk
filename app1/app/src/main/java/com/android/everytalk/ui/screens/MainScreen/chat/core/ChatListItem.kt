@@ -157,6 +157,8 @@ sealed interface ChatListItem {
         // 历史正文复用已有 Markdown 分块；仍保留原消息和段序号，保证工具/用户边界顺序。
         val staticBlock: AiMarkdownNode? = null,
         val staticPageSources: List<WebSearchResult> = emptyList(),
+        // 非空时属于回复结束后的总执行区，随总执行区一起收起。
+        val executionGroupKey: String = "",
     ) : ChatListItem {
         override val stableId: String = if (staticBlock == null || staticBlock.isFirstNode) {
             "${sourceMessageId}_content_$segmentIndex"
@@ -176,8 +178,22 @@ sealed interface ChatListItem {
         val messageIsError: Boolean,
         val executionStartedAtMillis: Long?,
         val executionFinishedAtMillis: Long?,
+        val executionGroupKey: String = "",
     ) : ChatListItem {
         override val stableId: String = "${messageId}_process_$segmentIndex"
+    }
+
+    /** 回复结束后一个用户指令阶段的总执行区标题；下方旁白和过程段原样保留，默认随它收起。 */
+    data class AiMessageExecutionGroup(
+        val messageId: String,
+        // 组内第一项的段序号，用户追加消息按它插入到正确位置。
+        val segmentIndex: Int,
+        val steps: List<com.android.everytalk.data.DataClass.ExecutionStep>,
+        val messageIsError: Boolean,
+        val executionStartedAtMillis: Long?,
+        val executionFinishedAtMillis: Long?,
+    ) : ChatListItem {
+        override val stableId: String = executionGroupKey(messageId, segmentIndex)
     }
 
     data class AiMessageFooter(val message: Message) : ChatListItem {
@@ -215,6 +231,8 @@ sealed interface ChatListItem {
         override val stableId: String = id
     }
 }
+
+internal fun executionGroupKey(messageId: String, segmentIndex: Int) = "${messageId}_execution_$segmentIndex"
 
 internal sealed interface OrderedAiOutputSegment {
     data class UserMessageBoundary(val messageId: String) : OrderedAiOutputSegment
@@ -303,14 +321,17 @@ internal fun executionTraceForProcessDisplay(
  * 按事件顺序合并相邻正文、相邻思考和工具。
  * 后续工具只能追加过程段，不能改变已显示正文的类型和段序号，否则 LazyColumn 会重建气泡。
  * 旁白索引仅用于对齐详情抽屉，聊天正文始终保留在原来的渲染组件中。
+ * [narrativeSegments] 收集旁白正文段的序号，回复结束后由列表把它们并回执行区。
  */
 internal fun orderedAiOutputSegments(
     trace: List<ExecutionTraceEvent>,
+    narrativeSegments: MutableSet<Int>? = null,
 ): List<OrderedAiOutputSegment> {
     val displayTrace = executionTraceForDisplay(trace)
     val narrativeContentIndexes = executionNarrativeContentIndexes(displayTrace)
     val result = mutableListOf<OrderedAiOutputSegment>()
     var content = StringBuilder()
+    var contentIsNarrative = false
     var processEvents = mutableListOf<ExecutionTraceEvent>()
     var processStartIndex = 0
     var processEventIndex = 0
@@ -322,8 +343,10 @@ internal fun orderedAiOutputSegments(
         val text = content.toString().trim('\r', '\n')
         content = StringBuilder()
         if (text.isNotBlank()) {
+            if (contentIsNarrative) narrativeSegments?.add(result.size)
             result += OrderedAiOutputSegment.Content(text, contentStartedAtMillis)
         }
+        contentIsNarrative = false
         contentStartedAtMillis = null
     }
 
@@ -350,7 +373,10 @@ internal fun orderedAiOutputSegments(
                 flushProcess(event.startedAtMillis)
                 if (content.isEmpty()) contentStartedAtMillis = event.startedAtMillis
                 content.append(event.text)
-                if (eventIndex in narrativeContentIndexes) processEventIndex++
+                if (eventIndex in narrativeContentIndexes) {
+                    contentIsNarrative = true
+                    processEventIndex++
+                }
             }
             is ExecutionTraceEvent.Reasoning,
             is ExecutionTraceEvent.Tool,

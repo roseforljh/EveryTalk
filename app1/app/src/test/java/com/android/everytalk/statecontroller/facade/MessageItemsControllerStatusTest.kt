@@ -33,6 +33,24 @@ import org.junit.Before
 import org.junit.Test
 
 class MessageItemsControllerStatusTest {
+    @Test
+    fun `输出正文后失败仍在聊天下方显示原因且不重复正文`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        val reason = "任务失败：服务端返回 HTTP 401"
+        controller.stateHolder.messages.add(
+            Message(
+                id = "failed-after-content", text = "我先检查配置。\n\n⚠️ $reason", sender = Sender.AI,
+                contentStarted = true, isError = true, executionStatus = reason,
+                executionTrace = listOf(ExecutionTraceEvent.Content("我先检查配置。")),
+            ),
+        )
+        Snapshot.sendApplyNotifications()
+        val items = controller.chatListItemsForTest()
+        assertEquals("我先检查配置。", items.filterIsInstance<ChatListItem.AiMessageContentSegment>().single().text)
+        assertEquals(reason, items.filterIsInstance<ChatListItem.ErrorMessage>().single().text)
+        assertTrue(items.last() is ChatListItem.ErrorMessage)
+    }
+
 
     @Test
     fun `统一聊天列表显示没有正文的图片回复`() {
@@ -1182,7 +1200,7 @@ class MessageItemsControllerStatusTest {
     }
 
     @Test
-    fun `新消息列表保持正文与多个过程的实际顺序`() {
+    fun `回复结束后旁白和多个过程合成一个执行区放在正式回答之前`() {
         val controller = MessageItemsControllerTestAccess.newController()
         val tool = completedToolStep()
         controller.stateHolder.messages.add(
@@ -1206,14 +1224,19 @@ class MessageItemsControllerStatusTest {
 
         val items = controller.chatListItemsForTest()
 
+        // 结束后旁白和各段工具原样保留，只在前面加一个总执行区标题，组内各项随它收起。
         assertEquals(
-            listOf("content", "process", "content", "process", "content", "footer"),
-            items.map { item ->
+            listOf("execution_0", "content_0", "process_1", "content_2", "process_3", "content_4", "footer"),
+            items.map { it.stableId.removePrefix("ordered-output_") },
+        )
+        val groupKey = "ordered-output_execution_0"
+        assertEquals(
+            listOf(groupKey, groupKey, groupKey, groupKey, ""),
+            items.mapNotNull { item ->
                 when (item) {
-                    is ChatListItem.AiMessageContentSegment -> "content"
-                    is ChatListItem.AiMessageProcessSegment -> "process"
-                    is ChatListItem.AiMessageFooter -> "footer"
-                    else -> item::class.java.simpleName
+                    is ChatListItem.AiMessageContentSegment -> item.executionGroupKey
+                    is ChatListItem.AiMessageProcessSegment -> item.executionGroupKey
+                    else -> null
                 }
             },
         )
@@ -1221,31 +1244,8 @@ class MessageItemsControllerStatusTest {
             listOf("旁白 1", "旁白 2", "正文 3"),
             items.filterIsInstance<ChatListItem.AiMessageContentSegment>().map { it.text },
         )
-        assertTrue(
-            items.filterIsInstance<ChatListItem.AiMessageContentSegment>().all {
-                it.sourceMessageId == "ordered-output" &&
-                    it.renderState.content == it.text &&
-                    it.renderState.blocks.isNotEmpty()
-            }
-        )
-        assertTrue(
-            items.filterIsInstance<ChatListItem.AiMessageProcessSegment>().all {
-                it.messageId == "ordered-output"
-            }
-        )
-        assertEquals(
-            listOf("思考 1", "调用工具", "思考 2", "调用工具"),
-            items.filterIsInstance<ChatListItem.AiMessageProcessSegment>()
-                .flatMap { it.events }
-                .map { event ->
-                    when (event) {
-                        is ExecutionTraceEvent.Content -> event.text
-                        is ExecutionTraceEvent.Reasoning -> event.text
-                        is ExecutionTraceEvent.Tool -> event.step.title
-                        else -> error("执行区不应包含正式正文或用户边界事件")
-                    }
-                },
-        )
+        assertEquals(2, items.single { it is ChatListItem.AiMessageExecutionGroup }
+            .let { (it as ChatListItem.AiMessageExecutionGroup).steps.size })
         assertTrue(items.filterIsInstance<ChatListItem.AiMessageProcessSegment>().all { !it.replyIsStreaming })
     }
 
@@ -1275,25 +1275,15 @@ class MessageItemsControllerStatusTest {
         Snapshot.sendApplyNotifications()
 
         val items = controller.chatListItemsForTest()
-        val processItems = items.filterIsInstance<ChatListItem.AiMessageProcessSegment>()
 
+        // 首字等待、旁白和工具归入同一个总执行区，耗时从请求开始算到最后一个过程结束。
         assertEquals(
-            listOf("process", "content", "process", "content", "footer"),
-            items.map { item ->
-                when (item) {
-                    is ChatListItem.AiMessageProcessSegment -> "process"
-                    is ChatListItem.AiMessageContentSegment -> "content"
-                    is ChatListItem.AiMessageFooter -> "footer"
-                    else -> item::class.java.simpleName
-                }
-            },
+            listOf("execution_-1", "process_-1", "content_0", "process_1", "content_2", "footer"),
+            items.map { it.stableId.removePrefix("ordered-output-initial-duration_") },
         )
-        assertTrue(processItems.first().events.isEmpty())
-        assertEquals(100L, processItems.first().executionStartedAtMillis)
-        assertEquals(500L, processItems.first().executionFinishedAtMillis)
-        assertEquals(2, processItems[1].events.size)
-        assertEquals(600L, processItems[1].executionStartedAtMillis)
-        assertEquals(900L, processItems[1].executionFinishedAtMillis)
+        val group = items.filterIsInstance<ChatListItem.AiMessageExecutionGroup>().single()
+        assertEquals(100L, group.executionStartedAtMillis)
+        assertEquals(900L, group.executionFinishedAtMillis)
     }
 
     @Test
@@ -1365,10 +1355,14 @@ class MessageItemsControllerStatusTest {
         val completed = withTimeout(5_000) {
             controller.chatListItems.first { list -> list.any { it is ChatListItem.AiMessageFooter } }
         }
-        assertEquals(items.filterIsInstance<ChatListItem.AiMessageContentSegment>().map { it.stableId },
-            completed.filterIsInstance<ChatListItem.AiMessageContentSegment>().map { it.stableId })
+        // 结束后旁白和工具原样保留并加总执行区标题，所有已显示正文保持流式期间的 key。
+        val streamingContentIds = items.filterIsInstance<ChatListItem.AiMessageContentSegment>().map { it.stableId }
+        val completedContentIds = completed.filterIsInstance<ChatListItem.AiMessageContentSegment>().map { it.stableId }
+        assertEquals(streamingContentIds, completedContentIds)
+        assertEquals(listOf("execution_0", "content_0", "process_1", "content_2", "process_3", "steer", "content_5", "footer"),
+            completed.map { it.stableId.removePrefix("${messageId}_") })
         assertTrue(completed.filterIsInstance<ChatListItem.AiMessageContentSegment>().all { it.staticBlock == null })
-        assertEquals(listOf("**先检查环境**。", "根据结果继续检查。", "调整方向", "调整后的回复。"), timelineTexts(completed))
+        assertEquals(listOf(firstContent.text, secondContent.text, "调整方向", "调整后的回复。"), timelineTexts(completed))
     }
 
     @Test
@@ -1445,7 +1439,7 @@ class MessageItemsControllerStatusTest {
     }
 
     @Test
-    fun `多个过程段分别保留首字等待和各段耗时`() {
+    fun `回复结束后多个过程段合并并保留从请求到最后过程的总耗时`() {
         val controller = MessageItemsControllerTestAccess.newController()
         controller.stateHolder.messages.add(
             Message(
@@ -1475,13 +1469,15 @@ class MessageItemsControllerStatusTest {
         )
         Snapshot.sendApplyNotifications()
 
-        val processItems = controller.chatListItemsForTest()
-            .filterIsInstance<ChatListItem.AiMessageProcessSegment>()
+        val items = controller.chatListItemsForTest()
+        val processItems = items.filterIsInstance<ChatListItem.AiMessageProcessSegment>()
 
-        assertEquals(3, processItems.size)
+        // 各过程段保留自己的耗时，总执行区标题从请求开始算到最后一个过程结束。
         assertEquals(listOf(50L, 200L, 700L), processItems.map { it.executionStartedAtMillis })
         assertEquals(listOf(100L, 500L, 900L), processItems.map { it.executionFinishedAtMillis })
-        assertEquals(listOf(0, 2, 2), processItems.map { it.events.size })
+        val group = items.filterIsInstance<ChatListItem.AiMessageExecutionGroup>().single()
+        assertEquals(50L, group.executionStartedAtMillis)
+        assertEquals(900L, group.executionFinishedAtMillis)
     }
 
     private fun completedToolStep() = ExecutionStep(

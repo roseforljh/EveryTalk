@@ -208,6 +208,7 @@ internal fun historyMessageItemsMatch(messages: List<Message>, chatItems: List<C
             is ChatListItem.AiMessageReasoning -> item.message.id
             is ChatListItem.AiMessageContentSegment -> item.sourceMessageId
             is ChatListItem.AiMessageProcessSegment -> item.messageId
+            is ChatListItem.AiMessageExecutionGroup -> item.messageId
             is ChatListItem.AiMessageFooter -> item.message.id
             is ChatListItem.ErrorMessage -> item.messageId
             is ChatListItem.LoadingIndicator -> item.messageId

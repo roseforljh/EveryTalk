@@ -150,13 +150,15 @@ internal fun shouldKeepResumedAgentUiActive(event: AppStreamEvent): Boolean = wh
 }
 
 /** Room 中的 Run 状态投影成用户能看懂的页面状态。 */
-internal fun restoredAgentExecutionStatus(status: AgentRunStatus): String? = when (status) {
+internal fun restoredAgentExecutionStatus(status: AgentRunStatus, terminalReason: String? = null): String? = when (status) {
     AgentRunStatus.WAITING_APPROVAL -> "等待确认"
     AgentRunStatus.WAITING_REMOTE_EXECUTION -> "正在恢复远端任务"
     AgentRunStatus.MODEL_CONTINUATION_PENDING -> "正在恢复回复..."
     AgentRunStatus.INTERRUPTED -> "等待恢复确认"
     AgentRunStatus.COMPLETED -> null
-    AgentRunStatus.FAILED -> "任务失败"
+    // 失败原因属于终态结果，不能在恢复界面时退化成没有解释的状态标签。
+    AgentRunStatus.FAILED -> terminalReason?.trim()?.takeIf(String::isNotEmpty)
+        ?.let { "任务失败：${NetworkUtils.sanitizeMessage(it)}" } ?: "任务失败"
     AgentRunStatus.CANCELLED -> "任务已取消"
     else -> "正在继续任务"
 }

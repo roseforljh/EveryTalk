@@ -216,6 +216,56 @@ class ViewModelStateHolderStreamingStateTest {
         assertTrue(stateHolder.messages.single().isIncomplete)
     }
 
+    @Test
+    fun `失败任务恢复后聊天正文和过程状态均包含原因且重复恢复不叠加`() {
+        val baseline = prepareRestoration()
+        val failedRun = run(AgentRunStatus.FAILED).copy(terminalReason = "SSH连接超时")
+        assertTrue(stateHolder.reconcileAgentRun(failedRun, fullTrace(), baseline, false))
+        val restored = stateHolder.messages.single()
+        assertTrue(restored.isError)
+        assertEquals("任务失败：SSH连接超时", restored.executionStatus)
+        assertTrue(restored.text.contains("SSH连接超时"))
+        assertFalse(stateHolder._isTextApiCalling.value)
+        assertTrue(stateHolder.reconcileAgentRun(failedRun, emptyList(), restored, false))
+        assertEquals(restored.text, stateHolder.messages.single().text)
+    }
+
+    @Test
+    fun `没有过程记录的失败任务也在正文显示原因`() {
+        val baseline = prepareRestoration()
+        stateHolder.reconcileAgentRun(
+            run(AgentRunStatus.FAILED).copy(terminalReason = "模型服务返回 HTTP 403"),
+            emptyList(), baseline, false,
+        )
+        assertTrue(stateHolder.messages.single().text.contains("HTTP 403"))
+    }
+
+    @Test
+    fun `旧任务未记录终态原因时保留实时错误且收尾不能清掉`() {
+        val baseline = prepareRestoration().copy(isError = true, executionStatus = "请求超时，请重试")
+        stateHolder.messages[0] = baseline
+        stateHolder.reconcileAgentRun(run(AgentRunStatus.FAILED), fullTrace(), baseline, false)
+        stateHolder.clearMessageStatus(baseline.id, false)
+        assertEquals("请求超时，请重试", stateHolder.messages.single().executionStatus)
+
+        stateHolder.messages[0] = baseline.copy(isError = false, executionStatus = "正在执行")
+        stateHolder.clearMessageStatus(baseline.id, false)
+        assertNull(stateHolder.messages.single().executionStatus)
+    }
+
+    @Test
+    fun `账本的HTTP摘要不能覆盖服务商的具体错误说明`() {
+        val detail = "网络错误：HTTP 400：Function call is missing a thought_signature"
+        val baseline = prepareRestoration().copy(isError = true, executionStatus = detail)
+        stateHolder.messages[0] = baseline
+        stateHolder.reconcileAgentRun(
+            run(AgentRunStatus.FAILED).copy(terminalReason = "HTTP 400"),
+            fullTrace(), baseline, false,
+        )
+        assertEquals(detail, stateHolder.messages.single().executionStatus)
+        assertTrue(stateHolder.messages.single().text.contains("thought_signature"))
+    }
+
     private fun prepareRestoration(): Message {
         stateHolder._currentConversationId.value = "session-1"
         val message = Message(id = "assistant-1", text = "完整", sender = Sender.AI)

@@ -39,6 +39,39 @@ class ChatScrollStateManagerComposeTest {
     val composeRule = createComposeRule()
 
     @Test
+    fun `结束后手动展开跨过底部范围不跳转且返回底部按钮仍有效`() {
+        lateinit var manager: ChatScrollStateManager
+        lateinit var state: androidx.compose.foundation.lazy.LazyListState
+        var height by mutableIntStateOf(300)
+        composeRule.setContent {
+            state = rememberLazyListState()
+            manager = rememberChatScrollStateManager(state, rememberCoroutineScope())
+            LazyColumn(state = state, modifier = Modifier.height(320.dp)) {
+                item { Spacer(Modifier.height(height.dp)) }
+            }
+        }
+        composeRule.waitForIdle()
+        composeRule.runOnIdle { manager.pinToRealBottomUntilUserScroll() }
+        composeRule.waitForIdle()
+        composeRule.runOnIdle {
+            manager.lockAutoScroll(untilUserScroll = true)
+            // 模拟展开动画先处于底部附近，再逐帧长出屏幕；不能在第一步就重新启用跟随。
+            height = 310
+        }
+        composeRule.waitForIdle()
+        composeRule.runOnIdle { height = 600 }
+        composeRule.waitForIdle()
+        composeRule.runOnIdle {
+            assertEquals(0, state.firstVisibleItemIndex)
+            assertEquals("手动展开必须保持原来的列表位置", 0, state.firstVisibleItemScrollOffset)
+            assertTrue(state.canScrollForward)
+            manager.jumpToBottom(isUserAction = true)
+        }
+        composeRule.waitForIdle()
+        composeRule.runOnIdle { assertFalse("主动返回底部仍应正常工作", state.canScrollForward) }
+    }
+
+    @Test
     fun `历史已经在底部时启动守护不重新定位和测量`() {
         val measures = AtomicInteger()
         lateinit var manager: ChatScrollStateManager

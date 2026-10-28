@@ -1096,7 +1096,8 @@ internal class ApiHandlerStreamProcessor(
                         executionTrace = messageList[messageIndex].executionTrace.completeAllTraceTools(),
                         executionFinishedAt = System.currentTimeMillis(),
                         currentWebSearchStage = null,
-                        executionStatus = null,
+                        // Error 后仍可能收到 Finish；结束流只清理临时进度，不能清掉失败原因。
+                        executionStatus = messageList[messageIndex].executionStatus.takeIf { messageList[messageIndex].isError },
                     )
                     updatedMessage = applyEstimatedTokenUsageFallback(updatedMessage)
                     logger.debug("Synced streaming message $aiMessageId to messages list")

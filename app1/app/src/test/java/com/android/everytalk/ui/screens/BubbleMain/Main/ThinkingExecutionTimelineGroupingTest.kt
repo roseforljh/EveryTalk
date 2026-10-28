@@ -117,6 +117,7 @@ class ThinkingExecutionTimelineGroupingTest {
 
     @Test
     fun `工具前后正文保持原位且过程按事件顺序插入`() {
+        val narratives = mutableSetOf<Int>()
         val segments = orderedAiOutputSegments(
             listOf(
                 ExecutionTraceEvent.Content("正文 1"),
@@ -126,8 +127,11 @@ class ThinkingExecutionTimelineGroupingTest {
                 ExecutionTraceEvent.Reasoning("思考 2"),
                 ExecutionTraceEvent.Tool(toolStep("2", "search")),
                 ExecutionTraceEvent.Content("正文 3"),
-            )
+            ),
+            narratives,
         )
+        // 最后一个工具之前的正文是旁白，回复结束后会并回执行区；最后的正文是正式回答。
+        assertEquals(setOf(0, 2), narratives)
 
         assertEquals(
             listOf("正文 1", "process:2", "正文 2", "process:2", "正文 3"),

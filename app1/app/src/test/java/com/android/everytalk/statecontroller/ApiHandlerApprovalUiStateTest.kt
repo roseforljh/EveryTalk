@@ -11,6 +11,18 @@ import org.junit.Test
 
 class ApiHandlerApprovalUiStateTest {
     @Test
+    fun `恢复失败任务保留具体原因且隐藏URL凭据`() {
+        val status = restoredAgentExecutionStatus(
+            AgentRunStatus.FAILED,
+            "HTTP 401 https://example.com/api?token=secret-value",
+        )!!
+        assertTrue(status.contains("HTTP 401"))
+        assertFalse(status.contains("secret-value"))
+        assertEquals("任务失败", restoredAgentExecutionStatus(AgentRunStatus.FAILED, "  "))
+        assertNull(restoredAgentExecutionStatus(AgentRunStatus.COMPLETED, "旧错误"))
+    }
+
+    @Test
     fun `等待Agent审批时保留文本会话进行中状态`() {
         assertTrue(
             shouldKeepApprovalUiActive(

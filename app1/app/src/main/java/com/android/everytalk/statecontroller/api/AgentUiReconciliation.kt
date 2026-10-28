@@ -39,9 +39,24 @@ internal fun ViewModelStateHolder.reconcileAgentRun(
     val replaceAttempt = status == AgentRunStatus.MODEL_CONTINUATION_PENDING || status == AgentRunStatus.RETRYING
     // 停止和崩溃恢复已封存部分正文，晚到的 Agent 账本只能更新本地状态，不能覆盖正式内容。
     val hasTranscript = !baseline.isIncomplete && (trace.isNotEmpty() || replaceAttempt)
-    val text = if (hasTranscript) {
+    val executionStatus = restoredAgentExecutionStatus(projectedStatus, run.terminalReason)
+        .let { restored ->
+            // 实时错误包含服务商的原始说明，账本可能只有 HTTP 状态等摘要，恢复时优先保留详细说明。
+            if (status == AgentRunStatus.FAILED && baseline.isError) {
+                baseline.executionStatus?.takeIf {
+                    it.isNotBlank() && it != "任务失败" && it != "执行失败"
+                } ?: restored
+            } else restored
+        }
+    val transcriptText = if (hasTranscript) {
         trace.filterIsInstance<ExecutionTraceEvent.Content>().joinToString("") { it.text }
     } else baseline.text
+    // 没有执行过程的请求也必须能看到原因；从账本重建正文时，错误说明不会存在于内容事件中。
+    val text = if (status == AgentRunStatus.FAILED && !executionStatus.isNullOrBlank() &&
+        !transcriptText.contains(executionStatus)
+    ) {
+        listOf(transcriptText, "⚠️ $executionStatus").filter(String::isNotBlank).joinToString("\n\n")
+    } else transcriptText
     val reasoning = if (hasTranscript) {
         trace.filterIsInstance<ExecutionTraceEvent.Reasoning>().joinToString("") { it.text }.takeIf(String::isNotBlank)
     } else baseline.reasoning
@@ -57,7 +72,8 @@ internal fun ViewModelStateHolder.reconcileAgentRun(
         executionSteps = if (hasTranscript) {
             trace.filterIsInstance<ExecutionTraceEvent.Tool>().map { it.step }
         } else baseline.executionSteps,
-        executionStatus = restoredAgentExecutionStatus(projectedStatus),
+        executionStatus = executionStatus,
+        isError = baseline.isError || status == AgentRunStatus.FAILED,
         // 等待恢复不是终态。写入结束时间会触发持久层的过期任务清理，误取消待恢复任务。
         executionFinishedAt = run.updatedAt.takeIf {
             status in setOf(AgentRunStatus.COMPLETED, AgentRunStatus.FAILED, AgentRunStatus.CANCELLED)

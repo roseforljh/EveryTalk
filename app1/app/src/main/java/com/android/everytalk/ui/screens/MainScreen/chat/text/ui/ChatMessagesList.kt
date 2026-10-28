@@ -7,6 +7,9 @@ import androidx.compose.ui.res.painterResource
 
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -72,6 +75,7 @@ import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.statecontroller.freezeWhileStreamingPaused
 import com.android.everytalk.ui.screens.BubbleMain.Main.AttachmentsContent
 import com.android.everytalk.ui.screens.BubbleMain.Main.ReasoningToggleAndContent
+import com.android.everytalk.ui.screens.BubbleMain.Main.ExecutionGroupToggle
 import com.android.everytalk.ui.screens.BubbleMain.Main.localizedExecutionStatusText
 import com.android.everytalk.ui.screens.BubbleMain.Main.UserOrErrorMessageContent
 import com.android.everytalk.ui.screens.BubbleMain.Main.resolveUserBubbleMaxHeightDp
@@ -212,6 +216,7 @@ internal fun shouldAddConversationGapAfter(item: ChatListItem): Boolean = when (
     is ChatListItem.AiMessageReasoning -> false
     is ChatListItem.AiMessageContentSegment -> false
     is ChatListItem.AiMessageProcessSegment -> false
+    is ChatListItem.AiMessageExecutionGroup -> false
     is ChatListItem.AiMarkdownNode -> item.isLastNode
     else -> true
 }
@@ -303,6 +308,8 @@ fun ChatMessagesList(
     val footnoteNavigationByMessage = remember(scrollSessionKey) {
         mutableMapOf<String, FootnoteNavigationState>()
     }
+    // 回复结束后的总执行区默认收起，只记录用户手动展开的组。
+    val expandedExecutionGroups = remember(scrollSessionKey) { mutableStateMapOf<String, Boolean>() }
 
     val pauseAwareApiCalling = remember(viewModel) {
         viewModel.isTextApiCalling.freezeWhileStreamingPaused(viewModel.isStreamingPaused)
@@ -514,6 +521,16 @@ fun ChatMessagesList(
                     ),
                 contentAlignment = itemAlignment
             ) {
+                val executionGroupKey = when (item) {
+                    is ChatListItem.AiMessageContentSegment -> item.executionGroupKey
+                    is ChatListItem.AiMessageProcessSegment -> item.executionGroupKey
+                    else -> ""
+                }
+                AnimatedVisibility(
+                    visible = executionGroupKey.isEmpty() || expandedExecutionGroups[executionGroupKey] == true,
+                    enter = fadeIn() + expandVertically(expandFrom = Alignment.Top),
+                    exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Top),
+                ) {
 
                     // 根据消息类型渲染不同内容；这里不用 Column 包裹以避免额外布局抖动
                     // 前端消息列表渲染：这里按消息类型分发到不同气泡组件。
@@ -689,6 +706,19 @@ fun ChatMessagesList(
                             )
                         }
 
+                        is ChatListItem.AiMessageExecutionGroup -> {
+                            val expanded = expandedExecutionGroups[item.stableId] == true
+                            ExecutionGroupToggle(
+                                steps = item.steps,
+                                messageIsError = item.messageIsError,
+                                executionStartedAtMillis = item.executionStartedAtMillis,
+                                executionFinishedAtMillis = item.executionFinishedAtMillis,
+                                expanded = expanded,
+                                onClick = { expandedExecutionGroups[item.stableId] = !expanded },
+                                modifier = Modifier.padding(top = ChatMarkdownTextStyle.SPACING_PARAGRAPH_DP.dp),
+                            )
+                        }
+
                         is ChatListItem.AiMessageProcessSegment -> {
                             val reasoningCompleteMap = viewModel.textReasoningCompleteMap
                             val reasoningText = remember(item.events) {
@@ -742,6 +772,9 @@ fun ChatMessagesList(
                                 reasoningTextColor = MaterialTheme.chatColors.reasoningText,
                                 reasoningToggleDotColor = MaterialTheme.colorScheme.onSurface,
                                 onInteractiveExpansionChanged = topAnchorEngine::updateInteractiveExpansion,
+                                onCompletedProcessExpand = {
+                                    if (!isApiCalling) scrollStateManager.lockAutoScroll(untilUserScroll = true)
+                                },
                                 onVisibilityChanged = {},
                             )
                         }
@@ -791,6 +824,9 @@ fun ChatMessagesList(
                                     reasoningTextColor = MaterialTheme.chatColors.reasoningText,
                                     reasoningToggleDotColor = MaterialTheme.colorScheme.onSurface,
                                     onInteractiveExpansionChanged = topAnchorEngine::updateInteractiveExpansion,
+                                    onCompletedProcessExpand = {
+                                        if (!isApiCalling) scrollStateManager.lockAutoScroll(untilUserScroll = true)
+                                    },
                                     onVisibilityChanged = { }
                                 )
                             }
@@ -983,6 +1019,7 @@ fun ChatMessagesList(
                             }
                         }
                     }
+                }
                 }
             }
                 

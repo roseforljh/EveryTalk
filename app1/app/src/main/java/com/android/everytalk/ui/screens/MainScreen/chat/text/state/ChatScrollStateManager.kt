@@ -106,6 +106,7 @@ class ChatScrollStateManager(
 
     private var preventAutoScroll = false
     private var contentFollowArmed = false
+    private var contentFollowPausedForExpansion = false
     private var userScrollInterrupted = false
     private var leftBottomRangeAfterInterrupt = false
     private var isProgrammaticScroll = false
@@ -130,6 +131,7 @@ class ChatScrollStateManager(
                 )
             }
             if (source == NestedScrollSource.UserInput && available.y != 0f) {
+                contentFollowPausedForExpansion = false
                 topAnchorReserveReleaseRequester?.invoke(available.y)
                 cancelContentFollowJob()
                 preventAutoScroll = true
@@ -328,6 +330,7 @@ class ChatScrollStateManager(
         }
         isStreaming = streaming
         if (streaming && !wasStreaming) {
+            contentFollowPausedForExpansion = false
             postStreamingGuardJob?.cancel()
             postStreamingGuardJob = null
             requestContentFollow()
@@ -367,7 +370,9 @@ class ChatScrollStateManager(
         topAnchorReserveReleaseRequester = requester
     }
 
-    fun lockAutoScroll() {
+    /** 结束后手动展开可持续暂停跟随，避免展开动画尚在底部范围时被自动重新启用；旧调用保持原行为。 */
+    fun lockAutoScroll(untilUserScroll: Boolean = false) {
+        if (untilUserScroll) contentFollowPausedForExpansion = true
         cancelAutoScrollJob()
         preventAutoScroll = true
         contentFollowArmed = false
@@ -441,6 +446,7 @@ class ChatScrollStateManager(
 
     private fun shouldFollowContent(): Boolean =
         (isStreaming || postStreamingGuardJob != null || contentFollowArmed) &&
+            !contentFollowPausedForExpansion &&
             !preventAutoScroll &&
             !suppressTopAnchorBottomScroll &&
             !isStopBottomPinActive
@@ -548,6 +554,7 @@ class ChatScrollStateManager(
      * 用户主动滑动、开始下一次滚动操作或管理器销毁后会立即释放守护。
      */
     fun pinToRealBottomUntilUserScroll(clearTopAnchorRuntime: Boolean = false) {
+        contentFollowPausedForExpansion = false
         cancelAutoScrollJob()
         preventAutoScroll = false
         contentFollowArmed = true
@@ -722,7 +729,7 @@ class ChatScrollStateManager(
             return
         }
 
-        if (!isUserAction && preventAutoScroll) {
+        if (!isUserAction && (preventAutoScroll || contentFollowPausedForExpansion)) {
             logger.debug(
                 "Ignoring auto jumpToBottom because preventAutoScroll is active: " +
                     "${scrollDebugSnapshot()}"
@@ -731,6 +738,7 @@ class ChatScrollStateManager(
         }
         
         if (isUserAction) {
+            contentFollowPausedForExpansion = false
             topAnchorRuntimeClearer?.invoke()
             suppressTopAnchorBottomScroll = false
             preventAutoScroll = false

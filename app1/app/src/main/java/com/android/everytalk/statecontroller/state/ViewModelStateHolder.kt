@@ -739,7 +739,7 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
             val currentMessage = messageList[index]
             messageList[index] = currentMessage.copy(
                 currentWebSearchStage = null,
-                executionStatus = null
+                executionStatus = currentMessage.executionStatus.takeIf { currentMessage.isError }
             )
         }
     }

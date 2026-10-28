@@ -101,6 +101,42 @@ class ThinkingUiScrollComposeTest {
     }
 
     @Test
+    fun `运行中手动展开的执行区结束后收起且再次展开只通知一次`() {
+        val streaming = mutableStateOf(true)
+        var completedExpansions = 0
+        composeRule.setContent {
+            MaterialTheme {
+                ReasoningToggleAndContent(
+                    currentMessageId = "completed-process-expansion",
+                    displayedReasoningText = "已完成的执行过程",
+                    isReasoningStreaming = false,
+                    isReasoningComplete = true,
+                    replyIsStreaming = streaming.value,
+                    messageIsError = false,
+                    mainContentHasStarted = true,
+                    reasoningTextColor = Color.Black,
+                    reasoningToggleDotColor = Color.Black,
+                    onCompletedProcessExpand = { completedExpansions++ },
+                    onVisibilityChanged = {},
+                )
+            }
+        }
+        composeRule.onNodeWithTag("reasoning-inline-status").performClick()
+        composeRule.onNodeWithTag("reasoning-chain-summaries").assertIsDisplayed()
+        assertEquals("运行中的展开不能触发结束后的滚动暂停", 0, completedExpansions)
+        composeRule.runOnIdle { streaming.value = false }
+        composeRule.waitForIdle()
+        assertTrue(composeRule.onAllNodesWithTag("reasoning-chain-summaries").fetchSemanticsNodes().isEmpty())
+        composeRule.onNodeWithTag("reasoning-inline-status").performClick()
+        composeRule.onNodeWithTag("reasoning-chain-summaries").assertIsDisplayed()
+        assertEquals(1, completedExpansions)
+        composeRule.onNodeWithTag("reasoning-inline-status").performClick()
+        composeRule.waitForIdle()
+        assertTrue(composeRule.onAllNodesWithTag("reasoning-chain-summaries").fetchSemanticsNodes().isEmpty())
+        assertEquals("收起不能再次触发暂停", 1, completedExpansions)
+    }
+
+    @Test
     fun `正文开始流式输出时过程收起且允许手动查看`() {
         val replyStreaming = mutableStateOf(true)
         val contentStarted = mutableStateOf(false)
@@ -998,6 +1034,7 @@ class ThinkingUiScrollComposeTest {
 
     @Test
     fun `执行失败且有工具记录时仍可通过圆点回看`() {
+        val failureReason = "任务失败：SSH连接超时，请检查服务器连接"
         composeRule.mainClock.autoAdvance = false
         composeRule.setContent {
             MaterialTheme {
@@ -1016,6 +1053,7 @@ class ThinkingUiScrollComposeTest {
                     isReasoningStreaming = false,
                     isReasoningComplete = true,
                     messageIsError = true,
+                    activityStatusText = failureReason,
                     mainContentHasStarted = true,
                     reasoningTextColor = Color.Black,
                     reasoningToggleDotColor = Color.Black,
@@ -1026,6 +1064,10 @@ class ThinkingUiScrollComposeTest {
 
         composeRule.mainClock.advanceTimeBy(1_000L)
         composeRule.waitForIdle()
+        composeRule.onNodeWithTag("reasoning-inline-status").performClick()
+        composeRule.mainClock.advanceTimeBy(250L)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("reasoning-chain-error-status", useUnmergedTree = true).assertTextEquals(failureReason)
         openReasoningSheet()
         composeRule.mainClock.advanceTimeBy(1_000L)
         composeRule.waitForIdle()
@@ -1033,6 +1075,29 @@ class ThinkingUiScrollComposeTest {
         composeRule.onNodeWithTag("reasoning-execution-step-0").fetchSemanticsNode("")
         composeRule.onNodeWithText("local_clock").fetchSemanticsNode("")
         assertTrue(composeRule.onAllNodesWithText("执行失败").fetchSemanticsNodes().isNotEmpty())
+        composeRule.onNodeWithTag("reasoning-execution-failure-reason").assertTextEquals(failureReason)
+    }
+
+    @Test
+    fun `失败工具没有标签或命令时仍展示返回的错误内容`() {
+        composeRule.setContent {
+            MaterialTheme {
+                ThinkingExecutionTimeline(
+                    executionSteps = listOf(
+                        ExecutionStep(
+                            id = "tool-error-no-label", type = ExecutionStepType.Tool,
+                            title = "调用工具", completed = true, isError = true,
+                            resultPreview = "Permission denied (publickey)",
+                        ),
+                    ),
+                    webSearchResults = emptyList(), activityStatusText = null,
+                    reasoningText = "", isReasoningActive = false, messageIsError = true,
+                    reasoningContent = { _, _ -> },
+                )
+            }
+        }
+        composeRule.onNodeWithTag("reasoning-execution-result-tool-error-no-label")
+            .assertTextEquals("Permission denied (publickey)")
     }
 
     @Test

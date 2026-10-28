@@ -23,6 +23,7 @@ fun mapChatItemsToTopAnchorItems(
                 is ChatListItem.AiMessageReasoning,
                 is ChatListItem.AiMessageContentSegment,
                 is ChatListItem.AiMessageProcessSegment,
+                is ChatListItem.AiMessageExecutionGroup,
                 is ChatListItem.AiMessageFooter -> TopAnchorItemRole.AssistantTarget
                 is ChatListItem.LoadingIndicator -> TopAnchorItemRole.LoadingTarget
                 is ChatListItem.StatusIndicator -> TopAnchorItemRole.StatusTarget

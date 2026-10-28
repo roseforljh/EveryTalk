@@ -69,6 +69,7 @@ import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.ChatInputArea
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.ChatMessagesList
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.AgentTaskOverlay
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.buildAgentTaskItems
+import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.taskApprovalsForDisplay
 import com.android.everytalk.ui.components.content.LocalStickyHeaderTop
 import com.android.everytalk.ui.components.image.buildImagePreviewSelection
 import com.android.everytalk.ui.screens.MainScreen.chat.dialog.SystemPromptDialog
@@ -187,6 +188,7 @@ fun ChatScreen(
             )
         }.mapNotNull { it.parameters["computer_id"] }.toSet(),
     )
+    val taskPanelApprovals = taskApprovalsForDisplay(taskItems, currentTaskApprovals)
     val pendingHostCommand by viewModel.pendingComputerHostCommand.collectAsState()
     val pendingAgentEnableApproval by viewModel.pendingAgentEnableApproval.collectAsState()
     val pendingMcpEnableApproval by viewModel.pendingMcpEnableApproval.collectAsState()
@@ -486,6 +488,7 @@ fun ChatScreen(
                         is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageReasoning -> it.message.id == messageId
                         is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageContentSegment -> it.sourceMessageId == messageId
                         is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageProcessSegment -> it.messageId == messageId
+                        is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageExecutionGroup -> it.messageId == messageId
                         else -> false
                     }
                 }
@@ -748,9 +751,9 @@ fun ChatScreen(
                 viewModel = viewModel,
                 onShowVoiceInput = { navController.navigate(Screen.VOICE_INPUT_SCREEN) },
                 onHeightChange = { height -> inputAreaHeightPx = height },
-                // 历史多服务器面板可以常驻，但只能接管同一 Run 的审批，不能遮住新任务的确认卡。
+                // 只有抽屉确实能展示这一条申请时才交接；旧任务和未匹配服务器的审批保留原卡片。
                 hostCommandConfirmationRequest = currentHostCommand.takeUnless { request ->
-                    taskTargets.size > 1 && request?.context?.runId == taskRun?.id
+                    taskPanelApprovals.any { it.approvalRequestId == request?.requestId }
                 },
                 agentEnableApprovalRequest = pendingAgentEnableApproval,
                 mcpEnableApprovalRequest = pendingMcpEnableApproval,
@@ -776,7 +779,7 @@ fun ChatScreen(
                 AgentTaskOverlay(
                     sessionKey = "$conversationId:${run.id}",
                     tasks = taskItems,
-                    approvals = currentTaskApprovals,
+                    approvals = taskPanelApprovals,
                     topAvoidance = sourcesDialogTopAvoidance,
                     bottomAvoidance = inputAreaHeightDp + 72.dp,
                     onApproval = { pending, decision, onHandled ->

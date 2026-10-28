@@ -6,6 +6,7 @@ import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.agent.AgentRunStatus
 import com.android.everytalk.data.agent.AgentTaskTarget
 import com.android.everytalk.data.computer.PendingComputerToolApproval
+import com.android.everytalk.data.computer.hostConfirmationRequest
 
 internal enum class AgentTaskPhase {
     PLANNING, WAITING, RUNNING, REVIEWING, APPROVAL, COMPLETED, FAILED, STOPPED, UNUSED,
@@ -18,6 +19,14 @@ internal data class AgentTaskItem(
     val phase: AgentTaskPhase,
     val trace: List<ExecutionTraceEvent>,
 )
+
+/** 只把有对应服务器且能生成审批卡的申请交给抽屉，其他申请继续使用原聊天入口。 */
+internal fun taskApprovalsForDisplay(
+    tasks: List<AgentTaskItem>,
+    approvals: List<PendingComputerToolApproval>,
+): List<PendingComputerToolApproval> = if (tasks.size < 2) emptyList() else approvals.filter { pending ->
+    pending.hostConfirmationRequest() != null && tasks.any { it.computerId == pending.request.context.computerId }
+}
 
 /**
  * 从已有 Run 和有序执行记录生成只读视图，不创建第二套任务状态机。

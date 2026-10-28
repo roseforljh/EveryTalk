@@ -82,6 +82,7 @@ import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.data.DataClass.hasReviewableExecutionProcess
 import com.android.everytalk.ui.components.ChatMarkdownTextStyle
+import com.android.everytalk.ui.theme.chatColors
 import com.android.everytalk.ui.components.sheet.AppModalBottomSheet
 import com.android.everytalk.ui.components.markdown.EveryTalkMarkdownFlavourDescriptor
 import com.android.everytalk.ui.components.streaming.PreparedMarkdownDocument
@@ -304,6 +305,7 @@ internal fun ReasoningToggleAndContent(
     modifier: Modifier = Modifier,
     streamingScrollState: ScrollState = rememberScrollState(),
     onInteractiveExpansionChanged: (key: String, expanded: Boolean) -> Unit = { _, _ -> },
+    onCompletedProcessExpand: () -> Unit = {},
     onVisibilityChanged: () -> Unit,
 ) {
     val focusManager = LocalFocusManager.current
@@ -328,6 +330,8 @@ internal fun ReasoningToggleAndContent(
         if (forceExpanded) userExpanded = false
     }
     LaunchedEffect(processIsActive, currentMessageId) {
+        // 回复结束时收回运行期间手动展开的过程；结束后仍可自由展开查看。
+        if (!processIsActive) userExpanded = false
         while (processIsActive) {
             nowMillis = System.currentTimeMillis()
             delay(1_000L)
@@ -432,6 +436,8 @@ internal fun ReasoningToggleAndContent(
                             if (sections.isEmpty() && processIsActive) {
                                 openReasoningSheet()
                             } else if (!forceExpanded) {
+                                // 在展开动画改变列表高度之前暂停跟随，避免查看已结束过程时被拉到底部。
+                                if (!userExpanded && !processIsActive) onCompletedProcessExpand()
                                 userExpanded = !userExpanded
                             }
                         },
@@ -489,6 +495,38 @@ internal fun executionProcessIsActive(
 ): Boolean = executionFinishedAtMillis == null &&
     !messageIsError &&
     (replyIsStreaming || isReasoningStreaming)
+
+/** 回复结束后的总执行区标题，标题文字与单个执行区结束态一致。 */
+@Composable
+internal fun ExecutionGroupToggle(
+    steps: List<ExecutionStep>,
+    messageIsError: Boolean,
+    executionStartedAtMillis: Long?,
+    executionFinishedAtMillis: Long?,
+    expanded: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val elapsedText = executionStartedAtMillis?.let { startedAt ->
+        executionFinishedAtMillis?.minus(startedAt)?.takeIf { it >= 1_000L }
+    }?.let { localizedExecutionDuration(it) }
+    val title = when {
+        messageIsError && elapsedText != null -> stringResource(R.string.thinking_failed_duration, elapsedText)
+        messageIsError -> stringResource(R.string.thinking_execution_failed)
+        elapsedText != null -> stringResource(R.string.thinking_elapsed_duration, elapsedText)
+        steps.isNotEmpty() -> executionStepsSummary(steps.map { it.type }.toSet(), steps.size)
+        else -> stringResource(R.string.thinking_process)
+    }
+    ExecutionChainHeader(
+        text = title,
+        active = false,
+        expanded = expanded,
+        textColor = MaterialTheme.chatColors.reasoningText,
+        iconColor = MaterialTheme.colorScheme.onSurface,
+        onClick = onClick,
+        modifier = modifier,
+    )
+}
 
 @Composable
 private fun ExecutionChainHeader(

@@ -537,25 +537,35 @@ internal fun ThinkingExecutionTimeline(
 
         if (!isReasoningActive) {
             TimelineNode(
-                icon = R.drawable.ic_check_circle,
+                icon = if (messageIsError) R.drawable.ic_close_bold else R.drawable.ic_check_circle,
                 iconTint = if (messageIsError) {
                     TimelineErrorRed
                 } else {
                     TimelineWebGreen
                 },
                 title = if (messageIsError) {
-                    localizedActivityStatusText
-                        ?.takeIf { activityStatusText?.startsWith(CONTEXT_COMPRESSION_FAILURE_PREFIX) == true }
-                        ?: stringResource(R.string.thinking_execution_failed)
+                    stringResource(R.string.thinking_execution_failed)
                 } else {
                     stringResource(R.string.thinking_complete)
                 },
                 active = false,
-                completed = !messageIsError,
+                completed = true,
                 first = nodeIndex == 0,
                 last = true,
                 modifier = Modifier.testTag("reasoning-execution-finish-step"),
-            )
+            ) {
+                // 复用终态节点正文，长错误允许换行和复制，不再仅对压缩错误显示原因。
+                if (messageIsError && !localizedActivityStatusText.isNullOrBlank()) {
+                    androidx.compose.foundation.text.selection.SelectionContainer {
+                        Text(
+                            text = localizedActivityStatusText,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.testTag("reasoning-execution-failure-reason"),
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -715,7 +725,11 @@ private fun ExecutionLabels(
     expanded: Boolean,
     onToggleExpanded: () -> Unit,
 ) {
-    if (step.labels.isEmpty()) return
+    if (step.labels.isEmpty()) {
+        // 缺少工具标签的失败记录仍需显示服务端返回的原因。
+        if (step.isError) ExecutionStepDetails(step)
+        return
+    }
     val uriHandler = LocalUriHandler.current
     FlowRow(
         horizontalArrangement = Arrangement.spacedBy(7.dp),
@@ -759,7 +773,7 @@ private fun ExecutionLabels(
 private fun ExecutionStepDetails(step: ExecutionStep) {
     val detail = step.detail?.trim().takeUnless { it.isNullOrEmpty() }
         ?: step.labels.joinToString(" ").trim()
-    if (detail.isEmpty()) return
+    if (detail.isEmpty() && step.resultPreview.isNullOrBlank()) return
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -767,14 +781,18 @@ private fun ExecutionStepDetails(step: ExecutionStep) {
             .testTag("reasoning-execution-detail-${step.id}"),
         verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
-        Text(
-            text = detail,
-            color = MaterialTheme.colorScheme.onSurface,
-            style = MaterialTheme.typography.bodySmall,
-        )
+        if (detail.isNotEmpty()) {
+            Text(
+                text = detail,
+                color = MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
         Text(
             text = stringResource(
-                if (step.completed) {
+                if (step.isError) {
+                    R.string.thinking_execution_failed
+                } else if (step.completed) {
                     R.string.thinking_execution_completed
                 } else {
                     R.string.thinking_execution_running
@@ -783,6 +801,16 @@ private fun ExecutionStepDetails(step: ExecutionStep) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
+        step.resultPreview?.takeIf(String::isNotBlank)?.let { result ->
+            androidx.compose.foundation.text.selection.SelectionContainer {
+                Text(
+                    text = result,
+                    color = if (step.isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.testTag("reasoning-execution-result-${step.id}"),
+                )
+            }
+        }
     }
 }
 
