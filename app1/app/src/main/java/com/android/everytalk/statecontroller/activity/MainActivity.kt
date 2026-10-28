@@ -26,6 +26,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -330,10 +331,14 @@ class MainActivity : AppCompatActivity() {
                                         appViewModel.stateHolder.pinnedTextConversationIds.collectAsState().value
                                     }
 
+                                    // 列表位置不随每次打开重置，让当前会话保留在点击进入时的位置。
+                                    // 放在会话 key 外，菜单、弹窗等临时状态仍按原逻辑清理。
+                                    val drawerListState = rememberLazyListState()
                                     key(drawerSessionKey, isImageGenerationMode) {
                                         // 监听同一个账户状态，修改头像或昵称后侧栏立即更新，无需重启。
                                         val accountState by appViewModel.accountManager.state.collectAsState()
                                         AppDrawerContent(
+                                            listState = drawerListState,
                                             accountAvatarUrl = accountState.user?.avatarUrl,
                                             accountName = accountState.user?.displayName,
                                             historicalConversations = if (isImageGenerationMode) appViewModel.imageGenerationHistoricalConversations.collectAsState().value else appViewModel.historicalConversations.collectAsState().value,

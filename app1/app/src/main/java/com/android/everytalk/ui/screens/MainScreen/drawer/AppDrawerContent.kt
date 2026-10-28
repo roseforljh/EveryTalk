@@ -8,7 +8,9 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -90,6 +92,7 @@ fun AppDrawerContent(
     onShareConversation: (Int) -> Unit = {}, // 新增：分享会话回调
     accountAvatarUrl: String? = null,
     accountName: String? = null,
+    listState: LazyListState = rememberLazyListState(),
 ) {
     val selectedSet = remember { mutableStateListOf<Int>() }
     var showDeleteConfirm by remember { mutableStateOf(false) }
@@ -250,6 +253,7 @@ fun AppDrawerContent(
                     .zIndex(1f),
             )
             LazyColumn(
+                state = listState,
                 modifier = Modifier
                     .fillMaxSize()
                     .zIndex(0f),

@@ -30,7 +30,8 @@ import org.koin.core.context.stopKoin
 import org.robolectric.annotation.Config
 
 @RunWith(AndroidJUnit4::class)
-@Config(sdk = [34])
+// 只验证侧栏界面，不启动真实应用的后台同步任务。
+@Config(sdk = [34], application = android.app.Application::class)
 @OptIn(ExperimentalMaterial3Api::class)
 class DrawerSessionKeyTest {
 
