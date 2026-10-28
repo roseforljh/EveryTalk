@@ -12,9 +12,10 @@ import org.junit.Test
 
 class AgentModelTurnLimitTest {
     @Test
-    fun `恢复Run只获得总上限内剩余轮次`() {
-        assertEquals(listOf(49, 50), remainingAgentModelTurnOrdinals(49).toList())
-        assertTrue(remainingAgentModelTurnOrdinals(51).isEmpty())
+    fun `模型轮次超过50后仍连续编号且恢复不重置`() {
+        assertEquals((1..60).toList(), agentModelTurnOrdinals(1).take(60).toList())
+        assertEquals(listOf(49, 50, 51, 52), agentModelTurnOrdinals(49).take(4).toList())
+        assertEquals(listOf(51, 52, 53), agentModelTurnOrdinals(51).take(3).toList())
     }
 
     @Test

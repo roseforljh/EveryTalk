@@ -61,7 +61,6 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.put
 
-internal const val MAX_AGENT_MODEL_TURNS = 50
 internal const val MAX_AGENT_CONSECUTIVE_TOOL_CALLS = 100
 internal const val MAX_IDENTICAL_TOOL_CALLS = 3
 internal const val MAX_PARALLEL_TOOL_CALLS = 4
@@ -348,9 +347,8 @@ class AgentLoop(
                 }
             }
 
-            // modelTurnOrdinal 从 1 开始；恢复 Run 时只能使用剩余额度，不能重新获得 50 轮。
             var overflowRecoveryUsed = false
-            for (modelTurnOrdinal in remainingAgentModelTurnOrdinals(firstModelTurnOrdinal)) {
+            for (modelTurnOrdinal in agentModelTurnOrdinals(firstModelTurnOrdinal)) {
                 // 每轮开始前统一经过安全暂停门，Resume 后从当前循环位置继续。
                 pauseController.awaitIfPaused(checkNotNull(run).id)
                 val steeringAtBoundary = consumeSteering()
@@ -915,20 +913,6 @@ class AgentLoop(
                 pauseController.awaitIfPaused(checkNotNull(run).id)
                 emit(AppStreamEvent.ExecutionStatusUpdate("正在分析工具结果"))
             }
-
-            val limitMessage = if (firstModelTurnOrdinal > MAX_AGENT_MODEL_TURNS) {
-                "该 Agent 已达到 $MAX_AGENT_MODEL_TURNS 轮模型请求上限"
-            } else {
-                "工具调用超过 $MAX_AGENT_MODEL_TURNS 轮限制"
-            }
-            runStore.updateRunStatus(
-                run = checkNotNull(run),
-                status = AgentRunStatus.FAILED,
-                requestOrdinal = requestOrdinal,
-                terminalReason = limitMessage,
-            )
-            emit(AppStreamEvent.Error(limitMessage))
-            emit(AppStreamEvent.Finish("tool_loop_limit"))
         } catch (error: CancellationException) {
             withContext(NonCancellable) {
                 run?.let { activeRun ->
@@ -2173,9 +2157,9 @@ class AgentLoop(
     }
 }
 
-/** 恢复 Run 只消费尚未使用的模型轮次；已达到上限时返回空范围。 */
-internal fun remainingAgentModelTurnOrdinals(firstModelTurnOrdinal: Int): IntRange =
-    firstModelTurnOrdinal.coerceAtLeast(1)..MAX_AGENT_MODEL_TURNS
+/** 从新建或恢复 Run 的轮次继续编号，不设总轮数上限。 */
+internal fun agentModelTurnOrdinals(firstModelTurnOrdinal: Int): Sequence<Int> =
+    generateSequence(firstModelTurnOrdinal.coerceAtLeast(1)) { it + 1 }
 
 /** Pi 默认允许初始请求之后再重试三次；attempt 从 1 开始并持久化。 */
 internal fun canRetryProviderAttempt(currentAttempt: Int): Boolean =
