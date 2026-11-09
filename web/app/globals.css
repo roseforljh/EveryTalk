@@ -20,14 +20,16 @@
 
 /* 所有页面使用同一组黑白变量，浅色主题只反转信息层，不改变素材内容。 */
 :root {
+  --q-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --q-font-mono: ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   --navigation-offset: 104px;
-  --bg: #000;
-  --fg: #fff;
+  --bg: #141416;
+  --fg: #F4F4F6;
   --muted: #a3a3a3;
-  --surface: #0c0c0c;
-  --line: #292929;
-  --soft: #161616;
-  --header: rgba(0, 0, 0, 0.88);
+  --surface: #1a1b1e;
+  --line: rgba(255, 255, 255, 0.1);
+  --soft: rgba(255, 255, 255, 0.08);
+  --header: rgba(20, 20, 22, 0.88);
   color-scheme: dark;
 }
 :root[data-theme='light'] {
@@ -67,7 +69,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
-  font-family: var(--font-noto), 'Microsoft YaHei', sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 14px; font-weight: 430; line-height: 1.5; letter-spacing: 0; font-synthesis-weight: none;
   -webkit-font-smoothing: antialiased;
 }
 button,

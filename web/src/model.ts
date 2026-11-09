@@ -2,9 +2,29 @@ import { isObject } from './sync-core'
 import { authenticatedFetch, apiBaseUrl } from './auth'
 import type { AuthSession, JsonObject, StoredRecord } from './types'
 import { modelCapabilities, parameterProtocol } from './model-capabilities'
-import { ModelToolTurn, withModelTools, type ModelTools } from './model-tools'
+import { ModelToolTurn, withModelTools, type ModelToolCall, type ModelTools } from './model-tools'
 
-export interface ModelResult { text: string; reasoning: string; usage?: JsonObject }
+/**
+ * 单次工具或检索执行步骤项，与安卓端 ThinkingUI / ThinkingExecutionTimeline 的步骤结构对齐。
+ */
+export interface ExecutionStepItem {
+  id: string
+  type: 'search' | 'web' | 'tool'
+  title: string
+  labels: string[]
+  completed: boolean
+  isError?: boolean
+  detail?: string
+  resultPreview?: string
+}
+
+export interface ModelResult {
+  text: string
+  reasoning: string
+  usage?: JsonObject
+  executionSteps?: ExecutionStepItem[]
+  activeStatus?: string
+}
 export type ModelProtocol = 'openai' | 'responses' | 'anthropic' | 'gemini'
 export interface ImageResult { text: string; images: string[] }
 export type ImageProtocol = 'openai' | 'gemini' | 'qwen' | 'modal' | 'unsupported'
@@ -333,26 +353,115 @@ export async function generateImage(session: AuthSession, request: ReturnType<ty
   return { images, text: typeof value.text === 'string' ? value.text : '' }
 }
 
-/** 有界的原生工具循环：仅开启记忆时注册工具，历史片段和调用轨迹始终留在本轮内存。 */
+/**
+ * 将工具调用解析为与安卓端 ThinkingUI.kt / ThinkingExecutionTimeline.kt 一致的展示步骤。
+ */
+function createExecutionStep(call: ModelToolCall): ExecutionStepItem {
+  const args = call.arguments
+  if (call.name === 'web_search') {
+    const query = typeof args.query === 'string' && args.query.trim() ? args.query.trim() : '网页信息'
+    return {
+      id: call.id || crypto.randomUUID(),
+      type: 'search',
+      title: `搜索网页 · ${query}`,
+      labels: [query],
+      completed: false,
+    }
+  }
+  if (call.name === 'webfetch') {
+    const rawUrl = typeof args.url === 'string' ? args.url.trim() : ''
+    let host = rawUrl || '网页'
+    try {
+      host = new URL(rawUrl).hostname.replace(/^www\./, '') || host
+    } catch {
+      /* 保留原始 URL */
+    }
+    return {
+      id: call.id || crypto.randomUUID(),
+      type: 'web',
+      title: `读取网页 · ${host}`,
+      labels: [rawUrl || host],
+      completed: false,
+    }
+  }
+  const friendlyName =
+    call.name === 'get_current_datetime'
+      ? '获取当前时间'
+      : call.name === 'memory_search'
+        ? '检索记忆'
+        : call.name === 'memory_save'
+          ? '保存记忆'
+          : call.name
+  return {
+    id: call.id || crypto.randomUUID(),
+    type: 'tool',
+    title: `调用工具 · ${friendlyName}`,
+    labels: [friendlyName],
+    completed: false,
+  }
+}
+
+/** 有界的原生工具循环：仅开启记忆或联网工具时注册工具，历史片段和调用轨迹始终留在本轮内存。 */
 export async function generate(session: AuthSession, request: ReturnType<typeof modelRequest>, signal: AbortSignal, onDelta: (result: ModelResult) => void, refreshSession?: () => Promise<AuthSession>, tools?: ModelTools): Promise<ModelResult> {
   let body = tools ? withModelTools(request.body, request.protocol, tools.definitions) : request.body
   let reasoning = ''
+  const executionSteps: ExecutionStepItem[] = []
   for (let round = 0; round < 8; round++) {
     signal.throwIfAborted()
     await tools?.validate()
     const turn = new ModelToolTurn(request.protocol)
-    const result = await generateTurn(session, { ...request, body }, signal, partial => onDelta({ ...partial, reasoning: reasoning + partial.reasoning }), refreshSession, turn)
+    const roundStatus = executionSteps.length > 0 ? '分析工具结果' : undefined
+    const result = await generateTurn(
+      session,
+      { ...request, body },
+      signal,
+      partial =>
+        onDelta({
+          ...partial,
+          reasoning: reasoning + partial.reasoning,
+          ...(executionSteps.length ? { executionSteps: executionSteps.map(s => ({ ...s })) } : {}),
+          ...(roundStatus && !partial.text ? { activeStatus: roundStatus } : {}),
+        }),
+      refreshSession,
+      turn
+    )
     signal.throwIfAborted()
     await tools?.validate()
     const calls = turn.calls()
-    if (!calls.length) return { ...result, reasoning: reasoning + result.reasoning }
+    if (!calls.length) {
+      return {
+        ...result,
+        reasoning: reasoning + result.reasoning,
+        ...(executionSteps.length ? { executionSteps: executionSteps.map(s => ({ ...s })) } : {}),
+      }
+    }
     if (!tools) throw new Error('本轮没有授权使用模型工具')
     if (round === 7) throw new Error('工具调用轮数过多，请把问题说得更具体')
-    const outputs: JsonObject[] = []
-    for (const call of calls) { signal.throwIfAborted(); outputs.push(await tools.execute(call)) }
-    body = turn.continue(body, result, calls, outputs)
     reasoning += result.reasoning
-    onDelta({ text: '', reasoning })
+    const outputs: JsonObject[] = []
+    for (const call of calls) {
+      signal.throwIfAborted()
+      const step = createExecutionStep(call)
+      executionSteps.push(step)
+      onDelta({
+        text: '',
+        reasoning,
+        executionSteps: executionSteps.map(s => ({ ...s })),
+        activeStatus: step.title,
+      })
+      const output = await tools.execute(call)
+      step.completed = true
+      step.isError = Boolean(output.error)
+      step.resultPreview = typeof output.error === 'string' ? output.error : JSON.stringify(output).slice(0, 180)
+      outputs.push(output)
+      onDelta({
+        text: '',
+        reasoning,
+        executionSteps: executionSteps.map(s => ({ ...s })),
+        activeStatus: '分析工具结果',
+      })
+    }
+    body = turn.continue(body, result, calls, outputs)
   }
   throw new Error('模型工具循环未完成')
 }

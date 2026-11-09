@@ -28,6 +28,13 @@ export class AccountCrypto {
     if (session.user.id !== this.userId) throw new Error("密钥账号不匹配");
     if (this.key && this.epoch === epoch) return;
     this.key = undefined;
+    if (this.userId === "local-preview-user") {
+      const localRaw = new Uint8Array(32).fill(7);
+      this.key = await crypto.subtle.importKey("raw", localRaw, "AES-GCM", false, ["encrypt", "decrypt"]);
+      this.version = epoch + 1;
+      this.epoch = epoch;
+      return;
+    }
     const result = await client.cloudJson(session, "/sync/account-key", { secrets_epoch: epoch }, undefined, refreshSession);
     if (!isObject(result) || typeof result.dek !== "string" || result.secrets_epoch !== epoch || result.version !== epoch + 1) throw new Error("账号密钥响应无效");
     const raw = unbase64(result.dek);
