@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { authClient, SessionExpiredError } from './auth'
 import { AccountCrypto } from './crypto'
+import { migrateLegacySettingRecords } from './settings-contract'
 import { SyncClient, type SyncSnapshot } from './sync'
 import { syncKey, type AuthSession, type JsonObject, type StoredRecord, type SyncEntity } from './types'
 
@@ -1027,6 +1028,8 @@ export function useWorkspaceSync(session: AuthSession, onExpired: () => void) {
         if (isLocalPreview) {
           await ensureLocalPreviewSeed(current.client)
         }
+        // 旧 kind 的本地配置在这里就地迁移成服务端合同 kind；失败的保持原样。
+        await migrateLegacySettingRecords(current.client, session.user.id)
         if (!current.alive) return
         current.ready = true
         const local = await current.client.snapshot()

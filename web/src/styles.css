@@ -1247,6 +1247,14 @@
 .et-user-clamp-wrap {
   position: relative;
 }
+.et-body-segments {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.et-body-segments .et-skill-file-chip {
+  margin: 0 4px;
+  vertical-align: middle;
+}
 .et-user-clamp-wrap.is-animatable {
   overflow: hidden;
   transition: max-height 0.34s cubic-bezier(0.22, 1, 0.36, 1);

@@ -55,6 +55,15 @@ import {
 import { ThemeToggle } from '@/components/ui/ThemeProvider'
 import { builtinModels, isBuiltinModel, withBuiltinModels } from './builtin-models'
 import { SettingsPanel, type SettingsTab } from './SettingsPanel'
+import {
+  canonicalSettingKey,
+  contractKindOf,
+  isCanonicalUuid,
+  isLegacySettingKind,
+  settingViewToContract,
+  settingsViewRecords,
+  writeSettingExtras,
+} from './settings-contract'
 
 /**
  * 1:1 还原安卓端 ParticlesBackground.kt 的 3D 球体粒子点云背景特效组件。
@@ -576,6 +585,7 @@ import {
   type ModelResult,
 } from './model'
 import { readHistory, uploadResource } from './resources'
+import { archiveDisplay, bodySegments, displaySegments, type ArchiveDisplay } from './message-segments'
 import { isObject } from './sync-core'
 import { syncKey, type AuthSession, type JsonObject, type StoredRecord, type SyncEntity } from './types'
 import type { SyncClient } from './sync'
@@ -1203,6 +1213,10 @@ export function Workspace({ session, onSignOut }: { session: AuthSession; onSign
   const recognition = useRef<BrowserSpeechRecognition | undefined>(undefined)
   const voiceBase = useRef('')
   const [history, setHistory] = useState<{ id: string; value: JsonObject }>()
+  // 大消息的完整正文来自加密归档，只用于当前页面显示，绝不写回同步队列。
+  const [archiveViews, setArchiveViews] = useState<Record<string, ArchiveDisplay>>({})
+  const archiveAttempts = useRef(new Map<string, number>())
+  const archiveLoading = useRef(false)
   const [previewFile, setPreviewFile] = useState<File>()
   useEffect(() => {
     setPreviewFile(undefined)
@@ -1233,6 +1247,8 @@ export function Workspace({ session, onSignOut }: { session: AuthSession; onSign
   liveRecords.current = snapshot.records
 
   const records = useMemo(() => withBuiltinModels(snapshot.records), [snapshot.records])
+  // 设置面板仍按网页旧 kind/字段渲染，同步合同值在这里转换；保存时 saveSetting 再转回合同。
+  const settingsPanelRecords = useMemo(() => settingsViewRecords(records, session.user.id), [records, session.user.id])
   const imageClient = runtime.current?.client
   const settingsRows = useMemo(() => records.filter(r => r.entity === 'user_settings' && !r.deleted), [records])
   const setting = (kind: string, key: string) => settingsRows.find(r => r.payload.kind === kind && r.payload.key === key)
@@ -1386,6 +1402,41 @@ export function Workspace({ session, onSignOut }: { session: AuthSession; onSign
   }, [sessionRef])
   const downloads = useFileDownloads(ready ? imageClient : undefined, records, session, refreshSession)
 
+  // 消息超过服务端上限时，完整正文只存在于 message_archive 附件里。
+  // 打开会话时下载并解密回填到显示层，只影响显示，不写回同步队列。
+  useEffect(() => {
+    const current = runtime.current
+    if (!current?.ready || !current.alive || archiveLoading.current) return
+    const pending = messages.flatMap(message => {
+      const attachment = records.find(r => r.entity === 'attachments' && !r.deleted && r.payload.messageId === message.id &&
+        r.payload.role === 'message_archive' && (!r.payload.chunkCount || r.payload.chunkIndex === 0))
+      if (!attachment || archiveViews[message.id]) return []
+      const key = `${attachment.id}:${String(attachment.payload.resourceVersion ?? '')}`
+      // 分块可能后到；失败先保留附件链接，等记录变化后再试，最多三次。
+      const attempts = archiveAttempts.current.get(key) ?? 0
+      if (attempts >= 3) return []
+      archiveAttempts.current.set(key, attempts + 1)
+      return [{ attachment }]
+    })
+    if (!pending.length) return
+    archiveLoading.current = true
+    void (async () => {
+      try {
+        for (const item of pending) {
+          try {
+            const value = await readHistory(current.client, current.crypto, sessionRef.current, records, item.attachment, refreshSession)
+            const view = archiveDisplay(value)
+            if (view && current.alive && runtime.current === current) setArchiveViews(prev => ({ ...prev, [String(item.attachment.payload.messageId)]: view }))
+          } catch {
+            // 网络或解密失败：继续显示原来的“完整历史”附件链接。
+          }
+        }
+      } finally {
+        archiveLoading.current = false
+      }
+    })()
+  }, [messages, records, ready, refreshSession, archiveViews])
+
   const startSpeechSession = (openOverlay: boolean): void => {
     const current = getSpeechRecognition(window)
     if (!current) {
@@ -1447,17 +1498,36 @@ export function Workspace({ session, onSignOut }: { session: AuthSession; onSign
 
   const saveSetting = async (kind: string, key: string, value: JsonObject, old?: StoredRecord, deleted = false): Promise<void> => {
     if (!key) throw new Error('配置标识不能为空')
-    const previous = old ?? liveRecords.current.find(r => r.entity === 'user_settings' && r.payload.kind === kind && r.payload.key === key)
-    if (kind === 'api_configs' && (isBuiltinModel(value, key) || (previous && isBuiltinModel(valueOf(previous), key)))) throw new Error('内置默认配置不可修改或删除')
+    const existing = old ?? liveRecords.current.find(r => r.entity === 'user_settings' && r.payload.kind === kind && r.payload.key === key)
+    if (kind === 'api_configs' && (isBuiltinModel(value, key) || (existing && isBuiltinModel(valueOf(existing), key)))) throw new Error('内置默认配置不可修改或删除')
+    const webKind = isLegacySettingKind(kind) ? kind : undefined
+    // 网页旧 kind 统一改写成安卓合同 kind；已有记录沿用其同步 key，新记录用 UUID。
+    const targetKind = webKind ? contractKindOf(webKind) : kind
+    const targetKey = webKind
+      ? existing
+        ? isCanonicalUuid(str(existing.payload.key))
+          ? str(existing.payload.key).toLowerCase()
+          : await canonicalSettingKey(targetKind, str(existing.payload.key, key))
+        : crypto.randomUUID()
+      : key
+    let extras: JsonObject | undefined
+    if (webKind && !deleted) {
+      const mapped = settingViewToContract(webKind, targetKey, value)
+      value = mapped.value
+      extras = mapped.extras
+    } else if (webKind) {
+      // 删除只发墓碑；网页视图里的本地字段（apiKey/workspaces 等）不能进入服务端扫描。
+      value = {}
+    }
     const current = currentRuntime()
     if (!deleted) {
       await current.crypto.unlock(current.client, sessionRef.current, snapshot.secretsEpoch ?? 0, refreshSession)
-      const encoded = await current.crypto.encodeSettings(value, kind, key)
+      const encoded = await current.crypto.encodeSettings(value, targetKind, targetKey)
       if (!isObject(encoded)) throw new Error('配置格式无效')
       value = encoded
     }
-    const existing = old ?? liveRecords.current.find(r => r.entity === 'user_settings' && r.payload.kind === kind && r.payload.key === key)
-    await current.client.saveLocal('user_settings', existing?.id ?? crypto.randomUUID(), { clientModifiedAt: updated(existing), kind, key, value }, deleted)
+    await current.client.saveLocal('user_settings', existing?.id ?? crypto.randomUUID(), { clientModifiedAt: updated(existing), kind: targetKind, key: targetKey, value }, deleted)
+    if (webKind) writeSettingExtras(sessionRef.current.user.id, targetKind, targetKey, deleted ? undefined : extras)
     await changed()
   }
 
@@ -2851,7 +2921,11 @@ export function Workspace({ session, onSignOut }: { session: AuthSession; onSign
               )
               const searchResults = readSearchResults(message.payload.webSearchResults)
               const steps = readExecutionSteps(message.payload.executionSteps)
-              const reasoningText = str(message.payload.reasoning)
+              const archived = archiveViews[message.id]
+              const displayParts = archived?.segments ?? displaySegments(message.payload)
+              const body = isUser ? bodySegments(message.payload) : undefined
+              const messageText = archived?.text || (body ? body.map(part => part.type === 'text' ? part.text : '').join('') : str(message.payload.text))
+              const reasoningText = archived?.reasoning || str(message.payload.reasoning)
               const durationMs = Number(
                 message.payload.executionDurationMs ??
                   (Number(message.payload.executionFinishedAt ?? 0) > Number(message.payload.executionStartedAt ?? 0)
@@ -2860,7 +2934,7 @@ export function Workspace({ session, onSignOut }: { session: AuthSession; onSign
               )
               const durationSec = durationMs > 0 ? Math.max(1, Math.round(durationMs / 1000)) : undefined
 
-              const fileParts = messageFileParts(str(message.payload.text), attachments)
+              const fileParts = messageFileParts(messageText, attachments)
               const referencedIds = new Set(fileParts.flatMap(part => (part.attachment ? [part.attachment.id] : [])))
               const remainingAttachments = attachments.filter(attachment => !referencedIds.has(attachment.id))
               const renderFile = (attachment: StoredRecord, label?: string) => (
@@ -2874,7 +2948,6 @@ export function Workspace({ session, onSignOut }: { session: AuthSession; onSign
                 />
               )
 
-              const messageText = str(message.payload.text)
               const isLongUserMessage = isUser && (messageText.length > 360 || messageText.split('\n').length > 8)
               const isUserExpanded = expandedUserMessages[message.id] === true
               const messageModelName = str(message.payload.modelName, modelLabel)
@@ -2891,7 +2964,19 @@ export function Workspace({ session, onSignOut }: { session: AuthSession; onSign
                         expanded={isUserExpanded}
                         onToggle={() => setExpandedUserMessages(prev => ({ ...prev, [message.id]: !isUserExpanded }))}
                       >
-                        <MessageFileText parts={fileParts} renderFile={renderFile} />
+                        {body ? (
+                          <span className="et-body-segments">
+                            {body.map((part, index) => part.type === 'skill' ? (
+                              <span key={index} className="et-skill-file-chip">
+                                {part.displayName || part.skillId}
+                              </span>
+                            ) : part.text ? (
+                              <MessageFileText key={index} parts={messageFileParts(part.text, attachments)} renderFile={renderFile} />
+                            ) : null)}
+                          </span>
+                        ) : (
+                          <MessageFileText parts={fileParts} renderFile={renderFile} />
+                        )}
                       </UserBubbleClamp>
                       {remainingAttachments.length > 0 && (
                         <div className="et-attachments">
@@ -2924,28 +3009,67 @@ export function Workspace({ session, onSignOut }: { session: AuthSession; onSign
                     </div>
                   ) : (
                     <div className="et-assistant-body">
-                      {(Boolean(reasoningText) || steps.length > 0) && (
-                        <ThinkingExecutionBlock
-                          reasoning={reasoningText}
-                          steps={steps}
-                          searchResults={searchResults}
-                          isStreaming={false}
-                          hasMainText={true}
-                          durationSeconds={durationSec}
-                          onOpenTimeline={() =>
-                            setTimelineModal({
-                              reasoning: reasoningText,
-                              steps,
-                              searchResults,
-                              durationSeconds: durationSec,
-                              isStreaming: false,
-                            })
-                          }
-                        />
+                      {displayParts ? (
+                        <>
+                          {(steps.length > 0 || searchResults.length > 0) && (
+                            <ThinkingExecutionBlock
+                              reasoning=""
+                              steps={steps}
+                              searchResults={searchResults}
+                              isStreaming={false}
+                              hasMainText={true}
+                              durationSeconds={durationSec}
+                              onOpenTimeline={() =>
+                                setTimelineModal({ reasoning: '', steps, searchResults, durationSeconds: durationSec, isStreaming: false })
+                              }
+                            />
+                          )}
+                          {displayParts.map((segment, index) =>
+                            segment.type === 'reasoning' ? (
+                              <ThinkingExecutionBlock
+                                key={`reasoning-${index}`}
+                                reasoning={segment.text}
+                                steps={[]}
+                                searchResults={[]}
+                                isStreaming={false}
+                                hasMainText={true}
+                                onOpenTimeline={() =>
+                                  setTimelineModal({ reasoning: segment.text, steps: [], searchResults: [], isStreaming: false })
+                                }
+                              />
+                            ) : (
+                              <div key={`content-${index}`} className="et-message-text">
+                                {renderFormattedMessageText(segment.text, attachments, renderFile)}
+                              </div>
+                            )
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          {(Boolean(reasoningText) || steps.length > 0) && (
+                            <ThinkingExecutionBlock
+                              reasoning={reasoningText}
+                              steps={steps}
+                              searchResults={searchResults}
+                              isStreaming={false}
+                              hasMainText={true}
+                              durationSeconds={durationSec}
+                              onOpenTimeline={() =>
+                                setTimelineModal({
+                                  reasoning: reasoningText,
+                                  steps,
+                                  searchResults,
+                                  durationSeconds: durationSec,
+                                  isStreaming: false,
+                                })
+                              }
+                            />
+                          )}
+                          <div className="et-message-text">
+                            {renderFormattedMessageText(messageText, attachments, renderFile)}
+                          </div>
+                        </>
                       )}
-                      <div className="et-message-text">
-                        {renderFormattedMessageText(messageText, attachments, renderFile)}
-                      </div>
 
                       {/* 网页来源胶囊按钮（对齐安卓端 ChatSourcesComponents.kt 的 PageSourcesButton） */}
                       {searchResults.length > 0 && (
@@ -3781,7 +3905,7 @@ export function Workspace({ session, onSignOut }: { session: AuthSession; onSign
       {/* 设置面板弹窗 */}
       {settings && (
         <SettingsPanel
-          records={records}
+          records={settingsPanelRecords}
           onClose={() => setSettings(undefined)}
           saveSetting={saveSetting}
           saveMemory={saveMemory}

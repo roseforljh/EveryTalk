@@ -15,4 +15,11 @@ describe("同步合并规则", () => {
     const result = mergeRemote(current, { entity: "messages", id: "m", deleted: false, payload: { text: "远端改写", reasoning: "补充" } });
     expect(result.payload).toEqual({ text: "原文", timestamp: 1, reasoning: "补充" });
   });
+  test("截断回复被远端完整正文补全", () => {
+    const current: StoredRecord = { key: "messages:m", entity: "messages", id: "m", deleted: false, payload: { text: "原文", timestamp: 1, tokenUsage: { a: 1 } } };
+    const result = mergeRemote(current, { entity: "messages", id: "m", deleted: false, payload: { text: "原文后续", timestamp: 1 } });
+    expect(result.payload).toEqual({ text: "原文后续", timestamp: 1, tokenUsage: { a: 1 } });
+    const shorter = mergeRemote(current, { entity: "messages", id: "m", deleted: false, payload: { text: "原", timestamp: 1 } });
+    expect(shorter.payload.text).toBe("原文");
+  });
 });

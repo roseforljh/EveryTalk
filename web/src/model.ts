@@ -405,6 +405,8 @@ function createExecutionStep(call: ModelToolCall): ExecutionStepItem {
 export async function generate(session: AuthSession, request: ReturnType<typeof modelRequest>, signal: AbortSignal, onDelta: (result: ModelResult) => void, refreshSession?: () => Promise<AuthSession>, tools?: ModelTools): Promise<ModelResult> {
   let body = tools ? withModelTools(request.body, request.protocol, tools.definitions) : request.body
   let reasoning = ''
+  // 工具轮次之间模型已经输出的正文也要保留；安卓端同样把各轮 Content 事件按顺序拼接。
+  let text = ''
   const executionSteps: ExecutionStepItem[] = []
   for (let round = 0; round < 8; round++) {
     signal.throwIfAborted()
@@ -418,6 +420,7 @@ export async function generate(session: AuthSession, request: ReturnType<typeof 
       partial =>
         onDelta({
           ...partial,
+          text: text + partial.text,
           reasoning: reasoning + partial.reasoning,
           ...(executionSteps.length ? { executionSteps: executionSteps.map(s => ({ ...s })) } : {}),
           ...(roundStatus && !partial.text ? { activeStatus: roundStatus } : {}),
@@ -431,12 +434,14 @@ export async function generate(session: AuthSession, request: ReturnType<typeof 
     if (!calls.length) {
       return {
         ...result,
+        text: text + result.text,
         reasoning: reasoning + result.reasoning,
         ...(executionSteps.length ? { executionSteps: executionSteps.map(s => ({ ...s })) } : {}),
       }
     }
     if (!tools) throw new Error('本轮没有授权使用模型工具')
     if (round === 7) throw new Error('工具调用轮数过多，请把问题说得更具体')
+    text += result.text
     reasoning += result.reasoning
     const outputs: JsonObject[] = []
     for (const call of calls) {
@@ -444,7 +449,7 @@ export async function generate(session: AuthSession, request: ReturnType<typeof 
       const step = createExecutionStep(call)
       executionSteps.push(step)
       onDelta({
-        text: '',
+        text,
         reasoning,
         executionSteps: executionSteps.map(s => ({ ...s })),
         activeStatus: step.title,
@@ -455,7 +460,7 @@ export async function generate(session: AuthSession, request: ReturnType<typeof 
       step.resultPreview = typeof output.error === 'string' ? output.error : JSON.stringify(output).slice(0, 180)
       outputs.push(output)
       onDelta({
-        text: '',
+        text,
         reasoning,
         executionSteps: executionSteps.map(s => ({ ...s })),
         activeStatus: '分析工具结果',

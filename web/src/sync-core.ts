@@ -31,7 +31,12 @@ export function mergeRemote(current: StoredRecord | undefined, remote: SyncRecor
   if (current?.deleted && remote.entity !== "user_settings") return { ...current, id: remote.id, key, pending: false };
   if (remote.deleted && remote.entity !== "user_settings") return { ...remote, payload: { ...current?.payload, ...remote.payload }, key, pending: false };
   if (remote.entity === "messages" && current && !remote.deleted) {
-    return { ...remote, key, payload: supplement(current.payload, remote.payload), pending: Boolean(pending) };
+    // 服务器只接受截断回复按原文继续增长；远端正文以本地为前缀且更长时整体采用远端。
+    const local = String(current.payload.text ?? "");
+    const grows = (field: string) => typeof remote.payload[field] === "string" && String(remote.payload[field]).startsWith(String(current.payload[field] ?? ""));
+    const extended = !pending && local !== "" && grows("text") && String(remote.payload.text).length > local.length &&
+      (remote.payload.reasoning === undefined || grows("reasoning"));
+    return { ...remote, key, payload: extended ? supplement(remote.payload, current.payload) : supplement(current.payload, remote.payload), pending: Boolean(pending) };
   }
   if (pending && modifiedAt(pending) >= modifiedAt(remote) && !(remote.deleted && modifiedAt(pending) === modifiedAt(remote))) {
     return { ...remote, payload: pending.payload, deleted: pending.deleted, key, pending: true };

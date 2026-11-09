@@ -1127,7 +1127,13 @@ export function SettingsPanel(props: {
 
                 <div className="et-parameter-grid">
                   {MCP_BUILTIN_CONNECTORS.map(connector => {
-                    const existing = mcpServers.find(r => str(r.payload.key) === connector.key)
+                    // 同步 key 是 UUID，内置连接器用本地业务 ID（view.id / localId）匹配。
+                    const existing = mcpServers.find(
+                      r =>
+                        str(r.payload.key) === connector.key ||
+                        str(valueOf(r).id) === connector.key ||
+                        str(valueOf(r).localId) === connector.key
+                    )
                     const isEnabled = existing ? valueOf(existing).enabled !== false : false
                     return (
                       <div key={connector.key} className="et-api-card">
@@ -1162,7 +1168,8 @@ export function SettingsPanel(props: {
                                   'mcp_configs',
                                   connector.key,
                                   {
-                                    id: connector.key,
+                                    // 保留安卓记录的本地业务 ID，避免编辑后被当成另一台服务器。
+                                    id: str(existing ? valueOf(existing).id : '', connector.key),
                                     name: connector.name,
                                     url: connector.url,
                                     transportType: connector.transportType,
@@ -3187,7 +3194,8 @@ export function SettingsPanel(props: {
 
                   const nextValue: JsonObject = {
                     ...existingVal,
-                    id: keyId,
+                    // 同步 key 与安卓本地业务 ID 不是同一个值，编辑时不能覆盖 localId。
+                    id: str(existingVal.id, keyId),
                     name: mcpEditor.name.trim(),
                     url: finalUrl,
                     transportType: mcpEditor.preset === 'CUSTOM' ? mcpEditor.transportType : presetMeta.transportType,
@@ -3467,7 +3475,10 @@ export function SettingsPanel(props: {
                   }
                   return item.collection === skillStoreCollection
                 }).map(item => {
-                  const installedRecord = skillPackages.find(r => str(r.payload.key) === item.packageId)
+                  // 技能同步 key 是 UUID，安装状态按合同里的 packageId 匹配。
+                  const installedRecord = skillPackages.find(
+                    r => str(r.payload.key) === item.packageId || str(valueOf(r).packageId) === item.packageId
+                  )
                   return (
                     <div key={item.packageId} className="et-api-card">
                       <div className="et-api-card-head">
