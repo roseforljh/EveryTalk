@@ -11,6 +11,7 @@ import io.mockk.justRun
 import io.mockk.mockkObject
 import io.mockk.mockkStatic
 import io.mockk.unmockkAll
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import org.junit.After
@@ -178,10 +179,11 @@ class ViewModelStateHolderStreamingStateTest {
         stateHolder.attachTextAgentUi("new")
         assertTrue(stateHolder.reconcileAgentRun(run(AgentRunStatus.COMPLETED), fullTrace(), baseline, false))
         assertEquals("new", stateHolder._currentTextStreamingAiMessageId.value)
-        stateHolder._currentConversationId.value = "other-session"
         val updated = stateHolder.messages[0]
+        stateHolder._currentConversationId.value = "other-session"
         assertFalse(stateHolder.reconcileAgentRun(run(AgentRunStatus.CANCELLED), emptyList(), updated, false))
-        assertEquals(updated, stateHolder.messages[0])
+        assertTrue(stateHolder.messages.isEmpty())
+        assertEquals(updated, stateHolder.textMessagesForConversation("session-1")[0])
     }
 
     @Test
@@ -264,6 +266,61 @@ class ViewModelStateHolderStreamingStateTest {
         )
         assertEquals(detail, stateHolder.messages.single().executionStatus)
         assertTrue(stateHolder.messages.single().text.contains("thought_signature"))
+    }
+
+    @Test
+    fun `切换会话保留准备阶段列表和活跃流快照并按任务身份收尾`() {
+        stateHolder.setCurrentConversationId("A")
+        val a = stateHolder.messages
+        a.add(Message(id = "a", text = "实时A", sender = Sender.AI))
+        val jobA = Job()
+        stateHolder.registerTextJob("A", "a", jobA)
+        stateHolder.setCurrentConversationId("B")
+        val b = stateHolder.messages
+        b.add(Message(id = "b", text = "实时B", sender = Sender.AI))
+        val jobB = Job()
+        stateHolder.registerTextJob("B", "b", jobB)
+        a.add(Message(id = "prepared-a", text = "准备完成", sender = Sender.User))
+        assertEquals(listOf("b"), b.map { it.id })
+        stateHolder.loadTextConversationMessages("A", listOf(Message(id = "a", text = "旧快照", sender = Sender.AI)))
+        assertEquals(listOf("实时A", "准备完成"), a.map { it.text })
+        stateHolder.completeTextJob("A", "a", jobA)
+        assertTrue(stateHolder._isTextApiCalling.value)
+        assertEquals("b", stateHolder._currentTextStreamingAiMessageId.value)
+        assertTrue(jobB.isActive)
+        stateHolder.setCurrentConversationId("A")
+        stateHolder.restoreTextConversationUi()
+        assertTrue(stateHolder.messages === a)
+        assertEquals(listOf("实时A", "准备完成"), stateHolder.messages.map { it.text })
+        stateHolder.setCurrentConversationId("B")
+        stateHolder.restoreTextConversationUi()
+        val replacement = Job()
+        stateHolder.registerTextJob("B", "b-new", replacement)
+        stateHolder.completeTextJob("B", "b", jobB)
+        assertTrue(stateHolder.textApiJob === replacement)
+        assertEquals("b-new", stateHolder._currentTextStreamingAiMessageId.value)
+        jobA.cancel()
+        jobB.cancel()
+        replacement.cancel()
+    }
+
+    @Test
+    fun `新会话首次落库迁移ID时列表和运行登记跟随且旧ID可解析`() {
+        stateHolder.setCurrentConversationId("new_chat_1")
+        val list = stateHolder.messages
+        list.add(Message(id = "u1", text = "问题", sender = Sender.User))
+        val job = Job()
+        stateHolder.registerTextJob("new_chat_1", "ai-1", job)
+        stateHolder.migratedConversationIds["new_chat_1"] = "u1"
+        stateHolder.migrateTextConversation("new_chat_1", "u1")
+        assertEquals("u1", stateHolder._currentConversationId.value)
+        assertTrue(stateHolder.messages === list)
+        assertTrue(stateHolder.textApiJobs["u1"] === job)
+        assertEquals("u1", stateHolder.resolveConversationId("new_chat_1"))
+        stateHolder.completeTextJob("new_chat_1", "ai-1", job)
+        assertTrue(stateHolder.textApiJobs.isEmpty())
+        assertTrue(!stateHolder._isTextApiCalling.value)
+        job.cancel()
     }
 
     private fun prepareRestoration(): Message {

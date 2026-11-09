@@ -26,11 +26,18 @@ internal class SyncCredentialSynchronizer(
     private val context = context.applicationContext
     private val settings = db.settingsDao()
     private val mutations = context.getSharedPreferences("sync_credential_mutations", Context.MODE_PRIVATE)
+    /** 本轮封存本机凭据的时间；其后的本机修改优先于云端，留给下一轮上传。 */
+    private var capturedAt = Long.MAX_VALUE
+    private fun editedSinceCapture(scope: String) = mutations.getLong(scope, 0) > capturedAt
 
     /** 联网前封存游客期间的凭据修改，不能先 pull 把它覆盖；没有旧密钥时等待账号恢复。 */
     suspend fun captureLocal() {
         val epoch = SyncStateStore(db).readSecretsEpoch()
-        if (epoch >= 0 && secrets.hasCachedDek(user, epoch + 1, epoch)) capturePrivateFields(epoch)
+        if (epoch >= 0 && secrets.hasCachedDek(user, epoch + 1, epoch)) {
+            // 已有钥时先封存配置再拉取；首次无钥的记录由 Room 的待修复保护保留。
+            SyncSettingsProjector(db, secrets, user, epoch, background = true).refresh()
+            capturePrivateFields(epoch)
+        }
     }
 
     suspend fun recover() {
@@ -40,7 +47,11 @@ internal class SyncCredentialSynchronizer(
         val recovered = api.recoverAccountKey(epoch, existing)
         require(recovered.secretsEpoch == epoch)
         secrets.acceptAccountKey(user, recovered)
+        // 先用账号钥封存待救的本机数据，再恢复远端业务投影，不能反过来覆盖它。
+        SyncSettingsProjector(db, secrets, user, epoch, background = true).refresh(onlyRejected = true)
         validateEncryptedFields(epoch)
+        // 封存之后用户仍可能改凭据（凭据写入不经同步锁）；此后发生的本机修改不能被云端旧版本覆盖。
+        capturedAt = System.currentTimeMillis()
         capturePrivateFields(epoch)
         // 已拉到的 API/语音/搜索 Key 和 headers 此刻自动恢复，不需要页面解锁。
         RoomSyncStore(db, secrets, user).restoreUnlockedSettings()
@@ -112,7 +123,7 @@ internal class SyncCredentialSynchronizer(
         }
         for (provider in McpOAuthProvider.entries) {
             val row = settings.getAllUserSettings().firstOrNull { it.kind == "mcp_servers" && !it.deleted &&
-                (runCatching { syncJson.parseToJsonElement(it.value).jsonObject["localId"]?.jsonPrimitive?.content }.getOrNull() == provider.serverId) } ?: continue
+                ((RoomSyncStore(db, secrets, user).decodedSetting(it)?.get("localId") as? JsonPrimitive)?.contentOrNull == provider.serverId) } ?: continue
             isolate(row.kind, row.key) {
             val token = oauth.read("token:${provider.key}")
             if (token != null) saveSecret("mcp_servers", row.key, "oauthCredential", JsonPrimitive(token), epoch, mutations.getLong("agent-authorization:mcp:token:${provider.key}", 0))
@@ -121,7 +132,7 @@ internal class SyncCredentialSynchronizer(
         }
         for (provider in McpMailProvider.entries) {
             val row = settings.getAllUserSettings().firstOrNull { it.kind == "mcp_servers" && !it.deleted &&
-                (runCatching { syncJson.parseToJsonElement(it.value).jsonObject["localId"]?.jsonPrimitive?.content }.getOrNull() == provider.serverId) } ?: continue
+                ((RoomSyncStore(db, secrets, user).decodedSetting(it)?.get("localId") as? JsonPrimitive)?.contentOrNull == provider.serverId) } ?: continue
             isolate(row.kind, row.key) {
             val token = oauth.read("mail:${provider.key}")
             if (token != null) saveSecret("mcp_servers", row.key, "mailCredential", JsonPrimitive(token), epoch, mutations.getLong("agent-authorization:mcp:mail:${provider.key}", 0))
@@ -161,7 +172,7 @@ internal class SyncCredentialSynchronizer(
         if (previous != null && SyncContractSanitizer.isValidEnvelope(previous) &&
             secrets.decryptField(user, kind, key, "/$name", epoch, previous) == plaintext) return@withTransaction
         val encrypted = secrets.encryptField(user, kind, key, "/$name", epoch + 1, epoch, plaintext) ?: return@withTransaction
-        val next = JsonObject(value + (name to encrypted))
+        val next = syncProtectSettings(JsonObject(value + (name to encrypted)), value, kind, key, secrets, user, epoch).jsonObject
         SyncContractSanitizer.validate(next)
         val modified = maxOf(modifiedAt.takeIf { it > 0 } ?: row.updatedAt, row.updatedAt + 1)
         settings.upsertUserSettings(listOf(row.copy(value = next.toString(), updatedAt = modified,
@@ -170,10 +181,8 @@ internal class SyncCredentialSynchronizer(
 
     private suspend fun restorePrivateFields(epoch: Long) {
         for (row in settings.getAllUserSettings()) {
-            val value = runCatching { syncJson.parseToJsonElement(row.value).jsonObject }.getOrNull() ?: continue
-            fun plain(name: String): String? = value[name]?.let {
-                (secrets.decryptField(user, row.kind, row.key, "/$name", epoch, it) as? JsonPrimitive)?.contentOrNull
-            }
+            val value = RoomSyncStore(db, secrets, user).decodedSetting(row) ?: continue
+            fun plain(name: String): String? = (value[name] as? JsonPrimitive)?.contentOrNull
             // 未上传的本机修改优先；远端密文有变化时才写 Keystore，避免每轮刷新覆盖本机新凭据。
             if (row.syncStatus != SyncStatus.SYNCED) continue
             val fingerprint = java.security.MessageDigest.getInstance("SHA-256").digest(row.value.toByteArray()).joinToString("") { "%02x".format(it) }
@@ -195,7 +204,7 @@ internal class SyncCredentialSynchronizer(
             when (row.kind) {
                 "computers" -> {
                     value["providerCredential"]?.let { encrypted ->
-                        val decoded = secrets.decryptField(user, row.kind, row.key, "/providerCredential", epoch, encrypted)
+                        val decoded = encrypted
                         if (decoded == JsonNull) {
                             db.computerDao().getCloudflareConfig(row.key)?.let { config ->
                                 db.computerDao().getCloudflareAuthorization(config.authorizationId)?.let { auth ->
@@ -232,7 +241,8 @@ internal class SyncCredentialSynchronizer(
                         }
                     }
                     for (field in listOf("sshCredential", "originalCredential")) {
-                        if (value[field]?.let { secrets.decryptField(user, row.kind, row.key, "/$field", epoch, it) } == JsonNull) {
+                        if (editedSinceCapture(if (field == "sshCredential") "credential:${row.key}" else "original-credential:${row.key}")) continue
+                        if (value[field] == JsonNull) {
                             if (field == "sshCredential") credentials.deleteComputerCredential(row.key) else credentials.deleteOriginalComputerCredential(row.key)
                             continue
                         }
@@ -258,11 +268,13 @@ internal class SyncCredentialSynchronizer(
                             else credentials.saveOriginalComputerCredential(row.key, credential)
                         } finally { credential.clear() }
                     }
+                    if (!editedSinceCapture("sudo-password:${row.key}")) {
                     plain("sudoPassword")?.let { credentials.saveComputerSudoPassword(row.key, it.toCharArray()) }
-                    if (value["sudoPassword"]?.let { secrets.decryptField(user, row.kind, row.key, "/sudoPassword", epoch, it) } == JsonNull)
+                    if (value["sudoPassword"] == JsonNull)
                         credentials.deleteComputerSudoPassword(row.key)
+                    }
                     value["sshTrust"]?.let { encrypted ->
-                        val trust = secrets.decryptField(user, row.kind, row.key, "/sshTrust", epoch, encrypted)?.jsonObject
+                        val trust = encrypted as? JsonObject
                         if (trust != null) db.computerDao().getComputer(row.key)?.let { computer -> db.computerDao().upsertComputer(computer.copy(
                             hostKeyAlgorithm = trust["algorithm"]?.jsonPrimitive?.contentOrNull,
                             hostKeyBlobBase64 = trust["blob"]?.jsonPrimitive?.contentOrNull,
@@ -273,10 +285,10 @@ internal class SyncCredentialSynchronizer(
                     val localId = value["localId"]?.jsonPrimitive?.contentOrNull
                     val provider = McpOAuthProvider.entries.firstOrNull { it.serverId == localId }
                     if (provider != null) plain("oauthCredential")?.let { oauth.write("token:${provider.key}", it) }
-                    if (provider != null && value["oauthCredential"]?.let { secrets.decryptField(user, row.kind, row.key, "/oauthCredential", epoch, it) } == JsonNull) oauth.remove("token:${provider.key}")
+                    if (provider != null && value["oauthCredential"] == JsonNull) oauth.remove("token:${provider.key}")
                     val mailProvider = McpMailProvider.entries.firstOrNull { it.serverId == localId }
                     if (mailProvider != null) plain("mailCredential")?.let { oauth.write("mail:${mailProvider.key}", it) }
-                    if (mailProvider != null && value["mailCredential"]?.let { secrets.decryptField(user, row.kind, row.key, "/mailCredential", epoch, it) } == JsonNull) oauth.remove("mail:${mailProvider.key}")
+                    if (mailProvider != null && value["mailCredential"] == JsonNull) oauth.remove("mail:${mailProvider.key}")
                 }
                 "skill_variables" -> {
                     val skillId = value["skillId"]?.jsonPrimitive?.contentOrNull

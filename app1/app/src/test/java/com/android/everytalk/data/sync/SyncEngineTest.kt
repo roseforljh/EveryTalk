@@ -126,6 +126,30 @@ class SyncEngineTest {
         assertTrue(RoomSyncStore(b).pendingBatch().isEmpty())
     }
 
+    @Test fun `旧竞态截断的回复从账本补全并同步到其他设备`() = runBlocking {
+        val a = device(); val b = device(); val api = FakeSyncApi(); val s = seed(a, count = 0)
+        val truncated = Message(id = "ai", text = "开头", sender = Sender.AI, timestamp = 100).toEntity(s.id)
+            .copy(syncStatus = SyncStatus.PENDING)
+        a.chatDao().writeMessages(listOf(truncated))
+        // 两台设备都先同步到旧的截断版本，修复只在下一次同步时发生。
+        a.settingsDao().insertSetting(SystemSettingEntity("sync_truncated_reply_repair_version", "1"))
+        run(a, api); run(b, api)
+        a.settingsDao().deleteSetting("sync_truncated_reply_repair_version")
+        a.agentDao().upsertRun(AgentRunEntity(
+            id = "run", sessionId = s.id, userMessageId = "user", visibleAssistantMessageId = "ai", configIdSnapshot = "c",
+            requestSnapshotJson = "{}", status = com.android.everytalk.data.agent.AgentRunStatus.COMPLETED.name,
+            currentRequestOrdinal = 1, terminalReason = null, createdAt = 1, updatedAt = 1,
+        ))
+        com.android.everytalk.data.agent.AgentRunStore(a.agentDao()).appendAssistant("run", "r1",
+            com.android.everytalk.data.agent.AgentAssistantTurn(listOf(com.android.everytalk.data.agent.AgentContentBlock.Text("开头和完整结尾"))))
+        assertEquals(SyncRunResult.Completed, run(a, api))
+        assertEquals("开头和完整结尾", a.chatDao().getMessageByUuid(truncated.uuid)!!.text)
+        run(b, api)
+        assertEquals("开头和完整结尾", b.chatDao().getMessageByUuid(truncated.uuid)!!.text)
+        assertTrue(RoomSyncStore(a).pendingBatch().isEmpty())
+        assertTrue(a.settingsDao().getByPrefix("sync_rejected:").isEmpty())
+    }
+
     @Test fun `补齐旧版云端空白消息但不覆盖本机原件和已定稿正文`() = runBlocking {
         val db = device(); val s = seed(db, count = 0)
         val blank = Message(id = "cloud:${UUID.randomUUID()}", text = "", sender = Sender.AI).toEntity(s.id)
@@ -347,6 +371,21 @@ class SyncEngineTest {
         assertFalse(db.settingsDao().getUserSetting("api_configs", "cfg-remote")!!.deleted)
     }
 
+    @Test fun `界面旧列表保存不能把同步更新过的配置改回旧内容`() = runBlocking {
+        val db = device()
+        val source = com.android.everytalk.data.database.RoomDataSource(ApplicationProvider.getApplicationContext(), db)
+        val a = com.android.everytalk.data.DataClass.ApiConfig("https://api.example/v1", "key", "model", "我的服务", id = "cfg-a", name = "A")
+        val b = a.copy(id = "cfg-b", name = "B")
+        source.saveApiConfigs(listOf(a, b))
+        val shown = source.loadApiConfigs()
+        // 另一台设备改了 A 的名称，同步写进库，界面仍拿着旧列表。
+        db.apiConfigDao().insertConfigs(listOf(a.copy(name = "A-云端新").toEntity()))
+        source.saveApiConfigs(shown.map { if (it.id == "cfg-b") it.copy(name = "B-用户改") else it })
+        val saved = source.loadApiConfigs().associate { it.id to it.name }
+        assertEquals("A-云端新", saved["cfg-a"])
+        assertEquals("B-用户改", saved["cfg-b"])
+    }
+
     @Test fun `同步前的后台投影不复活墓碑也不按当前时间盖过别处修改`() = runBlocking {
         val db = device()
         val config = com.android.everytalk.data.DataClass.ApiConfig("https://api.example/v1", "key", "model", "我的服务", id = "cfg-1", name = "模型")
@@ -436,7 +475,7 @@ class SyncEngineTest {
         store.applyPullPage(page(SyncPayloadMapper.session(s), msg.copy(payload = JsonObject(msg.payload + ("text" to JsonPrimitive("不能覆盖")))), since = 2))
         assertEquals("m", db.chatDao().getMessageByUuid(msg.id)!!.text)
         assertEquals("标题", db.chatDao().getSessionByUuid(s.uuid)!!.title)
-        assertTrue(store.pendingBatch().isEmpty())
+        assertTrue("不应产生回传：${store.pendingBatch().map { it.change.payload["kind"] to it.change.payload["key"] }}", store.pendingBatch().isEmpty())
     }
 
     @Test fun `会话墓碑删除子消息及草稿消息墓碑防乱序复活`() = runBlocking {
@@ -713,6 +752,14 @@ class SyncEngineTest {
             id = modelId, name = "模型", address = "https://model.example/v1", key = "本机密钥", model = "model", provider = "provider",
             channel = "Gemini", temperature = 0f,
             modelParameters = com.android.everytalk.data.DataClass.ModelParameters(
+                resolvedCapability = com.android.everytalk.data.DataClass.ResolvedModelCapability(
+                    modelId = "model", endpointIdentity = "https://model.example/v1",
+                    contextWindowTokens = 128000, maxInputTokens = 120000, maxOutputTokens = 8192,
+                    contextWindowSource = com.android.everytalk.data.DataClass.ModelCapabilitySource.LIVE_ENDPOINT,
+                    maxOutputSource = com.android.everytalk.data.DataClass.ModelCapabilitySource.LIVE_ENDPOINT,
+                    inputModalities = setOf("text", "image", "audio"), outputModalities = setOf("text", "image"),
+                    supportsReasoning = false,
+                ),
                 apiProtocolOverride = com.android.everytalk.data.DataClass.ModelParameterProtocol.GEMINI,
                 inputModalities = setOf("text", "image", "audio"),
                 outputModalities = setOf("text", "image"),
@@ -737,6 +784,7 @@ class SyncEngineTest {
         assertEquals(config.modelParameters.imageAspectRatio, received.modelParameters.imageAspectRatio)
         assertEquals(config.modelParameters.imageQuality, received.modelParameters.imageQuality)
         assertEquals(config.modelParameters.imageBatchSize, received.modelParameters.imageBatchSize)
+        assertEquals(config.modelParameters.resolvedCapability, received.modelParameters.resolvedCapability)
         val pushes = api.pushes
         repeat(3) { run(a, api); run(b, api) }
         assertEquals(pushes, api.pushes)

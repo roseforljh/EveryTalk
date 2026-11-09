@@ -149,9 +149,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     internal val syncController: com.android.everytalk.data.sync.SyncController = com.android.everytalk.data.sync.SyncController(
         application, authRepository.state, syncAccountBindingStore, viewModelScope,
         beforeClearLocal = {
-            apiHandler.cancelCurrentApiJob("换账号前清空本地文字对话")
-            stateHolder.textApiJob?.cancelAndJoin()
-            stateHolder.messages.clear()
+            apiHandler.stopAllTextRuns()
+            stateHolder.clearTextConversationCache()
             stateHolder._currentConversationId.value = ""
             stateHolder.isTextConversationDirty.value = false
         },
@@ -442,6 +441,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             if (!isImageGeneration && stateHolder._currentConversationId.value == conversationId) {
                 stateHolder.messages.clear()
                 stateHolder.messages.addAll(messages)
+                stateHolder.rememberSeenTextMessages(messages)
                 stateHolder.isTextConversationDirty.value = false
             } else if (isImageGeneration && stateHolder._currentImageGenerationConversationId.value == conversationId) {
                 stateHolder.imageGenerationMessages.clear()
@@ -825,6 +825,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000), null)
+    /** 抽屉观察所有会话的运行事实，不依赖当前页面或列表索引。 */
+    val runningConversationIds: StateFlow<Set<String>> = kotlinx.coroutines.flow.combine(
+        AppDatabase.getDatabase(getApplication()).agentDao().observeServiceRuns(),
+        stateHolder.preparingTextConversationIds,
+        apiHandler.agentRunControlSnapshots,
+    ) { runs, preparing, controls ->
+        runs.filter { run ->
+            run.status !in setOf("COMPLETED", "FAILED", "CANCELLED", "INTERRUPTED", "WAITING_APPROVAL") &&
+                controls[run.visibleAssistantMessageId]?.state != AgentRunControlState.PAUSED
+        }.mapTo(mutableSetOf()) { it.sessionId }.apply { addAll(preparing) }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
+
     val pendingComputerAgentApprovals = apiHandler.pendingAgentApprovals
     val pendingInterventions = apiHandler.pendingInterventions
 
@@ -1320,6 +1332,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                                 if (stateHolder._currentConversationId.value == currentId && !stateHolder.isTextConversationDirty.value) {
                                     stateHolder.messages.clear()
                                     stateHolder.messages.addAll(messages.orEmpty())
+                                    stateHolder.rememberSeenTextMessages(stateHolder.messages)
                                     // 与手动打开历史页走同一账本恢复，避免同步后把步骤与耗时退回旧快照。
                                     apiHandler.restoreVisibleAgentState()
                                 }

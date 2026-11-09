@@ -448,6 +448,7 @@ class DataPersistenceManager(
                             sessionId = loadedSession.sessionId,
                             messages = migration.messages,
                             isImageGeneration = isImageGeneration,
+                            removeMissingMessages = false,
                         )
                         unprotectSession(isImageGeneration, loadedSession.sessionId)
                         migration.messages
@@ -542,6 +543,8 @@ class DataPersistenceManager(
         val togglesBefore = stateHolder.conversationFunctionToggleStates.value
         val promptsBefore = stateHolder.systemPrompts.toMap()
         val engagedBefore = stateHolder.systemPromptEngagedState.toMap()
+        val basesBefore = roomDataSource.syncBases()
+        val toggleBaseBefore = toggleStatesBase
         withContext(Dispatchers.IO) {
             val text = roomDataSource.loadApiConfigs()
             val images = roomDataSource.loadImageGenApiConfigs()
@@ -563,27 +566,36 @@ class DataPersistenceManager(
                         // 所引用模型尚未到达时保留绑定但不显示另一份旧模型，下一页配置到达后再应用。
                         stateHolder._selectedApiConfig.value = (text + images).find { it.id == activeModelId }
                     }
-                } else roomDataSource.rememberShownConfigIds("text", stateHolder._apiConfigs.value.map { it.id })
+                } else {
+                    roomDataSource.rememberShownConfigIds("text", stateHolder._apiConfigs.value.map { it.id })
+                    roomDataSource.restoreConfigBase("text", basesBefore)
+                }
                 if (stateHolder._imageGenApiConfigs.value == imageBefore) {
                     stateHolder._imageGenApiConfigs.value = images
                     stateHolder._selectedImageGenApiConfig.value = images.find { it.id == selectedImage }
                         ?: stateHolder._selectedImageGenApiConfig.value?.takeIf { current -> selectedImage != null && images.any { it.id == current.id } }
-                } else roomDataSource.rememberShownConfigIds("image", stateHolder._imageGenApiConfigs.value.map { it.id })
+                } else {
+                    roomDataSource.rememberShownConfigIds("image", stateHolder._imageGenApiConfigs.value.map { it.id })
+                    roomDataSource.restoreConfigBase("image", basesBefore)
+                }
                 if (stateHolder._voiceBackendConfigs.value == voiceBefore) {
                     stateHolder._voiceBackendConfigs.value = voice
                     stateHolder._selectedVoiceConfig.value = voice.find { it.id == selectedVoice }
                         ?: stateHolder._selectedVoiceConfig.value?.takeIf { current -> selectedVoice != null && voice.any { it.id == current.id } }
-                } else roomDataSource.rememberShownConfigIds("voice", stateHolder._voiceBackendConfigs.value.map { it.id })
+                } else {
+                    roomDataSource.rememberShownConfigIds("voice", stateHolder._voiceBackendConfigs.value.map { it.id })
+                    roomDataSource.restoreConfigBase("voice", basesBefore)
+                }
                 // IO 读取期间用户可能刚改了标签或模型，旧读取结果不能覆盖这次操作。
                 if (stateHolder.conversationApiConfigIds.value == modelsBefore) {
                     stateHolder.conversationApiConfigIds.value = models
-                }
+                } else roomDataSource.restoreConversationConfigBase(basesBefore)
                 if (stateHolder.conversationFunctionToggleStates.value == togglesBefore) {
                     stateHolder.conversationFunctionToggleStates.value = toggles
                     // 回到主线程后再读取当前模式，避免 IO 期间切换页面把文字标签应用到生图页。
                     if (isInImageMode()) stateHolder.applyCurrentImageConversationFunctionToggleState()
                     else stateHolder.applyCurrentConversationFunctionToggleState()
-                }
+                } else toggleStatesBase = toggleBaseBefore
                 conversationSettings.forEach { (conversationId, value) ->
                     if (stateHolder.systemPrompts[conversationId] == promptsBefore[conversationId] &&
                         stateHolder.systemPromptEngagedState[conversationId] == engagedBefore[conversationId]) {
@@ -635,10 +647,12 @@ class DataPersistenceManager(
         sessionId: String,
         messages: List<Message>,
         isImageGeneration: Boolean,
+        removeMissingMessages: Boolean = true,
+        removableMessageIds: Set<String>? = null,
     ) {
         withContext(Dispatchers.IO) {
             val finalMessages = if (isImageGeneration) persistInlineAndRemoteImages(messages) else messages
-            roomDataSource.saveLoadedHistorySession(sessionId, finalMessages, isImageGeneration)
+            roomDataSource.saveLoadedHistorySession(sessionId, finalMessages, isImageGeneration, removeMissingMessages, removableMessageIds)
         }
     }
 
@@ -667,14 +681,19 @@ class DataPersistenceManager(
         states: Map<String, com.android.everytalk.statecontroller.ConversationFunctionToggleState>
     ) {
         withContext(Dispatchers.IO) {
+            // 界面持有整张开关表，可能早于同步拉取；只写用户改动的会话，其余保留库里的同步结果。
+            val base = toggleStatesBase
+            val merged = com.android.everytalk.data.database.mergeEditedEntries(base, states, if (base == null) emptyMap() else loadConversationFunctionToggleStates())
+            toggleStatesBase = states
             val jsonString = json.encodeToString(
                 kotlinx.serialization.builtins.MapSerializer(
                     String.serializer(),
                     com.android.everytalk.statecontroller.ConversationFunctionToggleState.serializer()
                 ),
-                states
+                merged
             )
             roomDataSource.setSetting("conversation_function_toggle_states", jsonString)
+            if (merged != states) com.android.everytalk.data.sync.SyncLocalChanges.notifyChanged()
         }
     }
 
@@ -696,9 +715,12 @@ class DataPersistenceManager(
                     Log.e(TAG, "loadConversationFunctionToggleStates 失败", e)
                     emptyMap()
                 }
-            }
+            }.also { toggleStatesBase = it }
         }
     }
+
+    /** 界面最近一次拿到的会话开关表，保存时据此判断哪些会话是用户真改的。 */
+    @Volatile private var toggleStatesBase: Map<String, com.android.everytalk.statecontroller.ConversationFunctionToggleState>? = null
 
     suspend fun saveConversationSettings(conversationId: String, systemPrompt: String, promptEnabled: Boolean) =
         withContext(Dispatchers.IO) { roomDataSource.saveConversationSettings(conversationId, systemPrompt, promptEnabled) }
@@ -842,7 +864,8 @@ class DataPersistenceManager(
         if (changed) {
             val isImageGeneration = roomDataSource.isImageGenerationSession(sessionId)
             try {
-                roomDataSource.saveLoadedHistorySession(sessionId, migrated, isImageGeneration)
+                // 只迁移图片存储格式，不删除消息；读取与回写之间同步可能刚写入新消息。
+                roomDataSource.saveLoadedHistorySession(sessionId, migrated, isImageGeneration, removeMissingMessages = false)
             } catch (exception: CancellationException) {
                 (inlineImages.persistedSources + payloads.persistedSources).forEach(::deleteMigratedImageFile)
                 throw exception

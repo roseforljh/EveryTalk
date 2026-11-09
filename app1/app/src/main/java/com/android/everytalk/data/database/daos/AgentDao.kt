@@ -599,6 +599,9 @@ interface AgentDao {
     @Query("SELECT * FROM agent_runs WHERE visibleAssistantMessageId = :messageId LIMIT 1")
     suspend fun getRunByVisibleMessage(messageId: String): AgentRunEntity?
 
+    @Query("SELECT * FROM agent_runs WHERE status = 'COMPLETED'")
+    suspend fun getCompletedRuns(): List<AgentRunEntity>
+
     /** 旧执行协程不得用整行 Upsert 覆盖已经终止或 generation 已变化的 Run。 */
     @Query(
         """

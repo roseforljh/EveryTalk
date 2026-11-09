@@ -57,8 +57,10 @@ internal fun AccountDataActions(
             }
         }
         Text(
-            state.lastSyncAt?.let { stringResource(R.string.cloud_sync_last_sync, DateFormat.getDateTimeInstance().format(Date(it))) }
-                ?: stringResource(R.string.cloud_sync_never_synced),
+            state.lastSyncAt?.let {
+                val label = if (state.rejectedCount > 0) R.string.cloud_sync_last_attempt else R.string.cloud_sync_last_sync
+                stringResource(label, DateFormat.getDateTimeInstance().format(Date(it)))
+            } ?: stringResource(R.string.cloud_sync_never_synced),
             style = MaterialTheme.typography.bodySmall,
         )
         if (state.pausedAfterCloudReset) {

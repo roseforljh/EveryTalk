@@ -572,7 +572,7 @@ internal class SyncResourceSynchronizer(
         for (row in settings.getAllUserSettings().filter { it.kind == "skills" && !it.deleted }) {
             val skill = db.skillDao().getInstallation(row.key) ?: continue
             isolatedResource("user_settings", row.uuid, "receive:${row.updatedAt}") {
-            val value = syncJson.parseToJsonElement(row.value).jsonObject
+            val value = RoomSyncStore(db, SyncSecretManager(context), user).decodedSetting(row) ?: return@isolatedResource
             val manifest = value["fileManifest"] as? JsonArray ?: value["manifestRef"]?.let {
                 val info = syncJson.decodeFromJsonElement(SyncFileInfo.serializer(), it)
                 require(info.size <= 1024 * 1024) { "Skill 文件清单过大" }

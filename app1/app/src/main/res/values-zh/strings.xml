@@ -44,7 +44,7 @@
     <string name="subscription_unavailable_body">%1$s 套餐即将开放，当前可以先查看价格与额度。</string>
     <string name="feature_locked">需要登录</string>
     <string name="feature_login_required">该功能需要登录账号</string>
-    <string name="feature_login_required_description">登录后即可继续。你的本地对话和模型 API Key 会继续保留在本机，除非你主动开启云功能。</string>
+    <string name="feature_login_required_description">登录后即可继续，对话、记忆和配置会自动同步；API Key 等敏感数据会加密后同步。不登录时仅在本机保存。</string>
     <string name="account_login_action">登录</string>
     <string name="account_switch_title">检测到同步账号变更</string>
     <string name="account_switch_description">本地数据曾绑定到其他账号。请选择如何处理，应用不会自动把本地数据上传到新账号。</string>
@@ -497,7 +497,7 @@
     <string name="computer_progress_detail_host_key">只读取服务器指纹，尚未发送登录凭据。</string>
     <string name="computer_progress_detail_authenticating">通过本机 SSH 直连并校验登录信息。</string>
     <string name="computer_progress_detail_inspecting">读取系统、Docker、sudo、SFTP 和终端能力。</string>
-    <string name="computer_progress_detail_securing_connection">凭据和专用密钥仅保存在本机加密存储中。</string>
+    <string name="computer_progress_detail_securing_connection">凭据和专用密钥在本机加密保存，登录后会加密同步到账号。</string>
     <string name="computer_progress_detail_preparing_container">组件会安装到用户自己的 VPS。</string>
     <string name="computer_progress_detail_preparing_docker">未安装 Docker 时这一步可能需要几分钟。</string>
     <string name="computer_progress_detail_installing_helper">Helper 只允许管理 EveryTalk 的隔离环境。</string>
@@ -1464,7 +1464,7 @@
     <string name="mcp_oauth_manage_hint">可在设置 → MCP 中重新登录。关闭开关可暂停工具，删除连接会清除本机授权。</string>
     <string name="mcp_action_edit">编辑连接</string>
     <string name="account_title">账号管理</string>
-    <string name="account_local_sync_notice">登录后自动同步账号数据；退出登录后仅保留本地数据，API Key 等本地机密不会自动上传。</string>
+    <string name="account_local_sync_notice">登录后自动同步账号数据，API Key 等敏感数据会加密后同步；退出登录后停止同步，本机数据保留。</string>
     <string name="account_back">返回</string>
     <string name="account_welcome">欢迎来到 EveryTalk</string>
     <string name="account_login_subtitle">登录或注册，继续你的对话</string>
@@ -1495,9 +1495,9 @@
     <string name="account_logout_notice">退出此设备的登录？本地聊天记录和 API 配置会保留。</string>
     <string name="account_cancel">取消</string>
     <string name="account_privacy">隐私政策</string>
-    <string name="account_local_data_notice">登录后，本地文字对话、思考过程、长期记忆、置顶和分组会自动合并到账号。数据存储在德国，国内用户涉及数据跨境传输。API Key、语音 Key、MCP 配置、图片、附件、工具执行轨迹和生图对话不参与账号同步。不登录则只在本机保存数据。</string>
+    <string name="account_local_data_notice">登录后，对话、思考过程、长期记忆、置顶、分组、配置、图片和附件会自动同步到账号。API Key、语音 Key、MCP 和服务器凭据等敏感数据会加密后同步。数据存储在德国，国内用户涉及数据跨境传输。不登录则只在本机保存数据。</string>
     <string name="privacy_account_title">EveryTalk 账号</string>
-    <string name="privacy_account_body">账号登录为可选功能，由 Supabase Auth 提供。邮箱登录会向认证服务发送邮箱地址和验证码；Google 和 GitHub 登录仅申请基本身份及邮箱信息，不申请 Gmail、网盘或代码仓库权限。Supabase 保存账号标识、邮箱、名称、关联身份及登录记录。自行选择的头像会上传到 Supabase 头像存储，使用公开图片地址展示。\n\n配置账号数据服务时，登录后会自动合并本地和账号的文字会话、消息、思考过程、长期记忆、置顶和分组。本地模式不会连接 EveryTalk 自有服务器。API Key、语音 Key、MCP 配置、图片、附件、工具执行轨迹和生图对话不参与账号同步。同步数据保存在德国，国内用户涉及数据跨境传输。服务器加密备份在数据删除后最多保留 7 天。权限和额度由服务器判断。\n\n应用通过 Android Keystore 加密保存会话凭据。退出登录会停止账号同步并删除本地账号凭据，保留聊天记录和 API 配置；卸载应用不会删除服务端账号。可通过项目页面联系维护者提出账号删除申请，请勿公开发布验证码或凭据。</string>
+    <string name="privacy_account_body">账号登录为可选功能，由 Supabase Auth 提供。邮箱登录会向认证服务发送邮箱地址和验证码；Google 和 GitHub 登录仅申请基本身份及邮箱信息，不申请 Gmail、网盘或代码仓库权限。Supabase 保存账号标识、邮箱、名称、关联身份及登录记录。自行选择的头像会上传到 Supabase 头像存储，使用公开图片地址展示。\n\n配置账号数据服务时，登录后会自动合并本地和账号的对话、消息、思考过程、长期记忆、置顶、分组、配置、图片和附件。API Key、语音 Key、MCP 和服务器凭据等敏感数据会使用账号密钥加密后同步。本地模式不会连接 EveryTalk 自有服务器。同步数据保存在德国，国内用户涉及数据跨境传输。服务器加密备份在数据删除后最多保留 7 天。权限和额度由服务器判断。\n\n应用通过 Android Keystore 加密保存会话凭据。退出登录会停止账号同步并删除本地账号凭据，保留聊天记录和 API 配置；卸载应用不会删除服务端账号。可通过项目页面联系维护者提出账号删除申请，请勿公开发布验证码或凭据。</string>
 
     <string name="cloud_sync_unconfigured">当前版本未配置账号数据服务，本机数据仍可使用。</string>
     <string name="cloud_sync_rejected_count">%1$d 条未能同步</string>
@@ -1518,14 +1518,15 @@
     <string name="cloud_sync_server_upgrade_required">服务器需要更新并配置账号密钥和文件存储，完成后会自动恢复；本机数据保留。</string>
     <string name="cloud_sync_credential_decryption_failed">这项凭据的云端密文损坏，本机 Key 保留，其他项目继续同步。</string>
     <string name="cloud_sync_credential_storage_failed">这项凭据暂时无法从本机加密存储读取或写入，其他项目继续同步。</string>
-    <string name="cloud_sync_prompt_contains_secret">这个提示词含疑似密钥，没有同步。</string>
-    <string name="cloud_sync_config_contains_secret">该配置含疑似密钥，没有同步；本机配置保留。</string>
+    <string name="cloud_sync_prompt_contains_secret">提示词中的敏感数据未能完成加密同步，本机内容保留，修复后会自动重试，无需删除密钥。</string>
+    <string name="cloud_sync_config_contains_secret">配置中的敏感数据未能完成加密同步，本机配置保留，修复后会自动重试，无需删除密钥。</string>
     <string name="cloud_sync_last_sync">上次同步：%1$s</string>
+    <string name="cloud_sync_last_attempt">上次同步尝试：%1$s（仍有项目未完成）</string>
     <string name="cloud_sync_never_synced">上次同步：从未成功同步</string>
     <string name="cloud_sync_cloud_reset_paused">云端清空后已暂停上传，本机数据保留。</string>
     <string name="cloud_sync_resume_upload">重新上传本机数据</string>
     <string name="cloud_sync_resume_title">重新上传本机数据？</string>
-    <string name="cloud_sync_resume_description">本机的文字对话、思考过程、长期记忆、置顶和分组将重新合并到当前账号。</string>
+    <string name="cloud_sync_resume_description">本机的对话、记忆、配置、图片和附件将重新合并到当前账号；敏感数据会加密后同步。</string>
     <string name="cloud_sync_upload">上传</string>
     <string name="cloud_sync_cancel">取消</string>
     <string name="cloud_sync_cloud_reset_question">云端数据已被清空，是否重新上传本机数据？</string>

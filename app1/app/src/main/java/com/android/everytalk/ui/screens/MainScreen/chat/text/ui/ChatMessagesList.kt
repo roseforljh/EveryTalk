@@ -612,7 +612,7 @@ fun ChatMessagesList(
                                     modifier = Modifier.wrapContentWidth(),
                                     horizontalAlignment = Alignment.End
                                 ) {
-                                    val message = viewModel.getMessageById(item.messageId)
+                                    val message = item.message ?: viewModel.getMessageById(item.messageId)
                                     if (message != null) {
                                         if (!item.attachments.isNullOrEmpty()) {
                                             AttachmentsContent(

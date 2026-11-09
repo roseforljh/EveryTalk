@@ -419,13 +419,15 @@ internal fun DataPersistenceManager.loadInitialDataInternal(
                     withContext(Dispatchers.Main.immediate) {
                         Snapshot.withMutableSnapshot {
                             visibleTextMessages?.let { visibleMessages ->
-                                stateHolder.messages.clear()
-                                stateHolder.messages.addAll(visibleMessages)
-                                stateHolder.textReasoningCompleteMap.clear()
-                                stateHolder.textReasoningCompleteMap.putAll(textReasoningStates)
+                                // 文本列表按会话保存，必须先切到恢复的会话再填充，否则内容落进旧会话的列表。
                                 stateHolder._currentConversationId.value =
                                     textSessionId
                                         ?: "new_chat_${System.currentTimeMillis()}"
+                                stateHolder.messages.clear()
+                                stateHolder.messages.addAll(visibleMessages)
+                                stateHolder.rememberSeenTextMessages(visibleMessages)
+                                stateHolder.textReasoningCompleteMap.clear()
+                                stateHolder.textReasoningCompleteMap.putAll(textReasoningStates)
                                 stateHolder.applyCurrentConversationFunctionToggleState()
                                 stateHolder._loadedHistoryIndex.value = null
                             }

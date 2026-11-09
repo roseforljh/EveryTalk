@@ -24,6 +24,9 @@ internal object SyncContractSanitizer {
         walk(value, "")
     }
 
+    fun containsSecret(value: JsonElement): Boolean = value is JsonPrimitive && value.isString &&
+        value.contentOrNull?.let { text -> secretValues.any { it.containsMatchIn(text) } } == true
+
     fun isForbiddenFieldName(name: String): Boolean {
         val normalized = name.filter(Char::isLetterOrDigit).lowercase()
         return forbiddenNameParts.any(normalized::contains)
@@ -65,6 +68,9 @@ internal object SyncContractSanitizer {
 internal object SyncWireFieldNames {
     const val OUTPUT_LIMIT = "outputLimit"
     const val CONTEXT_LIMIT = "contextLimit"
+    const val CAPABILITY_CONTEXT_LIMIT = "contextWindowLimit"
+    const val CAPABILITY_INPUT_LIMIT = "inputLimit"
+    const val CAPABILITY_OUTPUT_LIMIT = "outputLimit"
 
     fun fromLocal(name: String): String = when (name) {
         "maxTokens" -> OUTPUT_LIMIT
@@ -77,4 +83,23 @@ internal object SyncWireFieldNames {
         CONTEXT_LIMIT -> "maxContextTokens"
         else -> name
     }
+
+    /** 能力对象也包含 token 数值，但字段名不能直接进入同步合同。 */
+    fun capabilityToWire(value: JsonObject): JsonObject = JsonObject(value.mapKeys { (name, _) ->
+        when (name) {
+            "contextWindowTokens" -> CAPABILITY_CONTEXT_LIMIT
+            "maxInputTokens" -> CAPABILITY_INPUT_LIMIT
+            "maxOutputTokens" -> CAPABILITY_OUTPUT_LIMIT
+            else -> name
+        }
+    })
+
+    fun capabilityFromWire(value: JsonObject): JsonObject = JsonObject(value.mapKeys { (name, _) ->
+        when (name) {
+            CAPABILITY_CONTEXT_LIMIT -> "contextWindowTokens"
+            CAPABILITY_INPUT_LIMIT -> "maxInputTokens"
+            CAPABILITY_OUTPUT_LIMIT -> "maxOutputTokens"
+            else -> name
+        }
+    })
 }

@@ -115,9 +115,6 @@ import java.util.UUID
 
 @Composable
 internal fun FunctionPanelContent(
-    isWebSearchEnabled: Boolean,
-    isWebSearchAvailable: Boolean,
-    onToggleWebSearch: () -> Unit,
     isCodeExecutionEnabled: Boolean,
     onToggleCodeExecution: () -> Unit,
     isGeminiChannel: Boolean,
@@ -126,8 +123,6 @@ internal fun FunctionPanelContent(
     hasContent: Boolean,
     onClearContent: () -> Unit,
     onDismiss: () -> Unit,
-    isMcpEnabled: Boolean = false,
-    onToggleMcp: () -> Unit = {},
     isAgentEnabled: Boolean = false,
     isAgentPreparing: Boolean = false,
     onToggleAgent: () -> Unit = {},
@@ -175,24 +170,7 @@ internal fun FunctionPanelContent(
             isChecked = false,
             onClick = { onOpenFilePicker(); onDismiss() }
         )
-        FunctionPanelRow(
-            iconRes = R.drawable.ic_globe,
-            label = stringResource(R.string.chat_input_web_search),
-            iconBg = iconBg,
-            iconTint = if (isWebSearchEnabled && isWebSearchAvailable) Color(0xFF66B5FF) else iconTint,
-            textColor = textColor,
-            isChecked = isWebSearchEnabled && isWebSearchAvailable,
-            onClick = { onToggleWebSearch() }
-        )
-        FunctionPanelRow(
-            iconRes = R.drawable.ic_hammer,
-            label = "MCP",
-            iconBg = iconBg,
-            iconTint = if (isMcpEnabled) ChatMcpColor else iconTint,
-            textColor = textColor,
-            isChecked = isMcpEnabled,
-            onClick = { onToggleMcp() }
-        )
+        // 联网搜索与 MCP 不在此处手动开关，发送时按设置中的可用配置自动提供给模型。
         FunctionPanelRow(
             iconRes = R.drawable.ic_gpt_terminal,
             label = stringResource(R.string.chat_input_agent),

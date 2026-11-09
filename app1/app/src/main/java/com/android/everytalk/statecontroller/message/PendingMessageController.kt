@@ -16,7 +16,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
@@ -83,8 +82,9 @@ internal class PendingMessageController(
     private val submissionInProgress = AtomicBoolean(false)
     private val _composerMode = MutableStateFlow<ComposerMode>(ComposerMode.Normal)
     private val _isDispatchingPending = MutableStateFlow(false)
-    private var activeDispatchId: String? = null
-    private var blockedPendingId: String? = null
+    private val activeDispatchIds = mutableMapOf<String, String>()
+    private val blockedPendingIds = mutableMapOf<String, String>()
+    private val dispatchingPendingByConversation = mutableMapOf<String, Boolean>()
 
     val composerMode: StateFlow<ComposerMode> = _composerMode.asStateFlow()
 
@@ -142,7 +142,8 @@ internal class PendingMessageController(
                 .collect { dispatchNextIfIdle() }
         }
         scope.launch {
-            currentConversationId.drop(1).collect { conversationId ->
+            currentConversationId.collect { conversationId ->
+                syncDispatchingState(conversationId)
                 val editing = _composerMode.value as? ComposerMode.EditingPending
                 if (editing != null && editing.conversationId != conversationId) {
                     withContext(Dispatchers.IO) { chatDao.cancelPendingMessageEdit(editing.pendingId) }
@@ -250,7 +251,7 @@ internal class PendingMessageController(
                 }
                 submissionInProgress.set(false)
                 if (updated == 1) {
-                    blockedPendingId = blockedPendingId.takeUnless { it == editing.pendingId }
+                    blockedPendingIds.remove(editing.conversationId, editing.pendingId)
                     _composerMode.value = ComposerMode.Normal
                     onStored()
                 } else {
@@ -297,18 +298,24 @@ internal class PendingMessageController(
                 val pending = pendingMessages.value.firstOrNull {
                     it.id == id && it.status == PENDING_MESSAGE_STATUS_PENDING
                 } ?: return@withLock
+                val conversationId = pending.conversationId
+                if (currentConversationId.value != conversationId) return@withLock
                 val claimed = withContext(Dispatchers.IO) { chatDao.claimPendingMessage(id) }
                 if (claimed != 1) return@withLock
-                blockedPendingId = blockedPendingId.takeUnless { it == id }
-                activeDispatchId = id
-                _isDispatchingPending.value = true
+                if (currentConversationId.value != conversationId) {
+                    withContext(Dispatchers.IO) { chatDao.restorePendingDispatch(id) }
+                    return@withLock
+                }
+                blockedPendingIds.remove(conversationId, id)
+                activeDispatchIds[conversationId] = id
+                dispatchingPendingByConversation[conversationId] = true
+                syncDispatchingState(conversationId)
                 val steered = runCatching { steerCurrentRun(pending) }.getOrDefault(false)
                 if (steered) {
                     val recorded = runCatching { recordSteeredMessage(pending) }.isSuccess
                     if (!recorded) showMessage("调整方向已发送，但消息气泡显示失败")
                     withContext(Dispatchers.IO) { chatDao.finishPendingDispatch(id) }
-                    activeDispatchId = null
-                    _isDispatchingPending.value = false
+                    clearDispatch(pending.conversationId, id)
                 } else {
                     // 普通聊天流或空闲会话没有 AgentRun 可接收 steering，
                     // 直接走同一条 MessageSender 链路。该链路会在新请求开始前保存并结束旧流。
@@ -320,6 +327,12 @@ internal class PendingMessageController(
 
     suspend fun migrateConversationId(oldId: String, newId: String) {
         chatDao.migratePendingConversationId(oldId, newId)
+        operationMutex.withLock {
+            activeDispatchIds.remove(oldId)?.let { activeDispatchIds[newId] = it }
+            blockedPendingIds.remove(oldId)?.let { blockedPendingIds[newId] = it }
+            dispatchingPendingByConversation.remove(oldId)?.let { dispatchingPendingByConversation[newId] = it }
+            syncDispatchingState(currentConversationId.value)
+        }
         val editing = _composerMode.value as? ComposerMode.EditingPending
         if (editing?.conversationId == oldId) {
             _composerMode.value = editing.copy(conversationId = newId)
@@ -330,13 +343,14 @@ internal class PendingMessageController(
     private fun dispatchNextIfIdle() {
         scope.launch {
             operationMutex.withLock {
+                val conversationId = currentConversationId.value
                 if (
                     // _isTextApiCalling 只表示当前网络流，Agent 的规划/工具阶段可能暂时没有网络流。
                     // 控制记录仍存在就说明同一个 AgentRun 尚未彻底结束，队列必须继续等待。
                     agentRunControlState.value != null ||
                     isAbortInProgress.value ||
                     isApiCalling.value ||
-                    activeDispatchId != null
+                    activeDispatchIds[conversationId] != null
                 ) return@withLock
                 val editingPosition = (_composerMode.value as? ComposerMode.EditingPending)?.originalPosition
                 val next = nextDispatchablePending(
@@ -345,16 +359,41 @@ internal class PendingMessageController(
                     messages = pendingMessages.value,
                     editingPosition = editingPosition,
                 ) ?: return@withLock
-                if (next.id == blockedPendingId) return@withLock
+                if (next.conversationId != conversationId || currentConversationId.value != conversationId) return@withLock
+                if (next.id == blockedPendingIds[next.conversationId]) return@withLock
                 val claimed = withContext(Dispatchers.IO) { chatDao.claimPendingMessage(next.id) }
                 if (claimed != 1) return@withLock
+                if (currentConversationId.value != conversationId) {
+                    withContext(Dispatchers.IO) { chatDao.restorePendingDispatch(next.id) }
+                    return@withLock
+                }
 
-                activeDispatchId = next.id
-                _isDispatchingPending.value = true
+                activeDispatchIds[next.conversationId] = next.id
+                dispatchingPendingByConversation[next.conversationId] = true
+                syncDispatchingState(next.conversationId)
                 if (agentRunControlState.value == AgentRunControlState.PAUSED) resumeStreaming()
                 dispatchClaimed(next)
             }
         }
+    }
+
+    /** 仅把当前会话的派发状态投影到输入框，后台完成不能清掉另一会话的加载。 */
+    private fun syncDispatchingState(conversationId: String) {
+        if (currentConversationId.value == conversationId) {
+            _isDispatchingPending.value = dispatchingPendingByConversation[conversationId] == true
+        }
+    }
+
+    private fun clearDispatch(conversationId: String, pendingId: String): Boolean {
+        val mappedConversation = if (activeDispatchIds[conversationId] == pendingId) {
+            conversationId
+        } else {
+            activeDispatchIds.entries.firstOrNull { it.value == pendingId }?.key ?: return false
+        }
+        activeDispatchIds.remove(mappedConversation, pendingId)
+        dispatchingPendingByConversation.remove(mappedConversation)
+        syncDispatchingState(mappedConversation)
+        return true
     }
 
     /** 回调只允许清理自己登记的派发，防止“调整方案”抢占后旧请求误清新请求。 */
@@ -367,21 +406,13 @@ internal class PendingMessageController(
             {
                 scope.launch {
                     withContext(Dispatchers.IO) { chatDao.restorePendingDispatch(message.id) }
-                    blockedPendingId = message.id
-                    if (activeDispatchId == message.id) {
-                        activeDispatchId = null
-                        _isDispatchingPending.value = false
-                        dispatchNextIfIdle()
-                    }
+                    blockedPendingIds[message.conversationId] = message.id
+                    if (clearDispatch(message.conversationId, message.id)) dispatchNextIfIdle()
                 }
             },
             {
                 scope.launch {
-                    if (activeDispatchId == message.id) {
-                        activeDispatchId = null
-                        _isDispatchingPending.value = false
-                        dispatchNextIfIdle()
-                    }
+                    if (clearDispatch(message.conversationId, message.id)) dispatchNextIfIdle()
                 }
             },
         )

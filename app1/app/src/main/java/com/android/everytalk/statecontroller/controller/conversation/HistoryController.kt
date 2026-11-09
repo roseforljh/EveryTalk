@@ -205,8 +205,6 @@ class HistoryController(
     }
 
     suspend fun loadTextHistory(index: Int) {
-        stateHolder._isTextApiCalling.value = false
-        stateHolder._currentTextStreamingAiMessageId.value = null
         stateHolder._lastSentUserMessageId.value = null
         try {
             simpleModeSwitcher.loadTextHistory(index)
@@ -250,17 +248,33 @@ class HistoryController(
             showSnackbar("无法删除：无效的索引")
             return
         }
+        val deletedSessionId = ConversationNameHelper.resolveStableId(conversations[indexToDelete])
         scope.launch {
-            val wasCurrentDeleted = (currentLoadedIndex == indexToDelete)
-            val idsInDeleted = conversations.getOrNull(indexToDelete)?.map { it.id } ?: emptyList()
+            val idsInDeleted = conversations[indexToDelete].map { it.id }
+            if (!isImageGeneration && deletedSessionId != null) {
+                apiHandler.stopConversationRuns(deletedSessionId)
+            }
+            val latestConversations = if (isImageGeneration) stateHolder._imageGenerationHistoricalConversations.value
+                else stateHolder._historicalConversations.value
+            val latestIndex = if (deletedSessionId != null) {
+                latestConversations.indexOfFirst { ConversationNameHelper.resolveStableId(it) == deletedSessionId }
+            } else indexToDelete.takeIf { latestConversations.getOrNull(it) == conversations[indexToDelete] } ?: -1
+            if (latestIndex < 0) return@launch
+            withContext(Dispatchers.IO) { historyManager.deleteConversation(latestIndex, isImageGeneration) }
+            val remaining = if (isImageGeneration) stateHolder._imageGenerationHistoricalConversations.value
+                else stateHolder._historicalConversations.value
+            if (deletedSessionId != null && remaining.any { ConversationNameHelper.resolveStableId(it) == deletedSessionId }) return@launch
 
-            withContext(Dispatchers.IO) { historyManager.deleteConversation(indexToDelete, isImageGeneration) }
-
+            val wasCurrentDeleted = if (deletedSessionId != null) {
+                if (isImageGeneration) stateHolder._currentImageGenerationConversationId.value == deletedSessionId
+                else stateHolder._currentConversationId.value == deletedSessionId
+            } else currentLoadedIndex == latestIndex
             if (wasCurrentDeleted) {
                 if (isImageGeneration) simpleModeSwitcher.switchToImageMode(forceNew = true, skipSavingImageChat = true)
                 else simpleModeSwitcher.switchToTextMode(forceNew = true, skipSavingTextChat = true)
-                apiHandler.cancelCurrentApiJob("当前聊天(#$indexToDelete)被删除，开始新聊天")
             }
+
+            if (!isImageGeneration && deletedSessionId != null) stateHolder.clearTextConversationCache(deletedSessionId)
 
             if (idsInDeleted.isNotEmpty()) {
                 if (isImageGeneration) {
@@ -287,8 +301,10 @@ class HistoryController(
     fun clearAllConversations(isImageGeneration: Boolean = false) {
         scope.launch {
             if (!isImageGeneration) {
+                apiHandler.stopAllTextRuns()
                 withContext(Dispatchers.IO) { historyManager.clearAllHistory() }
                 messagesMutex.withLock {
+                    stateHolder.clearTextConversationCache()
                     stateHolder.clearForNewTextChat()
                     if (shouldAutoScroll()) triggerScrollToBottom()
                 }

@@ -4,6 +4,11 @@ import android.app.Application
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.android.everytalk.data.DataClass.ChatRequest
+import com.android.everytalk.data.DataClass.Message
+import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.data.DataClass.ExecutionTraceEvent
+import com.android.everytalk.data.agent.AgentRunStatus
+import com.android.everytalk.data.database.entities.toMessage
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.agent.AgentApprovalRecord
 import com.android.everytalk.data.agent.AgentApprovalDecision
@@ -100,6 +105,70 @@ class ApiHandlerQuietCleanupTest {
                     }
                 }
             }
+        } finally {
+            parent.cancelAndJoin()
+            unmockkObject(AppDatabase.Companion, AgentRunCoordinator.Companion)
+            Dispatchers.resetMain()
+            database.close()
+        }
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun `后台流交错处理及结束写回原会话并隔离停止`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        val database = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
+            .allowMainThreadQueries().build()
+        val parent = SupervisorJob()
+        val liveScope = CoroutineScope(parent + Dispatchers.Unconfined)
+        Dispatchers.setMain(UnconfinedTestDispatcher())
+        mockkObject(AppDatabase.Companion, AgentRunCoordinator.Companion)
+        try {
+            every { AppDatabase.getDatabase(any()) } returns database
+            val coordinator = mockk<AgentRunCoordinator>(relaxed = true)
+            every { coordinator.events } returns MutableSharedFlow<Pair<String, AppStreamEvent>>()
+            every { AgentRunCoordinator.shared(any(), any()) } returns coordinator
+            val state = ViewModelStateHolder().also { it.initializeBufferScope(liveScope) }
+            val liveHandler = ApiHandler(context, state, liveScope, mockk(relaxed = true), { _, _ -> }, {})
+            val store = AgentRunStore(database.agentDao())
+            val request = ChatRequest(
+                messages = listOf(SimpleTextApiMessage(role = "user", content = "任务")),
+                provider = "OpenAI", channel = "OpenAI", apiAddress = "https://example.test",
+                apiKey = "test", model = "test",
+            )
+            for (session in listOf("A", "B")) {
+                database.chatDao().insertSession(ChatSessionEntity(session, 1L, 1L, false))
+                store.createRun(session, "user-$session", "ai-$session", "config", request)
+                state.setCurrentConversationId(session)
+                state.messages.add(Message(id = "ai-$session", text = "", sender = Sender.AI))
+                state.registerTextJob(session, "ai-$session", Job(parent))
+                state.createStreamingBuffer("ai-$session")
+            }
+            liveHandler.processStreamEvent(AppStreamEvent.Reasoning("思考A"), "ai-A")
+            liveHandler.processStreamEvent(AppStreamEvent.Reasoning("思考B"), "ai-B")
+            liveHandler.processStreamEvent(AppStreamEvent.Content("正文A"), "ai-A")
+            liveHandler.processStreamEvent(AppStreamEvent.ToolCall("tool-A", "search", buildJsonObject {}), "ai-A")
+            liveHandler.processStreamEvent(AppStreamEvent.Content("正文B"), "ai-B")
+            liveHandler.processStreamEvent(AppStreamEvent.ToolCall("tool-B", "search", buildJsonObject {}), "ai-B")
+            val runA = requireNotNull(store.getRunByVisibleMessage("ai-A"))
+            store.updateRunStatus(runA, AgentRunStatus.COMPLETED)
+            liveHandler.processStreamEvent(AppStreamEvent.Finish("stop"), "ai-A")
+            val storedA = database.chatDao().getMessagesForSession("A").single { it.id == "ai-A" }.toMessage()
+            assertEquals("正文A", storedA.text)
+            assertEquals("思考A", storedA.reasoning)
+            assertTrue(storedA.executionTrace.any { it is ExecutionTraceEvent.Tool && it.step.id == "tool-A" })
+            // B 仍在流式中，正文在缓冲区；按页面切换时的同步方式投影后再核对。
+            state.syncStreamingSnapshotToList("ai-B")
+            assertEquals("正文B", state.messages.single().text)
+            assertEquals("ai-B", state._currentTextStreamingAiMessageId.value)
+            val jobA = requireNotNull(state.textApiJobs["A"])
+            val jobB = requireNotNull(state.textApiJobs["B"])
+            liveHandler.cancelCurrentApiJob("用户停止")
+            assertTrue(jobB.isCancelled)
+            assertTrue(jobA.isActive)
+            state.setCurrentConversationId("A")
+            assertEquals("正文A", state.messages.single().text)
+            assertEquals("思考A", state.messages.single().reasoning)
         } finally {
             parent.cancelAndJoin()
             unmockkObject(AppDatabase.Companion, AgentRunCoordinator.Companion)

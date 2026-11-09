@@ -100,7 +100,9 @@ import java.util.concurrent.ConcurrentHashMap
 
     val _text = MutableStateFlow("")
     val messageEditSession = MutableStateFlow<com.android.everytalk.statecontroller.controller.conversation.MessageEditSession?>(null)
-    val messages: SnapshotStateList<Message> = mutableStateListOf()
+    // 页面只是选择当前会话的列表；发送准备持有旧列表时，切页不能清空或替换它的内容。
+    val messages: SnapshotStateList<Message>
+        get() = textMessagesForConversation(_currentConversationId.value)
     val imageGenerationMessages: SnapshotStateList<Message> = mutableStateListOf()
 
     // 分离的API状态
@@ -125,6 +127,120 @@ val _isStreamingPaused = MutableStateFlow(false)
     // 分离的API Job
     var textApiJob: Job? = null
     var imageApiJob: Job? = null
+    /** 任务归属固定到会话；上面的单值只供当前页面显示，不能用于判断后台任务是否失效。 */
+    val textApiJobs: MutableMap<String, Job> = ConcurrentHashMap()
+    val textApiMessageIds: MutableMap<String, String> = ConcurrentHashMap()
+    val textMessageConversationIds: MutableMap<String, String> = ConcurrentHashMap()
+    val preparingTextConversationIds = MutableStateFlow<Set<String>>(emptySet())
+    private val textConversationMessages: MutableMap<String, SnapshotStateList<Message>> = ConcurrentHashMap()
+
+    /** 离开页面前保存同一份最新消息；不结束缓冲，也不取消实际运行。只能在主线程调用。 */
+    fun cacheTextConversation() {
+        val sessionId = _currentConversationId.value
+        if (sessionId.isBlank()) return
+        messages.forEach { textMessageConversationIds[it.id] = sessionId }
+    }
+
+    fun textMessagesForConversation(sessionId: String): SnapshotStateList<Message> =
+        textConversationMessages.getOrPut(sessionId) { mutableStateListOf() }
+
+    /**
+     * 页面实际持有过的文本消息。整页保存按“缺席即删除”清理时只能删这些消息；
+     * 同步在页面打开后才写入、页面从未见过的消息不在其中，旧快照不能把它们删掉并同步删除到所有设备。
+     */
+    val seenTextMessageIds: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    fun rememberSeenTextMessages(messages: List<Message>) {
+        messages.forEach { seenTextMessageIds += it.id }
+    }
+
+    /** 活跃任务的列表就是最新快照；历史加载只能补缺失消息，不能覆盖已收到的增量。 */
+    fun loadTextConversationMessages(sessionId: String, loaded: List<Message>) {
+        val target = textMessagesForConversation(sessionId)
+        if (target.isNotEmpty() && textApiMessageIds.containsKey(sessionId)) {
+            val current = target.associateBy { it.id }
+            val loadedIds = loaded.mapTo(mutableSetOf()) { it.id }
+            val merged = loaded.map { current[it.id] ?: it } + target.filterNot { it.id in loadedIds }
+            target.clear()
+            target.addAll(merged)
+        } else {
+            target.clear()
+            target.addAll(loaded)
+        }
+        target.forEach { textMessageConversationIds[it.id] = sessionId }
+        rememberSeenTextMessages(target)
+    }
+
+    /** 删除和换账号后释放缓存；普通切页保留原列表供后台任务使用。 */
+    fun clearTextConversationCache(sessionId: String? = null) {
+        if (sessionId == null) {
+            textConversationMessages.clear()
+            textMessageConversationIds.clear()
+            migratedConversationIds.clear()
+            seenTextMessageIds.clear()
+        } else {
+            textConversationMessages.remove(sessionId)
+            textMessageConversationIds.entries.removeAll { it.value == sessionId }
+        }
+    }
+
+    fun textMessagesForMessage(messageId: String): SnapshotStateList<Message> =
+        textMessageConversationIds[messageId]?.let(::textMessagesForConversation) ?: messages
+
+    /** 历史装载后优先合并活跃任务的内存快照，不以较旧的 Room 草稿覆盖实时增量。 */
+    fun restoreTextConversationUi() {
+        val sessionId = _currentConversationId.value
+        messages.forEach { textMessageConversationIds[it.id] = sessionId }
+        textApiJob = textApiJobs[sessionId]
+        _currentTextStreamingAiMessageId.value = textApiMessageIds[sessionId]
+        _isTextApiCalling.value = _currentTextStreamingAiMessageId.value != null
+    }
+
+    /** 临时会话 ID → 首次落库后的稳定 ID。发送入口固定的旧 ID 经此解析到当前归属。 */
+    val migratedConversationIds: MutableMap<String, String> = ConcurrentHashMap()
+
+    fun resolveConversationId(sessionId: String): String {
+        var resolved = sessionId
+        repeat(8) { resolved = migratedConversationIds[resolved] ?: return resolved }
+        return resolved
+    }
+
+    /** 列表、消息归属和运行登记随会话 ID 迁移，进行中的发送和后台任务不丢失。 */
+    fun migrateTextConversation(fromId: String, toId: String) {
+        if (fromId.isBlank() || fromId == toId) return
+        textConversationMessages.remove(fromId)?.let { textConversationMessages[toId] = it }
+        textMessageConversationIds.replaceAll { _, sessionId -> if (sessionId == fromId) toId else sessionId }
+        textApiJobs.remove(fromId)?.let { textApiJobs.putIfAbsent(toId, it) }
+        textApiMessageIds.remove(fromId)?.let { textApiMessageIds.putIfAbsent(toId, it) }
+        preparingTextConversationIds.update { if (fromId in it) it - fromId + toId else it }
+        if (_currentConversationId.value == fromId) _currentConversationId.value = toId
+    }
+
+    fun registerTextJob(sessionId: String, messageId: String, job: Job) {
+        @Suppress("NAME_SHADOWING") val sessionId = resolveConversationId(sessionId)
+        textMessageConversationIds[messageId] = sessionId
+        textApiJobs[sessionId] = job
+        textApiMessageIds[sessionId] = messageId
+        if (_currentConversationId.value == sessionId) {
+            textApiJob = job
+            _currentTextStreamingAiMessageId.value = messageId
+            _isTextApiCalling.value = true
+        }
+    }
+
+    /** 比较任务身份后释放，旧请求的 finally 不能清理同会话后来开始的请求。 */
+    fun completeTextJob(sessionId: String, messageId: String, job: Job, keepWaiting: Boolean = false) {
+        @Suppress("NAME_SHADOWING") val sessionId = resolveConversationId(sessionId)
+        if (!textApiJobs.remove(sessionId, job)) return
+        preparingTextConversationIds.update { it - sessionId }
+        if (!keepWaiting) textApiMessageIds.remove(sessionId, messageId)
+        // 可见槽属于这个 Job，或可见消息就是它且没有别的任务占用时，才归位当前页面。
+        if (textApiJob === job || (textApiJob == null && _currentTextStreamingAiMessageId.value == messageId)) {
+            textApiJob = null
+            _isTextApiCalling.value = keepWaiting
+            _currentTextStreamingAiMessageId.value = messageId.takeIf { keepWaiting }
+        }
+    }
     /**
      * 图像生成任务按会话保存。页面切换只会更换可见会话，不应取消其他会话的任务。
      * key 是稳定会话 ID，value 是该会话当前正在运行的生成 Job。
@@ -220,12 +336,12 @@ val _isStreamingPaused = MutableStateFlow(false)
 
     // 清理文本模式状态的方法 - 增强版本，确保完全隔离
     fun clearForNewTextChat() {
+        cacheTextConversation()
         _text.value = ""
-        messages.clear()
         selectedMediaItems.clear()
         _isTextApiCalling.value = false
         _isRemoteCancellationPending.value = false
-        textApiJob?.cancel()
+        // 页面切换不取消按会话登记的运行任务。
         textApiJob = null
         _currentTextStreamingAiMessageId.value = null
         textReasoningCompleteMap.clear()
@@ -235,18 +351,9 @@ val _isStreamingPaused = MutableStateFlow(false)
         _sourcesForDialog.value = emptyList()
         _loadedHistoryIndex.value = null
         
-        // 🎯 清理所有 StreamingBuffer（Requirements: 6.1, 6.2）
-        streamingBuffers.values.forEach { buffer ->
-            buffer.flush()
-            buffer.clear()
-        }
-        streamingBuffers.clear()
-
-        // 🎯 清理流式消息状态管理器（Requirements: 1.4, 3.4）
-        streamingMessageStateManager.clearAll()
-
-        // 🎯 清理同步标记
-        syncedMessageIds.clear()
+        // 只释放已经没有任务所有者的缓冲，后台会话仍需接收模型增量。
+        val activeIds = (textApiMessageIds.values + imageApiMessageIds.values).toSet()
+        streamingBuffers.keys.filterNot { it in activeIds }.forEach(::clearStreamingBuffer)
         
         android.util.Log.d("ViewModelStateHolder", "Cleared all StreamingBuffers and streaming states for text chat")
         
@@ -275,18 +382,9 @@ val _isStreamingPaused = MutableStateFlow(false)
         _loadedImageGenerationHistoryIndex.value = null
         _currentImageGenerationConversationId.value = "new_image_generation_${System.currentTimeMillis()}"
         
-        // 🎯 清理所有 StreamingBuffer（Requirements: 6.1, 6.2）
-        streamingBuffers.values.forEach { buffer ->
-            buffer.flush()
-            buffer.clear()
-        }
-        streamingBuffers.clear()
-
-        // 🎯 清理流式消息状态管理器（Requirements: 1.4, 3.4）
-        streamingMessageStateManager.clearAll()
-
-        // 🎯 清理同步标记
-        syncedMessageIds.clear()
+        // 只释放已经没有任务所有者的缓冲，后台会话仍需接收模型增量。
+        val activeIds = (textApiMessageIds.values + imageApiMessageIds.values).toSet()
+        streamingBuffers.keys.filterNot { it in activeIds }.forEach(::clearStreamingBuffer)
         
         android.util.Log.d("ViewModelStateHolder", "Cleared all StreamingBuffers and streaming states for image chat")
         
@@ -420,7 +518,7 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
                 if (delta.isNotEmpty()) {
                     streamingMessageStateManager.appendText(messageId, delta)
                     // 有序正文跟随同一缓冲批次落入消息，避免每个模型 token 都触发整表重算。
-                    val messageList = if (isImageGeneration) imageGenerationMessages else messages
+                    val messageList = if (isImageGeneration) imageGenerationMessages else textMessagesForMessage(messageId)
                     val index = messageList.indexOfFirst { it.id == messageId }
                     if (index >= 0) {
                         val current = messageList[index]
@@ -456,7 +554,7 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
      * @param isImageGeneration Whether this is for image generation chat
      */
     private fun updateMessageContentDirect(messageId: String, content: String, isImageGeneration: Boolean) {
-        val messageList = if (isImageGeneration) imageGenerationMessages else messages
+        val messageList = if (isImageGeneration) imageGenerationMessages else textMessagesForMessage(messageId)
         val index = messageList.indexOfFirst { it.id == messageId }
         
         if (index != -1) {
@@ -595,10 +693,10 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
                     "Memory pressure detected. Forcing cleanup of inactive buffers.")
                 
                 // Force cleanup of inactive buffers
-                val activeStreamingIds = setOf(
+                val activeStreamingIds = (textApiMessageIds.values + imageApiMessageIds.values + listOfNotNull(
                     _currentTextStreamingAiMessageId.value,
-                    _currentImageStreamingAiMessageId.value
-                ).filterNotNull().toSet()
+                    _currentImageStreamingAiMessageId.value,
+                )).toSet()
                 
                 val buffersToRemove = streamingBuffers.keys.filter { it !in activeStreamingIds }
                 buffersToRemove.forEach { messageId ->
@@ -698,7 +796,7 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
         }
 
         // 仅在没有缓冲的极端回退路径，才直接更新一次（如历史重放/异常场景）
-        val messageList = if (isImageGeneration) imageGenerationMessages else messages
+        val messageList = if (isImageGeneration) imageGenerationMessages else textMessagesForMessage(messageId)
         val index = messageList.indexOfFirst { it.id == messageId }
         if (index != -1) {
             val currentMessage = messageList[index]
@@ -721,7 +819,7 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
      * 更新消息状态（用于 ToolCall 等非内容追加的更新）
      */
     fun updateMessageStatus(messageId: String, currentWebSearchStage: String, isImageGeneration: Boolean = false) {
-        val messageList = if (isImageGeneration) imageGenerationMessages else messages
+        val messageList = if (isImageGeneration) imageGenerationMessages else textMessagesForMessage(messageId)
         val index = messageList.indexOfFirst { it.id == messageId }
         if (index != -1) {
             val currentMessage = messageList[index]
@@ -733,7 +831,7 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
     }
 
     fun clearMessageStatus(messageId: String, isImageGeneration: Boolean = false) {
-        val messageList = if (isImageGeneration) imageGenerationMessages else messages
+        val messageList = if (isImageGeneration) imageGenerationMessages else textMessagesForMessage(messageId)
         val index = messageList.indexOfFirst { it.id == messageId }
         if (index != -1) {
             val currentMessage = messageList[index]
@@ -749,7 +847,10 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
      * 只接管当前消息列表里真实存在的消息，也不会覆盖另一条正在运行的回复。
      */
     fun attachTextAgentUi(messageId: String): Boolean {
+        // 当前列表就是当前会话；未登记的消息在其中即属于当前会话，登记到别处的才拒绝。
+        val currentSessionId = _currentConversationId.value
         if (messages.none { it.id == messageId }) return false
+        if (textMessageConversationIds.getOrPut(messageId) { currentSessionId } != currentSessionId) return false
         if (_isTextApiCalling.value && _currentTextStreamingAiMessageId.value != messageId) return false
         _currentTextStreamingAiMessageId.value = messageId
         _isTextApiCalling.value = true
@@ -779,7 +880,7 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
         finalText: String,
         isImageGeneration: Boolean = false
     ) {
-        val messageList = if (isImageGeneration) imageGenerationMessages else messages
+        val messageList = if (isImageGeneration) imageGenerationMessages else textMessagesForMessage(messageId)
         val index = messageList.indexOfFirst { it.id == messageId }
         AppLogger.debug(
             "SlashCommand",
@@ -840,7 +941,7 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
             return
         }
 
-        val messageList = if (isImageGeneration) imageGenerationMessages else messages
+        val messageList = if (isImageGeneration) imageGenerationMessages else textMessagesForMessage(messageId)
         val index = messageList.indexOfFirst { it.id == messageId }
 
         if (index != -1) {
@@ -876,7 +977,7 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
         val currentReasoning = streamingReasoningStates[messageId]?.value.orEmpty()
         if (currentText.isEmpty() && currentReasoning.isEmpty()) return
 
-        val messageList = if (isImageGeneration) imageGenerationMessages else messages
+        val messageList = if (isImageGeneration) imageGenerationMessages else textMessagesForMessage(messageId)
         val index = messageList.indexOfFirst { it.id == messageId }
         if (index < 0) return
 

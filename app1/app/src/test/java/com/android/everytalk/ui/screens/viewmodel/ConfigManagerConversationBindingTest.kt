@@ -135,6 +135,23 @@ class ConfigManagerConversationBindingTest {
     }
 
     @Test
+    fun `选择配置时切会话仍绑定到点击时的原会话`() = runTest {
+        val config = config("picked", "model-picked")
+        val state = ViewModelStateHolder().apply {
+            _apiConfigs.value = listOf(config)
+            setCurrentConversationId("conversation-a")
+        }
+        val persistence = mockk<DataPersistenceManager>(relaxed = true)
+        val manager = ConfigManager(state, persistence, mockk<ApiHandler>(relaxed = true), this)
+        manager.selectConfig(config)
+        // 保存尚未执行时用户切到另一个会话；绑定目标不能跟随当前页面改变。
+        state.setCurrentConversationId("conversation-b")
+        advanceUntilIdle()
+        assertEquals(mapOf("conversation-a" to config.id), state.conversationApiConfigIds.value)
+        coVerify { persistence.saveConversationApiConfigIds(mapOf("conversation-a" to config.id)) }
+    }
+
+    @Test
     fun `图片模型选择沿用主会话且默认配置不能单删或成组清空`() = runTest(UnconfinedTestDispatcher()) {
         val defaults = com.android.everytalk.data.DataClass.builtinImageModels
         val state = ViewModelStateHolder().apply {

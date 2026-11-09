@@ -63,6 +63,8 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
     private val settingsDao = database.settingsDao()
     /** 界面最近一次拿到或保存的配置 ID，按 text/image/voice 分开；同步刚加进库、界面还没看到的条目不在其中。 */
     private val shownConfigIds = java.util.concurrent.ConcurrentHashMap<String, Set<String>>()
+    /** 界面最近一次拿到的配置内容（按 ID）。保存时用来判断哪条是用户真改的，没改的条目沿用库里可能更新的同步结果。 */
+    private val baseConfigs = java.util.concurrent.ConcurrentHashMap<String, Map<String, Any?>>()
 
     /** 仅由启动加载流程调用，不能在普通打开历史时把仍在运行的草稿提前定稿。 */
     suspend fun recoverInterruptedDrafts() = database.withTransaction {
@@ -82,7 +84,7 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
     // --- Api Configs --- 
     suspend fun loadApiConfigs(): List<ApiConfig> {
         return apiConfigDao.getConfigs(isImageGen = false).map { it.toApiConfig() }
-            .also { shownConfigIds["text"] = it.map(ApiConfig::id).toSet() }
+            .also { shownConfigIds["text"] = it.map(ApiConfig::id).toSet(); baseConfigs["text"] = it.associateBy(ApiConfig::id) }
     }
 
     suspend fun saveApiConfigs(configs: List<ApiConfig>, reviveDeleted: Boolean = false) = database.withTransaction {
@@ -100,7 +102,7 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
 
     suspend fun loadImageGenApiConfigs(): List<ApiConfig> {
         return withBuiltinImageModels(apiConfigDao.getConfigs(isImageGen = true).map { it.toApiConfig() })
-            .also { shownConfigIds["image"] = it.map(ApiConfig::id).toSet() }
+            .also { shownConfigIds["image"] = it.map(ApiConfig::id).toSet(); baseConfigs["image"] = it.associateBy(ApiConfig::id) }
     }
 
     suspend fun saveImageGenApiConfigs(configs: List<ApiConfig>, reviveDeleted: Boolean = false) = database.withTransaction {
@@ -129,7 +131,7 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
     // --- Voice Backend Configs ---
     suspend fun loadVoiceBackendConfigs(): List<VoiceBackendConfig> {
         return voiceConfigDao.getAll().map { it.toVoiceBackendConfig() }
-            .also { shownConfigIds["voice"] = it.map(VoiceBackendConfig::id).toSet() }
+            .also { shownConfigIds["voice"] = it.map(VoiceBackendConfig::id).toSet(); baseConfigs["voice"] = it.associateBy(VoiceBackendConfig::id) }
     }
 
     suspend fun saveVoiceBackendConfigs(configs: List<VoiceBackendConfig>, reviveDeleted: Boolean = false) = database.withTransaction {
@@ -239,10 +241,19 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
         val stale = if (reviveDeleted) emptyList()
             else filter { id(it) !in storedIds && settingsDao.getUserSetting(kind, id(it))?.deleted == true }
         val unseen = if (reviveDeleted) emptyList() else stored.filter { id(it) !in ids && id(it) !in shown }
-        val result = filterNot { it in stale } + unseen
+        // 界面整表保存会带上所有条目；用户没改的条目若库里已被同步更新，保留库里的新值，不能用旧内容盖回去再上传。
+        val base = if (reviveDeleted) emptyMap() else baseConfigs[scope].orEmpty()
+        val storedById = stored.associateBy(id)
+        var refreshed = false
+        val result = (filterNot { it in stale } + unseen).map { item ->
+            val latest = storedById[id(item)]
+            if (latest != null && latest != item && id(item) in base && base[id(item)] == item) latest.also { refreshed = true } else item
+        }
         shownConfigIds[scope] = ids - stale.map(id).toSet()
-        // 让界面按数据库重新加载：去掉已删除的条目，补上刚同步来的条目。
-        if (stale.isNotEmpty() || unseen.isNotEmpty()) com.android.everytalk.data.sync.SyncLocalChanges.notifyChanged()
+        // 基准记界面实际持有的内容：界面重载前再次保存，未改条目仍按库里新值处理。
+        baseConfigs[scope] = base + associateBy(id)
+        // 让界面按数据库重新加载：去掉已删除的条目，补上刚同步来的条目和新内容。
+        if (stale.isNotEmpty() || unseen.isNotEmpty() || refreshed) com.android.everytalk.data.sync.SyncLocalChanges.notifyChanged()
         return result
     }
 
@@ -287,7 +298,10 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
     suspend fun loadConversationSettings(): Map<String, Pair<String, Boolean>> =
         settingsDao.getSyncableUserSettings().filter { it.kind == "conversation_settings" }.mapNotNull { setting ->
             runCatching {
-                val value = json.parseToJsonElement(setting.value).jsonObject
+                val value = com.android.everytalk.data.sync.RoomSyncStore(database,
+                    com.android.everytalk.data.sync.SyncSecretManager(applicationContext),
+                    settingsDao.getValue(com.android.everytalk.data.sync.SyncStateStore.KEY_ACCOUNT)).decodedSetting(setting)
+                    ?: return@mapNotNull null
                 setting.key to (value["systemPrompt"]?.jsonPrimitive?.contentOrNull.orEmpty() to
                     (value["promptEnabled"]?.jsonPrimitive?.boolean ?: false))
             }.getOrNull()
@@ -444,11 +458,13 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
         sessionId: String,
         messages: List<Message>,
         isImageGeneration: Boolean,
+        removeMissingMessages: Boolean = true,
+        removableMessageIds: Set<String>? = null,
     ) {
         val existingSession = chatDao.getSession(sessionId)
         // 编辑首条消息会回退到空对话。保留会话身份和资源，只清空已有消息。
         if (messages.isEmpty()) {
-            if (existingSession != null) chatDao.saveSessionWithMessages(existingSession, emptyList(), sessionChanged = false)
+            if (existingSession != null) chatDao.saveSessionWithMessages(existingSession, emptyList(), sessionChanged = false, removeMissingMessages = removeMissingMessages, removableMessageIds = removableMessageIds)
             return
         }
         val persistedMessages = ConversationNameHelper.withoutStoredConversationTitle(messages)
@@ -469,6 +485,8 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
             messages = persistedMessages.map { it.toEntity(sessionId, converters) },
             sessionChanged = session != existingSession,
             draftIds = persistedMessages.filter { it.isStreamingDraft }.mapTo(hashSetOf()) { it.id },
+            removeMissingMessages = removeMissingMessages,
+            removableMessageIds = removableMessageIds,
         )
     }
 
@@ -724,8 +742,19 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
             }
         } else {
             emptyMap()
-        }
+        }.also { conversationConfigBase = it }
     }
+
+    /** 界面最近一次拿到的会话模型映射，保存时只写用户改动的会话。 */
+    @Volatile private var conversationConfigBase: Map<String, String>? = null
+
+    /** 读取会刷新基准；界面放弃这次读取结果时必须退回原基准，否则界面的旧内容会被当成用户改动。 */
+    internal data class SyncBases(val configs: Map<String, Map<String, Any?>>, val conversationConfig: Map<String, String>?)
+    internal fun syncBases() = SyncBases(HashMap(baseConfigs), conversationConfigBase)
+    internal fun restoreConfigBase(scope: String, bases: SyncBases) {
+        bases.configs[scope]?.let { baseConfigs[scope] = it } ?: baseConfigs.remove(scope)
+    }
+    internal fun restoreConversationConfigBase(bases: SyncBases) { conversationConfigBase = bases.conversationConfig }
 
     /** 同步记录保留原始 ID；读取选择时把旧 ID 解析到当前列表代表项，不改写或丢弃历史数据。 */
     private suspend fun builtinModelAliases(): Map<String, String> {
@@ -737,12 +766,17 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
     }
 
     suspend fun saveConversationApiConfigIds(mapping: Map<String, String>) {
+        // 界面持有整张映射，可能早于同步拉取；其他会话的同步结果不能被旧映射盖回去。
+        val base = conversationConfigBase
+        val merged = mergeEditedEntries(base, mapping, if (base == null) emptyMap() else loadConversationApiConfigIds())
+        conversationConfigBase = mapping
+        if (merged != mapping) com.android.everytalk.data.sync.SyncLocalChanges.notifyChanged()
         val jsonString = json.encodeToString(
             kotlinx.serialization.builtins.MapSerializer(
                 String.serializer(),
                 String.serializer()
             ),
-            mapping
+            merged
         )
         saveSetting("conversation_api_config_ids", jsonString)
     }
@@ -750,4 +784,13 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
     suspend fun vacuumDatabase() {
         database.openHelper.writableDatabase.execSQL("VACUUM")
     }
+}
+
+/** 三方合并整张映射：只采用界面相对基准真正改动或删除的键，其余保留库里的最新值。基准为空时按界面原样写入。 */
+internal fun <V> mergeEditedEntries(base: Map<String, V>?, edited: Map<String, V>, stored: Map<String, V>): Map<String, V> {
+    if (base == null) return edited
+    val merged = stored.toMutableMap()
+    edited.forEach { (key, value) -> if (key !in base || base[key] != value) merged[key] = value }
+    (base.keys - edited.keys).forEach(merged::remove)
+    return merged
 }

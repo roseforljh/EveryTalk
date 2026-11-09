@@ -144,7 +144,6 @@ import java.util.UUID
     }
 
     internal fun AppViewModel.buildLocalWebSearchExecutor(): (suspend (String) -> JsonElement)? {
-        if (!stateHolder._isWebSearchEnabled.value) return null
         val provider = selectedExternalWebSearchProvider
         val apiKey = selectedExternalWebSearchProviderApiKey
         if (provider != null && apiKey.isNotBlank()) {
@@ -178,7 +177,6 @@ import java.util.UUID
     }
 
     internal fun AppViewModel.buildMcpWebFetchFallback(): (suspend (JsonObject) -> JsonElement)? {
-        if (!stateHolder._isMcpEnabledForNextRequest.value) return null
         val webFetchTool = mcpManager.getDispatchCandidates()
             .firstOrNull { it.category == McpToolCategory.BROWSER }
             ?: return null
@@ -318,14 +316,6 @@ import java.util.UUID
             .toList()
     }
 
-    internal fun AppViewModel.toggleWebSearchMode(enabled: Boolean) {
-        stateHolder.updateCurrentConversationFunctionToggleState { it.copy(webSearchEnabled = enabled) }
-        stateHolder._isWebSearchEnabled.value = enabled
-        viewModelScope.launch {
-            persistenceManager.saveConversationFunctionToggleStates(stateHolder.conversationFunctionToggleStates.value)
-        }
-    }
-
     internal fun AppViewModel.updateExternalWebSearchProviderApiKey(
         provider: ExternalWebSearchProvider,
         apiKey: String,
@@ -418,15 +408,6 @@ import java.util.UUID
         if (isRestoringMessage.value) {
             onSendRejected?.invoke()
             return
-        }
-        if (!isImageGeneration && stateHolder._selectedApiConfig.value?.modalityType != com.android.everytalk.data.DataClass.ModalityType.IMAGE && stateHolder._isWebSearchEnabled.value) {
-            val currentConfig = stateHolder._selectedApiConfig.value
-            val supportsNative = com.android.everytalk.data.network.WebSearchSupport.supportsNativeWebSearch(currentConfig)
-            if (!supportsNative && !canUseSelectedExternalWebSearchProvider()) {
-                showSnackbar("请先在设置-联网搜索中配置并勾选一个搜索服务商")
-                onSendRejected?.invoke()
-                return
-            }
         }
         // 仅在“接入系统提示”开启时，才把系统提示注入到本次会话
         val engaged = stateHolder.systemPromptEngagedState[stateHolder._currentConversationId.value] ?: false
@@ -1180,7 +1161,7 @@ import java.util.UUID
         restoredMessageDraft.value?.let(::consumeRestoredMessageDraft)
         dismissSourcesDialog()
         cancelPendingTextHistoryLoad()
-        apiHandler.cancelCurrentApiJob("开始新聊天")
+        apiHandler.detachTextConversationUi()
         viewModelScope.launch {
             try {
                 // 使用新的模式管理器

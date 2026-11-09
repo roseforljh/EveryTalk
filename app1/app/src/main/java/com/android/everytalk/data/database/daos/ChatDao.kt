@@ -220,6 +220,8 @@ interface ChatDao {
         draftIds: Set<String> = emptySet(),
         debug: Boolean = BuildConfig.DEBUG,
         removeMissingMessages: Boolean = true,
+        // 非空时，缺席消息只有在这个集合里（页面确实见过）才删除；同步后到达的消息不受旧快照影响。
+        removableMessageIds: Set<String>? = null,
     ) {
         // 先读取 ID 和摘要，只写新增或真实变化的消息。长会话追加一条消息时不会重写全部历史。
         if (getStoredSession(session.id)?.deleted == true) return
@@ -229,7 +231,9 @@ interface ChatDao {
             (it.id !in draftIds || storedStates[it.id] != null) && storedStates[it.id]?.storageFingerprint != it.storageFingerprint
         }
         // 批量 UI 快照可能早于同步拉取，不凭缺席推断删除；编辑与重答等完整保存仍清理替换消息。
-        val removedIds = if (removeMissingMessages) storedStates.values.filter { !it.deleted && it.id !in incomingIds }.map { it.id } else emptyList()
+        val removedIds = if (removeMissingMessages) storedStates.values.filter {
+            !it.deleted && it.id !in incomingIds && (removableMessageIds == null || it.id in removableMessageIds)
+        }.map { it.id } else emptyList()
 
         // @Transaction 保证会话、变化消息和删除结果一起提交，任何一步失败都会保留旧数据。
         if (sessionChanged || getStoredSession(session.id) == null) insertSession(session)
@@ -241,7 +245,9 @@ interface ChatDao {
         }
         if (drafts.isNotEmpty()) writeDrafts(drafts)
         if (removeMissingMessages) {
-            val removedDrafts = existingDrafts.keys.filterNot(incomingIds::contains)
+            val removedDrafts = existingDrafts.keys.filter {
+                it !in incomingIds && (removableMessageIds == null || it in removableMessageIds)
+            }
             if (removedDrafts.isNotEmpty()) deleteDrafts(session.id, removedDrafts)
         }
     }

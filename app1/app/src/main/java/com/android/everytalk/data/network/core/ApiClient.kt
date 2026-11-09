@@ -187,8 +187,8 @@ object ApiClient {
                             java.util.concurrent.TimeUnit.MINUTES
                         ))
                         
-                        // 启用 HTTP/2 + HTTP/1.1 回退（OkHttp 默认支持）
-                        protocols(listOf(okhttp3.Protocol.HTTP_2, okhttp3.Protocol.HTTP_1_1))
+                        // 普通聊天与 Agent relay 的长 SSE 先固定 HTTP/1.1，避免 HTTP/2/TLS 长连接记录损坏。
+                        protocols(listOf(okhttp3.Protocol.HTTP_1_1))
                     }
                 }
                 install(ContentNegotiation) {

@@ -35,6 +35,17 @@ internal class FakeSyncApi : SyncApi {
 
     fun clearCloud() { rows.clear(); epoch++ }
 
+    /** 与服务端 extendsMessage 一致：同一条回复的正文/思考只按原文继续增长。 */
+    private fun extendsMessage(old: JsonObject, new: JsonObject): Boolean {
+        fun grows(field: String): Int {
+            if (field !in new) return 0
+            val before = old[field]?.jsonPrimitive?.content.orEmpty(); val after = new[field]?.jsonPrimitive?.content.orEmpty()
+            return if (after.startsWith(before)) after.length - before.length else -1
+        }
+        val text = grows("text"); val reasoning = grows("reasoning")
+        return old["sender"] == new["sender"] && old["timestamp"] == new["timestamp"] && text >= 0 && reasoning >= 0 && text + reasoning > 0
+    }
+
     override suspend fun push(changes: List<PushChange>): PushResponse {
         pushes++
         val results = changes.mapIndexed { index, change ->
@@ -50,7 +61,7 @@ internal class FakeSyncApi : SyncApi {
                 // 服务端不只检查本次增量，也检查同 UUID 合并后的总大小。
                 change.entity == "messages" && !change.deleted &&
                     JsonObject(old?.payload.orEmpty() + change.payload).toString().toByteArray(Charsets.UTF_8).size > 65536 -> "MESSAGE_PAYLOAD_TOO_LARGE"
-                change.entity == "messages" && old != null && !change.deleted && change.payload.any { (name, value) ->
+                change.entity == "messages" && old != null && !change.deleted && !extendsMessage(old.payload, change.payload) && change.payload.any { (name, value) ->
                     old.payload.containsKey(name) && old.payload[name] != value
                 } -> "IMMUTABLE_FIELD"
                 change.entity == "user_settings" && change.payload["kind"]?.jsonPrimitive?.content !in setOf(
@@ -63,6 +74,8 @@ internal class FakeSyncApi : SyncApi {
                 ) && !Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}").matches(
                     change.payload["key"]?.jsonPrimitive?.content.orEmpty(),
                 ) -> "INVALID_USER_SETTING"
+                change.entity == "user_settings" && change.payload["kind"]?.jsonPrimitive?.content != "crypto_keys" &&
+                    runCatching { SyncContractSanitizer.validate(change.payload.getValue("value")) }.isFailure -> "CONTAINS_SECRET"
                 change.entity == "messages" && session?.deleted == true -> "session_deleted"
                 else -> null
             }

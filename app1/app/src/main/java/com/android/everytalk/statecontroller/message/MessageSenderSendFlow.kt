@@ -159,6 +159,16 @@ internal fun MessageSender.sendMessageInternal(
         }
         // 会话归属与请求类型分开：统一聊天列表里可以交替调用文本和图片模型。
         val isImageRequest = isImageGeneration || "image" in currentConfig.outputModalities()
+        // 发送入口固定归属；首次落库把临时 ID 迁到稳定 ID 后经 resolveConversationId 跟随。
+        var requestConversationId = if (isImageGeneration) {
+            stateHolder._currentImageGenerationConversationId.value
+        } else {
+            stateHolder._currentConversationId.value
+        }
+        val requestMessages = if (isImageGeneration) stateHolder.imageGenerationMessages
+            else stateHolder.textMessagesForConversation(requestConversationId)
+        val requestLoadedHistoryIndex = if (isImageGeneration) stateHolder._loadedImageGenerationHistoryIndex.value
+            else stateHolder._loadedHistoryIndex.value
 
         when (
             val safetyDecision = AiContentSafetyPolicy.evaluateUserInput(
@@ -193,7 +203,7 @@ internal fun MessageSender.sendMessageInternal(
 
         // 记录会话使用的配置ID
         if (!isImageGeneration) {
-            val conversationId = stateHolder._currentConversationId.value
+            val conversationId = requestConversationId
             stateHolder.conversationApiConfigIds.update { currentMap ->
                 if (currentMap[conversationId] == currentConfig.id) currentMap
                 else currentMap + (conversationId to currentConfig.id)
@@ -201,7 +211,7 @@ internal fun MessageSender.sendMessageInternal(
             // 这里仅更新内存状态，HistoryManager.saveCurrentChatToHistoryIfNeededInternal 会负责持久化
         } else {
             // 图像模式：绑定当前图像会话ID与配置ID
-            val conversationId = stateHolder._currentImageGenerationConversationId.value
+            val conversationId = requestConversationId
             stateHolder.conversationApiConfigIds.update { currentMap ->
                 if (currentMap[conversationId] == currentConfig.id) currentMap
                 else currentMap + (conversationId to currentConfig.id)
@@ -233,11 +243,16 @@ internal fun MessageSender.sendMessageInternal(
             val modelIsGeminiType = parameterProtocol == ModelParameterProtocol.GEMINI
             val shouldUsePartsApiMessage = modelIsGeminiType
             val providerForRequestBackend = currentConfig.provider
-            val webSearchEnabledForRequest = !isImageRequest && stateHolder._isWebSearchEnabled.value
-            val isMcpEnabledForRequest = !isImageRequest && stateHolder._isMcpEnabledForNextRequest.value
+            // 联网搜索和 MCP 不再由用户手动开关：只要模型原生支持搜索或设置里配置了可用的搜索服务商，
+            // 就把搜索能力提供给模型；MCP 只暴露设置中已启用并连接成功的服务器工具（无可用服务器时候选为空）。
+            // 是否真正调用由模型结合用户问题自行判断，MCP 候选还会先经过意图分类筛选。
+            val webSearchEnabledForRequest = !isImageRequest && (
+                WebSearchSupport.supportsNativeWebSearch(currentConfig) ||
+                    (getSelectedExternalWebSearchProvider() != null && getSelectedExternalWebSearchProviderApiKey().isNotBlank())
+                )
+            val isMcpEnabledForRequest = !isImageRequest
             val isAgentEnabledForRequest = !isImageRequest && stateHolder._isAgentEnabled.value
-            val requestConversationId = stateHolder._currentConversationId.value
-            // 每条请求只冻结一次。后续启停和更新从下一条消息生效。
+            // requestConversationId 在发送入口固定，后续会话切换不影响本请求。
             val skillSnapshotForRequest = if (isImageRequest) {
                 null
             } else {
@@ -299,7 +314,7 @@ internal fun MessageSender.sendMessageInternal(
                 if (hasImageEditKeywords(t)) {
                     try {
                         // 找到最近一条包含图片的AI消息
-                        val lastAiWithImage = (if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages).lastOrNull {
+                        val lastAiWithImage = (if (isImageGeneration) stateHolder.imageGenerationMessages else requestMessages).lastOrNull {
                             it.sender == UiSender.AI && !it.imageUrls.isNullOrEmpty()
                         }
                         val refImageUrl = lastAiWithImage?.imageUrls?.lastOrNull()
@@ -360,6 +375,7 @@ internal fun MessageSender.sendMessageInternal(
                 // 重答参数里的 manualMessageId 是旧问题的定位 ID，不能用作新问题身份。
                 id = if (isFromRegeneration) "user_${UUID.randomUUID()}" else manualMessageId ?: "user_${UUID.randomUUID()}",
                 text = textToActuallySend, sender = UiSender.User,
+                conversationId = requestConversationId,
                 contentParts = contentPartsToActuallySend,
                 timestamp = System.currentTimeMillis(), contentStarted = true,
                 imageUrls = attachmentResult.imageUriStringsForUi,
@@ -372,7 +388,7 @@ internal fun MessageSender.sendMessageInternal(
             withContext(Dispatchers.Main.immediate) {
                 val animationMap = if (isImageGeneration) stateHolder.imageMessageAnimationStates else stateHolder.textMessageAnimationStates
                 animationMap[newUserMessageForUi.id] = true
-                val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
+                val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else requestMessages
                 addOrReplaceRegeneratedUserMessage(
                     messageList = messageList,
                     newUserMessage = newUserMessageForUi,
@@ -398,16 +414,18 @@ internal fun MessageSender.sendMessageInternal(
                 val persisted = runCatching {
                     withContext(Dispatchers.IO) {
                         historyManager.run {
-                            saveCurrentChatToHistoryNow(
-                            forceSave = true,
-                            isImageGeneration = isImageGeneration,
+                            saveConversationSnapshotNow(
+                                conversationId = requestConversationId,
+                                messages = requestMessages.toList(),
+                                isImageGeneration = isImageGeneration,
                             )
                         }
                     }
                 }.isSuccess
+                requestConversationId = stateHolder.resolveConversationId(requestConversationId)
                 if (!persisted) {
                     withContext(Dispatchers.Main.immediate) {
-                        val messages = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
+                        val messages = if (isImageGeneration) stateHolder.imageGenerationMessages else requestMessages
                         messages.removeAll { it.id == newUserMessageForUi.id }
                         showSnackbar("暂存消息落库失败，请重试")
                     }
@@ -420,14 +438,14 @@ internal fun MessageSender.sendMessageInternal(
             // 先判断首条消息。Agent 的 AI 加载占位也会进入 messages，不能让它改变会话入库判断。
             val isNewTextChatFirstMessage = !isImageGeneration &&
                     isFirstUserMessageForNewChat(
-                        messages = stateHolder.messages,
-                        loadedHistoryIndex = stateHolder._loadedHistoryIndex.value,
+                        messages = requestMessages,
+                        loadedHistoryIndex = requestLoadedHistoryIndex,
                     )
 
             val isNewImageChatFirstMessage = isImageGeneration &&
                     isFirstUserMessageForNewChat(
-                        messages = stateHolder.imageGenerationMessages,
-                        loadedHistoryIndex = stateHolder._loadedImageGenerationHistoryIndex.value,
+                        messages = requestMessages,
+                        loadedHistoryIndex = requestLoadedHistoryIndex,
                     )
 
             // Agent 占位会把当前发送协程登记为 textApiJob，因此必须先取消上一条请求。
@@ -435,11 +453,7 @@ internal fun MessageSender.sendMessageInternal(
             val cancelledActiveTextRequestBeforeSnapshot = !isImageGeneration &&
                 (isAgentEnabledForRequest || currentConfig.modelParameters.autoContextCompressionEnabled)
             if (cancelledActiveTextRequestBeforeSnapshot) {
-                apiHandler.cancelCurrentApiJob(
-                    reason = "发送新消息，预清理",
-                    isNewMessageSend = true,
-                    isImageGeneration = false,
-                )
+                apiHandler.cancelTextRequestForReplacement(requestConversationId)
             }
 
             // Agent 冻结本地 Workspace 快照时立即显示 AI 加载占位，避免短暂准备阶段看起来毫无响应。
@@ -449,6 +463,7 @@ internal fun MessageSender.sendMessageInternal(
                     providerName = currentConfig.provider,
                     isImageGeneration = false,
                     afterUserMessageId = newUserMessageForUi.id,
+                    conversationId = requestConversationId,
                     executionStatus = "正在准备服务器",
                     preparationJob = currentCoroutineContext()[Job],
                 )
@@ -469,6 +484,7 @@ internal fun MessageSender.sendMessageInternal(
                     providerName = currentConfig.provider,
                     isImageGeneration = false,
                     afterUserMessageId = newUserMessageForUi.id,
+                    conversationId = requestConversationId,
                     preparationJob = currentCoroutineContext()[Job],
                 ).also { preCreatedAiMessageId = it }
                 apiHandler.failPreparedStreamingAiMessage(failedMessageId, failureText)
@@ -483,6 +499,7 @@ internal fun MessageSender.sendMessageInternal(
                     providerName = currentConfig.provider,
                     isImageGeneration = false,
                     afterUserMessageId = newUserMessageForUi.id,
+                    conversationId = requestConversationId,
                     preparationJob = currentCoroutineContext()[Job],
                 ).also { preCreatedAiMessageId = it }
                 apiHandler.failPreparedStreamingAiMessage(failedMessageId, failureText)
@@ -491,7 +508,7 @@ internal fun MessageSender.sendMessageInternal(
             }
             if (!isImageGeneration) {
                 preparedComputerRequest = preparedComputerRequest?.let { prepared ->
-                    val stableConversationId = stateHolder._currentConversationId.value
+                    val stableConversationId = requestConversationId
                     if (prepared.context.conversationId == stableConversationId) {
                         prepared
                     } else {
@@ -500,9 +517,9 @@ internal fun MessageSender.sendMessageInternal(
                 }
                 preparedComputerRequest?.let { prepared ->
                     withContext(Dispatchers.Main.immediate) {
-                        val messageIndex = stateHolder.messages.indexOfFirst { it.id == newUserMessageForUi.id }
+                        val messageIndex = requestMessages.indexOfFirst { it.id == newUserMessageForUi.id }
                         if (messageIndex >= 0) {
-                            stateHolder.messages[messageIndex] = stateHolder.messages[messageIndex].copy(
+                            requestMessages[messageIndex] = requestMessages[messageIndex].copy(
                                 computerIdSnapshot = prepared.context.computerId,
                                 workspaceIdSnapshot = prepared.context.workspaceId,
                             )
@@ -511,22 +528,18 @@ internal fun MessageSender.sendMessageInternal(
                 }
             }
 
-            // Workspace 快照已经冻结，此时再入库并迁移会话 ID，映射不会遗留在临时会话下。
-            // Agent 必须在模型请求前同步保存用户消息和 AI 占位。否则首轮返回 Tool Call 后，
-            // 服务空闲对账会因 Room 查不到可见消息而误取消 Run，工具和模型续写都无法继续。
-            if (isNewTextChatFirstMessage || isNewImageChatFirstMessage || isAgentEnabledForRequest) {
-                withContext(Dispatchers.IO) {
-                    // AgentRun 使用会话和可见消息事实。必须等它们真正落库后再启动 Agent，
-                    // 不能只把保存命令放进队列，否则极快的模型请求会先进入审批暂停并触发误清理。
-                    historyManager.saveCurrentChatToHistoryNow(
-                        forceSave = true,
-                        isImageGeneration = isImageGeneration,
-                    )
-                }
+            // 在原会话中持久化用户消息和准备中的 AI 占位，不能保存切页后的会话。
+            withContext(Dispatchers.Main.immediate) {
+                historyManager.saveConversationSnapshotNow(
+                    conversationId = requestConversationId,
+                    messages = requestMessages.toList(),
+                    isImageGeneration = isImageGeneration,
+                )
             }
+            requestConversationId = stateHolder.resolveConversationId(requestConversationId)
 
             withContext(Dispatchers.IO) {
-                val messagesInChatUiSnapshot = if (isImageGeneration) stateHolder.imageGenerationMessages.toList() else stateHolder.messages.toList()
+                val messagesInChatUiSnapshot = requestMessages.toList()
                 logUiMessages("rawMessages", messagesInChatUiSnapshot)
                 val historyEndIndex = messagesInChatUiSnapshot.indexOfFirst { it.id == newUserMessageForUi.id }
                 val historyUiMessagesRaw = ConversationNameHelper.withoutStoredConversationTitle(
@@ -538,7 +551,7 @@ internal fun MessageSender.sendMessageInternal(
                 )
 
                 // 当"系统提示接入"处于暂停状态时，过滤掉会话历史中的系统消息，避免仍然将 Prompt 注入到请求
-                val engagedForThisConversation = stateHolder.systemPromptEngagedState[stateHolder._currentConversationId.value] ?: false
+                val engagedForThisConversation = stateHolder.systemPromptEngagedState[requestConversationId] ?: false
                 val historyUiMessages = historyUiMessagesRaw.filter { msg ->
                     // Notice 是 App 插的提示行，任何情况下都不进模型上下文。
                     val filteredOut = msg.sender == UiSender.Notice ||
@@ -552,17 +565,6 @@ internal fun MessageSender.sendMessageInternal(
                     !filteredOut
                 }
                 logUiMessages("filteredMessages", historyUiMessages)
-
-                // 图像会话的稳定会话ID规则：
-                // 第一次消息（historyEndIndex==0 且非从历史加载）时，用"首条用户消息ID"作为 conversationId，
-                // 这样重启后根据第一条消息ID恢复，后端会话可继续（与 SimpleModeManager.loadImageHistory 的写法严格一致）。
-                if (isImageGeneration) {
-                    val isFirstMessageInThisSession = historyEndIndex == 0
-                    val notFromHistory = stateHolder._loadedImageGenerationHistoryIndex.value == null
-                    if (isFirstMessageInThisSession && notFromHistory) {
-                        stateHolder._currentImageGenerationConversationId.value = newUserMessageForUi.id
-                    }
-                }
 
                 // 图片统一经 encodeImageForModel 缩放并带回真实 MIME。
                 val historyApiMessages = historyUiMessages.map { it.toApiMessage(uriToBase64Encoder) }.toMutableList()
@@ -902,6 +904,7 @@ internal fun MessageSender.sendMessageInternal(
                             providerName = currentConfig.provider,
                             isImageGeneration = false,
                             afterUserMessageId = newUserMessageForUi.id,
+                            conversationId = requestConversationId,
                             executionStatus = failureText,
                             preparationJob = currentCoroutineContext()[Job],
                         )
@@ -932,7 +935,7 @@ internal fun MessageSender.sendMessageInternal(
 
                 if (finalApiMessages.isEmpty() || finalApiMessages.lastOrNull()?.role != "user") {
                     withContext(Dispatchers.Main.immediate) {
-                        stateHolder.messages.remove(newUserMessageForUi)
+                        requestMessages.remove(newUserMessageForUi)
                         val animationMap = if (isImageGeneration) stateHolder.imageMessageAnimationStates else stateHolder.textMessageAnimationStates
                         animationMap.remove(newUserMessageForUi.id)
                     }
@@ -947,13 +950,14 @@ internal fun MessageSender.sendMessageInternal(
                 // 在自动压缩或外部联网搜索开始时复用同一个普通加载占位消息。
                 if (!isImageGeneration && preCreatedAiMessageId == null) {
                     if (!cancelledActiveTextRequestBeforeSnapshot) {
-                        apiHandler.cancelCurrentApiJob("发送新消息，预清理", isNewMessageSend = true, isImageGeneration = false)
+                        apiHandler.cancelTextRequestForReplacement(requestConversationId)
                     }
                     preCreatedAiMessageId = apiHandler.prepareStreamingAiMessage(
                         modelName = currentConfig.model,
                         providerName = currentConfig.provider,
                         isImageGeneration = false,
                         afterUserMessageId = newUserMessageForUi.id,
+                        conversationId = requestConversationId,
                         contextCompressionState = activeCompressionState,
                     )
                 }
@@ -973,7 +977,7 @@ internal fun MessageSender.sendMessageInternal(
                     apiKey = currentConfig.key,
                     model = currentConfig.model,
                     deviceId = com.android.everytalk.util.DeviceIdManager.getDeviceId(application),
-                    conversationId = stateHolder._currentConversationId.value,
+                    conversationId = requestConversationId,
                     useWebSearch = webSearchRouting.useNativeWebSearch,
                     // 显式传递代码执行开关状态
                     enableCodeExecution = enableCodeExecutionForRequest,
@@ -1055,7 +1059,7 @@ internal fun MessageSender.sendMessageInternal(
                                 if (r.isAuto) null else r.displayName
                             },
                             // 严格会话隔离：把当前图像历史项ID透传到后端
-                            conversationId = if (isImageGeneration) stateHolder._currentImageGenerationConversationId.value else stateHolder._currentConversationId.value,
+                            conversationId = requestConversationId,
                             // 额外兜底：把最近若干轮文本摘要也发给后端，确保"该会话独立记忆"不依赖服务端状态
                             history = historyForStatelessMemory.ifEmpty { null },
                             // 禁用水印（针对 Seedream 直连）
@@ -1078,11 +1082,7 @@ internal fun MessageSender.sendMessageInternal(
                 PromptCachePolicy.logToolProfile(chatRequestForApi.tools)
 
                 if ((isNewTextChatFirstMessage || isNewImageChatFirstMessage) && textToActuallySend.isNotBlank()) {
-                    val titleSessionId = if (isImageGeneration) {
-                        stateHolder._currentImageGenerationConversationId.value
-                    } else {
-                        stateHolder._currentConversationId.value
-                    }
+                    val titleSessionId = requestConversationId
                     // 图像模型通常只返回图片，优先使用已配置的文本模型生成标题；没有文本配置时再回退当前配置。
                     val titleConfig = if (isImageRequest) {
                         stateHolder._apiConfigs.value.firstOrNull() ?: currentConfig

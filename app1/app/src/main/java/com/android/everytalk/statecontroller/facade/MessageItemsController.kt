@@ -40,6 +40,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.flatMapLatest
 import androidx.compose.runtime.snapshotFlow
 import java.util.concurrent.ConcurrentHashMap
 
@@ -311,7 +312,9 @@ open class MessageItemsController(
 
     val chatListItems: StateFlow<List<ChatListItem>> =
         combine(
-            snapshotFlow { stateHolder.messages.toList() },
+            stateHolder._currentConversationId.flatMapLatest { sessionId ->
+                snapshotFlow { stateHolder.textMessagesForConversation(sessionId).toList() }
+            },
             stateHolder._isTextApiCalling,
             stateHolder._currentTextStreamingAiMessageId,
         ) { messages, isApiCalling, currentStreamingAiMessageId ->
@@ -1116,7 +1119,8 @@ open class MessageItemsController(
                     ChatListItem.UserMessage(
                         messageId = message.id,
                         text = message.text,
-                        attachments = message.attachments
+                        attachments = message.attachments,
+                        message = message,
                     )
                 )
             // Notice 是 App 自己插的提示行，和系统行一样按普通提示渲染。

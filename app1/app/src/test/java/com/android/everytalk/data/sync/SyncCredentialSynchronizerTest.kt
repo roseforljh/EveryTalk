@@ -40,7 +40,7 @@ class SyncCredentialSynchronizerTest {
             every { cachedKeyVersion(user, 0) } answers { if (accepted) 1L else null }
             every { acceptAccountKey(user, any()) } answers { assertEquals(java.util.Base64.getEncoder().encodeToString(dek), secondArg<AccountSyncKey>().dek); accepted = true }
             every { encryptField(user, any(), any(), any(), 1, 0, any()) } answers {
-                SyncCrypto.encryptJson(dek, arg(6), SyncCrypto.aad(user, arg(1), arg(2), arg(3), 1, 0), 1)
+                if (!accepted) null else SyncCrypto.encryptJson(dek, arg(6), SyncCrypto.aad(user, arg(1), arg(2), arg(3), 1, 0), 1)
             }
             every { decryptField(user, any(), any(), any(), 0, any()) } answers {
                 runCatching { SyncCrypto.decryptJson(dek, syncJson.decodeFromJsonElement(SyncEncryptedEnvelope.serializer(), arg(5)),
@@ -83,6 +83,112 @@ class SyncCredentialSynchronizerTest {
         assertEquals("", b.apiConfigDao().getTextConfig(id)!!.key)
         sync(b, sb); assertEquals("", b.apiConfigDao().getTextConfig(id)!!.key)
         assertTrue(RoomSyncStore(b, sb, user).pendingBatch().isEmpty())
+    }
+
+    @Test fun `旧拒绝配置自动加密重传且嵌套数组地址与提示词跨设备完整恢复`() = runBlocking {
+        val a = device(); val b = device(); val sa = secrets(); val sb = secrets(); val cloud = FakeSyncApi()
+        val api = object : SyncApi by cloud {
+            override suspend fun recoverAccountKey(epoch: Long, existingDek: String?) = AccountSyncKey(1, 0, java.util.Base64.getEncoder().encodeToString(dek))
+        }
+        val id = UUID.randomUUID().toString()
+        val sensitive = "sk-synchronization-test-12345678"
+        val address = "https://example.org/v1?apiKey=private-query-value"
+        val config = ApiConfig(address, sensitive, "model", "OpenAI", id, sensitive).toEntity().copy(
+            modelParameters = com.android.everytalk.data.DataClass.ModelParameters(
+                customReasoningEfforts = listOf("normal", "Bearer synchronization-test-token"),
+                resolvedCapability = com.android.everytalk.data.DataClass.ResolvedModelCapability(
+                    modelId = "model", endpointIdentity = "https://example.org/$sensitive/v1", contextWindowTokens = 128000,
+                    maxInputTokens = 120000, maxOutputTokens = 8192,
+                    contextWindowSource = com.android.everytalk.data.DataClass.ModelCapabilitySource.LIVE_ENDPOINT,
+                    maxOutputSource = com.android.everytalk.data.DataClass.ModelCapabilitySource.LIVE_ENDPOINT,
+                    inputModalities = setOf("text"), outputModalities = setOf("text"), supportsReasoning = true,
+                ),
+            ),
+            toolsJson = """[{"name":"test","nested/~":["$sensitive",{"Authorization":"Bearer synchronization-test-token"}]}]""",
+        )
+        a.apiConfigDao().insertConfigs(listOf(config))
+        val sessionId = UUID.randomUUID().toString()
+        a.chatDao().insertSession(ChatSessionEntity(id = sessionId, creationTimestamp = 1, lastModifiedTimestamp = 1, title = "test", isImageGeneration = false))
+        val session = a.chatDao().getStoredSession(sessionId)!!
+        val prompt = "保留完整内容 $sensitive"
+        a.settingsDao().insertSetting(SystemSettingEntity("conversation_api_config_ids", buildJsonObject { put(sessionId, id) }.toString()))
+        a.settingsDao().upsertUserSettings(listOf(UserSettingEntity("conversation_settings", session.uuid,
+            buildJsonObject { put("modelId", id); put("systemPrompt", prompt); put("promptEnabled", true) }.toString())))
+        SyncSettingsProjector(a).refresh()
+        val old = a.settingsDao().getUserSetting("api_configs", id)!!
+        a.settingsDao().upsertUserSettings(listOf(old.copy(value = """{"name":"$sensitive","apiKey":"$sensitive"}""", syncStatus = SyncStatus.LOCAL_ONLY)))
+        a.settingsDao().insertSetting(SystemSettingEntity("sync_rejected:user_settings:${old.uuid}", "CONTAINS_SECRET"))
+        suspend fun sync(db: AppDatabase, secret: SyncSecretManager) {
+            val credentials = SyncCredentialSynchronizer(context, db, api, secret, user)
+            SyncEngine(api, RoomSyncStore(db, secret, user), SyncStateStore(db), beforePull = { credentials.captureLocal() },
+                afterPull = { credentials.recover() }).runOnce()
+        }
+        sync(a, sa); sync(b, sb)
+        val received = b.apiConfigDao().getTextConfig(id)!!
+        assertEquals(config.name, received.name)
+        assertEquals(config.key, received.key)
+        assertEquals(address, received.address)
+        assertEquals(config.toolsJson?.let(syncJson::parseToJsonElement), received.toolsJson?.let(syncJson::parseToJsonElement))
+        assertEquals(config.modelParameters, received.modelParameters)
+        val remotePrompt = b.settingsDao().getUserSetting("conversation_settings", session.uuid)!!
+        val decoded = RoomSyncStore(b, sb, user).decodedSetting(remotePrompt)!!
+        assertEquals(prompt, decoded.getValue("systemPrompt").jsonPrimitive.content)
+        assertEquals(id, decoded.getValue("modelId").jsonPrimitive.content)
+        assertNull(a.settingsDao().getValue("sync_rejected:user_settings:${old.uuid}"))
+        val wire = cloud.rows.values.joinToString()
+        assertFalse(wire.contains(sensitive)); assertFalse(wire.contains("private-query-value")); assertFalse(wire.contains("synchronization-test-token"))
+        cloud.rows.values.filter { it.entity == "user_settings" }.forEach { SyncContractSanitizer.validate(it.payload.getValue("value")) }
+        val pushes = cloud.pushes
+        sync(a, sa); sync(b, sb)
+        assertEquals(pushes, cloud.pushes)
+    }
+
+    @Test fun `旧云端快照不能覆盖待修复配置且未取到密钥不丢本机内容`() = runBlocking {
+        val a = device(); val cloud = FakeSyncApi(); val initialSecrets = secrets()
+        val api = object : SyncApi by cloud {
+            override suspend fun recoverAccountKey(epoch: Long, existingDek: String?) = AccountSyncKey(1, 0, java.util.Base64.getEncoder().encodeToString(dek))
+        }
+        val id = UUID.randomUUID().toString()
+        val initial = ApiConfig("https://example.org/v1", "old-key", "model", "OpenAI", id, "old-name").toEntity()
+        a.apiConfigDao().insertConfigs(listOf(initial))
+        suspend fun sync(secret: SyncSecretManager) {
+            val credentials = SyncCredentialSynchronizer(context, a, api, secret, user)
+            SyncEngine(api, RoomSyncStore(a, secret, user), SyncStateStore(a), beforePull = { credentials.captureLocal() }, afterPull = { credentials.recover() }).runOnce()
+        }
+        sync(initialSecrets)
+        val updated = initial.copy(name = "sk-local-new-value-12345678", key = "new-key")
+        a.apiConfigDao().insertConfigs(listOf(updated))
+        val old = a.settingsDao().getUserSetting("api_configs", id)!!
+        a.settingsDao().upsertUserSettings(listOf(old.copy(syncStatus = SyncStatus.LOCAL_ONLY)))
+        a.settingsDao().insertSetting(SystemSettingEntity("sync_rejected:user_settings:${old.uuid}", "CONTAINS_SECRET"))
+        a.settingsDao().deleteSetting(SyncStateStore.KEY_CURSOR)
+        val locked = secrets()
+        RoomSyncStore(a, locked, user).prepareForSync()
+        assertEquals(updated, a.apiConfigDao().getTextConfig(id))
+        val pending = RoomSyncStore(a, locked, user).pendingBatch()
+        assertFalse(pending.any { it.entity == SyncEntity.USER_SETTINGS && it.change.payload["key"]?.jsonPrimitive?.contentOrNull == id })
+        sync(locked)
+        assertEquals(updated, a.apiConfigDao().getTextConfig(id))
+        assertNull(a.settingsDao().getValue("sync_rejected:user_settings:${old.uuid}"))
+        val remote = cloud.rows.values.single { it.entity == "user_settings" && it.payload["key"]?.jsonPrimitive?.contentOrNull == id }
+        val restored = syncDecodeSettings(remote.payload.getValue("value"), "api_configs", id, locked, user, 0)!!.jsonObject
+        assertEquals(updated.name, restored.getValue("name").jsonPrimitive.content)
+        assertEquals(updated.key, restored.getValue("apiKey").jsonPrimitive.content)
+    }
+
+    @Test fun `配置树认证失败不改写且路径移位失败同值复用密文`() = runBlocking {
+        val secret = secrets()
+        secret.acceptAccountKey(user, AccountSyncKey(1, 0, java.util.Base64.getEncoder().encodeToString(dek)))
+        val local = syncJson.parseToJsonElement("""{"nested/~":["sk-synchronization-test-12345678",{"apiKey":"value"}]}""")
+        val wire = syncProtectSettings(local, null, "api_configs", "id", secret, user, 0)
+        SyncContractSanitizer.validate(wire)
+        assertEquals(local, syncDecodeSettings(wire, "api_configs", "id", secret, user, 0))
+        assertEquals(wire, syncProtectSettings(local, wire, "api_configs", "id", secret, user, 0))
+        assertNull(syncDecodeSettings(wire, "api_configs", "other", secret, user, 0))
+        val moved = buildJsonObject { put("moved", wire.jsonObject.getValue("nested/~")) }
+        assertNull(syncDecodeSettings(moved, "api_configs", "id", secret, user, 0))
+        val corrupted = syncJson.parseToJsonElement(wire.toString().replace("AES-256-GCM", "invalid"))
+        assertTrue(runCatching { syncProtectSettings(corrupted, null, "api_configs", "id", secret, user, 0) }.isFailure)
     }
 
     @Test fun `换账号移除旧密文和文件引用但保留本机配置`() = runBlocking {

@@ -2235,7 +2235,7 @@ internal class ToolLoopGuard {
         lastFingerprint = fingerprint
         return when {
             total > MAX_AGENT_CONSECUTIVE_TOOL_CALLS ->
-                "连续工具调用超过 $MAX_AGENT_CONSECUTIVE_TOOL_CALLS 次，已终止 Agent"
+                "本次 Agent 运行累计工具调用超过 $MAX_AGENT_CONSECUTIVE_TOOL_CALLS 次，已终止 Agent"
             identicalCount >= MAX_IDENTICAL_TOOL_CALLS ->
                 "同一工具和参数连续调用 $MAX_IDENTICAL_TOOL_CALLS 次，已终止 Agent"
             else -> null

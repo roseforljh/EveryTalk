@@ -41,6 +41,21 @@ class AgentModelTurnLimitTest {
     }
 
     @Test
+    fun `累计工具调用超过100次终止并使用准确文案`() {
+        val guard = ToolLoopGuard()
+        fun call(id: String) = AgentContentBlock.ToolCall(
+            id = id,
+            name = "exec",
+            arguments = buildJsonObject { put("command", "uname-$id") },
+        )
+        repeat(100) { index -> assertNull(guard.record(call("call-$index"))) }
+        assertEquals(
+            "本次 Agent 运行累计工具调用超过 100 次，已终止 Agent",
+            guard.record(call("call-101")),
+        )
+    }
+
+    @Test
     fun `工具指纹忽略Map插入顺序且系统指纹包含默认提示`() {
         val first = ChatRequest(
             messages = listOf(SimpleTextApiMessage(role = "user", content = "你好")),

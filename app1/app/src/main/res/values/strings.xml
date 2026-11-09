@@ -44,7 +44,7 @@
     <string name="subscription_unavailable_body">The %1$s plan will be available soon. You can preview its price and credits now.</string>
     <string name="feature_locked">Sign-in required</string>
     <string name="feature_login_required">This feature requires an account</string>
-    <string name="feature_login_required_description">Sign in to continue. Your local chats and model API keys stay on this device until you explicitly enable a cloud feature.</string>
+    <string name="feature_login_required_description">Sign in to continue and automatically sync chats, memories, and settings. API keys and other sensitive data are encrypted before syncing. Without sign-in, data stays on this device.</string>
     <string name="account_login_action">Sign in</string>
     <string name="account_switch_title">Sync account changed</string>
     <string name="account_switch_description">Local data was previously bound to another account. Choose how to handle it. The app will not upload local data to the new account automatically.</string>
@@ -440,6 +440,7 @@
     <string name="chat_no_available_model_configuration">No model configuration is available</string>
     <string name="chat_native_search_unavailable">The current model has no native web access. Configure an external search provider in Settings.</string>
     <string name="chat_loading_conversation">Loading conversation</string>
+    <string name="drawer_conversation_running">Generating response</string>
     <string name="chat_action_copy_full_text">Copy full text</string>
     <string name="chat_action_regenerate">Regenerate</string>
     <string name="chat_action_export_text">Export text</string>
@@ -498,7 +499,7 @@
     <string name="computer_progress_detail_host_key">Only the server fingerprint is read. Login credentials have not been sent.</string>
     <string name="computer_progress_detail_authenticating">Connecting directly over SSH from this device and verifying the login.</string>
     <string name="computer_progress_detail_inspecting">Reading system, Docker, sudo, SFTP, and terminal capabilities.</string>
-    <string name="computer_progress_detail_securing_connection">Credentials and the device-specific key stay in encrypted storage on this device.</string>
+    <string name="computer_progress_detail_securing_connection">Credentials and the device-specific key are stored encrypted on this device and synced encrypted after sign-in.</string>
     <string name="computer_progress_detail_preparing_container">Components are installed on your own VPS.</string>
     <string name="computer_progress_detail_preparing_docker">This can take several minutes when Docker is not installed.</string>
     <string name="computer_progress_detail_installing_helper">The Helper can only manage EveryTalk isolated environments.</string>
@@ -1491,7 +1492,7 @@
     <string name="mcp_oauth_manage_hint">Sign in again from Settings → MCP. Disable to pause tools, or remove this connection to delete the saved authorization.</string>
     <string name="mcp_action_edit">Edit connection</string>
     <string name="account_title">Account management</string>
-    <string name="account_local_sync_notice">After sign-in, account data syncs automatically. After sign-out, only local data remains; API keys and other local secrets are not uploaded automatically.</string>
+    <string name="account_local_sync_notice">Account data syncs automatically after sign-in, with API keys and other sensitive data encrypted before syncing. Signing out stops sync and keeps local data.</string>
     <string name="account_back">Back</string>
     <string name="account_welcome">Welcome to EveryTalk</string>
     <string name="account_login_subtitle">Sign in or sign up to continue your conversations</string>
@@ -1522,9 +1523,9 @@
     <string name="account_logout_notice">Sign out on this device? Your local chats and API configurations will be kept.</string>
     <string name="account_cancel">Cancel</string>
     <string name="account_privacy">Privacy policy</string>
-    <string name="account_local_data_notice">Signing in automatically merges local text chats, reasoning, memories, pinned items and groups with your account. Data is stored in Germany; users in mainland China will transfer this data across borders. API keys, voice keys, MCP settings, images, attachments, tool traces and image generation chats stay local. Continue without an account to keep data on this device.</string>
+    <string name="account_local_data_notice">Signing in automatically syncs chats, reasoning, memories, pinned items, groups, settings, images, and attachments with your account. Sensitive data, including API keys, voice keys, MCP and server credentials, is encrypted before syncing. Data is stored in Germany; users in mainland China transfer this data across borders. Without sign-in, data stays on this device.</string>
     <string name="privacy_account_title">EveryTalk accounts</string>
-    <string name="privacy_account_body">Account sign-in is optional and provided by Supabase Auth. Email sign-in sends your email address and verification code to the authentication service. Google and GitHub sign-in request basic identity information only, not Gmail, Drive or repository access. Supabase stores account identifiers, email, display name, linked identities and sign-in records. Custom avatars are uploaded to Supabase Storage and displayed through public URLs.\n\nWhen the sync server is configured, signing in automatically merges local text sessions, messages, reasoning, long term memories, pinned items and groups with your account. Local mode does not connect to EveryTalk servers. API keys, voice keys, MCP configuration, images, attachments, tool traces and image generation chats are excluded from account sync. Synced data is stored in Germany; users in mainland China transfer this data across borders. Encrypted server backups may remain for up to 7 days after data deletion. Server permissions and quotas are decided by the server.\n\nSession credentials are encrypted using Android Keystore. Signing out stops account sync and removes local account credentials while keeping local chats and API configurations. Uninstalling does not delete the account. Contact the maintainers through the project page to request account deletion; do not post verification codes or credentials publicly.</string>
+    <string name="privacy_account_body">Account sign-in is optional and provided by Supabase Auth. Email sign-in sends your email address and verification code to the authentication service. Google and GitHub sign-in request basic identity information only, not Gmail, Drive or repository access. Supabase stores account identifiers, email, display name, linked identities and sign-in records. Custom avatars are uploaded to Supabase Storage and displayed through public URLs.\n\nWhen the sync server is configured, signing in automatically merges local chats, messages, reasoning, memories, pinned items, groups, settings, images, and attachments with your account. Sensitive data, including API keys, voice keys, MCP and server credentials, is encrypted with the account key before syncing. Local mode does not connect to EveryTalk servers. Synced data is stored in Germany; users in mainland China transfer this data across borders. Encrypted server backups may remain for up to 7 days after data deletion. Server permissions and quotas are decided by the server.\n\nSession credentials are encrypted using Android Keystore. Signing out stops account sync and removes local account credentials while keeping local chats and API configurations. Uninstalling does not delete the account. Contact the maintainers through the project page to request account deletion; do not post verification codes or credentials publicly.</string>
 
     <string name="cloud_sync_unconfigured">Account data service is not configured in this version. Local data remains available.</string>
     <string name="cloud_sync_rejected_count">%1$d items could not be synchronized</string>
@@ -1545,14 +1546,15 @@
     <string name="cloud_sync_server_upgrade_required">The server needs an update and account key and file storage configuration. Sync will recover automatically; local data remains.</string>
     <string name="cloud_sync_credential_decryption_failed">The cloud ciphertext for this credential is damaged. The local key remains and other items will continue to synchronize.</string>
     <string name="cloud_sync_credential_storage_failed">This credential cannot currently be read from or written to encrypted local storage. Other items will continue to synchronize.</string>
-    <string name="cloud_sync_prompt_contains_secret">This prompt appears to contain a secret and was not synchronized.</string>
-    <string name="cloud_sync_config_contains_secret">This configuration appears to contain a secret and was not synchronized. The local configuration remains.</string>
+    <string name="cloud_sync_prompt_contains_secret">Sensitive data in this prompt could not be encrypted for sync. Local content is kept and sync will retry after the issue is fixed. No need to remove your keys.</string>
+    <string name="cloud_sync_config_contains_secret">Sensitive data in this configuration could not be encrypted for sync. Local settings are kept and sync will retry after the issue is fixed. No need to remove your keys.</string>
     <string name="cloud_sync_last_sync">Last synchronization: %1$s</string>
+    <string name="cloud_sync_last_attempt">Last sync attempt: %1$s (some items are still incomplete)</string>
     <string name="cloud_sync_never_synced">Last synchronization: never completed</string>
     <string name="cloud_sync_cloud_reset_paused">Upload paused after the cloud data was cleared. Local data remains.</string>
     <string name="cloud_sync_resume_upload">Upload local data again</string>
     <string name="cloud_sync_resume_title">Upload local data again?</string>
-    <string name="cloud_sync_resume_description">Local text conversations, reasoning, long-term memories, pinned items and groups will be merged into the current account again.</string>
+    <string name="cloud_sync_resume_description">Local chats, memories, settings, images, and attachments will be merged into the current account again. Sensitive data is encrypted before syncing.</string>
     <string name="cloud_sync_upload">Upload</string>
     <string name="cloud_sync_cancel">Cancel</string>
     <string name="cloud_sync_cloud_reset_question">Cloud data was cleared. Upload local data again?</string>

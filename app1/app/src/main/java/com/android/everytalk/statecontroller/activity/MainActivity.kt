@@ -339,6 +339,7 @@ class MainActivity : AppCompatActivity() {
                                         val accountState by appViewModel.accountManager.state.collectAsState()
                                         AppDrawerContent(
                                             listState = drawerListState,
+                                            runningConversationIds = appViewModel.runningConversationIds.collectAsState().value,
                                             accountAvatarUrl = accountState.user?.avatarUrl,
                                             accountName = accountState.user?.displayName,
                                             historicalConversations = if (isImageGenerationMode) appViewModel.imageGenerationHistoricalConversations.collectAsState().value else appViewModel.historicalConversations.collectAsState().value,

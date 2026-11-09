@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import com.android.everytalk.R
+import com.android.everytalk.ui.components.EveryTalkLoadingIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -58,6 +59,7 @@ internal fun DrawerConversationListItem(
     onDeleteTriggered: (Int) -> Unit,
     onTogglePin: (Int) -> Unit,
     isPinned: Boolean,
+    isRunning: Boolean,
     expandedItemIndex: Int?,
     onExpandItem: (index: Int, position: Offset) -> Unit,
     onCollapseMenu: () -> Unit,
@@ -195,8 +197,16 @@ internal fun DrawerConversationListItem(
                     style = MaterialTheme.typography.bodyLarge,
                     modifier = Modifier
                         .weight(1f)
-                        .padding(start = if (isActuallyActive) 0.dp else 32.dp, end = 48.dp)
+                        .padding(start = if (isActuallyActive) 0.dp else 32.dp, end = if (isRunning) 8.dp else 48.dp)
                 )
+                if (isRunning) {
+                    EveryTalkLoadingIndicator(
+                        size = 16.dp,
+                        strokeWidth = 2.dp,
+                        contentDescription = stringResource(R.string.drawer_conversation_running),
+                    )
+                    Spacer(Modifier.width(16.dp))
+                }
                 if (isPinned) {
                     Icon(
                         painter = painterResource(R.drawable.ic_pin),

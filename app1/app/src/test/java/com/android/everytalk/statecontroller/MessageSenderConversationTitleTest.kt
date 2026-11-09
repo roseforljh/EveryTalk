@@ -46,7 +46,7 @@ class MessageSenderConversationTitleTest {
         val userMessageIndex = sendBlock.indexOf("addOrReplaceRegeneratedUserMessage(")
         val loadingMessageIndex = sendBlock.indexOf("apiHandler.prepareStreamingAiMessage(")
         val preparationAwaitIndex = sendBlock.indexOf("computerPreparation.await()")
-        val historySaveIndex = sendBlock.indexOf("historyManager.saveCurrentChatToHistoryNow(")
+        val historySaveIndex = sendBlock.indexOf("historyManager.saveConversationSnapshotNow(")
 
         assertTrue("用户消息应在等待 Workspace 前显示", userMessageIndex in 0 until preparationAwaitIndex)
         assertTrue("Agent 加载状态应在等待 Workspace 前显示", loadingMessageIndex in 0 until preparationAwaitIndex)
@@ -56,13 +56,10 @@ class MessageSenderConversationTitleTest {
     @Test
     fun `Agent每次请求都在模型调用前同步保存可见消息`() {
         val source = messageSenderSendFlowSource()
-        val saveCondition = source
-            .substringBefore("historyManager.saveCurrentChatToHistoryNow(")
-            .substringAfterLast("if (")
-        val historySaveIndex = source.indexOf("historyManager.saveCurrentChatToHistoryNow(")
+        val historySaveIndex = source.indexOf("historyManager.saveConversationSnapshotNow(")
         val modelRequestIndex = source.indexOf("apiHandler.streamChatResponse(")
 
-        assertTrue("已有会话的 Agent 请求也必须同步保存 AI 占位", saveCondition.contains("isAgentEnabledForRequest"))
+        // 发送前无条件按原会话保存，已有会话的 Agent 请求也包含在内。
         assertTrue("可见消息必须先落库，随后才能启动模型请求", historySaveIndex in 0 until modelRequestIndex)
     }
 
@@ -72,14 +69,14 @@ class MessageSenderConversationTitleTest {
         val preparationBlock = source
             .substringAfter("val isNewImageChatFirstMessage")
             .substringBefore("val computerPreparationResult")
-        val cancelIndex = preparationBlock.indexOf("apiHandler.cancelCurrentApiJob(")
+        val cancelIndex = preparationBlock.indexOf("apiHandler.cancelTextRequestForReplacement(")
         val placeholderIndex = preparationBlock.indexOf("apiHandler.prepareStreamingAiMessage(")
         val afterPlaceholderBlock = source
             .substringAfter("val computerPreparationResult")
             .substringBefore("val messagesInChatUiSnapshot")
 
         assertTrue("必须在 Agent 占位登记当前任务前取消旧请求", cancelIndex in 0 until placeholderIndex)
-        assertFalse("Agent 占位登记当前任务后不能再次取消它", afterPlaceholderBlock.contains("apiHandler.cancelCurrentApiJob("))
+        assertFalse("Agent 占位登记当前任务后不能再次取消它", afterPlaceholderBlock.contains("apiHandler.cancelTextRequestForReplacement("))
     }
 
     private fun messageSenderSendFlowSource(): String {

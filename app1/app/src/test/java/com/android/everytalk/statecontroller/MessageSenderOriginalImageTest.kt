@@ -160,6 +160,7 @@ class MessageSenderOriginalImageTest {
                 isImageGeneration = any(),
                 onNewAiMessageAdded = any(),
                 afterUserMessageId = any(),
+                conversationId = any(),
                 contextUsageSnapshot = any(),
                 contextCompressionState = any(),
                 executionStatus = any(),

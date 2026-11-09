@@ -102,18 +102,7 @@ fun ChatScreen(
 
     val isRemoteCancellationPending by viewModel.isRemoteCancellationPending.collectAsState()
     val currentStreamingAiMessageId by viewModel.currentTextStreamingAiMessageId.collectAsState()
-    val isWebSearchEnabled by viewModel.isWebSearchEnabled.collectAsState()
     val isCodeExecutionEnabled by viewModel.isCodeExecutionEnabled.collectAsState()
-    val supportsNativeWebSearch by remember(selectedApiConfig) {
-        derivedStateOf { com.android.everytalk.data.network.WebSearchSupport.supportsNativeWebSearch(selectedApiConfig) }
-    }
-    val selectedExternalWebSearchProviderId by viewModel.selectedExternalWebSearchProviderId.collectAsState()
-    val canUseWebSearch by remember(selectedApiConfig, selectedExternalWebSearchProviderId) {
-        derivedStateOf {
-            supportsNativeWebSearch ||
-                viewModel.canUseSelectedExternalWebSearchProvider()
-        }
-    }
     val selectedMediaItems = viewModel.selectedMediaItems
     val isLoadingHistory by viewModel.isLoadingHistory.collectAsState()
     val historyLoadGeneration by viewModel.historyLoadGeneration.collectAsState()
@@ -715,15 +704,6 @@ fun ChatScreen(
                 onRemoveMediaItemAtIndex = { viewModel.removeMediaItemAtIndex(it) },
                 onClearMediaItems = { viewModel.clearMediaItems() },
                 isRemoteCancellationPending = isRemoteCancellationPending,
-                isWebSearchEnabled = isWebSearchEnabled,
-                isWebSearchAvailable = canUseWebSearch,
-                onToggleWebSearch = {
-                    if (canUseWebSearch) {
-                        viewModel.toggleWebSearchMode(!isWebSearchEnabled)
-                    } else {
-                        viewModel.showSnackbar(context.getString(R.string.chat_native_search_unavailable))
-                    }
-                },
                 isCodeExecutionEnabled = isCodeExecutionEnabled,
                 onToggleCodeExecution = {
                     viewModel.toggleCodeExecutionEnabled()

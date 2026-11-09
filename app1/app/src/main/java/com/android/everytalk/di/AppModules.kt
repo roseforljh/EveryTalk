@@ -24,6 +24,10 @@ val networkModule = module {
     
     single {
         HttpClient(OkHttp) {
+            engine {
+                // ponytail: 普通聊天长 SSE 先固定 HTTP/1.1，绕开 Android HTTP/2/TLS 长连接的记录损坏；恢复 HTTP/2 需有 A/B 证据。
+                config { protocols(listOf(okhttp3.Protocol.HTTP_1_1)) }
+            }
             install(ContentNegotiation) {
                 json(get())
             }

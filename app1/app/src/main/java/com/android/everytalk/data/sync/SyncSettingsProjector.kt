@@ -40,6 +40,7 @@ internal class SyncSettingsProjector(
     private val sessions = database.chatDao()
     private var currentKeyVersion: Long? = null
     private var existingValues: Map<Pair<String, String>, JsonObject> = emptyMap()
+    private var repairOnly = false
 
     /** 在用户删除时保留逐条墓碑；下次联网才发送，不依赖设备当时是否登录。 */
     suspend fun markDeleted(kind: String, key: String) {
@@ -70,7 +71,8 @@ internal class SyncSettingsProjector(
         }
     }
 
-    suspend fun refresh() = database.withTransaction {
+    suspend fun refresh(onlyRejected: Boolean = false) = database.withTransaction {
+        repairOnly = onlyRejected
         migrateLegacySettingKeys()
         existingValues = settings.getSyncableUserSettings().mapNotNull { row ->
             (runCatching { syncJson.parseToJsonElement(row.value) }.getOrNull() as? JsonObject)?.let { (row.kind to row.key) to it }
@@ -110,6 +112,10 @@ internal class SyncSettingsProjector(
             upsert("skills", it.skillId, JsonObject(value), it.updatedAt)
         }
         customVoiceModels(); voicePlatforms()
+        // 提示词、技能变量等可直接写同步表；同样必须经过通用保护，不能只处理业务表重建的配置。
+        for (row in settings.getAllUserSettings().filter { !it.deleted && it.kind in setOf("conversation_settings", "skill_variables") }) {
+            upsert(row.kind, row.key, syncJson.parseToJsonElement(row.value).jsonObject, row.updatedAt)
+        }
         database.computerDao().getAllSnapshot().forEach {
             // 删除服务器分两步完成：先写同步墓碑，再删除业务行。同步刷新可能正好
             // 发生在两步之间；旧业务行不能把刚写入的墓碑重新投影成活动配置。
@@ -248,8 +254,7 @@ internal class SyncSettingsProjector(
         // 自定义工具定义同样属于模型配置；可疑内容只能进密文，不能绕过配置扫描。
         if (config.toolsJson == null) put("toolDefinitions", JsonNull)
         else runCatching { syncJson.parseToJsonElement(config.toolsJson) }.getOrNull()?.let { definitions ->
-            if (runCatching { SyncContractSanitizer.validate(definitions) }.isSuccess) put("toolDefinitions", definitions)
-            else secretJson("toolDefinitions", definitions, "api_configs", config.id, "/toolDefinitions")
+            put("toolDefinitions", definitions)
         }
         put("modelParameters", buildJsonObject {
             put("protocolOverride", config.modelParameters.apiProtocolOverride?.name ?: ""); put("reasoningMode", config.modelParameters.reasoningMode.name)
@@ -261,7 +266,9 @@ internal class SyncSettingsProjector(
             put("inputModalities", config.modelParameters.inputModalities?.let { JsonArray(it.map(::JsonPrimitive)) } ?: JsonNull)
             put("outputModalities", config.modelParameters.outputModalities?.let { JsonArray(it.map(::JsonPrimitive)) } ?: JsonNull)
             put("supportsReasoning", config.modelParameters.supportsReasoning?.let(::JsonPrimitive) ?: JsonNull)
-            put("resolvedCapability", config.modelParameters.resolvedCapability?.let { syncJson.encodeToJsonElement(it) } ?: JsonNull)
+            put("resolvedCapability", config.modelParameters.resolvedCapability?.let {
+                SyncWireFieldNames.capabilityToWire(syncJson.encodeToJsonElement(it).jsonObject)
+            } ?: JsonNull)
             put("imageApiFormat", config.modelParameters.imageApiFormat?.let(::JsonPrimitive) ?: JsonNull)
             put("imageAspectRatio", config.modelParameters.imageAspectRatio?.let(::JsonPrimitive) ?: JsonNull)
             put("imageQuality", config.modelParameters.imageQuality?.let(::JsonPrimitive) ?: JsonNull)
@@ -316,10 +323,44 @@ internal class SyncSettingsProjector(
         syncStatus: String = SyncStatus.PENDING,
     ) {
         val old = settings.getUserSetting(kind, key)
+        if (repairOnly && (old == null || settings.getValue("sync_rejected:user_settings:${old.uuid}") == null)) return
+        fun hasLegacyEnvelope(element: JsonElement): Boolean = when (element) {
+            is JsonObject -> (syncLooksEncrypted(element) && !SyncContractSanitizer.isValidEnvelope(element)) || element.values.any(::hasLegacyEnvelope)
+            is JsonArray -> element.any(::hasLegacyEnvelope)
+            else -> false
+        }
+        if (background && old?.syncStatus == SyncStatus.LOCAL_ONLY &&
+            settings.getValue("sync_rejected:user_settings:${old.uuid}") == null &&
+            !hasLegacyEnvelope(syncJson.parseToJsonElement(old.value))) return
+        // 新设备已拉到密文但业务表尚未恢复，旧业务快照不能被当作用户修改反推覆盖云端。
+        if (old?.syncStatus == SyncStatus.SYNCED && syncDecodeSettings(syncJson.parseToJsonElement(old.value), kind, key,
+                secrets, userId, secretsEpoch) == null) return
         // 后台投影不能复活墓碑；只有业务表自带的修改时间晚于删除，才说明用户确实重新创建过。
         if (background && old?.deleted == true && (modifiedAt ?: 0L) <= old.updatedAt) return
+        val marker = old?.let { settings.getValue("sync_rejected:user_settings:${it.uuid}") }
+        // 修复的是旧的“不被接受”事实，成功 ACK 前仍保留错误；损坏密文不在可重试范围。
+        val retryableProtection = marker in setOf("CONTAINS_SECRET", "FORBIDDEN_FIELD_NAME", "INVALID_ENVELOPE", "ACCOUNT_KEY_UNAVAILABLE")
+        if (old?.syncStatus == SyncStatus.LOCAL_ONLY && !retryableProtection && marker in setOf("CREDENTIAL_DECRYPTION_FAILED", "SETTING_PAYLOAD_TOO_LARGE")) return
         val merged = preserveEncryptedLeaves(old?.value, value)
-        val raw = merged.toString()
+        // 所有配置共用同一保护出口；未解锁时保留本机记录，不能上传缺字段的“成功版本”。
+        val protected = if (userId == null) merged else try {
+            syncProtectSettings(merged, old?.value?.let(syncJson::parseToJsonElement), kind, key, secrets, userId, secretsEpoch).jsonObject
+                .also(SyncContractSanitizer::validate)
+        } catch (error: SyncSettingProtectionException) {
+            // 这里仍是本机数据；网络出口另做保护。先封存，防止首次 pull 用旧云端值覆盖本机。
+            val local = old ?: UserSettingEntity(kind, key, merged.toString(), updatedAt = modifiedAt ?: 0L)
+            settings.upsertUserSettings(listOf(local.copy(value = if (error.code == "ACCOUNT_KEY_UNAVAILABLE") merged.toString() else local.value, syncStatus = SyncStatus.LOCAL_ONLY)))
+            settings.insertSetting(com.android.everytalk.data.database.entities.SystemSettingEntity("sync_rejected:user_settings:${local.uuid}", error.code))
+            return
+        }
+        val raw = protected.toString()
+        val rejection = old?.let { settings.getValue("sync_rejected:user_settings:${it.uuid}") }
+        val fingerprint = "1:" + java.security.MessageDigest.getInstance("SHA-256").digest(raw.toByteArray()).joinToString("") { "%02x".format(it) }
+        // 旧拒绝只在本版本首次修复时重排一次；成功后由 applyPush 清错误，再次失败则保留提示。
+        val repairRetryKey = if (userId != null && rejection in setOf("CONTAINS_SECRET", "FORBIDDEN_FIELD_NAME", "INVALID_ENVELOPE", "ACCOUNT_KEY_UNAVAILABLE")) {
+            old?.let { "sync_setting_protection_retry:${it.uuid}" }?.takeIf { settings.getValue(it) != fingerprint }
+        } else null
+        val repaired = repairRetryKey != null
         fun withToggleDefaults(element: JsonElement): JsonElement =
             if (kind == "conversation_settings" && element is JsonObject) JsonObject(
                 mapOf("webSearchEnabled" to JsonPrimitive(false), "codeExecutionEnabled" to JsonPrimitive(false),
@@ -327,9 +368,10 @@ internal class SyncSettingsProjector(
             ) else element
         // 服务端会排序 JSON 属性，并可能把 0.0 写成 0；这些变化不代表用户修改了配置。
         // 同样，旧云端缺省的 false 和显式 false 等价，不能在拉取后制造“本地修改”。
-        if (old != null && !old.deleted && syncSettingValuesEqual(withToggleDefaults(syncJson.parseToJsonElement(old.value)), withToggleDefaults(merged))) return
+        if (!repaired && old != null && !old.deleted && syncSettingValuesEqual(withToggleDefaults(syncJson.parseToJsonElement(old.value)), withToggleDefaults(protected))) return
+        if (repairRetryKey != null) settings.insertSetting(com.android.everytalk.data.database.entities.SystemSettingEntity(repairRetryKey, fingerprint))
         settings.upsertUserSettings(listOf(UserSettingEntity(kind, key, raw, old?.uuid ?: localSyncUuid("user_settings", "$kind:$key"),
-            maxOf(modifiedAt ?: if (background) 0L else System.currentTimeMillis(), (old?.updatedAt ?: 0L) + 1), false, syncStatus)))
+            maxOf(modifiedAt ?: if (background) 0L else System.currentTimeMillis(), (old?.updatedAt ?: 0L) + 1), false, if (repaired || (old != null && raw != old.value)) SyncStatus.PENDING else syncStatus)))
     }
 
     /** 未解锁时保留已有密文，防止后台投影把已同步凭据清空。 */
@@ -358,37 +400,18 @@ internal class SyncSettingsProjector(
     }
 
     private fun kotlinx.serialization.json.JsonObjectBuilder.secretJson(name: String, value: JsonElement, kind: String, key: String, pointer: String) {
-        val account = userId ?: return
-        val version = currentKeyVersion ?: return
-        val previous = pointer.removePrefix("/").split('/').fold(existingValues[kind to key] as JsonElement?) { parent, part ->
-            when (parent) {
-                is JsonObject -> parent[part.replace("~1", "/").replace("~0", "~")]
-                is JsonArray -> part.toIntOrNull()?.let(parent::getOrNull)
-                else -> null
-            }
-        }
-        // 随机 nonce 只用于真实改动；每次轮询重加密会让配置永远 PENDING。
-        if (previous != null) {
-            val decrypted = secrets?.decryptField(account, kind, key, pointer, secretsEpoch, previous)
-            if (decrypted == null || (decrypted == value && SyncContractSanitizer.isValidEnvelope(previous))) {
-                // 损坏密文不能被尚未恢复的空字段覆盖；上层显示错误，保留本机已有 Key。
-                put(name, previous)
-                return
-            }
-            // 旧版漏序列化 $enc/alg；能认证但形状不合法时重新封装，不能永久沿用旧错误信封。
-        }
-        val encrypted = secrets?.encryptField(account, kind, key, pointer, version, secretsEpoch, value) ?: return
-        put(name, encrypted)
+        // 构造阶段仅保留本机值；统一出口负责加密、旧信封复用及单项失败隔离。
+        if (userId != null) put(name, value)
     }
 
     private fun parseHeaders(raw: String): JsonElement? = runCatching { syncJson.parseToJsonElement(raw) }.getOrNull()
 
-    /**
-     * 地址一旦带用户密码或疑似密钥查询参数，整条地址都不进入同步。
-     * 这样不会把凭据藏在 URL 的 query、userinfo 或未登记参数里。
-     */
+    /** 含凭据的合法地址完整保留，统一出口加密；不能用删除字段代替同步。 */
     private fun kotlinx.serialization.json.JsonObjectBuilder.syncEndpoint(name: String, raw: String) {
-        syncSafeEndpoint(raw)?.let { put(name, it) }
+        val uri = runCatching { URI(raw) }.getOrNull() ?: return
+        if (uri.scheme?.lowercase() in setOf("https", "http") && !uri.host.isNullOrBlank()) {
+            put(name, if (userId == null) syncSafeEndpoint(raw) ?: return else raw)
+        } else if (raw.isEmpty()) put(name, raw)
     }
 
     /**

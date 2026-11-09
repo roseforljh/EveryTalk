@@ -8,6 +8,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.android.everytalk.data.database.AppDatabase
 import com.android.everytalk.data.database.entities.PendingMessageEntity
 import com.android.everytalk.data.agent.AgentRunControlState
+import io.mockk.coEvery
+import io.mockk.spyk
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -402,6 +404,76 @@ class PendingMessageControllerTest {
     }
 
     @Test
+    fun `切换会话后并行派发且迟到回调只清理所属会话`() = runTest {
+        val dao = database.chatDao()
+        dao.enqueuePendingMessage(pending("a", "A", 1, "conversation-a"))
+        dao.enqueuePendingMessage(pending("b", "B", 2, "conversation-b"))
+        val conversationId = MutableStateFlow("conversation-a")
+        val isRunning = MutableStateFlow(false)
+        val dispatched = mutableListOf<String>()
+        val callbacks = mutableMapOf<String, Pair<() -> Unit, () -> Unit>>()
+        val aDispatch = CompletableDeferred<Unit>()
+        val bDispatch = CompletableDeferred<Unit>()
+        val controller = controller(
+            isRunning = isRunning,
+            currentConversationId = conversationId,
+            dispatch = { message, accepted, _, finished ->
+                dispatched += message.id
+                callbacks[message.id] = accepted to finished
+                if (message.id == "a") aDispatch.complete(Unit)
+                if (message.id == "b") bDispatch.complete(Unit)
+            },
+        )
+        controller.pendingMessages.first { it.singleOrNull()?.id == "a" }
+        aDispatch.await()
+
+        conversationId.value = "conversation-b"
+        controller.pendingMessages.first { it.singleOrNull()?.id == "b" }
+        bDispatch.await()
+        assertEquals(listOf("a", "b"), dispatched)
+        controller.runState.first { it == ChatRunState.Streaming }
+
+        callbacks.getValue("a").second.invoke()
+        advanceUntilIdle()
+        assertEquals(ChatRunState.Streaming, controller.runState.value)
+
+        callbacks.getValue("b").first.invoke()
+        callbacks.getValue("b").second.invoke()
+        controller.pendingMessages.first { it.isEmpty() }
+        controller.runState.first { it == ChatRunState.Idle }
+    }
+
+    @Test
+    fun `切页发生在claim之后会归还消息且不派发到新会话`() = runTest {
+        val dao = database.chatDao()
+        dao.enqueuePendingMessage(pending("a", "A", 1, "conversation-a"))
+        val conversationId = MutableStateFlow("conversation-a")
+        val claimEntered = CompletableDeferred<Unit>()
+        val dispatched = mutableListOf<String>()
+        // 在 claim 已落库、派发尚未登记之间切页，复现迟到的抢占结果。
+        val spyDao = spyk(dao)
+        coEvery { spyDao.claimPendingMessage(any()) } coAnswers {
+            val claimed = dao.claimPendingMessage(firstArg())
+            conversationId.value = "conversation-b"
+            claimEntered.complete(Unit)
+            claimed
+        }
+        controller(
+            isRunning = MutableStateFlow(false),
+            currentConversationId = conversationId,
+            chatDao = spyDao,
+            dispatch = { message, _, _, _ -> dispatched += message.id },
+        )
+        claimEntered.await()
+        dao.observePendingMessages("conversation-a").first { rows ->
+            rows.singleOrNull()?.status == PENDING_MESSAGE_STATUS_PENDING
+        }
+        advanceUntilIdle()
+
+        assertTrue(dispatched.isEmpty())
+    }
+
+    @Test
     fun `缺失控制记录不会伪造暂停也不会阻塞空闲队列`() = runTest {
         val dao = database.chatDao()
         dao.enqueuePendingMessage(pending("queued", "继续", 1))
@@ -429,11 +501,13 @@ class PendingMessageControllerTest {
         isAbortInProgress: MutableStateFlow<Boolean> = MutableStateFlow(false),
         agentRunControlState: kotlinx.coroutines.flow.StateFlow<AgentRunControlState?> =
             MutableStateFlow(null),
+        currentConversationId: MutableStateFlow<String> = MutableStateFlow("conversation"),
+        chatDao: com.android.everytalk.data.database.daos.ChatDao = database.chatDao(),
         dispatch: (PendingMessageEntity, () -> Unit, () -> Unit, () -> Unit) -> Unit,
     ) = PendingMessageController(
-        chatDao = database.chatDao(),
+        chatDao = chatDao,
         scope = backgroundScope,
-        currentConversationId = MutableStateFlow("conversation"),
+        currentConversationId = currentConversationId,
         isApiCalling = isRunning,
         isAbortInProgress = isAbortInProgress,
         agentRunControlState = agentRunControlState,
@@ -447,9 +521,14 @@ class PendingMessageControllerTest {
         dispatch = dispatch,
     )
 
-    private fun pending(id: String, content: String, createdAt: Long) = PendingMessageEntity(
+    private fun pending(
+        id: String,
+        content: String,
+        createdAt: Long,
+        conversationId: String = "conversation",
+    ) = PendingMessageEntity(
         id = id,
-        conversationId = "conversation",
+        conversationId = conversationId,
         content = content,
         composerText = content,
         createdAt = createdAt,

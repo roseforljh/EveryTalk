@@ -252,9 +252,7 @@ class ConfigManager(
         val selectedConfigFlow = if (isImageGen) stateHolder._selectedImageGenApiConfig else stateHolder._selectedApiConfig
 
         if (selectedConfigFlow.value?.id != config.id) {
-            if (!isImageGen) {
-                apiHandler.cancelCurrentApiJob("Switching selected config to ID ${config.id}")
-            }
+            // 配置只影响后续请求，已运行任务持有自己的配置快照。
             selectedConfigFlow.value = config
             
             if (isImageGen) {
@@ -265,28 +263,22 @@ class ConfigManager(
                 Log.d(TAG_CM, "Selected config in memory: ${safeApiConfigSummary(config)}")
             }
 
+            // 绑定目标必须在点击时固定；保存期间切会话不能把模型写到另一个会话。
+            val targetConversationId = if (isImageGen) {
+                stateHolder._currentImageGenerationConversationId.value
+            } else {
+                stateHolder._currentConversationId.value
+            }
             viewModelScope.launch {
                 persistenceManager.saveSelectedConfigIdentifier(config.id, isImageGen)
                 Log.d(TAG_CM, "Selected config ID (${config.id}) saved to persistence.")
-                
+
                 // 修复：将配置ID绑定到当前会话，确保切换会话时能恢复正确的模型
-                if (!isImageGen) {
-                    // 文本模式：绑定到当前文本会话ID
-                    val currentConversationId = stateHolder._currentConversationId.value
-                    val currentMapping = stateHolder.conversationApiConfigIds.updateAndGet { mapping ->
-                        mapping + (currentConversationId to config.id)
-                    }
-                    persistenceManager.saveConversationApiConfigIds(currentMapping)
-                    Log.d(TAG_CM, "Bound config ${config.id} to text conversation $currentConversationId")
-                } else {
-                    // 图像模式：绑定到当前图像会话ID
-                    val currentImageConversationId = stateHolder._currentImageGenerationConversationId.value
-                    val currentMapping = stateHolder.conversationApiConfigIds.updateAndGet { mapping ->
-                        mapping + (currentImageConversationId to config.id)
-                    }
-                    persistenceManager.saveConversationApiConfigIds(currentMapping)
-                    Log.d(TAG_CM, "Bound config ${config.id} to image conversation $currentImageConversationId")
+                val currentMapping = stateHolder.conversationApiConfigIds.updateAndGet { mapping ->
+                    mapping + (targetConversationId to config.id)
                 }
+                persistenceManager.saveConversationApiConfigIds(currentMapping)
+                Log.d(TAG_CM, "Bound config ${config.id} to conversation $targetConversationId (image=$isImageGen)")
             }
         }
         if (isImageGen) {

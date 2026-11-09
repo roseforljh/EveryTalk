@@ -35,7 +35,6 @@ class ImageFunctionPanelComposeTest {
             MaterialTheme {
                 if (format.value == "text") {
                     FunctionPanelContent(
-                        isWebSearchEnabled = false, isWebSearchAvailable = true, onToggleWebSearch = {},
                         isCodeExecutionEnabled = false, onToggleCodeExecution = {}, isGeminiChannel = false,
                         onToggleImagePanel = {}, onToggleMoreOptionsPanel = {}, hasContent = false,
                         onClearContent = {}, onDismiss = {},
@@ -82,7 +81,9 @@ class ImageFunctionPanelComposeTest {
 
         composeRule.runOnIdle { format.value = "text" }
         composeRule.onNodeWithText(quality).assertDoesNotExist()
-        composeRule.onNodeWithText(search).performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithText("MCP").performScrollTo().assertIsDisplayed()
+        // 文本模型的加号面板同样不再提供联网搜索和 MCP 手动开关。
+        composeRule.onNodeWithText(context.getString(R.string.chat_input_attachment)).performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText(search).assertDoesNotExist()
+        composeRule.onNodeWithText("MCP").assertDoesNotExist()
     }
 }

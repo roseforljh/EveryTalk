@@ -74,6 +74,39 @@ internal class RoomSyncStore(
             chat.markImageSessionsPending()
             chat.markImageMessagesPending()
         }
+        repairTruncatedReplies()
+    }
+
+    /**
+     * 旧版流式定稿竞态只把回复的开头写进正式消息，完整回复仍在 Agent 账本里。
+     * 账本正文/思考以已存正文为前缀且更长时，就地补全并重新整条上传；服务端只接受这种前缀增长。
+     */
+    private suspend fun repairTruncatedReplies() {
+        if (settings.getValue("sync_truncated_reply_repair_version") == "1") return
+        val agent = database.agentDao()
+        val store = com.android.everytalk.data.agent.AgentRunStore(agent)
+        for (run in agent.getCompletedRuns()) {
+            val old = chat.getStoredMessage(run.visibleAssistantMessageId, run.visibleAssistantMessageId) ?: continue
+            if (old.deleted || old.sender != Sender.AI || old.isIncomplete) continue
+            val trace = store.executionTrace(run.id)
+            val text = trace.filterIsInstance<ExecutionTraceEvent.Content>().joinToString("") { it.text }
+            val reasoning = trace.filterIsInstance<ExecutionTraceEvent.Reasoning>().joinToString("") { it.text }.ifBlank { null }
+            val oldReasoning = old.reasoning.orEmpty()
+            val grows = text.startsWith(old.text) && (reasoning ?: oldReasoning).startsWith(oldReasoning)
+            if (!grows || (text.length == old.text.length && (reasoning?.length ?: 0) <= oldReasoning.length)) continue
+            val repaired = old.toMessage().copy(
+                text = text, reasoning = reasoning ?: old.reasoning, executionTrace = trace,
+                parts = listOf(com.android.everytalk.ui.components.MarkdownPart.Text(id = "text_0", content = text)),
+            ).toEntity(old.sessionId)
+            chat.writeMessages(listOf(repaired.copy(
+                uuid = old.uuid, updatedAt = maxOf(System.currentTimeMillis(), old.updatedAt + 1), everSynced = old.everSynced,
+                syncStatus = if (old.syncStatus == SyncStatus.LOCAL_ONLY && settings.getValue("sync_rejected:messages:${old.uuid}") == null) old.syncStatus else SyncStatus.PENDING,
+            )))
+            // 服务器已有截断版本：清掉“远端已拥有字段”的记录，让下一轮整条发送正文完成修复。
+            settings.deleteSetting(remoteMessageFieldsKey(old.uuid))
+            settings.deleteSetting("sync_rejected:messages:${old.uuid}")
+        }
+        settings.insertSetting(SystemSettingEntity("sync_truncated_reply_repair_version", "1"))
     }
 
     private suspend fun preparePullPage() {
@@ -98,8 +131,13 @@ internal class RoomSyncStore(
         SyncLocalChanges.notifyChanged()
     }
 
+    /** 原 wire 保留在同步表；任何字段未解锁时不把半行数据写入业务表。 */
+    suspend fun decodedSetting(setting: UserSettingEntity): JsonObject? =
+        syncDecodeSettings(syncJson.parseToJsonElement(setting.value), setting.kind, setting.key, secrets, userId,
+            state.readSecretsEpoch().coerceAtLeast(0L)) as? JsonObject
+
     private suspend fun restoreSetting(setting: UserSettingEntity) {
-        val value = runCatching { syncJson.parseToJsonElement(setting.value).jsonObject }.getOrNull() ?: return
+        val value = decodedSetting(setting) ?: return
         when (setting.kind) {
             "selected_models" -> {
                 val localKey = when (setting.key) {
@@ -242,7 +280,13 @@ internal class RoomSyncStore(
                 inputModalities = if ("inputModalities" in params) (params["inputModalities"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }?.toSet() else old?.modelParameters?.inputModalities,
                 outputModalities = if ("outputModalities" in params) (params["outputModalities"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }?.toSet() else old?.modelParameters?.outputModalities,
                 supportsReasoning = if ("supportsReasoning" in params) (params["supportsReasoning"] as? JsonPrimitive)?.booleanOrNull else old?.modelParameters?.supportsReasoning,
-                resolvedCapability = if ("resolvedCapability" in params) (params["resolvedCapability"] as? JsonObject)?.let { runCatching { syncJson.decodeFromJsonElement<com.android.everytalk.data.DataClass.ResolvedModelCapability>(it) }.getOrNull() } else old?.modelParameters?.resolvedCapability,
+                resolvedCapability = if ("resolvedCapability" in params) (params["resolvedCapability"] as? JsonObject)?.let {
+                    runCatching {
+                        syncJson.decodeFromJsonElement<com.android.everytalk.data.DataClass.ResolvedModelCapability>(
+                            SyncWireFieldNames.capabilityFromWire(it),
+                        )
+                    }.getOrNull()
+                } else old?.modelParameters?.resolvedCapability,
                 imageApiFormat = if ("imageApiFormat" in params) (params["imageApiFormat"] as? JsonPrimitive)?.contentOrNull else old?.modelParameters?.imageApiFormat,
                 imageAspectRatio = if ("imageAspectRatio" in params) (params["imageAspectRatio"] as? JsonPrimitive)?.contentOrNull else old?.modelParameters?.imageAspectRatio,
                 imageQuality = if ("imageQuality" in params) (params["imageQuality"] as? JsonPrimitive)?.contentOrNull else old?.modelParameters?.imageQuality,
@@ -300,7 +344,9 @@ internal class RoomSyncStore(
         // 未知传输类型不能写入后让 Room 观察者在 valueOf 处永久退出。
         val transport = value["transport"]?.jsonPrimitive?.contentOrNull?.takeIf { it in setOf("SSE", "HTTP") }
             ?: old?.transportType ?: "SSE"
-        val endpoint = value["endpoint"]?.jsonPrimitive?.contentOrNull?.let(::syncSafeEndpoint) ?: old?.url.orEmpty()
+        val endpoint = value["endpoint"]?.jsonPrimitive?.contentOrNull?.takeIf { raw ->
+            raw.isEmpty() || runCatching { java.net.URI(raw).let { it.scheme?.lowercase() in setOf("http", "https") && !it.host.isNullOrBlank() } }.getOrDefault(false)
+        } ?: old?.url.orEmpty()
         database.mcpConfigDao().insertConfig(McpServerConfigEntity(localId, value["name"]?.jsonPrimitive?.contentOrNull ?: old?.name.orEmpty(), endpoint, transport, value["enabled"]?.jsonPrimitive?.booleanOrNull ?: old?.enabled ?: true, headers))
     }
 
@@ -369,8 +415,17 @@ internal class RoomSyncStore(
                 sourceSessionUuid(it.sourceConversationId), sourceMessageUuid(it.sourceMessageId)),
                 SyncEntity.MEMORIES, it.id, it.clientModifiedAt)
         }
-        if (snapshots.size < maxItems) settings.getPendingUserSettings(maxItems - snapshots.size).forEach {
-            snapshots += PendingChangeSnapshot(SyncPayloadMapper.userSetting(it), SyncEntity.USER_SETTINGS, it.uuid, it.updatedAt)
+        if (snapshots.size < maxItems) settings.getPendingUserSettings(maxItems - snapshots.size).forEach { row ->
+            if (!row.deleted && row.kind != "crypto_keys") {
+                try { SyncContractSanitizer.validate(syncJson.parseToJsonElement(row.value)) }
+                catch (_: IllegalArgumentException) {
+                    settings.markUserSettingRejectedIfVersion(row.uuid, row.updatedAt)
+                    settings.insertSetting(SystemSettingEntity("sync_rejected:user_settings:${row.uuid}", "CONTAINS_SECRET"))
+                    advancedPendingQueue = true
+                    return@forEach
+                }
+            }
+            snapshots += PendingChangeSnapshot(SyncPayloadMapper.userSetting(row), SyncEntity.USER_SETTINGS, row.uuid, row.updatedAt)
         }
         if (snapshots.size < maxItems) attachments.getPending(maxItems - snapshots.size).forEach {
             snapshots += PendingChangeSnapshot(attachmentChange(it), SyncEntity.ATTACHMENTS, it.id, it.updatedAt)
@@ -682,7 +737,11 @@ internal class RoomSyncStore(
         } else {
             // 补充合并只填缺失字段。旧版留下的云端空白占位允许用服务器正文补齐，
             // 但不能覆盖本机原件、待上传编辑或已恢复的完整归档。
-            val supplemented = old.copy(
+            // 服务器只允许“截断回复补全”这一种正文变化：远端正文以本机已同步正文为前缀且更长时采用远端。
+            val extended = old.syncStatus == SyncStatus.SYNCED && old.text.isNotEmpty() && message.sender == old.sender &&
+                message.timestamp == old.timestamp && message.text.length > old.text.length && message.text.startsWith(old.text) &&
+                message.reasoning.orEmpty().startsWith(old.reasoning.orEmpty())
+            val base = old.copy(
                 text = if (old.id.startsWith("cloud:") && old.syncStatus == SyncStatus.SYNCED && old.text.isEmpty() &&
                     settings.getValue("sync_resource_restored:${old.uuid}") == null) message.text else old.text,
                 reasoning = old.reasoning ?: message.reasoning,
@@ -694,6 +753,11 @@ internal class RoomSyncStore(
                 contentParts = if (old.contentParts.any { it is MessageContentPart.SkillReference }) old.contentParts
                     else message.contentParts.ifEmpty { old.contentParts },
             )
+            val supplemented = if (extended) base.copy(
+                text = message.text, reasoning = message.reasoning ?: old.reasoning,
+                executionTrace = message.executionTrace.ifEmpty { old.executionTrace },
+                parts = listOf(com.android.everytalk.ui.components.MarkdownPart.Text(id = "text_0", content = message.text)),
+            ) else base
             if (supplemented != old) chat.writeMessages(listOf(supplemented.toMessage().toEntity(old.sessionId).copy(
                 uuid = old.uuid, updatedAt = old.updatedAt, deleted = old.deleted,
                 syncStatus = old.syncStatus, everSynced = old.everSynced,
@@ -752,9 +816,18 @@ internal class RoomSyncStore(
             settings.upsertUserSettings(listOf(old.copy(uuid = record.id)))
             return
         }
-        if (old?.syncStatus == SyncStatus.PENDING && old.updatedAt > version) {
-            // 内容保留本地较新版本，但始终采用服务器逻辑键的 canonical id。
-            settings.upsertUserSettings(listOf(old.copy(uuid = record.id)))
+        val localRejection = old?.let { settings.getValue("sync_rejected:user_settings:${it.uuid}") }
+        val protectedLocal = !record.deleted && old?.deleted == false && old.syncStatus == SyncStatus.LOCAL_ONLY && localRejection in setOf(
+            "CONTAINS_SECRET", "FORBIDDEN_FIELD_NAME", "INVALID_ENVELOPE", "ACCOUNT_KEY_UNAVAILABLE", "CREDENTIAL_DECRYPTION_FAILED")
+        val local = old
+        if (local != null && (protectedLocal || (local.syncStatus == SyncStatus.PENDING && local.updatedAt > version))) {
+            // 等账号钥恢复后先修复本机内容；旧云端记录不能抢先覆盖待救的配置。
+            settings.upsertUserSettings(listOf(local.copy(uuid = record.id, updatedAt = if (protectedLocal) maxOf(local.updatedAt, version + 1) else local.updatedAt)))
+            if (local.uuid != record.id) localRejection?.let { code ->
+                // canonical UUID 归并后拒绝标记必须跟着走，否则待修复保护会丢失。
+                settings.insertSetting(SystemSettingEntity("sync_rejected:user_settings:${record.id}", code))
+                settings.deleteSetting("sync_rejected:user_settings:${local.uuid}")
+            }
             return
         }
         val value = if (record.deleted) "{}" else requireNotNull(record.payload["value"]).toString()
@@ -832,7 +905,7 @@ internal class RoomSyncStore(
             else ConversationGroupEntity(setting.key, ids)
         }
         val grouped = synced.filter { it.kind == "group_members" }.mapNotNull { setting ->
-            val value = runCatching { syncJson.parseToJsonElement(setting.value).jsonObject }.getOrNull() ?: return@mapNotNull null
+            val value = decodedSetting(setting) ?: return@mapNotNull null
             val conversationUuid = value["conversationId"]?.jsonPrimitive?.content ?: return@mapNotNull null
             val localId = chat.getSessionByUuid(conversationUuid)?.takeIf { !it.deleted }?.id ?: return@mapNotNull null
             setting.key.substringBeforeLast('.').let { encoded ->

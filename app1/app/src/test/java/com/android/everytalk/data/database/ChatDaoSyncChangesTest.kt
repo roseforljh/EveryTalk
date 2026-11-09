@@ -63,6 +63,25 @@ class ChatDaoSyncChangesTest {
         assertTrue(dao.getPendingSyncMessages().isEmpty())
     }
 
+    @Test fun `旧页面整页保存不删除同步后到达的消息只删页面见过又移除的`() = runBlocking {
+        save(listOf(question, answer)); syncAll()
+        // 另一台设备追加的消息经同步写入，本页面从未见过它。
+        val remote = question.copy(id = "cloud:remote", text = "另一台设备", timestamp = 5)
+        dao.saveSessionWithMessages(session, listOf(question, answer, remote).map { it.toEntity(session.id) }, removeMissingMessages = false)
+        // 页面重答移除了 answer，再用旧快照整页保存。
+        dao.saveSessionWithMessages(session, listOf(question.toEntity(session.id)), removableMessageIds = setOf(question.id, answer.id))
+        assertNotNull(dao.getMessage(session.id, remote.id))
+        assertNull(dao.getMessage(session.id, answer.id))
+    }
+
+    @Test fun `整表保存只采用界面改动的键其余保留同步新值`() {
+        val base = mapOf("a" to "旧", "b" to "旧", "c" to "旧")
+        val edited = mapOf("a" to "用户改", "b" to "旧")
+        val stored = mapOf("a" to "旧", "b" to "同步新", "c" to "旧", "d" to "同步新增")
+        assertEquals(mapOf("a" to "用户改", "b" to "同步新", "d" to "同步新增"), mergeEditedEntries(base, edited, stored))
+        assertEquals(edited, mergeEditedEntries(null, edited, stored))
+    }
+
     @Test fun `debug改同步字段报错release跳过该条仍保存其它合法变更`() = runBlocking {
         save(listOf(question, answer)); syncAll()
         val changed = answer.copy(text = "禁止覆盖")

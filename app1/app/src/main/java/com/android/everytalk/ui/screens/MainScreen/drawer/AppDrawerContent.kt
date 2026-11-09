@@ -93,6 +93,7 @@ fun AppDrawerContent(
     accountAvatarUrl: String? = null,
     accountName: String? = null,
     listState: LazyListState = rememberLazyListState(),
+    runningConversationIds: Set<String> = emptySet(),
 ) {
     val selectedSet = remember { mutableStateListOf<Int>() }
     var showDeleteConfirm by remember { mutableStateOf(false) }
@@ -182,6 +183,7 @@ fun AppDrawerContent(
                     onTogglePin(index)
                 },
                 isPinned = isPinned,
+                isRunning = itemData.stableId in runningConversationIds,
                 expandedItemIndex = expandedItemIndex,
                 onExpandItem = { index, position ->
                     val newIndex = if (expandedItemIndex == index) null else index

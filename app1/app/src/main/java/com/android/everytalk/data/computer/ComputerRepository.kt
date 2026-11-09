@@ -228,6 +228,7 @@ class ComputerRepository(
             authKind = request.credential.kind,
             credentialState = ComputerCredentialState.ORIGINAL_ENCRYPTED,
             runMode = ComputerRunMode.DIRECT,
+            permissionMode = ComputerPermissionMode.FULL,
             status = ComputerStatus.AUTHENTICATING,
             createdAt = now,
             updatedAt = now,

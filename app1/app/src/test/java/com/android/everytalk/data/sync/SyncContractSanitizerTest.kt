@@ -1,6 +1,7 @@
 package com.android.everytalk.data.sync
 
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -39,6 +40,13 @@ class SyncContractSanitizerTest {
         assertEquals("contextLimit", SyncWireFieldNames.fromLocal("maxContextTokens"))
         assertEquals("maxTokens", SyncWireFieldNames.toLocal("outputLimit"))
         assertEquals("maxContextTokens", SyncWireFieldNames.toLocal("contextLimit"))
+    }
+
+    @Test fun `模型能力字段改名后通过合同扫描并可逆`() {
+        val local = syncJson.parseToJsonElement("""{"contextWindowTokens":128000,"maxInputTokens":120000,"maxOutputTokens":8192,"modelId":"m"}""").jsonObject
+        val wire = SyncWireFieldNames.capabilityToWire(local)
+        SyncContractSanitizer.validate(wire)
+        assertEquals(local, SyncWireFieldNames.capabilityFromWire(wire))
     }
 
     @Test fun `敏感字段只允许完整合法信封且不能用伪造信封绕过扫描`() {

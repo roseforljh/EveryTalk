@@ -32,7 +32,9 @@ sealed interface ChatListItem {
     data class UserMessage(
         val messageId: String,
         val text: String,
-        val attachments: List<com.android.everytalk.models.SelectedMediaItem>
+        val attachments: List<com.android.everytalk.models.SelectedMediaItem>,
+        /** 投影时的消息快照，避免 LazyColumn 渲染时再次读取已切换的实时列表。 */
+        val message: Message? = null,
     ) : ChatListItem {
         override val stableId: String = messageId
     }

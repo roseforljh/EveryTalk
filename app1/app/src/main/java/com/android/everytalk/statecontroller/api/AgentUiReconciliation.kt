@@ -18,8 +18,9 @@ internal fun ViewModelStateHolder.reconcileAgentRun(
     hasActiveJob: Boolean,
 ): Boolean {
     if (_currentConversationId.value != run.sessionId) return false
-    val index = messages.indexOfFirst { it.id == run.visibleAssistantMessageId }
-    if (index < 0 || messages[index] != baseline) return false
+    val targetMessages = textMessagesForConversation(run.sessionId)
+    val index = targetMessages.indexOfFirst { it.id == run.visibleAssistantMessageId }
+    if (index < 0 || targetMessages[index] != baseline) return false
     val status = runCatching { AgentRunStatus.valueOf(run.status) }.getOrNull() ?: return false
     if (hasActiveJob && isActiveAgentUiStatus(status)) {
         attachTextAgentUi(run.visibleAssistantMessageId)
@@ -60,7 +61,7 @@ internal fun ViewModelStateHolder.reconcileAgentRun(
     val reasoning = if (hasTranscript) {
         trace.filterIsInstance<ExecutionTraceEvent.Reasoning>().joinToString("") { it.text }.takeIf(String::isNotBlank)
     } else baseline.reasoning
-    messages[index] = baseline.copy(
+    targetMessages[index] = baseline.copy(
         text = text,
         reasoning = reasoning,
         parts = if (hasTranscript) {

@@ -37,7 +37,8 @@ internal class ApiHandlerResourceController(
         
         // 识别需要清理的处理器（不在当前消息列表中的）
         val inactiveProcessorIds = messageProcessorMap.keys.filter { id ->
-            !currentMessageIds.contains(id) && id != currentStreamingId
+            !currentMessageIds.contains(id) && id != currentStreamingId &&
+                id !in stateHolder.textApiMessageIds.values && id !in stateHolder.imageApiMessageIds.values
         }
         
         logger.debug("Current active message count: ${currentMessageIds.size}")
@@ -57,12 +58,14 @@ internal class ApiHandlerResourceController(
             generatedImageSourceFingerprints.remove(messageId)
         }
         
-        // 清理已处理的消息ID集合
-        val processedIdsBeforeCleanup = processedMessageIds.size
-        processedMessageIds.clear()
-        
+        // 只清理不再被任何会话/任务持有的幂等标记，后台任务仍需保留去重状态。
+        val preservedMessageIds = currentMessageIds + setOfNotNull(currentStreamingId) +
+            stateHolder.textApiMessageIds.values + stateHolder.imageApiMessageIds.values
+        val inactiveProcessedIds = processedMessageIds.filterNot { it in preservedMessageIds }
+        inactiveProcessedIds.forEach(processedMessageIds::remove)
+
         logger.debug("Removed $removedCount inactive message processors")
-        logger.debug("Cleared $processedIdsBeforeCleanup processed message IDs")
+        logger.debug("Removed ${inactiveProcessedIds.size} inactive processed message IDs")
         logger.debug("Remaining active processors: ${messageProcessorMap.size}")
         logger.debug("Active processor IDs: ${messageProcessorMap.keys}")
         
@@ -92,7 +95,8 @@ internal class ApiHandlerResourceController(
         
         // 识别需要清理的处理器（不在当前消息列表中的）
         val inactiveProcessorIds = messageProcessorMap.keys.filter { id ->
-            !currentMessageIds.contains(id) && id != currentStreamingId
+            !currentMessageIds.contains(id) && id != currentStreamingId &&
+                id !in stateHolder.textApiMessageIds.values && id !in stateHolder.imageApiMessageIds.values
         }
         
         logger.debug("Current active image message count: ${currentMessageIds.size}")
@@ -112,12 +116,14 @@ internal class ApiHandlerResourceController(
             generatedImageSourceFingerprints.remove(messageId)
         }
         
-        // 清理已处理的消息ID集合
-        val processedIdsBeforeCleanup = processedMessageIds.size
-        processedMessageIds.clear()
-        
+        // 只清理不再被任何会话/任务持有的幂等标记，后台任务仍需保留去重状态。
+        val preservedMessageIds = currentMessageIds + setOfNotNull(currentStreamingId) +
+            stateHolder.textApiMessageIds.values + stateHolder.imageApiMessageIds.values
+        val inactiveProcessedIds = processedMessageIds.filterNot { it in preservedMessageIds }
+        inactiveProcessedIds.forEach(processedMessageIds::remove)
+
         logger.debug("Removed $removedCount inactive image message processors")
-        logger.debug("Cleared $processedIdsBeforeCleanup processed message IDs")
+        logger.debug("Removed ${inactiveProcessedIds.size} inactive processed message IDs")
         logger.debug("Remaining active processors: ${messageProcessorMap.size}")
         logger.debug("Active processor IDs: ${messageProcessorMap.keys}")
         
@@ -182,8 +188,9 @@ internal class ApiHandlerResourceController(
             val currentTextStreamingId = stateHolder._currentTextStreamingAiMessageId.value
             val currentImageStreamingId = stateHolder._currentImageStreamingAiMessageId.value
             
-            val allActiveIds = activeTextMessageIds + activeImageMessageIds + 
-                listOfNotNull(currentTextStreamingId, currentImageStreamingId)
+            val allActiveIds = activeTextMessageIds + activeImageMessageIds +
+                listOfNotNull(currentTextStreamingId, currentImageStreamingId) +
+                stateHolder.textApiMessageIds.values + stateHolder.imageApiMessageIds.values
             
             // 清理所有不活跃的处理器
             val inactiveProcessorIds = messageProcessorMap.keys.filter { id ->
@@ -203,12 +210,13 @@ internal class ApiHandlerResourceController(
             }
             
             // 清理已处理的消息ID集合
-            processedMessageIds.clear()
+            val inactiveProcessedIds = processedMessageIds.filterNot { it in allActiveIds }
+            inactiveProcessedIds.forEach(processedMessageIds::remove)
             
             logger.debug("Memory pressure cleanup complete:")
             logger.debug("  - Removed $removedCount inactive processors")
             logger.debug("  - Remaining processors: ${messageProcessorMap.size}")
-            logger.debug("  - Cleared processed message IDs")
+            logger.debug("  - Removed ${inactiveProcessedIds.size} inactive processed message IDs")
             logger.debug("  - Cleaned up old conversation parameters")
             logger.debug("=== MEMORY PRESSURE CLEANUP END ===")
             

@@ -212,7 +212,7 @@ data class Computer(
     val bootstrapVersion: String? = null,
     val sandboxImage: String? = null,
     val allowPrivateNetwork: Boolean = false,
-    val permissionMode: ComputerPermissionMode = ComputerPermissionMode.MANUAL,
+    val permissionMode: ComputerPermissionMode = ComputerPermissionMode.FULL,
     val lastConnectedAt: Long? = null,
     val lastErrorCode: String? = null,
     val createdAt: Long = System.currentTimeMillis(),

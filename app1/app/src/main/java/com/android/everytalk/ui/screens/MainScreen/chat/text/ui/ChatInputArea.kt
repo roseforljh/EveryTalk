@@ -183,9 +183,6 @@ fun ChatInputArea(
     onRemoveMediaItemAtIndex: (Int) -> Unit,
     onClearMediaItems: () -> Unit,
     isRemoteCancellationPending: Boolean = false,
-    isWebSearchEnabled: Boolean,
-    isWebSearchAvailable: Boolean,
-    onToggleWebSearch: () -> Unit,
     isCodeExecutionEnabled: Boolean = false,
     onToggleCodeExecution: () -> Unit = {},
     onPauseStreaming: (String?) -> Unit,
@@ -1109,14 +1106,8 @@ fun ChatInputArea(
                 val isGeminiChannel = selectedApiConfig?.let { config ->
                     com.android.everytalk.data.network.WebSearchSupport.isGeminiNativeSearch(config)
                 } == true
-                val supportsNativeWebSearch = selectedApiConfig?.let { config ->
-                    com.android.everytalk.data.network.WebSearchSupport.supportsNativeWebSearch(config)
-                } == true
-                val effectiveWebSearchAvailable = isWebSearchAvailable || supportsNativeWebSearch
                 val activeTagCount =
-                    (if (isWebSearchEnabled) 1 else 0) +
-                        (if (isMcpEnabled) 1 else 0) +
-                        (if (isAgentEnabled) 1 else 0) +
+                    (if (isAgentEnabled) 1 else 0) +
                         (if (!isAgentEnabled && currentAgentResourceState != null) 1 else 0)
                 val hasActiveTags = !isImageModel && activeTagCount > 0
 
@@ -1349,9 +1340,6 @@ fun ChatInputArea(
                                         parameterKeys = imageFields,
                                     )
                                 } else FunctionPanelContent(
-                                    isWebSearchEnabled = isWebSearchEnabled,
-                                    isWebSearchAvailable = effectiveWebSearchAvailable,
-                                    onToggleWebSearch = onToggleWebSearch,
                                     isCodeExecutionEnabled = isCodeExecutionEnabled,
                                     onToggleCodeExecution = onToggleCodeExecution,
                                     isGeminiChannel = isGeminiChannel,
@@ -1371,8 +1359,6 @@ fun ChatInputArea(
                                         lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
                                         showFunctionPanel = false
                                     },
-                                    isMcpEnabled = isMcpEnabled,
-                                    onToggleMcp = { viewModel.setMcpEnabledForNextRequest(!isMcpEnabled) },
                                     isAgentEnabled = isAgentEnabled,
                                     isAgentPreparing = isAgentPreparing,
                                     onToggleAgent = ::toggleAgent,
@@ -1577,27 +1563,6 @@ fun ChatInputArea(
                                             },
                                             verticalArrangement = Arrangement.spacedBy(2.dp),
                                         ) {
-                                            // 账号同步的是用户选择；缺本机 Key 时仍显示选择，发送前继续校验凭据。
-                                            if (isWebSearchEnabled) {
-                                                ActiveFunctionTag(
-                                                    iconRes = R.drawable.ic_globe,
-                                                    label = stringResource(if (effectiveWebSearchAvailable) R.string.chat_input_search_tag else R.string.chat_input_search_tag_unconfigured),
-                                                    tint = Color(0xFF66B5FF),
-                                                    lightBackground = Color(0xFFDDEEFF),
-                                                    closeContentDescription = stringResource(R.string.chat_input_close_web_search),
-                                                    onClick = onToggleWebSearch,
-                                                )
-                                            }
-                                            if (isMcpEnabled) {
-                                                ActiveFunctionTag(
-                                                    iconRes = R.drawable.ic_hammer,
-                                                    label = stringResource(R.string.chat_input_mcp),
-                                                    tint = ChatMcpColor,
-                                                    lightBackground = Color(0xFFFFECE5),
-                                                    closeContentDescription = stringResource(R.string.chat_input_close_mcp),
-                                                    onClick = { viewModel.setMcpEnabledForNextRequest(false) },
-                                                )
-                                            }
                                             if (isAgentEnabled) {
                                                 ActiveFunctionTag(
                                                     iconRes = R.drawable.ic_gpt_terminal,
@@ -1644,13 +1609,7 @@ fun ChatInputArea(
                                     Box(modifier = Modifier.weight(1f)) {
                                         if (localText.isEmpty()) {
                                             Text(
-                                                stringResource(
-                                                    if (isWebSearchEnabled && effectiveWebSearchAvailable) {
-                                                        R.string.chat_input_search_web_hint
-                                                    } else {
-                                                        R.string.chat_input_reply_hint
-                                                    }
-                                                ),
+                                                stringResource(R.string.chat_input_reply_hint),
                                                 style = MaterialTheme.typography.bodyLarge,
                                                 color = if (isDarkTheme) Color(0xFFAFAFAF) else Color(0xFF8F8F8F)
                                             )

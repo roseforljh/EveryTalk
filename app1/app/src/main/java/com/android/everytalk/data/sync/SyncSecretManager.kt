@@ -9,7 +9,7 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
-import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.*
 
 /**
  * 管理账号自动恢复的 DEK 和本机 Keystore 缓存。
@@ -179,5 +179,112 @@ internal class SyncSecretManager(private val context: Context) {
         const val KEY_METADATA = "metadata"
         const val KEY_NONCE = "nonce"
         const val KEY_CIPHERTEXT = "ciphertext"
+    }
+}
+
+/** 配置树的原始路径同时用于两端 AAD；绝不移动数组中的旧密文。 */
+internal fun syncDecodeSettings(
+    value: kotlinx.serialization.json.JsonElement,
+    kind: String,
+    key: String,
+    secrets: SyncSecretManager?,
+    user: String?,
+    epoch: Long,
+    pointer: String = "",
+): kotlinx.serialization.json.JsonElement? {
+    return when (value) {
+    is kotlinx.serialization.json.JsonObject -> {
+        if (syncLooksEncrypted(value)) {
+            if (secrets != null && user != null) secrets.decryptField(user, kind, key, pointer, epoch, value) else null
+        } else {
+            val decoded = linkedMapOf<String, kotlinx.serialization.json.JsonElement>()
+            for ((name, child) in value) {
+                decoded[name] = syncDecodeSettings(child, kind, key, secrets, user, epoch, "$pointer/${syncPointerPart(name)}") ?: return null
+            }
+            kotlinx.serialization.json.JsonObject(decoded)
+        }
+    }
+    is kotlinx.serialization.json.JsonArray -> {
+        val decoded = mutableListOf<kotlinx.serialization.json.JsonElement>()
+        for ((index, child) in value.withIndex()) {
+            decoded += syncDecodeSettings(child, kind, key, secrets, user, epoch, "$pointer/$index") ?: return null
+        }
+        kotlinx.serialization.json.JsonArray(decoded)
+    }
+    else -> value
+    }
+}
+
+internal fun syncPointerPart(name: String) = name.replace("~", "~0").replace("/", "~1")
+
+/** 兼容旧版漏写标记的信封，但普通 JSON 对象不能冒充损坏凭据。 */
+internal fun syncLooksEncrypted(value: kotlinx.serialization.json.JsonElement): Boolean =
+    value is kotlinx.serialization.json.JsonObject && ("\$enc" in value || setOf("nonce", "ct", "keyVersion").all { it in value })
+
+internal class SyncSettingProtectionException(val code: String) : IllegalStateException(code)
+
+/** 上传出口统一保护任意字段；同值复用原信封，避免每轮随机 nonce 制造修改。 */
+internal fun syncProtectSettings(
+    value: kotlinx.serialization.json.JsonElement,
+    previous: kotlinx.serialization.json.JsonElement?,
+    kind: String,
+    key: String,
+    secrets: SyncSecretManager?,
+    user: String?,
+    epoch: Long,
+    pointer: String = "",
+    force: Boolean = false,
+): kotlinx.serialization.json.JsonElement {
+    if (pointer.isEmpty()) {
+        // 敏感容器可能整体加密，先认证所有已有信封，不能把坏信封包在里面伪装有效。
+        if (syncDecodeSettings(value, kind, key, secrets, user, epoch) == null) throw SyncSettingProtectionException(
+            if (user == null || secrets?.hasCachedDek(user, epoch + 1, epoch) != true) "ACCOUNT_KEY_UNAVAILABLE" else "CREDENTIAL_DECRYPTION_FAILED")
+    }
+    fun decrypt(element: kotlinx.serialization.json.JsonElement) =
+        if (user != null && secrets != null) secrets.decryptField(user, kind, key, pointer, epoch, element) else null
+    val plain = if (syncLooksEncrypted(value)) {
+        val decoded = decrypt(value) ?: throw SyncSettingProtectionException(
+            if (user == null || secrets?.hasCachedDek(user, epoch + 1, epoch) != true) "ACCOUNT_KEY_UNAVAILABLE" else "CREDENTIAL_DECRYPTION_FAILED")
+        if (SyncContractSanitizer.isValidEnvelope(value)) return value
+        decoded
+    } else value
+    val wasEncrypted = syncLooksEncrypted(value)
+    val sensitiveEndpoint = (plain as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content?.let { raw ->
+        val uri = runCatching { java.net.URI(raw) }.getOrNull()
+        uri?.scheme?.lowercase() in setOf("http", "https") && !uri?.host.isNullOrBlank() && syncSafeEndpoint(raw) == null
+    } == true
+    if (force || wasEncrypted || sensitiveEndpoint || SyncContractSanitizer.containsSecret(plain)) {
+        if (previous != null && syncLooksEncrypted(previous)) {
+            val oldPlain = decrypt(previous) ?: throw SyncSettingProtectionException("CREDENTIAL_DECRYPTION_FAILED")
+            if (SyncContractSanitizer.isValidEnvelope(previous) && syncSettingValuesEqual(oldPlain, plain)) return previous
+        }
+        return if (secrets != null && user != null) {
+            try {
+                secrets.encryptField(user, kind, key, pointer, epoch + 1, epoch, plain)
+                    ?: throw SyncSettingProtectionException("ACCOUNT_KEY_UNAVAILABLE")
+            } catch (error: IllegalArgumentException) {
+                throw SyncSettingProtectionException("SETTING_PAYLOAD_TOO_LARGE")
+            }
+        } else throw SyncSettingProtectionException("ACCOUNT_KEY_UNAVAILABLE")
+    }
+    // 旧版可能加密整个对象；内容相同保持信封，避免升级后无故变成明文或反复推送。
+    if (previous != null && syncLooksEncrypted(previous)) {
+        val decoded = decrypt(previous) ?: throw SyncSettingProtectionException("CREDENTIAL_DECRYPTION_FAILED")
+        if (SyncContractSanitizer.isValidEnvelope(previous) && syncSettingValuesEqual(decoded, plain)) return previous
+    }
+    return when (plain) {
+        is kotlinx.serialization.json.JsonObject -> kotlinx.serialization.json.JsonObject(plain.mapValues { (name, child) ->
+            syncProtectSettings(child, (previous as? kotlinx.serialization.json.JsonObject)?.get(name), kind, key,
+                secrets, user, epoch, "$pointer/${syncPointerPart(name)}", SyncContractSanitizer.isForbiddenFieldName(name) ||
+                    (name == "value" && ((plain["name"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.let(SyncContractSanitizer::isForbiddenFieldName) == true ||
+                        ((child as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content?.let { raw ->
+                            runCatching { syncJson.parseToJsonElement(raw) }.getOrNull()?.let { runCatching { SyncContractSanitizer.validate(it) }.isFailure }
+                        } == true))))
+        })
+        is kotlinx.serialization.json.JsonArray -> kotlinx.serialization.json.JsonArray(plain.mapIndexed { index, child ->
+            syncProtectSettings(child, (previous as? kotlinx.serialization.json.JsonArray)?.getOrNull(index), kind, key,
+                secrets, user, epoch, "$pointer/$index")
+        })
+        else -> plain
     }
 }

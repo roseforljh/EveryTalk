@@ -609,6 +609,11 @@ internal class ApiHandlerStreamProcessor(
     private val onAiMessageFullTextChanged: (messageId: String, currentFullText: String) -> Unit,
     private val errorHandler: ApiHandlerErrorController,
 ) {
+    /** 文本由 ApiHandler 按消息归属落库，不能在后台事件中保存当前页面。 */
+    private suspend fun saveImageChatToHistoryIfNeeded(forceSave: Boolean = false, isImageGeneration: Boolean) {
+        if (isImageGeneration) historyManager.saveCurrentChatToHistoryIfNeeded(forceSave, true)
+    }
+
     private fun generatedImageSource(event: AppStreamEvent): String? = when (event) {
         is AppStreamEvent.CodeExecutionResult -> event.imageUrl
         is AppStreamEvent.ImageGeneration -> event.imageUrl
@@ -672,7 +677,7 @@ internal class ApiHandlerStreamProcessor(
     
         // 然后，根据处理结果和事件类型更新UI状态
         withContext(Dispatchers.Main.immediate) {
-            val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
+            val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.textMessagesForMessage(aiMessageId)
             val messageIndex = messageList.indexOfFirst { it.id == aiMessageId }
     
             if (messageIndex == -1) {
@@ -733,7 +738,7 @@ internal class ApiHandlerStreamProcessor(
                     stateHolder.isTextConversationDirty.value = true
                 }
                 viewModelScope.launch(Dispatchers.IO) {
-                    historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = isImageGeneration)
+                    saveImageChatToHistoryIfNeeded(isImageGeneration = isImageGeneration)
                 }
             }
     
@@ -782,7 +787,7 @@ internal class ApiHandlerStreamProcessor(
                         )
                         stateHolder.isTextConversationDirty.value = true
                         viewModelScope.launch(Dispatchers.IO) {
-                            historyManager.saveCurrentChatToHistoryIfNeeded(
+                            saveImageChatToHistoryIfNeeded(
                                 forceSave = true,
                                 isImageGeneration = false,
                             )
@@ -827,7 +832,7 @@ internal class ApiHandlerStreamProcessor(
                             // 目的：即使用户立刻切换会话，当前内容也能落入"最后打开"或历史
                             viewModelScope.launch(Dispatchers.IO) {
                                 try {
-                                    historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = isImageGeneration)
+                                    saveImageChatToHistoryIfNeeded(isImageGeneration = isImageGeneration)
                                 } catch (_: Exception) { }
                             }
                         }
@@ -888,7 +893,7 @@ internal class ApiHandlerStreamProcessor(
                             // 🛡️ 持久化保护：实时保存（可被防抖合并），防止切会话导致未落盘
                             viewModelScope.launch(Dispatchers.IO) {
                                 try {
-                                    historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = isImageGeneration)
+                                    saveImageChatToHistoryIfNeeded(isImageGeneration = isImageGeneration)
                                 } catch (_: Exception) { }
                             }
                         }
@@ -969,7 +974,7 @@ internal class ApiHandlerStreamProcessor(
                     if (usage?.isFinal == true) {
                         messageList[messageIndex] = updatedMessage
                         viewModelScope.launch(Dispatchers.IO) {
-                            historyManager.saveCurrentChatToHistoryIfNeeded(
+                            saveImageChatToHistoryIfNeeded(
                                 forceSave = true,
                                 isImageGeneration = isImageGeneration,
                             )
@@ -980,7 +985,7 @@ internal class ApiHandlerStreamProcessor(
                     updatedMessage = applyMessageTokenUsage(latestMessageForUpdate(), appEvent)
                     messageList[messageIndex] = updatedMessage
                     viewModelScope.launch(Dispatchers.IO) {
-                        historyManager.saveCurrentChatToHistoryIfNeeded(
+                        saveImageChatToHistoryIfNeeded(
                             forceSave = true,
                             isImageGeneration = isImageGeneration,
                         )
@@ -1001,7 +1006,7 @@ internal class ApiHandlerStreamProcessor(
                     }
                     messageList[messageIndex] = updatedMessage
                     viewModelScope.launch(Dispatchers.IO) {
-                        historyManager.saveCurrentChatToHistoryIfNeeded(
+                        saveImageChatToHistoryIfNeeded(
                             forceSave = true,
                             isImageGeneration = isImageGeneration,
                         )
@@ -1116,7 +1121,7 @@ internal class ApiHandlerStreamProcessor(
                     // 核心修复：在消息处理完成并最终化之后，在这里触发强制保存
                     messageList[messageIndex] = updatedMessage
                     viewModelScope.launch(Dispatchers.IO) {
-                        historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = isImageGeneration)
+                        saveImageChatToHistoryIfNeeded(forceSave = true, isImageGeneration = isImageGeneration)
                     }
     
                     stateHolder.clearMessageStatus(aiMessageId, isImageGeneration)
@@ -1167,6 +1172,7 @@ internal class ApiHandlerStreamProcessor(
             // 若处于"暂停流式显示"状态，则不更新UI，仅由恢复时一次性刷新
             if ((
                     !stateHolder._isStreamingPaused.value ||
+                        stateHolder._currentTextStreamingAiMessageId.value != aiMessageId ||
                         appEvent is AppStreamEvent.Usage ||
                         appEvent is AppStreamEvent.AgentUsage ||
                         appEvent is AppStreamEvent.NativeContextCompaction

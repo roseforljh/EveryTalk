@@ -246,11 +246,18 @@ class HistoryManager(
         val conversationId: String,
         val loadedHistoryIndex: Int?,
         val isDirty: Boolean,
+        val appendOnly: Boolean = false,
     )
 
     private fun buildSaveRequest(force: Boolean, isImageGeneration: Boolean): SaveRequest {
-        val streamingId = if (isImageGeneration) stateHolder._currentImageStreamingAiMessageId.value
-            else stateHolder._currentTextStreamingAiMessageId.value
+        // 页面解绑不代表后台流结束；保存前按原会话的任务登记识别草稿。
+        val streamingId = if (isImageGeneration) {
+            stateHolder.imageApiMessageIds[stateHolder._currentImageGenerationConversationId.value]
+                ?: stateHolder._currentImageStreamingAiMessageId.value
+        } else {
+            stateHolder.textApiMessageIds[stateHolder._currentConversationId.value]
+                ?: stateHolder._currentTextStreamingAiMessageId.value
+        }
         return SaveRequest(
             force = force,
             isImageGen = isImageGeneration,
@@ -279,6 +286,28 @@ class HistoryManager(
                 stateHolder.isTextConversationDirty.value
             },
         )
+    }
+
+    /** 固定发送会话及消息快照，切页后仍由同一串行队列保存。 */
+    suspend fun saveConversationSnapshotNow(
+        conversationId: String,
+        messages: List<Message>,
+        isImageGeneration: Boolean,
+    ) {
+        val streamingId = if (isImageGeneration) stateHolder.imageApiMessageIds[conversationId]
+            else stateHolder.textApiMessageIds[conversationId]
+        val snapshot = messages.map { message ->
+            message.copy(
+                conversationId = conversationId,
+                isStreamingDraft = message.sender == Sender.AI && !message.isError &&
+                    message.executionFinishedAt == null &&
+                    (message.id == streamingId || !message.executionStatus.isNullOrBlank()),
+            )
+        }
+        enqueueAndAwait(HistoryCommand.Save(
+            SaveRequest(true, isImageGeneration, snapshot, conversationId, null, true, appendOnly = true),
+            CompletableDeferred(),
+        ))
     }
 
     private suspend fun performSave(req: SaveRequest) {
@@ -439,7 +468,18 @@ class HistoryManager(
             return currentConversationId == latestLiveConversationId || stableIdFromSnapshot == latestLiveConversationId
         }
 
-        val messagesToSave = filterMessagesForSaving(currentMessagesSnapshot)
+        val snapshotMessages = filterMessagesForSaving(currentMessagesSnapshot)
+        val existingSnapshotHistory = if (request?.appendOnly == true) {
+            (if (isImageGeneration) stateHolder._imageGenerationHistoricalConversations.value
+            else stateHolder._historicalConversations.value)
+                .firstOrNull { stableConversationId(it) == currentConversationId }
+        } else null
+        val messagesToSave = if (existingSnapshotHistory != null) {
+            val snapshotById = snapshotMessages.associateBy { it.id }
+            val existing = filterMessagesForSaving(existingSnapshotHistory)
+            val existingIds = existing.mapTo(hashSetOf()) { it.id }
+            existing.map { snapshotById[it.id] ?: it } + snapshotMessages.filterNot { it.id in existingIds }
+        } else snapshotMessages
         var historyListModified = false
         var loadedIndexChanged = false
 
@@ -647,7 +687,16 @@ class HistoryManager(
                 val conversation = committedHistory.firstOrNull {
                     stableConversationId(it) == sessionId
                 } ?: pendingConversation
-                persistenceManager.saveHistorySession(sessionId, conversation, isImageGeneration)
+                // 固定快照只追加，不能删除快照之后并发写入的消息和草稿。
+                // 文本整页保存只删除页面见过又移除的消息；同步后才到的消息不被旧页面快照删除。
+                persistenceManager.saveHistorySession(
+                    sessionId,
+                    conversation,
+                    isImageGeneration,
+                    removeMissingMessages = request?.appendOnly != true,
+                    removableMessageIds = if (isImageGeneration) null else stateHolder.seenTextMessageIds,
+                )
+                if (!isImageGeneration) stateHolder.rememberSeenTextMessages(conversation)
             }
         }
         removedSessionIds.forEach { sessionId ->
@@ -784,11 +833,17 @@ class HistoryManager(
                 Log.d(TAG_HM, "Migrated scroll state from '$migrationSourceId' to stable key '$stableId'")
             }
 
+            // 文本消息列表和运行登记按会话保存；临时 ID 迁到稳定 ID 时整体跟随，后台会话同样迁移。
+            if (migrationSourceId != stableId) {
+                stateHolder.migratedConversationIds[migrationSourceId] = stableId
+                if (!isImageGeneration) stateHolder.migrateTextConversation(migrationSourceId, stableId)
+            }
+
             // 切换当前会话ID到稳定key
             if (isStillSavingLiveConversation() && currentId != stableId) {
                 if (isImageGeneration) {
                     stateHolder._currentImageGenerationConversationId.value = stableId
-                } else {
+                } else if (stateHolder._currentConversationId.value != stableId) {
                     stateHolder.setCurrentConversationId(stableId)
                 }
                 // 不再触发滚动到底部事件，而是依赖 scrollState 的迁移和 ChatScreen 的恢复逻辑。
@@ -886,16 +941,8 @@ class HistoryManager(
         runCatching {
             val currentHistoryFinal = historicalConversations.value
 
-            // 修复：删除历史项后，重建 systemPrompts 映射，并保证当前加载会话的会话ID稳定
-            stateHolder.systemPrompts.clear()
-            currentHistoryFinal.forEach { conversation ->
-                val stableIdForConv = stableConversationId(conversation)
-                val promptForConv =
-                    conversation.firstOrNull { it.sender == Sender.System && !it.isPlaceholderName }?.text ?: ""
-                if (stableIdForConv != null) {
-                    stateHolder.systemPrompts[stableIdForConv] = promptForConv
-                }
-            }
+            // 提示词已独立存储，历史正文不再包含它；删除一条会话只能移除它自己的映射。
+            sessionId?.let { stateHolder.systemPrompts.remove(it) }
 
             if (finalLoadedIndexAfterDelete != null && finalLoadedIndexAfterDelete in currentHistoryFinal.indices) {
                 stableConversationId(currentHistoryFinal[finalLoadedIndexAfterDelete])?.let { stableIdLoaded ->

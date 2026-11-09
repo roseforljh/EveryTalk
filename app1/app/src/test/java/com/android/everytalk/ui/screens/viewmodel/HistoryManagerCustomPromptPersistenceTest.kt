@@ -58,7 +58,7 @@ class HistoryManagerCustomPromptPersistenceTest {
             state.setCurrentConversationId(temporaryId)
             state.messages.add(user)
             val writes = mutableListOf<String>()
-            coEvery { persistence.saveHistorySession(any(), any(), any()) } coAnswers {
+            coEvery { persistence.saveHistorySession(any(), any(), any(), any(), any()) } coAnswers {
                 writes += "session"
             }
             coEvery { persistence.updateConversationGroups(any()) } coAnswers {
@@ -125,19 +125,22 @@ class HistoryManagerCustomPromptPersistenceTest {
         try {
             history.saveCurrentChatToHistoryIfNeeded(forceSave = true)
             advanceUntilIdle()
-            coVerify { persistence.saveHistorySession(user.id, match { it.last().isStreamingDraft }, false) }
+            coVerify { persistence.saveHistorySession(user.id, match { it.last().isStreamingDraft }, false, any(), any()) }
             val usage = com.android.everytalk.data.network.TokenUsage(
                 inputTokens = 10, outputTokens = 20, isFinal = true,
                 source = com.android.everytalk.data.network.TokenUsageSource.OPENAI_CHAT,
             )
+            state.textApiMessageIds[user.id] = reply.id
+            // 模拟离开页面：显示绑定已经解绑，但该会话的后台任务仍然持有回复。
+            state._currentTextStreamingAiMessageId.value = null
             state.messages[1] = reply.copy(tokenUsage = usage)
             history.saveCurrentChatToHistoryIfNeeded(forceSave = true)
             advanceUntilIdle()
-            coVerify { persistence.saveHistorySession(user.id, match { it.last().tokenUsage == usage && it.last().isStreamingDraft }, false) }
+            coVerify { persistence.saveHistorySession(user.id, match { it.last().tokenUsage == usage && it.last().isStreamingDraft }, false, any(), any()) }
             state.messages[1] = state.messages[1].copy(isIncomplete = true, executionFinishedAt = 100)
             history.saveCurrentChatToHistoryIfNeeded(forceSave = true)
             advanceUntilIdle()
-            coVerify { persistence.saveHistorySession(user.id, match { !it.last().isStreamingDraft && it.last().isIncomplete }, false) }
+            coVerify { persistence.saveHistorySession(user.id, match { !it.last().isStreamingDraft && it.last().isIncomplete }, false, any(), any()) }
         } finally {
             scope.coroutineContext[Job]?.cancel()
             advanceUntilIdle()
@@ -153,11 +156,12 @@ class HistoryManagerCustomPromptPersistenceTest {
             val persistence = mockk<DataPersistenceManager>(relaxed = true)
             val history = HistoryManager(state, persistence, { a, b -> a == b }, {}, scope)
             val conversation = if (imageMode) state._currentImageGenerationConversationId else state._currentConversationId
-            val messages = if (imageMode) state.imageGenerationMessages else state.messages
             val loadedIndex = if (imageMode) state._loadedImageGenerationHistoryIndex else state._loadedHistoryIndex
             val original = Message(id = "u1", text = "cs", sender = Sender.User)
             val originalMessages = listOf(original, Message(id = "a1", text = "回答", sender = Sender.AI))
             conversation.value = "temporary"
+            // 文本列表按当前会话取，必须在设置会话 ID 之后读取。
+            val messages = if (imageMode) state.imageGenerationMessages else state.messages
             messages.addAll(originalMessages)
             loadedIndex.value = 0
             val controller = com.android.everytalk.statecontroller.controller.conversation.EditMessageController(
@@ -200,7 +204,7 @@ class HistoryManagerCustomPromptPersistenceTest {
             assertTrue(state._historicalConversations.value.isEmpty())
             assertEquals(null, state._loadedHistoryIndex.value)
             io.mockk.coVerifyOrder {
-                persistence.saveHistorySession(message.id, any(), false)
+                persistence.saveHistorySession(message.id, any(), false, any(), any())
                 persistence.rewindHistorySession(message.id, emptyList(), false, true)
             }
             history.rewindConversation(message.id, listOf(message), false)
@@ -920,7 +924,7 @@ class HistoryManagerCustomPromptPersistenceTest {
             val saved = stateHolder._historicalConversations.value.single()
             assertEquals(listOf("user-agent", "ai-agent"), saved.map(Message::id))
             coVerify(exactly = 1) {
-                persistenceManager.saveHistorySession("user-agent", saved, false)
+                persistenceManager.saveHistorySession("user-agent", saved, false, any(), any())
             }
         } finally {
             scope.coroutineContext[Job]?.cancelAndJoin()
@@ -969,7 +973,7 @@ class HistoryManagerCustomPromptPersistenceTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val persistenceManager = mockk<DataPersistenceManager>(relaxed = true)
         val calls = java.util.Collections.synchronizedList(mutableListOf<String>())
-        coEvery { persistenceManager.saveHistorySession(any(), any(), any()) } coAnswers {
+        coEvery { persistenceManager.saveHistorySession(any(), any(), any(), any(), any()) } coAnswers {
             calls += "dirty-save"
         }
         coEvery { persistenceManager.saveChatHistory(any(), any()) } coAnswers {
@@ -1036,7 +1040,7 @@ class HistoryManagerCustomPromptPersistenceTest {
             assertEquals("最近修改的名称", saved.first().text)
             assertTrue(saved.first().isPlaceholderName)
             coVerify(exactly = 1) {
-                persistenceManager.saveHistorySession("user-title", saved, false)
+                persistenceManager.saveHistorySession("user-title", saved, false, any(), any())
             }
         } finally {
             scope.coroutineContext[Job]?.cancelAndJoin()
@@ -1092,7 +1096,7 @@ class HistoryManagerCustomPromptPersistenceTest {
             val saved = stateHolder._historicalConversations.value.single()
             assertEquals("最新名称", saved.first().text)
             coVerify(exactly = 1) {
-                persistenceManager.saveHistorySession("user-race", saved, false)
+                persistenceManager.saveHistorySession("user-race", saved, false, any(), any())
             }
         } finally {
             continueCompare.complete(Unit)
@@ -1106,7 +1110,7 @@ class HistoryManagerCustomPromptPersistenceTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val persistenceManager = mockk<DataPersistenceManager>(relaxed = true)
         var attempts = 0
-        coEvery { persistenceManager.saveHistorySession(any(), any(), any()) } coAnswers {
+        coEvery { persistenceManager.saveHistorySession(any(), any(), any(), any(), any()) } coAnswers {
             attempts++
             if (attempts == 1) error("模拟首次写入失败")
         }
@@ -1131,7 +1135,7 @@ class HistoryManagerCustomPromptPersistenceTest {
 
             historyManager.saveCurrentChatToHistoryNow()
 
-            coVerify(exactly = 2) { persistenceManager.saveHistorySession("user-retry", updated, false) }
+            coVerify(exactly = 2) { persistenceManager.saveHistorySession("user-retry", updated, false, any(), any()) }
             assertFalse(stateHolder.isTextConversationDirty.value)
         } finally {
             scope.coroutineContext[Job]?.cancelAndJoin()

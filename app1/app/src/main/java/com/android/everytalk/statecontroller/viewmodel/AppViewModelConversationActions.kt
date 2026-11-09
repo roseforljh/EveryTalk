@@ -112,7 +112,7 @@ import java.util.TimeZone
         restoredMessageDraft.value?.let(::consumeRestoredMessageDraft)
         dismissSourcesDialog()
         cancelPendingTextHistoryLoad()
-        apiHandler.cancelCurrentApiJob("开始新的图像生成")
+        apiHandler.detachTextConversationUi()
         viewModelScope.launch {
             try {
                 // 修复：始终强制新建图像会话，避免复用上一会话
@@ -145,7 +145,7 @@ import java.util.TimeZone
         }
         restoredMessageDraft.value?.let(::consumeRestoredMessageDraft)
         dismissSourcesDialog()
-        apiHandler.cancelCurrentApiJob("加载文本模式历史索引 $index", isNewMessageSend = false, isImageGeneration = false)
+        apiHandler.detachTextConversationUi()
         val historyBeforeSave = stateHolder._historicalConversations.value
         val loadGeneration = stateHolder._historyLoadGeneration.value + 1L
         stateHolder._historyLoadGeneration.value = loadGeneration
@@ -196,7 +196,7 @@ import java.util.TimeZone
         restoredMessageDraft.value?.let(::consumeRestoredMessageDraft)
         dismissSourcesDialog()
         cancelPendingTextHistoryLoad()
-        apiHandler.cancelCurrentApiJob("加载图像模式历史索引 $index", isNewMessageSend = false, isImageGeneration = true)
+        apiHandler.detachTextConversationUi()
         historyController.loadImageHistory(index)
     }
 
@@ -217,7 +217,6 @@ import java.util.TimeZone
         restoredMessageDraft.value?.let(::consumeRestoredMessageDraft)
         dismissSourcesDialog()
         cancelPendingTextHistoryLoad()
-        apiHandler.cancelCurrentApiJob("清除所有历史记录")
         historyController.clearAllConversations(isImageGeneration = false)
         conversationPreviewController.clearAllCaches()
         // 清空所有文本置顶

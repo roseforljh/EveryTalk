@@ -28,6 +28,11 @@ import com.android.everytalk.data.agent.PendingSkillSecretApproval
 import com.android.everytalk.data.agent.AgentRunStatus
 import com.android.everytalk.data.computer.PendingComputerToolApproval
 import com.android.everytalk.data.computer.ComputerRequestContext
+import androidx.room.withTransaction
+import com.android.everytalk.data.database.entities.toEntity
+import com.android.everytalk.data.database.entities.toMessage
+import com.android.everytalk.data.database.entities.MessageDraftEntity
+import com.android.everytalk.data.database.entities.ChatSessionEntity
 import com.android.everytalk.data.database.entities.toApiConfig
 import com.android.everytalk.data.database.AppDatabase
 import com.android.everytalk.data.DataClass.resolvedModelTokenLimits
@@ -229,6 +234,11 @@ internal fun clearCompletedStreamingJob(
         stateHolder._isImageApiCalling.value = false
         stateHolder._currentImageStreamingAiMessageId.value = null
     } else {
+        val sessionId = stateHolder.textMessageConversationIds[messageId]
+        if (sessionId != null && stateHolder.textApiJobs[sessionId] === job) {
+            stateHolder.completeTextJob(sessionId, messageId, job)
+            return
+        }
         if (stateHolder.textApiJob !== job) return
         stateHolder.textApiJob = null
         if (stateHolder._currentTextStreamingAiMessageId.value != messageId) return
@@ -425,7 +435,93 @@ class ApiHandler(
 
     val agentRunControlSnapshots: StateFlow<Map<String, AgentRunControlSnapshot>>
         get() = agentRunCoordinator.runControlSnapshots
-    private var pendingAgentStop: PendingAgentStop? = null
+    private val pendingAgentStops = ConcurrentHashMap<String, PendingAgentStop>()
+    private val messagePersistenceMutex = Mutex()
+    private val lastMessagePersistedAt = ConcurrentHashMap<String, Long>()
+
+    /** 页面离开只卸下显示绑定；按会话登记的 Collector 和 Agent 仍继续消费、落库。 */
+    fun detachTextConversationUi() {
+        stateHolder._currentTextStreamingAiMessageId.value?.let { stateHolder.syncStreamingSnapshotToList(it) }
+        stateHolder.cacheTextConversation()
+        stateHolder.textApiJob = null
+        stateHolder._currentTextStreamingAiMessageId.value = null
+        stateHolder._isTextApiCalling.value = false
+        stateHolder._isRemoteCancellationPending.value = false
+        _retryableRemoteStopMessageId.value = null
+    }
+
+    /** 新请求只替换它自己会话的页面收集，不影响其他会话。 */
+    fun cancelTextRequestForReplacement(sessionId: String) {
+        stateHolder.textApiJobs[sessionId]?.cancel(CancellationException("NEW_STREAM_INITIATED"))
+    }
+
+    /** 删除/换账号必须等待对应任务退出，防止晚到内容把已删除会话重新写回来。 */
+    suspend fun stopConversationRuns(sessionId: String) {
+        val jobs = withContext(Dispatchers.Main.immediate) {
+            listOfNotNull(stateHolder.textApiJobs[sessionId])
+        }
+        agentRunStore.getRunsForSession(sessionId).filter { it.status !in setOf("COMPLETED", "FAILED", "CANCELLED") }
+            .forEach { run ->
+                agentRunCoordinator.cancelVisibleRun(run.visibleAssistantMessageId)
+                val remote = cancelComputerExecutions(sessionId, run.id) { }
+                remote.join()
+            }
+        jobs.forEach { it.cancel() }
+        jobs.forEach { it.join() }
+        withContext(Dispatchers.Main.immediate) {
+            stateHolder.textApiMessageIds.remove(sessionId)
+            stateHolder.preparingTextConversationIds.value -= sessionId
+        }
+    }
+
+    suspend fun stopAllTextRuns() {
+        agentRunCoordinator.cancelAllActiveRuns()
+        val jobs = stateHolder.textApiJobs.values.toList()
+        jobs.forEach { it.cancel() }
+        jobs.forEach { it.join() }
+        withContext(Dispatchers.Main.immediate) {
+            stateHolder.textApiJobs.clear()
+            stateHolder.textApiMessageIds.clear()
+            stateHolder.preparingTextConversationIds.value = emptySet()
+        }
+    }
+
+    /** 单消息写入，不用当前页面的整会话快照覆盖另一个会话的新消息。 */
+    private suspend fun persistTextMessage(messageId: String, force: Boolean = false) {
+        val sessionId = stateHolder.textMessageConversationIds[messageId] ?: return
+        val now = System.currentTimeMillis()
+        if (!force && now - (lastMessagePersistedAt[messageId] ?: 0L) < 500L) return
+        messagePersistenceMutex.withLock {
+            val database = AppDatabase.getDatabase(context)
+            val run = agentRunStore.getRunByVisibleMessage(messageId)
+            val snapshot = withContext(Dispatchers.Main.immediate) {
+                stateHolder.syncStreamingSnapshotToList(messageId)
+                stateHolder.textMessagesForConversation(sessionId).firstOrNull { it.id == messageId }
+            } ?: return@withLock
+            // Agent 的 callbackFlow 有缓冲：Room 的 Run 可能早已完成，当前消费的却仍是正文增量。
+            // 只有这条消息自己已经处理终态事件/错误/停止，才允许离开草稿边界。
+            val terminal = snapshot.sender != Sender.AI || snapshot.isError || snapshot.executionFinishedAt != null
+            withContext(Dispatchers.IO) {
+                database.withTransaction {
+                    val dao = database.chatDao()
+                    val session = dao.getStoredSession(sessionId) ?: return@withTransaction
+                    if (session.deleted) return@withTransaction
+                    if (run != null && database.agentDao().getRun(run.id)?.runGeneration != run.runGeneration) return@withTransaction
+                    val entity = snapshot.copy(isStreamingDraft = !terminal).toEntity(sessionId)
+                    val stored = dao.getStoredMessage(entity.id, entity.uuid)
+                    if (stored?.deleted == true) return@withTransaction
+                    // 正式消息不可改写；运行内容只进草稿，终态才定稿一次。
+                    if (stored != null) return@withTransaction
+                    if (terminal) dao.upsertMessages(listOf(entity))
+                    else {
+                        val previous = dao.getDraft(sessionId, messageId)
+                        dao.writeDrafts(listOf(MessageDraftEntity(entity.copy(uuid = previous?.message?.uuid ?: entity.uuid))))
+                    }
+                }
+            }
+            lastMessagePersistedAt[messageId] = now
+        }
+    }
     private val _retryableRemoteStopMessageId = MutableStateFlow<String?>(null)
     /** 远端未确认且本轮等待已结束时才提供重试；取消屏障仍保持，Pending 不能偷偷派发。 */
     val retryableRemoteStopMessageId: StateFlow<String?> = _retryableRemoteStopMessageId.asStateFlow()
@@ -552,7 +648,27 @@ class ApiHandler(
         // 页面 Collector 离开后，应用级 Agent 继续运行；回到进程后仍把事件写回原消息。
         viewModelScope.launch {
             agentRunCoordinator.events.collect { (messageId, event) ->
+                if (!stateHolder.textMessageConversationIds.containsKey(messageId)) {
+                    agentRunStore.getRunByVisibleMessage(messageId)?.let { run ->
+                        val stored = AppDatabase.getDatabase(context).chatDao().getMessagesForSession(run.sessionId)
+                        withContext(Dispatchers.Main.immediate) {
+                            stateHolder.textMessageConversationIds[messageId] = run.sessionId
+                            val target = stateHolder.textMessagesForConversation(run.sessionId)
+                            if (target.none { it.id == messageId }) {
+                                stored.map { it.toMessage() }.forEach { message ->
+                                    stateHolder.textMessageConversationIds[message.id] = run.sessionId
+                                    if (target.none { it.id == message.id }) target.add(message)
+                                }
+                            }
+                        }
+                    }
+                }
                 val keepUiActive = shouldKeepResumedAgentUiActive(event)
+                val ownerSessionId = stateHolder.textMessageConversationIds[messageId]
+                if (ownerSessionId != null) {
+                    if (keepUiActive) stateHolder.textApiMessageIds[ownerSessionId] = messageId
+                    else stateHolder.textApiMessageIds.remove(ownerSessionId, messageId)
+                }
                 if (keepUiActive) {
                     withContext(Dispatchers.Main.immediate) {
                         stateHolder.attachTextAgentUi(messageId)
@@ -603,8 +719,13 @@ class ApiHandler(
         val sessionId = withContext(Dispatchers.Main.immediate) {
             stateHolder._currentConversationId.value
         }.takeIf(String::isNotBlank) ?: return
+        val pendingStop = pendingAgentStops[sessionId]
         val baselines = withContext(Dispatchers.Main.immediate) {
-            stateHolder.messages.associateBy { it.id }
+            if (stateHolder._currentConversationId.value != sessionId) return@withContext emptyMap<String, Message>()
+            stateHolder._isRemoteCancellationPending.value = pendingStop != null
+            _retryableRemoteStopMessageId.value = pendingStop?.messageId
+            stateHolder.restoreTextConversationUi()
+            stateHolder.textMessagesForConversation(sessionId).associateBy { it.id }
         }
         if (baselines.isEmpty()) return
         val runs = agentRunStore.getRunsForSession(sessionId)
@@ -637,7 +758,7 @@ class ApiHandler(
         val pendingRuns = agentRunStore.getPendingModelContinuationRuns()
         withContext(Dispatchers.Main.immediate) {
             pendingRuns.firstOrNull { run ->
-                stateHolder.messages.any { message -> message.id == run.visibleAssistantMessageId }
+                stateHolder.textMessagesForConversation(run.sessionId).any { message -> message.id == run.visibleAssistantMessageId }
             }?.let { run ->
                 stateHolder.attachTextAgentUi(run.visibleAssistantMessageId)
             }
@@ -670,7 +791,11 @@ class ApiHandler(
         }
         withContext(Dispatchers.Main.immediate) {
             runs.forEach { run ->
-                updatePreparedMessageStatus(stateHolder.messages, run.visibleAssistantMessageId, status)
+                updatePreparedMessageStatus(
+                    stateHolder.textMessagesForMessage(run.visibleAssistantMessageId),
+                    run.visibleAssistantMessageId,
+                    status,
+                )
             }
         }
     }
@@ -767,7 +892,7 @@ class ApiHandler(
             withContext(Dispatchers.Main.immediate) {
                 supersededRuns.forEach { run ->
                     updatePreparedMessageStatus(
-                        stateHolder.messages,
+                        stateHolder.textMessagesForMessage(run.visibleAssistantMessageId),
                         run.visibleAssistantMessageId,
                         "已由新消息取代",
                     )
@@ -788,7 +913,7 @@ class ApiHandler(
                     resumingAgentRunIds.remove(run.id)
                 }
             }
-            if (started || stateHolder.textApiJob?.isActive == true) break
+            // 继续处理其他会话的恢复，不能因一条文本任务已启动就退出全局扫描。
         }
     }
 
@@ -855,7 +980,7 @@ class ApiHandler(
                     }
                 }
                 // 当前已有文本任务时决定仍保留在 Room；任务结束后统一扫描并串行续接。
-                if (started || stateHolder.textApiJob?.isActive == true) return@launch
+                if (started) return@launch
                 resumeDecidedAgentRuns()
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -939,13 +1064,12 @@ class ApiHandler(
             logger.error("审批恢复失败：找不到 Run: runId=$runId")
             return false
         }
-        val activeTextJob = stateHolder.textApiJob
+        val activeTextJob = stateHolder.textApiJobs[run.sessionId]
         if (activeTextJob?.isActive == true) {
             // 点击审批时，原 Agent 流刚发完 AgentApprovalRequired，通常还在执行
             // streamChatResponse 的 finally。等待旧流必须放在恢复锁外：旧流的 finally
             // 可能触发恢复扫描，而恢复扫描也需要这把锁；在锁内 join 会形成死锁。
-            if (stateHolder._currentTextStreamingAiMessageId.value != run.visibleAssistantMessageId) {
-                logger.debug("已有其他会话的文本流，暂不恢复 Agent: runId=$runId")
+            if (stateHolder.textApiMessageIds[run.sessionId] != run.visibleAssistantMessageId) {
                 return false
             }
             val currentJob = kotlinx.coroutines.currentCoroutineContext()[Job]
@@ -956,7 +1080,7 @@ class ApiHandler(
         }
         return agentResumeMutex.withLock {
             // 等待期间可能已有另一条恢复路径启动了新流，不能覆盖它。
-            val latestJob = stateHolder.textApiJob
+            val latestJob = stateHolder.textApiJobs[run.sessionId]
             if (latestJob?.isActive == true && latestJob !== kotlinx.coroutines.currentCoroutineContext()[Job]) {
                 logger.debug("审批恢复已由其他路径接管: runId=$runId")
                 return@withLock false
@@ -966,7 +1090,7 @@ class ApiHandler(
         }
     }
 
-    /** 同一时刻只允许一个文本 Run 占用统一流状态，避免恢复覆盖正在进行的会话。 */
+    /** 每个会话独立恢复；统一流状态仅投影当前可见会话。 */
     private suspend fun startResumedAgentRun(runId: String, record: AgentApprovalRecord?): Boolean {
         logger.debug("Agent 恢复前置开始: runId=$runId")
         var run = agentRunStore.getRun(runId) ?: run {
@@ -1056,23 +1180,34 @@ class ApiHandler(
             maxContextTokens = request.contextManagement?.maxContextTokens
                 ?: com.android.everytalk.data.DataClass.DEFAULT_MAX_CONTEXT_TOKENS,
         )
+        val persistedMessages = withContext(Dispatchers.IO) {
+            AppDatabase.getDatabase(context).chatDao().getMessagesForSession(run.sessionId).map { it.toMessage() }
+        }
         withContext(Dispatchers.Main.immediate) {
             logger.debug("恢复请求准备 UI 状态: runId=${run.id}")
             val trace = agentRunStore.executionTrace(run.id)
-            val messageIndex = stateHolder.messages.indexOfFirst { it.id == run.visibleAssistantMessageId }
+            stateHolder.textMessageConversationIds[run.visibleAssistantMessageId] = run.sessionId
+            val target = stateHolder.textMessagesForConversation(run.sessionId)
+            persistedMessages.forEach { message ->
+                stateHolder.textMessageConversationIds[message.id] = run.sessionId
+                if (target.none { it.id == message.id }) target.add(message)
+            }
+            val messageIndex = target.indexOfFirst { it.id == run.visibleAssistantMessageId }
             if (messageIndex >= 0 && trace.isNotEmpty()) {
-                stateHolder.messages[messageIndex] = stateHolder.messages[messageIndex].copy(executionTrace = trace)
+                target[messageIndex] = target[messageIndex].copy(executionTrace = trace)
             }
             messageProcessorMap.putIfAbsent(run.visibleAssistantMessageId, MessageProcessor())
             stateHolder.createStreamingBuffer(run.visibleAssistantMessageId, isImageGeneration = false)
-            stateHolder._currentTextStreamingAiMessageId.value = run.visibleAssistantMessageId
-            stateHolder._isTextApiCalling.value = true
-            stateHolder._isRemoteCancellationPending.value = false
+            if (stateHolder._currentConversationId.value == run.sessionId) {
+                stateHolder._currentTextStreamingAiMessageId.value = run.visibleAssistantMessageId
+                stateHolder._isTextApiCalling.value = true
+                stateHolder._isRemoteCancellationPending.value = false
+            }
         }
         withContext(Dispatchers.Main.immediate) {
             logger.debug("开始注册恢复后的 Agent 流: runId=${run.id}")
             viewModelScope.launchRegisteredJob(
-                register = { job -> stateHolder.textApiJob = job },
+                register = { job -> stateHolder.registerTextJob(run.sessionId, run.visibleAssistantMessageId, job) },
                 onCompletion = { job ->
                     clearCompletedStreamingJob(stateHolder, job, run.visibleAssistantMessageId, false)
                 },
@@ -1115,13 +1250,9 @@ class ApiHandler(
                     withContext(kotlinx.coroutines.NonCancellable + Dispatchers.Main.immediate) {
                         stateHolder.syncStreamingMessageToList(run.visibleAssistantMessageId, false)
                         stateHolder.clearStreamingBuffer(run.visibleAssistantMessageId)
-                        if (stateHolder.textApiJob == thisJob) {
-                            finalizeResumedAgentStreamingState(
-                                stateHolder = stateHolder,
-                                visibleAssistantMessageId = run.visibleAssistantMessageId,
-                                waitingForAgentApproval = waitingForAgentApproval,
-                                completedNormally = completedNormally,
-                            )
+                        if (thisJob != null) {
+                            stateHolder.completeTextJob(run.sessionId, run.visibleAssistantMessageId, thisJob,
+                                shouldKeepApprovalUiActive(waitingForAgentApproval, false, completedNormally))
                         }
                         try {
                             restorePendingAgentApproval()
@@ -1146,7 +1277,11 @@ class ApiHandler(
         _pendingMcpEnableApprovals.value = _pendingMcpEnableApprovals.value.filterNot { it.runId == run.id }
         _pendingSkillSecretApprovals.value = _pendingSkillSecretApprovals.value.filterNot { it.runId == run.id }
         withContext(Dispatchers.Main.immediate) {
-            updatePreparedMessageStatus(stateHolder.messages, run.visibleAssistantMessageId, reason)
+            updatePreparedMessageStatus(
+                stateHolder.textMessagesForMessage(run.visibleAssistantMessageId),
+                run.visibleAssistantMessageId,
+                reason,
+            )
             // 原审批流在等待用户时会故意保留 isTextApiCalling=true。恢复准备失败后没有
             // 新流可以负责 finally 清理，因此这里必须主动结束该 UI 状态，否则发送按钮永久转圈。
             if (stateHolder._currentTextStreamingAiMessageId.value == run.visibleAssistantMessageId) {
@@ -1215,8 +1350,14 @@ class ApiHandler(
         contextCompressionState: ContextCompressionState? = null,
         executionStatus: String? = null,
         preparationJob: Job? = null,
+        conversationId: String = stateHolder._currentConversationId.value,
     ): String {
         val aiMessageId = UUID.randomUUID().toString()
+        if (!isImageGeneration) {
+            stateHolder.textMessageConversationIds[aiMessageId] = conversationId
+            stateHolder.textApiMessageIds[conversationId] = aiMessageId
+            stateHolder.preparingTextConversationIds.value += conversationId
+        }
         logger.debug("Preparing streaming AI message: $aiMessageId, model=$modelName, isImageGeneration=$isImageGeneration")
 
         PerformanceMonitor.setContext(aiMessageId, mode = if (isImageGeneration) "image" else "text")
@@ -1234,10 +1375,12 @@ class ApiHandler(
             stateHolder._isImageApiCalling.value = true
             stateHolder.imageReasoningCompleteMap[aiMessageId] = false
         } else {
-            if (preparationJob != null) stateHolder.textApiJob = preparationJob
-            stateHolder._currentTextStreamingAiMessageId.value = aiMessageId
-            stateHolder._isTextApiCalling.value = true
-            stateHolder._isRemoteCancellationPending.value = false
+            if (preparationJob != null) stateHolder.registerTextJob(conversationId, aiMessageId, preparationJob)
+            if (stateHolder._currentConversationId.value == conversationId) {
+                stateHolder._currentTextStreamingAiMessageId.value = aiMessageId
+                stateHolder._isTextApiCalling.value = true
+                stateHolder._isRemoteCancellationPending.value = false
+            }
             stateHolder.textReasoningCompleteMap[aiMessageId] = false
         }
 
@@ -1255,7 +1398,7 @@ class ApiHandler(
         )
 
         withContext(Dispatchers.Main.immediate) {
-            val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
+            val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.textMessagesForMessage(aiMessageId)
             addAiMessageAfterUserMessage(messageList, newAiMessage, afterUserMessageId)
             onNewAiMessageAdded()
             logger.debug("🔧 Pre-created AI message added to list: $aiMessageId")
@@ -1272,7 +1415,7 @@ class ApiHandler(
         contextCompressionState: ContextCompressionState? = null,
     ) {
         withContext(Dispatchers.Main.immediate) {
-            val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
+            val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.textMessagesForMessage(messageId)
             if (!updatePreparedMessageStatus(messageList, messageId, status)) {
                 logger.warn("预创建消息不存在，无法更新执行状态: $messageId")
             }
@@ -1297,7 +1440,7 @@ class ApiHandler(
         isImageGeneration: Boolean = false,
     ) {
         withContext(Dispatchers.Main.immediate) {
-            val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
+            val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.textMessagesForMessage(messageId)
             val localizedErrorText = context.localizeUiMessage(errorText)
             if (!markPreparedMessageFailed(messageList, messageId, localizedErrorText)) {
                 logger.warn("预创建消息不存在，无法写入压缩错误: $messageId")
@@ -1311,9 +1454,18 @@ class ApiHandler(
                 }
             } else {
                 stateHolder.textReasoningCompleteMap[messageId] = true
-                stateHolder.textApiJob = null
-                stateHolder._isTextApiCalling.value = false
+                stateHolder.textMessageConversationIds[messageId]?.let { sessionId ->
+                    if (stateHolder.textApiMessageIds[sessionId] == messageId) {
+                        stateHolder.textApiJobs[sessionId]?.let { job ->
+                            stateHolder.completeTextJob(sessionId, messageId, job)
+                        }
+                        stateHolder.textApiMessageIds.remove(sessionId, messageId)
+                        stateHolder.preparingTextConversationIds.value -= sessionId
+                    }
+                }
                 if (stateHolder._currentTextStreamingAiMessageId.value == messageId) {
+                    stateHolder.textApiJob = null
+                    stateHolder._isTextApiCalling.value = false
                     stateHolder._currentTextStreamingAiMessageId.value = null
                 }
             }
@@ -1323,10 +1475,11 @@ class ApiHandler(
         }
         withContext(Dispatchers.IO) {
             try {
-                historyManager.saveCurrentChatToHistoryIfNeeded(
-                    forceSave = true,
-                    isImageGeneration = isImageGeneration,
-                )
+                if (isImageGeneration) {
+                    historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = true)
+                } else {
+                    persistTextMessage(messageId, force = true)
+                }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -1358,7 +1511,7 @@ class ApiHandler(
         if (jobToCancel?.isActive == true) {
             if (messageIdBeingCancelled != null) {
                 viewModelScope.launch(Dispatchers.Main.immediate) {
-                    val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
+                    val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.textMessagesForMessage(messageIdBeingCancelled)
                     val index =
                         messageList.indexOfFirst { it.id == messageIdBeingCancelled }
                     if (index != -1) {
@@ -1368,7 +1521,11 @@ class ApiHandler(
                         }
 
                         logger.debug("Saving partial content on user cancellation (${syncedMessage.text.length} chars)")
-                        historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = isImageGeneration)
+                        if (isImageGeneration) {
+                            historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = true)
+                        } else {
+                            persistTextMessage(messageIdBeingCancelled, force = true)
+                        }
                     }
                 }
             }
@@ -1388,13 +1545,22 @@ class ApiHandler(
             finishMessageExecutionForUserStop(messageIdBeingCancelled)
             agentRunCoordinator.cancelVisibleRun(messageIdBeingCancelled, AgentTerminalReasons.USER_STOP)
             val operation = PendingAgentStop(messageIdBeingCancelled, conversationIdBeingCancelled, showFeedback)
-            pendingAgentStop = operation
+            pendingAgentStops[conversationIdBeingCancelled] = operation
             _retryableRemoteStopMessageId.value = null
             launchStopConfirmation(operation)
         }
         if (showFeedback && !isNewMessageSend && messageIdBeingCancelled == null && !isImageGeneration) {
             // 用户点击与任务结束竞争时静默对账；启动/切页的空清理不触发额外恢复。
             viewModelScope.launch(Dispatchers.IO) { restoreVisibleAgentState() }
+        }
+        if (!isImageGeneration) {
+            val sessionId = messageIdBeingCancelled?.let { stateHolder.textMessageConversationIds[it] }
+                ?: stateHolder._currentConversationId.value
+            stateHolder.textApiJobs[sessionId]?.let { job ->
+                if (job === jobToCancel) stateHolder.textApiJobs.remove(sessionId, job)
+            }
+            messageIdBeingCancelled?.let { stateHolder.textApiMessageIds.remove(sessionId, it) }
+            stateHolder.preparingTextConversationIds.value -= sessionId
         }
         jobToCancel?.cancel(CancellationException(specificCancelReason))
 
@@ -1404,6 +1570,7 @@ class ApiHandler(
                 stateHolder._currentImageStreamingAiMessageId.value = null
             }
         } else {
+            if (jobToCancel != null && stateHolder.textApiJob === jobToCancel) stateHolder.textApiJob = null
             stateHolder._isTextApiCalling.value = false
             if (!isNewMessageSend && stateHolder._currentTextStreamingAiMessageId.value == messageIdBeingCancelled) {
                 stateHolder._currentTextStreamingAiMessageId.value = null
@@ -1431,7 +1598,7 @@ class ApiHandler(
             }
             if (!isNewMessageSend) {
                 viewModelScope.launch(Dispatchers.Main.immediate) {
-                    val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
+                    val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.textMessagesForMessage(messageIdBeingCancelled)
                     val index =
                         messageList.indexOfFirst { it.id == messageIdBeingCancelled }
                     if (index != -1) {
@@ -1452,7 +1619,7 @@ class ApiHandler(
                 }
             }
         }
-        // 🔧 修复：取消时必须重置所有流式状态，否则UI会继续显示"正在连接"
+        // 取消时只归位被取消会话的页面投影；后台其他会话继续保留运行登记。
         if (isImageGeneration) {
             val conversationId = stateHolder._currentImageGenerationConversationId.value
             if (stateHolder.imageApiJobs[conversationId] === jobToCancel) {
@@ -1462,10 +1629,14 @@ class ApiHandler(
             stateHolder.imageApiJob = null
             stateHolder._isImageApiCalling.value = false
             stateHolder._currentImageStreamingAiMessageId.value = null
-        } else {
-            stateHolder.textApiJob = null
-            stateHolder._isTextApiCalling.value = false
-            stateHolder._currentTextStreamingAiMessageId.value = null
+        } else if (messageIdBeingCancelled != null) {
+            val conversationId = stateHolder.textMessageConversationIds[messageIdBeingCancelled]
+                ?: stateHolder._currentConversationId.value
+            if (stateHolder._currentConversationId.value == conversationId) {
+                stateHolder.textApiJob = null
+                stateHolder._isTextApiCalling.value = false
+                stateHolder._currentTextStreamingAiMessageId.value = null
+            }
         }
     }
 
@@ -1504,13 +1675,15 @@ class ApiHandler(
             } finally {
                 withContext(kotlinx.coroutines.NonCancellable + Dispatchers.Main.immediate) {
                     // 用操作对象身份核对，即使同一消息被重新恢复也不让旧等待覆盖新的取消操作。
-                    if (pendingAgentStop === operation && cancellingMessageId == operation.messageId) {
+                    if (pendingAgentStops[operation.conversationId] === operation) {
                         if (confirmed) {
                             completeConfirmedAgentStop(operation)
                         } else {
                             updateMessageExecutionStatus(operation.messageId, resultMessage)
-                            _retryableRemoteStopMessageId.value = operation.messageId
-                            if (operation.showFeedback) stateHolder.showSnackbar(resultMessage)
+                            if (stateHolder._currentConversationId.value == operation.conversationId) {
+                                _retryableRemoteStopMessageId.value = operation.messageId
+                                if (operation.showFeedback) stateHolder.showSnackbar(resultMessage)
+                            }
                         }
                     }
                 }
@@ -1520,18 +1693,20 @@ class ApiHandler(
 
     /** 只在主线程确认当前操作，迟到的远端成功不能解除另一轮取消屏障或重复提示。 */
     private fun completeConfirmedAgentStop(operation: PendingAgentStop) {
-        if (pendingAgentStop !== operation || cancellingMessageId != operation.messageId) return
-        pendingAgentStop = null
-        cancellingMessageId = null
-        _retryableRemoteStopMessageId.value = null
-        stateHolder._isRemoteCancellationPending.value = false
+        if (!pendingAgentStops.remove(operation.conversationId, operation)) return
+        // 全局停止状态只是当前会话的投影：按当前会话是否仍有停止操作重算，不清另一会话的屏障。
+        if (cancellingMessageId == operation.messageId) cancellingMessageId = null
+        if (_retryableRemoteStopMessageId.value == operation.messageId) _retryableRemoteStopMessageId.value = null
+        stateHolder._isRemoteCancellationPending.value =
+            pendingAgentStops.containsKey(stateHolder._currentConversationId.value)
         updateMessageExecutionStatus(operation.messageId, "任务已停止")
         if (operation.showFeedback) stateHolder.showSnackbar("任务已停止")
     }
 
     /** 重试前同步隐藏入口防止连点；尚未结束的停止 Job 会被复用，不重复创建 SSH 取消请求。 */
     fun retryRemoteStopConfirmation(expectedMessageId: String?) {
-        val operation = pendingAgentStop ?: return
+        // 按点击的消息找原停止操作，沿用其所属会话，不能读取当前已切换的会话。
+        val operation = pendingAgentStops.values.firstOrNull { it.messageId == expectedMessageId } ?: return
         if (expectedMessageId == null || _retryableRemoteStopMessageId.value != expectedMessageId ||
             operation.messageId != expectedMessageId || !stateHolder._isRemoteCancellationPending.value
         ) return
@@ -1584,11 +1759,16 @@ class ApiHandler(
         
         // 如果没有预先创建的 ID，才执行常规的取消逻辑
         if (preCreatedAiMessageId == null) {
-            cancelCurrentApiJob("开始新的流式传输，上下文: '$contextForLog'", isNewMessageSend = true, isImageGeneration = isImageGeneration)
+            if (isImageGeneration) cancelCurrentApiJob("开始新的流式传输", isNewMessageSend = true, isImageGeneration = true)
+            else cancelTextRequestForReplacement(requestConversationId)
         }
 
         // 使用预创建的 ID 或创建新 ID
         val aiMessageId = preCreatedAiMessageId ?: UUID.randomUUID().toString()
+        if (!isImageGeneration) {
+            stateHolder.textMessageConversationIds[aiMessageId] = requestConversationId
+            stateHolder.textApiMessageIds[requestConversationId] = aiMessageId
+        }
         
         if (preCreatedAiMessageId == null) {
             // 只有在非预创建情况下才初始化处理器和状态（预创建时 prepareStreamingAiMessage 已做）
@@ -1624,7 +1804,7 @@ class ApiHandler(
                 stateHolder.textReasoningCompleteMap[aiMessageId] = false
             }
             
-            val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
+            val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.textMessagesForMessage(aiMessageId)
             viewModelScope.launch(Dispatchers.Main.immediate) {
                 // 后台图像任务可能已经先通过 Room 回写并刷新了当前页面，避免重复添加占位消息。
                 if (messageList.none { it.id == aiMessageId }) {
@@ -1646,7 +1826,10 @@ class ApiHandler(
                     if (stateHolder._currentImageGenerationConversationId.value == requestConversationId) {
                         stateHolder.imageApiJob = job
                     }
-                } else stateHolder.textApiJob = job
+                } else {
+                    stateHolder.registerTextJob(requestConversationId, aiMessageId, job)
+                    stateHolder.preparingTextConversationIds.value -= requestConversationId
+                }
             },
             onCompletion = { job ->
                 if (isImageGeneration) {
@@ -1686,7 +1869,7 @@ class ApiHandler(
                 // 初始化也必须在收尾保护内；取消或状态同步失败时不能遗留运行标记。
                 if (preCreatedAiMessageId != null && contextUsageSnapshot != null) {
                     withContext(Dispatchers.Main.immediate) {
-                        val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
+                        val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.textMessagesForMessage(aiMessageId)
                         if (!updateMessageContextUsageSnapshot(messageList, aiMessageId, contextUsageSnapshot)) {
                             logger.warn("预创建消息不存在，无法同步上下文快照: $aiMessageId")
                         }
@@ -1739,9 +1922,8 @@ class ApiHandler(
                         ),
                     )
                     ).collect { appEvent ->
-                        val currentStreamingId = stateHolder._currentTextStreamingAiMessageId.value
-                        if (stateHolder.textApiJob != thisJob || currentStreamingId != aiMessageId) {
-                            thisJob?.cancel(CancellationException("API job 或 streaming ID 已更改，停止收集旧数据块"))
+                        if (stateHolder.textApiJobs[requestConversationId] != thisJob) {
+                            thisJob?.cancel(CancellationException("该会话的请求已被替换"))
                             return@collect
                         }
                         stateHolder.checkMemoryUsage()
@@ -1767,10 +1949,11 @@ class ApiHandler(
                      logger.debug("Saving partial content (${partialText.length} chars) to history on cancellation")
                      viewModelScope.launch(Dispatchers.IO) {
                          try {
-                             historyManager.saveCurrentChatToHistoryIfNeeded(
-                                 forceSave = true,
-                                 isImageGeneration = isImageGeneration,
-                             )
+                             if (isImageGeneration) {
+                                 historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = true)
+                             } else {
+                                 persistTextMessage(aiMessageId, force = true)
+                             }
                              logger.debug("Successfully saved partial content to history")
                          } catch (saveError: Exception) {
                              logger.error("Failed to save partial content to history", saveError)
@@ -1800,23 +1983,16 @@ class ApiHandler(
                     generatedImageSourceFingerprints.remove(aiMessageId)
                     retryCountMap.remove(aiMessageId)
 
-                    val currentJob = if (isImageGeneration) stateHolder.imageApiJob else stateHolder.textApiJob
+                    val currentJob = if (isImageGeneration) stateHolder.imageApiJob else stateHolder.textApiJobs[requestConversationId]
                     if (currentJob == thisJob) {
                         if (isImageGeneration) {
                             stateHolder.imageApiJob = null
                             stateHolder._isImageApiCalling.value = false
                             stateHolder._currentImageStreamingAiMessageId.value = null
-                        } else {
-                            stateHolder.textApiJob = null
-                            if (shouldKeepApprovalUiActive(waitingForAgentApproval, isImageGeneration, completedNormally)) {
-                                // 正常等待审批仍阻止 Pending 自动派发；取消或异常不能依据旧事件保留加载。
-                                stateHolder._isTextApiCalling.value = true
-                                stateHolder._currentTextStreamingAiMessageId.value = aiMessageId
-                            } else {
-                                stateHolder._isTextApiCalling.value = false
-                                stateHolder._currentTextStreamingAiMessageId.value = null
-                                clearedCurrentTextJob = true
-                            }
+                        } else if (thisJob != null) {
+                            stateHolder.completeTextJob(requestConversationId, aiMessageId, thisJob,
+                                shouldKeepApprovalUiActive(waitingForAgentApproval, false, completedNormally))
+                            clearedCurrentTextJob = stateHolder._currentConversationId.value == requestConversationId
                         }
                     }
                 }
@@ -1840,6 +2016,17 @@ class ApiHandler(
         isImageGeneration: Boolean = false,
     ) {
         streamProcessor.processStreamEvent(appEvent, aiMessageId, isImageGeneration)
+        if (!isImageGeneration && appEvent is AppStreamEvent.AgentFollowUpAccepted) {
+            stateHolder.textMessageConversationIds[aiMessageId]?.let { sessionId ->
+                stateHolder.textMessageConversationIds[appEvent.messageId] = sessionId
+                persistTextMessage(appEvent.messageId, force = true)
+            }
+        }
+        if (!isImageGeneration) {
+            persistTextMessage(aiMessageId, force = appEvent is AppStreamEvent.Finish ||
+                appEvent is AppStreamEvent.StreamEnd || appEvent is AppStreamEvent.AgentApprovalRequired ||
+                appEvent is AppStreamEvent.AgentInterventionRequired || appEvent is AppStreamEvent.Error)
+        }
         when (appEvent) {
             is AppStreamEvent.AgentApprovalRequired -> {
                 // 事件发出前审批已原子落库。直接刷新全部审批类型，
@@ -1864,11 +2051,8 @@ class ApiHandler(
     /** 在任意线程安全地更新取消或恢复提示。 */
     private fun updateMessageExecutionStatus(messageId: String, status: String?) {
         viewModelScope.launch(Dispatchers.Main.immediate) {
-            if (updatePreparedMessageStatus(stateHolder.messages, messageId, status)) {
-                historyManager.saveCurrentChatToHistoryIfNeeded(
-                    forceSave = true,
-                    isImageGeneration = false,
-                )
+            if (updatePreparedMessageStatus(stateHolder.textMessagesForMessage(messageId), messageId, status)) {
+                persistTextMessage(messageId, force = true)
             }
         }
     }
@@ -1893,17 +2077,14 @@ class ApiHandler(
         val finishedAt = System.currentTimeMillis()
         viewModelScope.launch(Dispatchers.Main.immediate) {
             val updated = finishPreparedMessageExecution(
-                messageList = stateHolder.messages,
+                messageList = stateHolder.textMessagesForMessage(messageId),
                 messageId = messageId,
                 status = "正在取消远端任务",
                 finishedAt = finishedAt,
             )
             if (updated) {
                 stateHolder.textReasoningCompleteMap[messageId] = true
-                historyManager.saveCurrentChatToHistoryIfNeeded(
-                    forceSave = true,
-                    isImageGeneration = false,
-                )
+                persistTextMessage(messageId, force = true)
             }
         }
     }
@@ -1915,6 +2096,7 @@ class ApiHandler(
         allowRetry: Boolean = true,
     ) {
         errorHandler.updateMessageWithError(messageId, error, isImageGeneration, allowRetry)
+        if (!isImageGeneration) persistTextMessage(messageId, force = true)
     }
 
     fun hasImageGenerationKeywords(text: String?): Boolean {

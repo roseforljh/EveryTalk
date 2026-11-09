@@ -73,6 +73,7 @@ class SimpleModeManager(
     private var _lastModeSwitch: Long = 0L
     // 自动回填也会直接加载历史，因此在公共入口区分先后请求，不能只依赖控制器取消。
     private var imageHistoryRequestGeneration = 0L
+    private var textHistoryRequestGeneration = 0L
 
     // 新增：用于UI即时感知的"意图模式"（优先于内容态）
     private val _uiMode: MutableStateFlow<ModeType> = MutableStateFlow(ModeType.NONE)
@@ -123,6 +124,8 @@ class SimpleModeManager(
      * 安全的模式切换到文本模式
      */
     suspend fun switchToTextMode(forceNew: Boolean = false, skipSavingTextChat: Boolean = false) {
+        textHistoryRequestGeneration++
+        imageHistoryRequestGeneration++
         Log.d(TAG, "Switching to TEXT mode (forceNew: $forceNew, skipSavingTextChat: $skipSavingTextChat)")
         
         // 跟踪模式切换（立即更新意图模式，供UI使用）
@@ -176,14 +179,14 @@ class SimpleModeManager(
         
         // 如果强制新建，清除文本模式状态
         if (forceNew) {
-            stateHolder.messages.clear()
             stateHolder._loadedHistoryIndex.value = null
             // 新会话是全新的、独立的：禁止任何迁移/继承
             val newId = "chat_${UUID.randomUUID()}"
             stateHolder.setCurrentConversationId(newId)
             stateHolder.systemPrompts[newId] = ""
         }
-        
+        stateHolder.restoreTextConversationUi()
+
         // 重置输入框
         stateHolder._text.value = ""
         
@@ -215,6 +218,8 @@ class SimpleModeManager(
      * 安全的模式切换到图像模式
      */
     suspend fun switchToImageMode(forceNew: Boolean = false, skipSavingImageChat: Boolean = false) {
+        textHistoryRequestGeneration++
+        imageHistoryRequestGeneration++
         Log.d(TAG, "Switching to IMAGE mode (forceNew: $forceNew, skipSavingImageChat: $skipSavingImageChat)")
         
         // 跟踪模式切换（立即更新意图模式，供UI使用）
@@ -257,16 +262,13 @@ class SimpleModeManager(
         Log.d(TAG, "Text index after save: $savedTextIndex")
         
         
-        clearTextApiState()
+        stateHolder.getApiHandler().detachTextConversationUi()
         
         stateHolder._loadedHistoryIndex.value = savedTextIndex
         Log.d(TAG, "Preserved text history index: $savedTextIndex")
         
         // 保留文本消息（不清空）
         Log.d(TAG, "Preserved ${stateHolder.messages.size} text messages")
-        
-        val currentTextSessionId = stateHolder._currentConversationId.value
-        stateHolder.getApiHandler().clearTextChatResources(currentTextSessionId)
         
         // 如果强制新建，清除图像模式状态
         if (forceNew) {
@@ -306,6 +308,9 @@ class SimpleModeManager(
      * 安全的历史记录加载 - 文本模式（完全独立加载）
      */
     suspend fun loadTextHistory(index: Int) {
+        val requestGeneration = ++textHistoryRequestGeneration
+        imageHistoryRequestGeneration++
+        val sourceConversationId = stateHolder._currentConversationId.value
         Log.d(TAG, "🔥 [START] Loading TEXT history at index: $index")
         _uiMode.value = ModeType.TEXT // 立即更新意图
 
@@ -326,13 +331,6 @@ class SimpleModeManager(
         val previewStableId = ConversationNameHelper.resolveStableId(previewConversation)
             ?: "history_${UUID.randomUUID()}"
         val conversationToLoad = loadHistorySession(previewStableId) ?: previewConversation
-        if (conversationToLoad !== previewConversation) {
-            withContext(Dispatchers.Main.immediate) {
-                stateHolder._historicalConversations.value = conversationList.toMutableList().apply {
-                    this[index] = conversationToLoad
-                }
-            }
-        }
         Log.d(TAG, "🔥 Found conversation to load with ${conversationToLoad.size} messages.")
         // 云端消息 UUID 与会话 UUID 不同，必须沿用会话身份，否则模型、标签和后续刷新都会查错键。
         val stableId = ConversationNameHelper.resolveStableId(conversationToLoad) ?: previewStableId
@@ -395,17 +393,19 @@ class SimpleModeManager(
         }
         Log.d(TAG, "🔥 Processed ${processedMessages.size} messages.")
 
-        withContext(Dispatchers.Main.immediate) {
+        val committed = withContext(Dispatchers.Main.immediate) {
+            currentCoroutineContext().ensureActive()
+            if (requestGeneration != textHistoryRequestGeneration ||
+                _uiMode.value != ModeType.TEXT ||
+                stateHolder._currentConversationId.value != sourceConversationId
+            ) return@withContext false
+            val latestHistory = stateHolder._historicalConversations.value
+            val latestIndex = latestHistory.indexOfFirst { ConversationNameHelper.resolveStableId(it) == previewStableId }
+            if (latestIndex < 0) return@withContext false
+            val titledHistory = ConversationNameHelper.preserveStoredConversationTitle(latestHistory[latestIndex], conversationToLoad)
             Log.d(TAG, "🔥 Updating state on Main thread...")
 
-            // 只清理流式状态，不调用 clearForNewTextChat()（它会设置临时 conversationId 导致竞态）
-            stateHolder._isTextApiCalling.value = false
-            stateHolder.textApiJob?.cancel()
-            stateHolder.textApiJob = null
-            stateHolder._currentTextStreamingAiMessageId.value = null
-            stateHolder.streamingMessageStateManager.clearAll()
-            stateHolder.getApiHandler().clearTextChatResources()
-            android.util.Log.d("ViewModelStateHolder", "Cleared all StreamingBuffers and streaming states for text chat")
+            stateHolder.getApiHandler().detachTextConversationUi()
 
             // 关键修复：不清除图像模式索引，保持两个模式的历史索引独立
             // 保留图像消息（不在加载文本历史时清空）
@@ -422,6 +422,9 @@ class SimpleModeManager(
                     stateHolder._selectedApiConfig.value = config
                     Log.d(TAG, "🔥 Restored selected config: ${safeApiConfigSummary(config)}")
                 } else {
+                    // 绑定存在但配置实体还没同步到：不能继续沿用上一个会话的模型，否则会拿错模型发请求。
+                    // 保留本会话的绑定，配置到达后重新加载会话即可恢复。
+                    stateHolder._selectedApiConfig.value = null
                     Log.w(TAG, "🔥 Saved config ID $savedConfigId not found in current configs.")
                 }
             }
@@ -432,11 +435,11 @@ class SimpleModeManager(
                 stateHolder.textMessageAnimationStates.clear()
                 stateHolder.selectedMediaItems.clear()
                 stateHolder.systemPrompts[stableId] = systemPrompt
-                stateHolder.messages.clear()
-                stateHolder.messages.addAll(processedMessages)
+                stateHolder.loadTextConversationMessages(stableId, processedMessages)
                 stateHolder.textReasoningCompleteMap.putAll(reasoningCompleteStates)
                 stateHolder.textMessageAnimationStates.putAll(animationPlayedStates)
             }
+            stateHolder.restoreTextConversationUi()
             Log.d(TAG, "🔥 Loaded messages into state.")
             Log.d(TAG, "🔥 Set reasoning and animation states.")
             
@@ -512,13 +515,6 @@ class SimpleModeManager(
         }
     }
 
-    /**
-     * 清理文本模式API相关状态
-     */
-    private fun clearTextApiState() {
-        stateHolder.clearForNewTextChat()
-    }
-    
     /**
      * 清理图像模式API相关状态
      */

@@ -300,6 +300,7 @@ class CloudflareComputerManager(
                 username = "cloudflare",
                 authKind = ComputerAuthKind.PASSWORD,
                 runMode = ComputerRunMode.DIRECT,
+                permissionMode = ComputerPermissionMode.FULL,
                 status = ComputerStatus.READY,
             )
             val config = CloudflareComputerConfigEntity(

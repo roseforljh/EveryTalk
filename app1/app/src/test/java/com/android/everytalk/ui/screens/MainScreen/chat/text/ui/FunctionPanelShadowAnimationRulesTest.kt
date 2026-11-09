@@ -14,13 +14,14 @@ class FunctionPanelShadowAnimationRulesTest {
             "R.string.chat_input_image",
             "R.string.chat_input_camera",
             "R.string.chat_input_attachment",
-            "R.string.chat_input_web_search",
-            "label = \"MCP\"",
             "R.string.chat_input_prompt",
         )
         val positions = labels.map(functionPanel::indexOf)
 
         assertTrue("功能面板选项缺失", positions.all { it >= 0 })
+        // 联网搜索和 MCP 改为按设置自动启用，加号面板不再提供手动开关。
+        assertTrue("功能面板不应再显示联网搜索", !functionPanel.contains("R.string.chat_input_web_search"))
+        assertTrue("功能面板不应再显示 MCP", !functionPanel.contains("label = \"MCP\""))
         assertTrue("功能面板选项顺序错误", positions.zipWithNext().all { (left, right) -> left < right })
     }
 
@@ -49,8 +50,9 @@ class FunctionPanelShadowAnimationRulesTest {
             .substringAfter("internal fun ActiveFunctionTag(")
             .substringBefore("fun OptimizedSelectedItemPreview(")
 
-        assertTrue(panelSource.contains("iconTint = if (isMcpEnabled) ChatMcpColor else iconTint"))
-        assertTrue(inputSource.contains("tint = ChatMcpColor"))
+        // MCP 不再有手动开关，输入框也不再显示 MCP 标签。
+        assertTrue(!panelSource.contains("isMcpEnabled"))
+        assertTrue(!inputSource.contains("tint = ChatMcpColor"))
         assertTrue(inputSource.contains("val activeTagCount ="))
         assertTrue(inputSource.contains("maxItemsInEachRow = 3"))
         assertTrue(inputSource.contains(".padding(top = 4.dp, end = 11.dp, bottom = 2.dp)"))

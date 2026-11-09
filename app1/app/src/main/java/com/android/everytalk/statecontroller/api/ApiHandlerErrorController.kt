@@ -67,7 +67,7 @@ internal class ApiHandlerErrorController(
         currentMessageProcessor.reset()
         
         withContext(Dispatchers.Main.immediate) {
-            val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
+            val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.textMessagesForMessage(messageId)
             val idx = messageList.indexOfFirst { it.id == messageId }
             if (idx != -1) {
                 val msg = messageList[idx]
@@ -125,7 +125,9 @@ internal class ApiHandlerErrorController(
                     if (animationMap[messageId] != true) {
                         animationMap[messageId] = true
                     }
-                    historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = isImageGeneration)
+                    if (isImageGeneration) {
+                        historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = true)
+                    }
                 }
             }
             val currentStreamingId = if (isImageGeneration) 
