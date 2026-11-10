@@ -907,7 +907,11 @@ class MainActivity : AppCompatActivity() {
                                         },
                                         subscriptionLocked = subscriptionLocked,
                                         accentColor = accentColor,
-                                        onSelectAccent = { appViewModel.setAccentColor(it) },
+                                        onSelectAccent = {
+                                            // 立即更新主题状态；持久化异步进行，不能等重启后才生效。
+                                            accentState.value = it
+                                            appViewModel.setAccentColor(it)
+                                        },
                                         accountAvatarUrl = accountState.user?.avatarUrl,
                                         accountName = accountState.user?.displayName,
                                         avatarEditingEnabled = !accountState.busy,

@@ -33,7 +33,7 @@ val darkChatColors = ChatColors(
     aiBubble = Color(0xFF1A1A1A),                 // 修复：与夜间模式app背景一致
     errorContent = Color(0xFFE57373),             // 柔和的错误色
     reasoningText = Color(0xFFD0D0D0),            // 柔和的次要文字颜色
-    codeBlockBackground = Color(0xFF2A2A2A),      // 暗色主题调整为截图中 ChatGPT 的深灰黑 (#2A2A2A)
+    codeBlockBackground = Color(0xFF1F1F1F),      // 暗色代码块比纯黑页面亮一档，配 1dp 细边框
     loadingIndicator = Color(0xFF5B9BD5)          // 柔和的主色调指示器
 )
 

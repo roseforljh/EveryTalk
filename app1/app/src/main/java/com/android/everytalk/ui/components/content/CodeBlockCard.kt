@@ -7,6 +7,7 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -26,7 +27,6 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.graphicsLayer
@@ -127,7 +127,7 @@ fun CodeBlockCard(
     /** AI 深色气泡中的代码块不单独画卡片。 */
     flatDarkStyle: Boolean = false,
 ) {
-    val shape = if (flatDarkStyle) RectangleShape else RoundedCornerShape(24.dp)
+    val shape = RoundedCornerShape(if (flatDarkStyle) 16.dp else 24.dp)
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
     val isDarkTheme = isSystemInDarkTheme()
@@ -135,12 +135,12 @@ fun CodeBlockCard(
     val copyDescription = stringResource(R.string.action_copy)
     val previewDescription = stringResource(R.string.code_preview)
     val openFullScreenPreviewDescription = stringResource(R.string.code_open_fullscreen_preview)
-    val bg = if (flatDarkStyle) Color.Transparent else MaterialTheme.chatColors.codeBlockBackground
-    // 夜间模式使用白色边框，白天模式使用 outline 颜色
-    val outline = if (isDarkTheme) {
-        Color.White.copy(alpha = 0.3f)
+    val bg = MaterialTheme.chatColors.codeBlockBackground
+    // 深色气泡里也要能和纯黑背景分开：底色用比背景亮一档的 #1F1F1F，再画一圈细边框。
+    val borderStroke = if (isDarkTheme) {
+        BorderStroke(1.dp, Color.White.copy(alpha = if (flatDarkStyle) 0.14f else 0.22f))
     } else {
-        MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
+        BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f))
     }
     
     // 根据主题设置头部内容颜色：亮色系为黑色，暗色系为白色
@@ -224,8 +224,8 @@ fun CodeBlockCard(
 
     // 胶囊组件底色与选中颜色
     // 由于代码块背景现在是深黑(0xFF2A2A2A)，胶囊背景需要稍微亮一点以产生对比，选中的按钮则更亮
-    val capsuleBgColor = if (flatDarkStyle) Color.Transparent else if (isDarkTheme) Color(0xFF383838) else Color(0xFFE2E2E2)
-    val capsuleSelectedBgColor = if (flatDarkStyle) Color.Transparent else if (isDarkTheme) Color(0xFF505050) else Color.White
+    val capsuleBgColor = if (isDarkTheme) Color(0xFF383838) else Color(0xFFE2E2E2)
+    val capsuleSelectedBgColor = if (isDarkTheme) Color(0xFF505050) else Color.White
     val pageBgColor = MaterialTheme.colorScheme.background
     val previewBgColor = pageBgColor
     val previewTextColor = if (isDarkTheme) Color(0xFFEAEAEA) else Color.Black
@@ -275,6 +275,7 @@ fun CodeBlockCard(
             },
         shape = shape,
         color = bg,
+        border = borderStroke,
         // 注意这里：即使内部也有拦截，表面也需要允许点击以防止穿透到底层列表
         onClick = { showFullScreenPreview = true } 
     ) {
