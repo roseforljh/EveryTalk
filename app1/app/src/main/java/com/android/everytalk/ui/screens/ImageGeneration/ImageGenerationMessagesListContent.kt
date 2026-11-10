@@ -564,7 +564,7 @@ fun ImageGenerationMessagesList(
                                                 displayedText = item.text,
                                                 showLoadingDots = false,
                                                 bubbleColor = MaterialTheme.chatColors.userBubble,
-                                                contentColor = MaterialTheme.colorScheme.onSurface,
+                                                contentColor = MaterialTheme.chatColors.userBubbleText,
                                                 isError = false,
                                                 maxWidth = bubbleMaxWidth * ChatDimensions.USER_BUBBLE_WIDTH_RATIO,
                                                 onLongPress = { msg, offset ->

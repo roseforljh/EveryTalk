@@ -1,5 +1,4 @@
-package com.android.everytalk.ui.theme // 确保这是你的主题包名
-import com.android.everytalk.statecontroller.*
+package com.android.everytalk.ui.theme
 
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle
@@ -7,110 +6,42 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
+/**
+ * ChatGPT 1.2026.279 的公开排版 token 映射。
+ *
+ * APK 的 `ii00` 明确使用 Roboto → OpenAI Sans → sans-serif 回退，
+ * Android 本地没有 OpenAI Sans 文件时由 SansSerif 继续走系统 Roboto。
+ * 字距使用 APK token 的 sp 数值，不再全部清零。
+ */
+private val ChatGptSans = FontFamily.SansSerif
+
+private fun chatText(
+    size: Int,
+    lineHeight: Int,
+    weight: FontWeight,
+    letterSpacing: Float,
+) = TextStyle(
+    fontFamily = ChatGptSans,
+    fontWeight = weight,
+    fontSize = size.sp,
+    lineHeight = lineHeight.sp,
+    letterSpacing = letterSpacing.sp,
+)
+
 val AppTypography = Typography(
-    displayLarge = TextStyle(
-        fontFamily = FontFamily.Default,
-        fontWeight = FontWeight.Normal,
-        fontSize = 57.sp,
-        lineHeight = 64.sp,
-        letterSpacing = (-0.2).sp,
-    ),
-    displayMedium = TextStyle(
-        fontFamily = FontFamily.Default,
-        fontWeight = FontWeight.Normal,
-        fontSize = 45.sp,
-        lineHeight = 52.sp,
-        letterSpacing = 0.sp,
-    ),
-    displaySmall = TextStyle(
-        fontFamily = FontFamily.Default,
-        fontWeight = FontWeight.Normal,
-        fontSize = 36.sp,
-        lineHeight = 44.sp,
-        letterSpacing = 0.sp,
-    ),
-    headlineLarge = TextStyle(
-        fontFamily = FontFamily.Default,
-        fontWeight = FontWeight.Normal,
-        fontSize = 32.sp,
-        lineHeight = 40.sp,
-        letterSpacing = 0.sp,
-    ),
-    headlineMedium = TextStyle(
-        fontFamily = FontFamily.Default,
-        fontWeight = FontWeight.Normal,
-        fontSize = 28.sp,
-        lineHeight = 36.sp,
-        letterSpacing = 0.sp,
-    ),
-    headlineSmall = TextStyle(
-        fontFamily = FontFamily.Default,
-        fontWeight = FontWeight.Normal,
-        fontSize = 24.sp,
-        lineHeight = 32.sp,
-        letterSpacing = 0.sp,
-    ),
-    titleLarge = TextStyle(
-        fontFamily = FontFamily.Default,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 20.sp,
-        lineHeight = 28.sp,
-        letterSpacing = 0.sp,
-    ),
-    titleMedium = TextStyle(
-        fontFamily = FontFamily.Default,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 18.sp,
-        lineHeight = 24.sp,
-        letterSpacing = 0.2.sp,
-    ),
-    titleSmall = TextStyle(
-        fontFamily = FontFamily.Default,
-        fontWeight = FontWeight.Medium,
-        fontSize = 16.sp,
-        lineHeight = 20.sp,
-        letterSpacing = 0.1.sp,
-    ),
-    bodyLarge = TextStyle(
-        fontFamily = FontFamily.Default,
-        fontWeight = FontWeight.Normal,
-        fontSize = 16.sp,
-        lineHeight = 24.sp,
-        letterSpacing = 0.1.sp
-    ),
-    bodyMedium = TextStyle(
-        fontFamily = FontFamily.Default,
-        fontWeight = FontWeight.Normal,
-        fontSize = 14.sp,
-        lineHeight = 20.sp,
-        letterSpacing = 0.2.sp,
-    ),
-    bodySmall = TextStyle(
-        fontFamily = FontFamily.Default,
-        fontWeight = FontWeight.Normal,
-        fontSize = 12.sp,
-        lineHeight = 16.sp,
-        letterSpacing = 0.4.sp
-    ),
-    labelLarge = TextStyle(
-        fontFamily = FontFamily.Default,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 14.sp,
-        lineHeight = 20.sp,
-        letterSpacing = 0.1.sp,
-    ),
-    labelMedium = TextStyle(
-        fontFamily = FontFamily.Default,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 12.sp,
-        lineHeight = 16.sp,
-        letterSpacing = 0.5.sp
-    ),
-    labelSmall = TextStyle(
-        fontFamily = FontFamily.Default,
-        fontWeight = FontWeight.Medium,
-        fontSize = 11.sp,
-        lineHeight = 16.sp,
-        letterSpacing = 0.5.sp
-    )
+    displayLarge = chatText(36, 44, FontWeight.Normal, 0.32f),
+    displayMedium = chatText(28, 36, FontWeight.Normal, 0.32f),
+    displaySmall = chatText(24, 32, FontWeight.Medium, 0.1f),
+    headlineLarge = chatText(22, 28, FontWeight.Medium, 0.1f),
+    headlineMedium = chatText(17, 26, FontWeight.Medium, 0.1f),
+    headlineSmall = chatText(17, 26, FontWeight.Normal, 0.1f),
+    titleLarge = chatText(17, 26, FontWeight.Medium, 0.1f),
+    titleMedium = chatText(14, 20, FontWeight.Medium, 0.1f),
+    titleSmall = chatText(14, 20, FontWeight.Normal, 0.1f),
+    bodyLarge = chatText(17, 26, FontWeight.Normal, 0.1f),
+    bodyMedium = chatText(14, 20, FontWeight.Normal, 0.1f),
+    bodySmall = chatText(14, 18, FontWeight.Normal, 0.15f),
+    labelLarge = chatText(14, 20, FontWeight.Medium, 0.2f),
+    labelMedium = chatText(13, 18, FontWeight.Normal, 0.2f),
+    labelSmall = chatText(12, 16, FontWeight.Normal, 0.2f),
 )

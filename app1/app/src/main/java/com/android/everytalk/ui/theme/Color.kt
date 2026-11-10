@@ -21,7 +21,7 @@ val DarkSurfaceDim = Color(0xFF0A0A0A)         // 被压暗的表面 - 必须暗
 // 深色前景系列 - 纯白主文字 + 灰阶次级文字
 val DarkOnBackground = Color(0xFFFFFFFF)       // 背景上的文字 - 纯白
 val DarkOnSurface = Color(0xFFFFFFFF)          // 表面上的文字 - 纯白
-val DarkOnSurfaceVariant = Color(0xFFBBBBBB)   // 表面变体上的文字 - 中等灰
+val DarkOnSurfaceVariant = Color(0xFFCDCDCD)   // ChatGPT 次级文字
 val DarkOnCard = Color(0xFFFFFFFF)             // 卡片上的文字 - 纯白
 
 // 操作颜色统一为灰阶：暗色主题白底黑字，容器保留深灰层级。

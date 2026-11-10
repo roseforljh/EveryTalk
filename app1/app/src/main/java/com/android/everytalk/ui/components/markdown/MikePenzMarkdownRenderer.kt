@@ -1,4 +1,5 @@
 package com.android.everytalk.ui.components.markdown
+import androidx.compose.material3.LocalContentColor
 import com.android.everytalk.statecontroller.*
 
 import com.android.everytalk.R
@@ -797,6 +798,8 @@ fun MikePenzMarkdownRenderer(
             }
 
             val markdownColors = markdownColor(
+                // 用户气泡文字跟随气泡提供的内容色（强调色气泡会改文字色）。
+                text = if (sender == Sender.User) LocalContentColor.current else MaterialTheme.colorScheme.onBackground,
                 inlineCodeBackground = Color.Transparent,
                 tableBackground = Color.Transparent,
             )

@@ -31,7 +31,16 @@ class ThemeColorMappingTest {
 
     @Test
     fun `secondary text colors remain grayscale`() {
-        assertEquals(Color(0xFF49454F), lightThemeOnSurfaceVariant())
-        assertEquals(Color(0xFFBBBBBB), DarkOnSurfaceVariant)
+        assertEquals(Color(0xFF5D5D5D), lightThemeOnSurfaceVariant())
+        assertEquals(Color(0xFFCDCDCD), DarkOnSurfaceVariant)
+    }
+
+    @Test
+    fun `强调色只改用户气泡底色，默认与黑色保持灰色`() {
+        assertEquals(Color(0xFFEDF3FE), AccentColor.Blue.userBubble(dark = false))
+        assertEquals(Color(0xFF020562), AccentColor.Blue.userBubble(dark = true))
+        assertEquals(null, AccentColor.Default.userBubble(dark = false))
+        assertEquals(null, AccentColor.Black.userBubble(dark = true))
+        org.junit.Assert.assertTrue(AccentColor.pickerEntries.filter { it != AccentColor.Black }.all { it.isTinted })
     }
 }

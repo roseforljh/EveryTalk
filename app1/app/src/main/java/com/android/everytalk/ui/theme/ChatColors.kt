@@ -9,6 +9,7 @@ import androidx.compose.ui.graphics.luminance
 
 data class ChatColors(
     val userBubble: Color,
+    val userBubbleText: Color,
     val aiBubble: Color,
     val errorContent: Color,
     val reasoningText: Color,
@@ -18,6 +19,7 @@ data class ChatColors(
 
 val lightChatColors = ChatColors(
     userBubble = Color(0xFFE8E8E8),               // 淡灰色背景
+    userBubbleText = Color(0xFF000000),
     aiBubble = Color(0xFFFFFFFF),                 // 修复：白天模式使用纯白色，与app背景一致
     errorContent = Color(0xFFD32F2F),             // Material Red 700
     reasoningText = Color(0xFF424242),            // 深灰色推理文字
@@ -27,6 +29,7 @@ val lightChatColors = ChatColors(
 
 val darkChatColors = ChatColors(
     userBubble = Color(0xFF2C2C2E),               // 深色模式下的淡灰色背景
+    userBubbleText = Color(0xFFEDEDED),
     aiBubble = Color(0xFF1A1A1A),                 // 修复：与夜间模式app背景一致
     errorContent = Color(0xFFE57373),             // 柔和的错误色
     reasoningText = Color(0xFFD0D0D0),            // 柔和的次要文字颜色
@@ -38,15 +41,20 @@ val darkChatColors = ChatColors(
 @ReadOnlyComposable
 fun getChatColors(): ChatColors {
     val colorScheme = MaterialTheme.colorScheme
-    return if (colorScheme.surface.luminance() > 0.5f) {
+    val dark = colorScheme.surface.luminance() <= 0.5f
+    val base = if (!dark) {
         // 亮色模式：使用为聊天定制的配色（适配白天）
-        lightChatColors
+        lightChatColors.copy(userBubbleText = colorScheme.onSurface)
     } else {
         // 深色模式下 AI 气泡必须融入页面，不能再使用独立的灰黑色卡片。
         darkChatColors.copy(
             aiBubble = colorScheme.background,
+            userBubbleText = colorScheme.onSurface,
         )
     }
+    // 强调色只改用户气泡底色，文字保持主题主文字色。
+    val accent = LocalAccentColor.current
+    return base.copy(userBubble = accent.userBubble(dark) ?: base.userBubble)
 }
 
 val MaterialTheme.chatColors: ChatColors

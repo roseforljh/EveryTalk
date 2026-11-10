@@ -11,6 +11,7 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -43,7 +44,7 @@ private val DarkColorScheme = darkColorScheme(
     surface = DarkCardBackground,                  // 卡片使用深灰而非白色
     onSurface = DarkOnCard,                       // 卡片上的文字
     surfaceVariant = DarkSurfaceVariant,          // 表面变体
-    onSurfaceVariant = DarkOnSurfaceVariant,      // 表面变体文字
+    onSurfaceVariant = DarkOnSurfaceVariant,      // 次级文字
     surfaceContainer = DarkSurfaceContainer,       // 容器颜色
     
     // 错误状态 - 柔和的红色
@@ -97,7 +98,7 @@ private val LightColorScheme = lightColorScheme(
     surface = Color.White, // 卡片、对话框表面改为纯白
     onSurface = Color(0xFF000000),
     surfaceVariant = Color.White, // 表面变体改为纯白
-    onSurfaceVariant = Color(0xFF49454F),
+    onSurfaceVariant = Color(0xFF5D5D5D),
 
     // 错误状态
     error = Color(0xFFBA1A1A),
@@ -136,6 +137,7 @@ fun App1Theme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     // 默认保持品牌黑白主题，只有显式启用时才使用系统壁纸配色。
     dynamicColor: Boolean = false,
+    accentColor: AccentColor = AccentColor.Default,
     content: @Composable () -> Unit
 ) {
     val colorScheme = when {
@@ -148,10 +150,12 @@ fun App1Theme(
         else -> LightColorScheme
     }
 
-    MaterialTheme(
-        colorScheme = colorScheme,
-        typography = AppTypography,
-        shapes = Shapes(extraSmall = AppInputFieldShape),
-        content = content
-    )
+    CompositionLocalProvider(LocalAccentColor provides accentColor) {
+        MaterialTheme(
+            colorScheme = colorScheme,
+            typography = AppTypography,
+            shapes = Shapes(extraSmall = AppInputFieldShape),
+            content = content
+        )
+    }
 }
