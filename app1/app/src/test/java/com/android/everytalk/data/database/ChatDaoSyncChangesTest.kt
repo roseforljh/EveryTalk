@@ -63,6 +63,16 @@ class ChatDaoSyncChangesTest {
         assertTrue(dao.getPendingSyncMessages().isEmpty())
     }
 
+    @Test fun `只差首尾空白不算改写且保留已同步原文`() = runBlocking {
+        val padded = answer.copy(reasoning = "思考\n\n")
+        save(listOf(question, padded)); syncAll()
+        save(listOf(question, padded.copy(reasoning = "思考", executionStatus = "DONE")))
+        val saved = dao.getMessage(session.id, answer.id)!!
+        assertEquals("思考\n\n", saved.reasoning)
+        assertEquals("DONE", saved.executionStatus)
+        assertTrue(dao.getPendingSyncMessages().isEmpty())
+    }
+
     @Test fun `旧页面整页保存不删除同步后到达的消息只删页面见过又移除的`() = runBlocking {
         save(listOf(question, answer)); syncAll()
         // 另一台设备追加的消息经同步写入，本页面从未见过它。

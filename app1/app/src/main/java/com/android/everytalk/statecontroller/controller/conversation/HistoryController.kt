@@ -263,7 +263,11 @@ class HistoryController(
             withContext(Dispatchers.IO) { historyManager.deleteConversation(latestIndex, isImageGeneration) }
             val remaining = if (isImageGeneration) stateHolder._imageGenerationHistoricalConversations.value
                 else stateHolder._historicalConversations.value
-            if (deletedSessionId != null && remaining.any { ConversationNameHelper.resolveStableId(it) == deletedSessionId }) return@launch
+            if (deletedSessionId != null && remaining.any { ConversationNameHelper.resolveStableId(it) == deletedSessionId }) {
+                // 服务器连不上时任务状态已记为未知，下一次删除不再等它。
+                showSnackbar("远端任务未能确认停止，会话未删除，可再删一次")
+                return@launch
+            }
 
             val wasCurrentDeleted = if (deletedSessionId != null) {
                 if (isImageGeneration) stateHolder._currentImageGenerationConversationId.value == deletedSessionId

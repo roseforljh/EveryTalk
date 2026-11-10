@@ -1065,7 +1065,7 @@ class ComputerManager(
         return workspace
     }
 
-    /** 删除会话时，先取消该会话所有远端任务并清理对应 Workspace。 */
+    /** 删除会话时，先取消该会话所有远端任务，再在后台清理对应 Workspace。 */
     suspend fun deleteWorkspacesForConversation(
         conversationId: String,
         deleteRemoteFiles: Boolean = false,
@@ -1073,22 +1073,26 @@ class ComputerManager(
         if (conversationId.isBlank()) return true
         if (!toolExecutor.cancelActiveExecutions(conversationId)) return false
         val workspaces = repository.dao().getWorkspacesForConversation(conversationId)
-        workspaces.forEach { entity ->
-            runCatching {
-                val workspace = entity.toModel()
-                toolExecutor.closeWorkspace(workspace.id)
-                previewManager.stopByWorkspace(workspace.id)
-                workspaceManager.deleteRemote(workspace.id, deleteRemoteFiles)
-                secretManager.deleteAll(workspace.id)
-                workspaceManager.deleteMapping(workspace.id)
-            }.onFailure { error ->
-                // 会话删除的前置安全条件是取消活动任务；服务器或 Workspace 清理失败
-                // 不能继续阻止本地会话删除，否则一个失效绑定会永久锁住历史记录。
-                if (error is kotlinx.coroutines.CancellationException) throw error
-                AppLogger.warn(
-                    "ComputerRuntime",
-                    "删除会话 Workspace 失败，保留待清理记录：${error.message}",
-                )
+        // 远端清理要走 SSH（断线时重连握手最长 15 秒，删除命令最长 30 秒），结果又不影响会话能否删除，
+        // 所以不让会话列表等它；失败时 Workspace 记录保留在服务器详情页，可手动再删。
+        scope.launch(Dispatchers.IO) {
+            workspaces.forEach { entity ->
+                runCatching {
+                    val workspace = entity.toModel()
+                    toolExecutor.closeWorkspace(workspace.id)
+                    previewManager.stopByWorkspace(workspace.id)
+                    workspaceManager.deleteRemote(workspace.id, deleteRemoteFiles)
+                    secretManager.deleteAll(workspace.id)
+                    workspaceManager.deleteMapping(workspace.id)
+                }.onFailure { error ->
+                    // 会话删除的前置安全条件是取消活动任务；服务器或 Workspace 清理失败
+                    // 不能继续阻止本地会话删除，否则一个失效绑定会永久锁住历史记录。
+                    if (error is kotlinx.coroutines.CancellationException) throw error
+                    AppLogger.warn(
+                        "ComputerRuntime",
+                        "删除会话 Workspace 失败，保留待清理记录：${error.message}",
+                    )
+                }
             }
         }
         return true

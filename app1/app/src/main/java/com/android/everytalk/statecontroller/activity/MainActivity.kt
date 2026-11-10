@@ -1201,6 +1201,7 @@ class MainActivity : AppCompatActivity() {
        if (this::appViewModel.isInitialized) {
            appViewModel.onAppStop()
        }
+       com.android.everytalk.service.SyncScheduler.requestNow(applicationContext)
    }
    
    /**

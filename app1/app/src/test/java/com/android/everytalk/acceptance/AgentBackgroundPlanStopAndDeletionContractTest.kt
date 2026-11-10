@@ -99,6 +99,10 @@ class AgentBackgroundPlanStopAndDeletionContractTest {
         val sessionIndex = historyDeleteBlock.indexOf("deleteHistorySession")
         assertTrue("删除会话必须先取消活动任务", cancelIndex >= 0)
         assertTrue("取消成功后必须删除对应 Workspace", workspaceIndex > cancelIndex)
+        assertTrue(
+            "Workspace 的 SSH 清理必须放后台，不能让会话列表等网络",
+            deleteBlock.indexOf("scope.launch") in (cancelIndex + 1) until workspaceIndex,
+        )
         assertTrue("Workspace 清理成功后才能删除聊天 Session", sessionIndex >= 0)
         assertTrue("取消失败必须中止删除", deleteBlock.contains("return false"))
     }

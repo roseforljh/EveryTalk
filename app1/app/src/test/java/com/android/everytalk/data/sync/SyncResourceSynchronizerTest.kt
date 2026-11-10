@@ -314,4 +314,39 @@ class SyncResourceSynchronizerTest {
         assertEquals(0, db.settingsDao().syncRejectedCount())
         assertEquals(19, cloud.rows.values.count { it.entity == "attachments" && !it.deleted })
     }
+
+    @Test fun `恢复大量文件时分批续传直到全部完成`() = runBlocking {
+        val a = database(); val b = database(); val ca = context(); val cb = context()
+        val api = FakeSyncApi().apply { chunkSize = 4096 }
+        val session = ChatSessionEntity("source", 1, 1, false)
+        a.chatDao().writeSession(session)
+        // 60 张图片 = 60 个文件，超过单轮 40 个的上限，必须续传第二轮。
+        val pictures = (1..60).map { index ->
+            val image = File(ca.filesDir, "many-$index.png").apply { writeBytes(ByteArray(600) { (it + index).toByte() }) }
+            Message(id = "picture-$index", text = "图片 $index", sender = Sender.User, timestamp = index.toLong(),
+                imageUrls = listOf(image.toURI().toString())).toEntity(session.id)
+        }
+        a.chatDao().writeMessages(pictures)
+        // 上传端每轮最多传 5 条资源，要跑到没有剩余工作为止。
+        while (true) {
+            val uploader = SyncResourceSynchronizer(ca, a, api, user)
+            uploader.use { it.synchronize() }
+            sync(a, api)
+            if (!uploader.moreWork) break
+        }
+        sync(b, api)
+        SyncStateStore(b).markAllLocalDataPending()
+        val first = SyncResourceSynchronizer(cb, b, api, user)
+        first.use { it.synchronize() }
+        assertTrue("超过单轮上限必须表示还有剩余工作", first.moreWork)
+        SyncResourceSynchronizer(cb, b, api, user).use { it.synchronize() }
+        // 全部图片都应在两轮内落盘，且不重复下载。
+        val files = b.settingsDao().getByPrefix("sync_resource_meta:").mapNotNull { row ->
+            b.syncAttachmentDao().get(row.key.substringAfter(':'))
+        }
+        assertEquals(60, files.size)
+        assertEquals(0, b.settingsDao().syncRejectedCount())
+        sync(b, api)
+        assertTrue(RoomSyncStore(b).pendingBatch().isEmpty())
+    }
 }

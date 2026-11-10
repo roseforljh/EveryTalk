@@ -18,6 +18,12 @@ internal fun syncDiagnostic(message: String) {
     android.util.Log.println(android.util.Log.INFO, "EveryTalkSync", message)
 }
 
+/** 各阶段耗时也进诊断日志：本地修改到上传之间等了什么，只能靠它定位。只记阶段名和毫秒数。 */
+internal suspend fun <T> syncTimed(phase: String, block: suspend () -> T): T {
+    val started = System.nanoTime()
+    return try { block() } finally { syncDiagnostic("phase=$phase ms=${(System.nanoTime() - started) / 1_000_000}") }
+}
+
 /**
  * 对账日志只读取标量列，不读取正文或机密；随机标识散列后用于比较两台设备的缺行、
  * 墓碑、所属会话、正文/思考过程截断哈希和过滤条件。每个进程只在快照变化时输出，不能用总数代替逐条对账。
@@ -89,17 +95,17 @@ internal class SyncEngine(
 ) {
     suspend fun runOnce(): SyncRunResult = SyncRuntimeLock.mutex.withLock {
         if (!canSync() || !state.isEnabled() || state.epochDecision() != null) return@withLock SyncRunResult.Disabled
-        store.prepareForSync()
-        beforePull()
-        pullAll()?.let { return@withLock it }
-        afterPull()
+        syncTimed("prepare") { store.prepareForSync() }
+        syncTimed("beforePull") { beforePull() }
+        syncTimed("pull") { pullAll() }?.let { return@withLock it }
+        syncTimed("afterPull") { afterPull() }
         repeat(20) {
             if (!canSync() || !state.isEnabled()) return@withLock SyncRunResult.Disabled
-            val pending = store.pendingBatch()
+            val pending = syncTimed("pending") { store.pendingBatch() }
             if (pending.isEmpty()) {
                 // 先确认普通记录，再补文件；文件预约被限流时不能拖住模型凭据和文字回复。
                 // 资源恢复仍在同一把锁内，不能与其他 Worker 或换账号流程同时写入。
-                beforeComplete()
+                syncTimed("beforeComplete") { beforeComplete() }
                 if (!canSync()) return@withLock SyncRunResult.Disabled
                 return@withLock if (store.pendingBatch(1).isEmpty()) SyncRunResult.Completed else SyncRunResult.MoreWork
             }

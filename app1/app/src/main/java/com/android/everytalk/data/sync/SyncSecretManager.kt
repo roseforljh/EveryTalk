@@ -92,18 +92,28 @@ internal class SyncSecretManager(private val context: Context) {
         }
     }
 
+    /**
+     * 本实例已解开过的 DEK，按落盘密文识别；密文一换（换钥、清除）自然失效。
+     * 每个字段的加解密都要取 DEK，而 Keystore 解一次要十几毫秒：几百条配置的一轮投影原先要 3~5 秒，
+     * 一次同步又要投影六七轮，本地修改因此排队半分钟以上才上传。
+     */
+    @Volatile private var unwrappedDek: Pair<String, ByteArray>? = null
+
     fun readCachedDek(userId: String, keyVersion: Long, secretsEpoch: Long): ByteArray? {
         val metadata = preferences.getString(KEY_METADATA, null)?.split('|') ?: return null
         if (metadata.size != 3 || metadata[0] != userId || metadata[1].toLongOrNull() != keyVersion ||
             metadata[2].toLongOrNull() != secretsEpoch) return null
-        val nonce = preferences.getString(KEY_NONCE, null)?.let(::decodeUrlBase64) ?: return null
-        val ciphertext = preferences.getString(KEY_CIPHERTEXT, null)?.let(::decodeUrlBase64) ?: return null
+        val storedNonce = preferences.getString(KEY_NONCE, null) ?: return null
+        val storedCiphertext = preferences.getString(KEY_CIPHERTEXT, null) ?: return null
+        val identity = "${metadata.joinToString("|")}|$storedNonce|$storedCiphertext"
+        // 调用方用完会把返回的数组清零，所以每次都给副本。
+        unwrappedDek?.takeIf { it.first == identity }?.let { return it.second.copyOf() }
         return runCatching {
             Cipher.getInstance("AES/GCM/NoPadding").apply {
-                init(Cipher.DECRYPT_MODE, deviceKey(), GCMParameterSpec(128, nonce))
+                init(Cipher.DECRYPT_MODE, deviceKey(), GCMParameterSpec(128, decodeUrlBase64(storedNonce)))
                 updateAAD(metadata.joinToString("|").toByteArray(Charsets.UTF_8))
-            }.doFinal(ciphertext)
-        }.getOrNull()?.also { require(it.size == 32) }
+            }.doFinal(decodeUrlBase64(storedCiphertext))
+        }.getOrNull()?.also { require(it.size == 32); unwrappedDek = identity to it.copyOf() }
     }
 
     /** secrets_epoch 变化时必须丢掉旧 DEK，避免旧密文再次入队。 */

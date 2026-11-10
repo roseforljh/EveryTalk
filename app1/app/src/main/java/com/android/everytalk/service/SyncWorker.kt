@@ -48,8 +48,10 @@ class SyncWorker(context: Context, parameters: WorkerParameters) : CoroutineWork
         syncDiagnostic("worker start attempt=$runAttemptCount")
         val resources = SyncResourceSynchronizer(applicationContext, db, api, user.id)
         val credentials = SyncCredentialSynchronizer(applicationContext, db, api, secrets, user.id)
+        // 文件传输被限流时只暂停文件这条线：文字、配置照常同步，不能跟着停一分钟。
+        var resourcesWaitMillis: Long? = null
         return try {
-            SyncInventoryDiagnostic.log(db)
+            syncTimed("inventory") { SyncInventoryDiagnostic.log(db) }
             when (SyncEngine(
                 api = api,
                 beforePull = { credentials.captureLocal() },
@@ -59,7 +61,18 @@ class SyncWorker(context: Context, parameters: WorkerParameters) : CoroutineWork
                     recoverService(db, "credentials") { credentials.recover() }
                 },
                 beforeComplete = {
-                    recoverService(db, "resources") { resources.synchronize() }
+                    recoverService(db, "resources") {
+                        val wait = (db.settingsDao().getValue(RESOURCES_RESUME_AT)?.toLongOrNull() ?: 0L) - System.currentTimeMillis()
+                        if (wait > 0) resourcesWaitMillis = wait.coerceAtMost(120_000)
+                        else try { resources.synchronize() } catch (error: SyncHttpException) {
+                            if (error.statusCode != 429) throw error
+                            val millis = (error.retryAfterSeconds ?: 30).coerceIn(1, 120) * 1000L
+                            db.settingsDao().insertSetting(com.android.everytalk.data.database.entities.SystemSettingEntity(
+                                RESOURCES_RESUME_AT, (System.currentTimeMillis() + millis).toString()))
+                            resourcesWaitMillis = millis
+                            syncDiagnostic("resources rate limited waitMs=$millis")
+                        }
+                    }
                 },
                 store = RoomSyncStore(db, secrets, user.id),
                 state = state,
@@ -71,8 +84,8 @@ class SyncWorker(context: Context, parameters: WorkerParameters) : CoroutineWork
                     Result.success()
                 }
                 SyncRunResult.Completed -> {
-                    if (resources.moreWork) {
-                        SyncScheduler.continueResources(applicationContext)
+                    if (resources.moreWork || resourcesWaitMillis != null) {
+                        SyncScheduler.continueResources(applicationContext, resourcesWaitMillis ?: 1_000L)
                         return Result.success()
                     }
                     if (db.settingsDao().getByPrefix("sync_rejected:services:").isEmpty()) state.markSyncCompleted()
@@ -118,6 +131,8 @@ class SyncWorker(context: Context, parameters: WorkerParameters) : CoroutineWork
             if (permitted()) Result.retry() else Result.success()
         } finally { resources.close(); api.close() }
     }
+
+    private companion object { const val RESOURCES_RESUME_AT = "sync_resource_resume_at" }
 
     private suspend fun recoverService(db: AppDatabase, name: String, block: suspend () -> Unit) {
         val marker = "sync_rejected:services:$name"
@@ -184,6 +199,15 @@ object SyncScheduler {
         }
     }
 
+    /**
+     * 应用退到后台时立刻把同步任务交给 WorkManager，不走 1 秒防抖和待上传检查：
+     * 用户改完马上划掉应用，进程活不到防抖结束，任务没入队，修改就要等下次打开才上传。
+     */
+    fun requestNow(context: Context) {
+        val app = context.applicationContext
+        scope.launch { scheduleIfEnabled(app) }
+    }
+
     suspend fun scheduleIfEnabled(context: Context, dataChanged: Boolean = false) {
         val runtime = AuthRuntime.get(context)
         val user = (runtime.auth.state.value as? AuthState.SignedIn)?.user ?: return
@@ -196,10 +220,12 @@ object SyncScheduler {
         val immediate = immediateWork((state.retryAt() - System.currentTimeMillis()).coerceAtLeast(0))
         // 用户重新打开应用时接管旧版积累的限流退避；正在传输的任务继续运行。
         // 已持久化的 Retry-After 仍作为 initialDelay，不能通过重启绕过服务端限流。
-        val resumeRateLimited = !dataChanged && state.retryAt() > 0 && withContext(Dispatchers.IO) {
+        // 排队中的任务可能是半分钟后的资源续传或旧的退避；本地有新修改或用户回到应用时直接顶替它，
+        // 不让上传排在后面。正在运行的任务保留，它结束前会自己复查待上传记录。
+        val idle = withContext(Dispatchers.IO) {
             manager.getWorkInfosForUniqueWork(NOW).get().none { it.state == WorkInfo.State.RUNNING }
         }
-        manager.enqueueUniqueWork(NOW, if (resumeRateLimited) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP, immediate)
+        manager.enqueueUniqueWork(NOW, if (idle) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP, immediate)
         val periodic = PeriodicWorkRequestBuilder<SyncWorker>(15, TimeUnit.MINUTES).setConstraints(constraints)
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).build()
         manager.enqueueUniquePeriodicWork(PERIODIC, ExistingPeriodicWorkPolicy.KEEP, periodic)

@@ -53,7 +53,8 @@ internal fun ViewModelStateHolder.reconcileAgentRun(
         trace.filterIsInstance<ExecutionTraceEvent.Content>().joinToString("") { it.text }
     } else baseline.text
     // 没有执行过程的请求也必须能看到原因；从账本重建正文时，错误说明不会存在于内容事件中。
-    val text = if (status == AgentRunStatus.FAILED && !executionStatus.isNullOrBlank() &&
+    // 已封存的正文是正式内容（可能已同步），失败原因由 executionStatus 展示，不再拼进正文。
+    val text = if (!baseline.isIncomplete && status == AgentRunStatus.FAILED && !executionStatus.isNullOrBlank() &&
         !transcriptText.contains(executionStatus)
     ) {
         listOf(transcriptText, "⚠️ $executionStatus").filter(String::isNotBlank).joinToString("\n\n")
@@ -74,7 +75,7 @@ internal fun ViewModelStateHolder.reconcileAgentRun(
             trace.filterIsInstance<ExecutionTraceEvent.Tool>().map { it.step }
         } else baseline.executionSteps,
         executionStatus = executionStatus,
-        isError = baseline.isError || status == AgentRunStatus.FAILED,
+        isError = baseline.isError || (!baseline.isIncomplete && status == AgentRunStatus.FAILED),
         // 等待恢复不是终态。写入结束时间会触发持久层的过期任务清理，误取消待恢复任务。
         executionFinishedAt = run.updatedAt.takeIf {
             status in setOf(AgentRunStatus.COMPLETED, AgentRunStatus.FAILED, AgentRunStatus.CANCELLED)

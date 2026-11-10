@@ -69,6 +69,10 @@ interface ChatDao {
     /** 分页补传既有消息资源，避免一次加载所有历史正文；文字和图片历史共用附件合同。 */
     @Query("SELECT * FROM messages WHERE deleted=0 AND sessionId IN (SELECT id FROM chat_sessions WHERE deleted=0 AND id NOT IN ('last_open_chat_v1','last_open_image_generation_v1')) ORDER BY timestamp DESC, uuid LIMIT :limit OFFSET :offset")
     suspend fun getResourceSyncMessages(limit: Int, offset: Int): List<MessageEntity>
+
+    /** 资源补传先只读身份和内容指纹：绝大多数消息早已传完，不必为了核对把正文和执行轨迹整行读出来。 */
+    @Query("SELECT id, storageFingerprint, uuid, updated_at, deleted, sync_status, ever_synced FROM messages WHERE deleted=0 AND sessionId IN (SELECT id FROM chat_sessions WHERE deleted=0 AND id NOT IN ('last_open_chat_v1','last_open_image_generation_v1')) ORDER BY timestamp DESC, uuid")
+    suspend fun getResourceSyncCandidates(): List<MessageStorageState>
     /** 旧版本提示词仅在 System 消息中，升级时只读取这一列，不解析附件和工具轨迹。 */
     @Query("SELECT text FROM messages WHERE sessionId = :sessionId AND sender = 'System' AND isPlaceholderName = 0 AND deleted = 0 ORDER BY timestamp DESC LIMIT 1")
     suspend fun getLegacySystemPrompt(sessionId: String): String?
@@ -187,10 +191,11 @@ interface ChatDao {
      */
     @Transaction
     suspend fun upsertMessages(messages: List<MessageEntity>, debug: Boolean = BuildConfig.DEBUG) {
-        messages.forEach { incoming ->
-            val session = getStoredSession(incoming.sessionId) ?: error("消息缺少所属会话")
+        messages.forEach { page ->
+            val session = getStoredSession(page.sessionId) ?: error("消息缺少所属会话")
             if (session.deleted) return@forEach
-            val stored = getStoredMessage(incoming.id, incoming.uuid)
+            val stored = getStoredMessage(page.id, page.uuid)
+            val incoming = stored?.let(page::keepingStoredPadding) ?: page
             if (stored != null) {
                 // last-open 是设备恢复快照而非正式历史，允许更新但仍不可复活删除记录。
                 val isSnapshot = session.id == "last_open_chat_v1" || session.id == "last_open_image_generation_v1"

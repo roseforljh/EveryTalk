@@ -598,6 +598,11 @@ internal class RoomSyncStore(
     /** 升级时也处理旧失败附件；仍存活的附件错误保留，不能掩盖实际传输失败。 */
     private suspend fun retireDeletedParentAttachments() = database.withTransaction {
         attachments.retireDeletedParentAttachments()
+        // 配置已被云端删除（或记录已不存在）后，没有东西可再上传；旧的“未能同步”提示留着只会永远挂在账号页。
+        settings.getByPrefix("sync_rejected:user_settings:").forEach { failure ->
+            val row = settings.getUserSettingByUuid(failure.key.removePrefix("sync_rejected:user_settings:"))
+            if (row == null || (row.deleted && row.syncStatus == SyncStatus.SYNCED)) settings.deleteSetting(failure.key)
+        }
         settings.getByPrefix("sync_rejected:attachments:").forEach { failure ->
             if (attachments.get(failure.key.removePrefix("sync_rejected:attachments:"))?.deleted == true) {
                 settings.deleteSetting(failure.key)

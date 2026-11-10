@@ -44,6 +44,7 @@ internal class SyncResourceSynchronizer(
     private val state = SyncStateStore(db)
     var moreWork = false
         private set
+    private var downloads = 0
     private var historyDek: ByteArray? = null
     private var chunkBytes = CHUNK_BYTES
     override fun close() { historyDek?.fill(0); historyDek = null }
@@ -59,42 +60,42 @@ internal class SyncResourceSynchronizer(
         restoreAttachments()
         restoreSkills()
         uploadSkills()
-        var offset = 0
         var transferred = 0
-        while (true) {
-            val messages = chat.getResourceSyncMessages(20, offset)
-            if (messages.isEmpty()) break
-            for (message in messages) {
-                if (message.id.startsWith("cloud:") && settings.getValue("sync_resource_republish") != "true") continue
-                val marker = "sync_resource_source:${message.uuid}"
-                val revision = "$user:${message.storageFingerprint}"
-                if (settings.getValue(marker) == revision) continue
-                val needsTransfer = needsArchive(message) || mediaItems(message).isNotEmpty()
-                if (needsTransfer && transferred >= 5) { moreWork = true; return }
-                val session = chat.getStoredSession(message.sessionId)?.takeUnless { it.deleted } ?: continue
-                val failureMarker = "sync_resource_failed:${message.uuid}"
-                if (settings.getValue(failureMarker) == revision) continue
-                try { uploadMessage(message, session) }
-                catch (cancelled: CancellationException) { throw cancelled }
-                catch (error: SyncHttpException) {
-                    if (error.statusCode in setOf(401, 408, 409, 429) || error.statusCode >= 500) throw error
-                    settings.insertSetting(SystemSettingEntity("sync_rejected:messages:${message.uuid}", error.serverCode?.takeIf { it.matches(Regex("[A-Z_]{1,64}")) } ?: "RESOURCE_UPLOAD_FAILED"))
-                    settings.insertSetting(SystemSettingEntity(failureMarker, revision)); continue
-                }
-                catch (_: IllegalArgumentException) {
-                    settings.insertSetting(SystemSettingEntity("sync_rejected:messages:${message.uuid}", "RESOURCE_VALIDATION_FAILED"))
-                    settings.insertSetting(SystemSettingEntity(failureMarker, revision)); continue
-                }
-                // 上传期间又编辑了本地消息时，下一轮仍须补传新版本。
-                if (chat.getMessageByUuid(message.uuid)?.storageFingerprint == message.storageFingerprint) {
-                    settings.insertSetting(SystemSettingEntity(marker, revision))
-                    // 整条消息完成前保留相同密文和 nonce，防止后续附件 429 后重复生成前面的文件块。
-                    root.listFiles()?.filter { it.name.startsWith("out-${message.uuid}-") || it.name.startsWith("tool-${message.uuid}-") }
-                        ?.forEach { it.delete() }
-                }
-                if (needsTransfer) transferred++
+        // 每次同步都会走到这里。先用轻量列和已完成标记筛掉传过的消息，只有真要补传的才读整行；
+        // 原先逐页读全部历史，几千条消息要十几秒，期间整把同步锁被占着，新的本地修改只能等。
+        val republish = settings.getValue("sync_resource_republish") == "true"
+        val uploaded = settings.getByPrefix("sync_resource_source:").associate { it.key to it.value }
+        val failures = settings.getByPrefix("sync_resource_failed:").associate { it.key to it.value }
+        for (candidate in chat.getResourceSyncCandidates()) {
+            if (candidate.id.startsWith("cloud:") && !republish) continue
+            val marker = "sync_resource_source:${candidate.uuid}"
+            val failureMarker = "sync_resource_failed:${candidate.uuid}"
+            val candidateRevision = "$user:${candidate.storageFingerprint}"
+            if (uploaded[marker] == candidateRevision || failures[failureMarker] == candidateRevision) continue
+            val message = chat.getMessageByUuid(candidate.uuid)?.takeUnless { it.deleted } ?: continue
+            val revision = "$user:${message.storageFingerprint}"
+            val needsTransfer = needsArchive(message) || mediaItems(message).isNotEmpty()
+            if (needsTransfer && transferred >= 5) { moreWork = true; return }
+            val session = chat.getStoredSession(message.sessionId)?.takeUnless { it.deleted } ?: continue
+            try { uploadMessage(message, session) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: SyncHttpException) {
+                if (error.statusCode in setOf(401, 408, 409, 429) || error.statusCode >= 500) throw error
+                settings.insertSetting(SystemSettingEntity("sync_rejected:messages:${message.uuid}", error.serverCode?.takeIf { it.matches(Regex("[A-Z_]{1,64}")) } ?: "RESOURCE_UPLOAD_FAILED"))
+                settings.insertSetting(SystemSettingEntity(failureMarker, revision)); continue
             }
-            offset += messages.size
+            catch (_: IllegalArgumentException) {
+                settings.insertSetting(SystemSettingEntity("sync_rejected:messages:${message.uuid}", "RESOURCE_VALIDATION_FAILED"))
+                settings.insertSetting(SystemSettingEntity(failureMarker, revision)); continue
+            }
+            // 上传期间又编辑了本地消息时，下一轮仍须补传新版本。
+            if (chat.getMessageByUuid(message.uuid)?.storageFingerprint == message.storageFingerprint) {
+                settings.insertSetting(SystemSettingEntity(marker, revision))
+                // 整条消息完成前保留相同密文和 nonce，防止后续附件 429 后重复生成前面的文件块。
+                root.listFiles()?.filter { it.name.startsWith("out-${message.uuid}-") || it.name.startsWith("tool-${message.uuid}-") }
+                    ?.forEach { it.delete() }
+            }
+            if (needsTransfer) transferred++
         }
         settings.deleteSetting("sync_resource_republish")
     }
@@ -313,6 +314,8 @@ internal class SyncResourceSynchronizer(
             attachment to payload
         }
         for ((messageId, entries) in records.groupBy { it.first.messageId }) {
+            // 恢复不降速，只是分批：每批之间放开同步锁并立刻续传，下一轮开头会先上传这期间的本地修改。
+            if (downloads >= RESTORE_DOWNLOADS_PER_RUN) { moreWork = true; break }
             val message = chat.getMessageByUuid(messageId)?.takeUnless { it.deleted } ?: continue
             val failureMarker = "sync_resource_receive_failed:$messageId"
             // 旧版本只保存笼统的下载失败，升级后重查一次并记录真实错误码；
@@ -478,7 +481,7 @@ internal class SyncResourceSynchronizer(
     }
     private suspend fun cached(info: SyncFileInfo): File {
         val target = File(root, "${info.fileId}-${info.sha256}")
-        if (!target.isFile || target.length() != info.size || syncFileHash(target) != info.sha256) api.downloadFile(info, target)
+        if (!target.isFile || target.length() != info.size || syncFileHash(target) != info.sha256) { api.downloadFile(info, target); downloads++ }
         return target
     }
 
@@ -648,5 +651,8 @@ internal class SyncResourceSynchronizer(
         require(target.canonicalPath.startsWith(File(context.filesDir, "agent_tool_results").canonicalPath + File.separator))
         return target
     }
-    private companion object { const val CHUNK_BYTES = 4L * 1024 * 1024 }
+    private companion object {
+        const val CHUNK_BYTES = 4L * 1024 * 1024
+        const val RESTORE_DOWNLOADS_PER_RUN = 40
+    }
 }

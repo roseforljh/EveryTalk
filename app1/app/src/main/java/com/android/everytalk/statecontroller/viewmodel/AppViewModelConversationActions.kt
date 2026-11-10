@@ -156,8 +156,15 @@ import java.util.TimeZone
         textHistoryLoadJob = viewModelScope.launch {
             try {
                 previousHistoryLoadJob?.cancelAndJoin()
-                withContext(Dispatchers.IO) {
-                    historyManager.saveCurrentChatToHistoryNow(forceSave = true, isImageGeneration = false)
+                // 旧会话保存失败只影响旧会话，不能让用户点开的新会话也加载不出来。
+                try {
+                    withContext(Dispatchers.IO) {
+                        historyManager.saveCurrentChatToHistoryNow(forceSave = true, isImageGeneration = false)
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.e("AppViewModel", "Error saving current chat before history load", e)
                 }
                 val resolvedIndex = resolveHistoryIndexAfterSave(
                     requestedIndex = index,

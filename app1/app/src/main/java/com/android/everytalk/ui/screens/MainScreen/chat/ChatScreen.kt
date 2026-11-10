@@ -671,6 +671,15 @@ fun ChatScreen(
                         }
                     }
                 }
+                // 加载指示只盖住消息区：顶栏、侧边栏入口和输入框都在它上层，加载慢时仍可切走。
+                AnimatedVisibility(
+                    visible = isInitialConversationLoading,
+                    modifier = Modifier.fillMaxSize(),
+                    enter = fadeIn(animationSpec = tween(durationMillis = 90)),
+                    exit = fadeOut(animationSpec = tween(durationMillis = 120)),
+                ) {
+                    HistoryConversationLoadingOverlay()
+                }
             }
 
             // 浮动输入框 - 对齐到底部
@@ -843,15 +852,6 @@ fun ChatScreen(
                     }
                 }
             )
-
-            AnimatedVisibility(
-                visible = isInitialConversationLoading,
-                modifier = Modifier.fillMaxSize(),
-                enter = fadeIn(animationSpec = tween(durationMillis = 90)),
-                exit = fadeOut(animationSpec = tween(durationMillis = 120)),
-            ) {
-                HistoryConversationLoadingOverlay()
-            }
         }
 
 
