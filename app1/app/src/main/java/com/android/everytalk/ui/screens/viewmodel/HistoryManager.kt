@@ -4,6 +4,7 @@ import com.android.everytalk.statecontroller.*
 import android.util.Log
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.data.DataClass.hasReviewableExecutionProcess
 import com.android.everytalk.data.network.extractThinkTagContent
 import com.android.everytalk.statecontroller.ViewModelStateHolder
 import com.android.everytalk.util.ConversationNameHelper
@@ -348,13 +349,11 @@ class HistoryManager(
         fun hasAiSubstance(msg: Message): Boolean {
             if (msg.sender != Sender.AI) return true
             val hasText = msg.text.isNotBlank()
-            val hasReasoning = !msg.reasoning.isNullOrBlank()
             val hasParts = hasValidParts(msg.parts)
             val hasImages = !msg.imageUrls.isNullOrEmpty()
-            // Agent 开始执行时正文通常还是空的，但 executionStatus 是 Run 与可见消息之间的持久锚点。
-            // 丢掉这条占位会让前台服务把真实 Run 误判为孤儿任务并提前取消。
-            val hasExecutionStatus = !msg.executionStatus.isNullOrBlank()
-            return hasText || hasReasoning || hasParts || hasImages || hasExecutionStatus
+            // 思考、工具步骤和执行状态都算内容：中断时正文常为空，丢掉会让已完成的过程整条消失；
+            // executionStatus 还是 Run 与可见消息之间的持久锚点，丢掉会让前台服务误判孤儿任务。
+            return hasText || hasParts || hasImages || msg.hasReviewableExecutionProcess()
         }
         return stripLeadingLegacySystemPromptMessages(messagesToFilter)
             .filter { msg ->
@@ -963,8 +962,22 @@ class HistoryManager(
             pruneOrphanConversationStateMappings(setOf(deletedId))
             persistConversationApiConfigIdsIfChanged()
         }
-        persistenceManager.cleanupOrphanedAttachments()
+        scheduleOrphanAttachmentCleanup()
         onHistoryModified()
+    }
+
+    private var orphanCleanupJob: Job? = null
+
+    /**
+     * 孤立附件清理要重读全部历史（库大时要几秒）。放在删除命令里会让下一条删除、保存都排在它后面，
+     * 用户这时退出应用，排队的删除就丢了。改为删除完成后单独延后执行，连删多条只跑最后一次。
+     */
+    private fun scheduleOrphanAttachmentCleanup() {
+        orphanCleanupJob?.cancel()
+        orphanCleanupJob = scope.launch {
+            delay(DEBOUNCE_SAVE_MS)
+            persistenceManager.cleanupOrphanedAttachments()
+        }
     }
 
     /** 回退与自动保存共用串行队列，旧快照必须先落库，不能在回退之后复活旧消息。 */

@@ -73,13 +73,8 @@ internal class ApiHandlerErrorController(
                 val msg = messageList[idx]
                 if (!msg.isError) {
                     val safetyBlocked = error is AiContentSafetyBlockedException
-                    val existingContent = if (safetyBlocked) {
-                        ""
-                    } else {
-                        msg.text.takeIf { it.isNotBlank() }
-                            ?: msg.reasoning?.takeIf { it.isNotBlank() && msg.text.isBlank() }
-                            ?: ""
-                    }
+                    // 思考和工具过程留在过程组件里，错误只追加到已有正文之后。
+                    val existingContent = if (safetyBlocked) "" else msg.text.takeIf { it.isNotBlank() }.orEmpty()
                     val errorPrefix = if (existingContent.isNotBlank()) "\n\n" else ""
                     val errorTextContent = errorVisualPrefix + when (error) {
                         is AiContentSafetyBlockedException -> context.localizeUiMessage(
@@ -109,11 +104,7 @@ internal class ApiHandlerErrorController(
                         text = existingContent + errorPrefix + errorTextContent,
                         isError = true,
                         contentStarted = true,
-                        reasoning = if (safetyBlocked || (existingContent == msg.reasoning && errorPrefix.isNotBlank())) {
-                            null
-                        } else {
-                            msg.reasoning
-                        },
+                        reasoning = if (safetyBlocked) null else msg.reasoning,
                         parts = if (safetyBlocked) emptyList() else msg.parts,
                         currentWebSearchStage = null,
                         // 错误正文可能被 Agent 轨迹重建，过程组件必须独立保留可显示、已脱敏的原因。

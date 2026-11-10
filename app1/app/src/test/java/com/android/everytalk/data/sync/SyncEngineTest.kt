@@ -365,10 +365,26 @@ class SyncEngineTest {
         source.saveApiConfigs(listOf(config), reviveDeleted = true)
         assertEquals(listOf("cfg-1"), source.loadApiConfigs().map { it.id })
         // 同步刚加进库、界面还没拿到的配置，不能被旧列表当成删除。
-        db.apiConfigDao().insertConfigs(listOf(config.copy(id = "cfg-remote").toEntity()))
+        db.apiConfigDao().insertConfigs(listOf(config.copy(id = "cfg-remote", model = "model-2").toEntity()))
         source.saveApiConfigs(listOf(config))
         assertEquals(setOf("cfg-1", "cfg-remote"), source.loadApiConfigs().map { it.id }.toSet())
         assertFalse(db.settingsDao().getUserSetting("api_configs", "cfg-remote")!!.deleted)
+    }
+
+    @Test fun `多设备各自添加的同一模型只保留一条并迁移会话绑定`() = runBlocking {
+        val db = device()
+        val source = com.android.everytalk.data.database.RoomDataSource(ApplicationProvider.getApplicationContext(), db)
+        val config = com.android.everytalk.data.DataClass.ApiConfig("https://api.example/v1", "key", "model", "我的服务", id = "cfg-b", name = "模型")
+        source.saveApiConfigs(listOf(config))
+        // 另一台设备添加的同一模型经同步写进库，会话绑定的是它。
+        db.apiConfigDao().insertConfigs(listOf(config.copy(id = "cfg-a").toEntity()))
+        source.saveConversationApiConfigIds(mapOf("c1" to "cfg-b"))
+        source.saveSelectedConfigId("cfg-b")
+
+        assertEquals(listOf("cfg-a"), source.loadApiConfigs().map { it.id })
+        assertTrue(db.settingsDao().getUserSetting("api_configs", "cfg-b")!!.deleted)
+        assertEquals(mapOf("c1" to "cfg-a"), source.loadConversationApiConfigIds())
+        assertEquals("cfg-a", source.loadSelectedConfigId())
     }
 
     @Test fun `界面旧列表保存不能把同步更新过的配置改回旧内容`() = runBlocking {

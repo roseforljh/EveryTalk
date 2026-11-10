@@ -51,7 +51,8 @@ internal class MessageItemsControllerForTest(
     }
 
     fun chatListItemsForTest(): List<com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem> = runBlocking {
-        chatListItems.first { it.isNotEmpty() }
+        // 生成失败时 flow 不会发射，无限等待会让整个测试挂死；超时后直接失败并保留原因。
+        kotlinx.coroutines.withTimeout(10_000) { chatListItems.first { it.isNotEmpty() } }
     }
 
     fun close() {

@@ -190,6 +190,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             ?.let { provider -> _externalWebSearchConfigs.value[provider.providerId]?.apiKey.orEmpty() }
             .orEmpty()
 
+    // --- 强调色（色值见 ui/theme/AccentPalette.kt） ---
+    internal val _accentColor = MutableStateFlow(com.android.everytalk.ui.theme.AccentColor.Default)
+    val accentColor: StateFlow<com.android.everytalk.ui.theme.AccentColor>
+        get() = _accentColor.asStateFlow()
+
+    fun setAccentColor(color: com.android.everytalk.ui.theme.AccentColor) {
+        _accentColor.value = color
+        viewModelScope.launch { persistenceManager.saveAccentColorName(color.name) }
+    }
+
     internal val fileManager: FileManager by lazy {
         org.koin.java.KoinJavaComponent.getKoin().get()
     }
@@ -567,28 +577,36 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    /** 异步生成首条问题的会话标题；失败时不写入标题元数据，列表继续显示首条问题。 */
+    /**
+     * 异步生成首条问题的会话标题；失败时列表继续显示首条问题。
+     * 发送流程在调用前已把首条消息入库，这里按（可能迁移后的）稳定 ID 找到历史会话。
+     * 列表只观察内存历史，所以写进内存历史让列表立即刷新（之后每次保存都会带进 Room），再直接更新数据库。
+     */
     private fun generateConversationTitle(
-        conversationId: String,
+        requestConversationId: String,
         prompt: String,
         config: ApiConfig,
         isImageGeneration: Boolean,
     ) {
         viewModelScope.launch(Dispatchers.IO) {
-            val generated = runCatching {
+            val generated = try {
                 com.android.everytalk.statecontroller.controller.conversation.ConversationTitleGenerator
                     .generate(prompt, config)
-            }.onFailure { error ->
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
                 Log.w("AppViewModel", "会话标题生成失败，将使用首条问题: ${error.message}")
-            }.getOrNull() ?: return@launch
+                null
+            } ?: return@launch
 
-            // 用户在模型返回前手动改过标题时，尊重手动标题，不覆盖它。
-            val current = persistenceManager.loadHistorySession(conversationId).orEmpty()
-            if (com.android.everytalk.util.ConversationNameHelper.getStoredConversationTitle(current) != null) return@launch
+            val conversationId = withContext(Dispatchers.Main.immediate) {
+                com.android.everytalk.statecontroller.controller.conversation.applyGeneratedConversationTitle(
+                    if (isImageGeneration) stateHolder._imageGenerationHistoricalConversations else stateHolder._historicalConversations,
+                    stateHolder.resolveConversationId(requestConversationId),
+                    generated,
+                )?.also { conversationPreviewController.setCachedTitle(it, generated, isImageGeneration) }
+            } ?: return@launch
             historyManager.renameHistorySession(conversationId, generated)
-            withContext(Dispatchers.Main.immediate) {
-                conversationPreviewController.setCachedTitle(conversationId, generated, isImageGeneration)
-            }
         }
     }
 
@@ -1154,6 +1172,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
   }
 
   init {
+         // 恢复上次选中的强调色；找不到或名字失效时保持默认。
+         viewModelScope.launch {
+             val saved = persistenceManager.loadAccentColorName()
+             if (saved != null) {
+                 com.android.everytalk.ui.theme.AccentColor.entries
+                     .firstOrNull { it.name == saved }
+                     ?.let { _accentColor.value = it }
+             }
+         }
          val appToolExecutor: AppToolExecutor = {
              toolName,
              arguments,

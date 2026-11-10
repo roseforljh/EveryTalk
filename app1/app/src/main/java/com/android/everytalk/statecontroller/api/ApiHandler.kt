@@ -1603,9 +1603,10 @@ class ApiHandler(
                         messageList.indexOfFirst { it.id == messageIdBeingCancelled }
                     if (index != -1) {
                         val msg = messageList[index]
-                        // 如仍为占位消息则移除；否则仅触发重组以刷新思考框可见性
+                        // 如仍为占位消息则移除；已有思考、工具步骤等过程的消息必须保留。
                         val isPlaceholder = msg.sender == Sender.AI && msg.text.isBlank() &&
                                 msg.reasoning.isNullOrBlank() && msg.webSearchResults.isNullOrEmpty() &&
+                                msg.executionSteps.isEmpty() && msg.executionTrace.isEmpty() &&
                                 msg.currentWebSearchStage.isNullOrEmpty() && !msg.contentStarted && !msg.isError
                         val isHistoryLoaded = stateHolder._loadedHistoryIndex.value != null || stateHolder._loadedImageGenerationHistoryIndex.value != null
                         if (isPlaceholder && !isHistoryLoaded) {

@@ -83,8 +83,35 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
     
     // --- Api Configs --- 
     suspend fun loadApiConfigs(): List<ApiConfig> {
-        return apiConfigDao.getConfigs(isImageGen = false).map { it.toApiConfig() }
+        return mergeDuplicateTextConfigs()
             .also { shownConfigIds["text"] = it.map(ApiConfig::id).toSet(); baseConfigs["text"] = it.associateBy(ApiConfig::id) }
+    }
+
+    /**
+     * 多台设备各自添加同一模型会得到不同随机 ID，同步后列表出现重复项。
+     * 按本机添加时的判重规则（地址、密钥、平台、渠道、模型）再加上显示名合并：保留 ID 最小的一条，
+     * 各设备结果一致；其余写墓碑同步删除，会话和默认选择改指向保留项。
+     */
+    private suspend fun mergeDuplicateTextConfigs(): List<ApiConfig> = database.withTransaction {
+        val stored = apiConfigDao.getConfigs(isImageGen = false).map { it.toApiConfig() }
+        val aliases = stored.groupBy { listOf(it.key, it.model, it.address, it.provider, it.channel, it.name) }.values
+            .flatMap { group -> val keeper = group.minOf(ApiConfig::id); group.filter { it.id != keeper }.map { it.id to keeper } }
+            .toMap()
+        if (aliases.isEmpty()) return@withTransaction stored
+        val kept = stored.filter { it.id !in aliases }
+        apiConfigDao.replaceConfigs(isImageGen = false, configs = kept.map { it.toEntity(isImageGenConfig = false) })
+        recordRemovedSettings("api_configs", aliases.keys)
+        settingsDao.getValue("selected_api_config_id")?.let { aliases[it] }?.let { saveSetting("selected_api_config_id", it) }
+        val mappingSerializer = kotlinx.serialization.builtins.MapSerializer(String.serializer(), String.serializer())
+        settingsDao.getValue("conversation_api_config_ids")
+            ?.let { runCatching { json.decodeFromString(mappingSerializer, it) }.getOrNull() }
+            ?.takeIf { mapping -> mapping.values.any(aliases::containsKey) }
+            ?.let { mapping ->
+                saveSetting("conversation_api_config_ids",
+                    json.encodeToString(mappingSerializer, mapping.mapValues { (_, id) -> aliases[id] ?: id }))
+            }
+        captureSyncSettings()
+        kept
     }
 
     suspend fun saveApiConfigs(configs: List<ApiConfig>, reviveDeleted: Boolean = false) = database.withTransaction {
@@ -157,6 +184,10 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
 
     suspend fun loadSelectedVoiceConfigId(): String? = settingsDao.getValue("selected_voice_config_id")
     suspend fun saveSelectedVoiceConfigId(id: String?) = saveSetting("selected_voice_config_id", id)
+
+    // --- Accent Color ---
+    suspend fun loadAccentColor(): String? = settingsDao.getValue("accent_color")
+    suspend fun saveAccentColor(name: String?) = saveSetting("accent_color", name)
 
     // --- Custom Providers ---
     suspend fun loadCustomProviders(): Set<String> {

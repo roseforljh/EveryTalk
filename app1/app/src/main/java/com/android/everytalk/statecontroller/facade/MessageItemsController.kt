@@ -812,7 +812,10 @@ open class MessageItemsController(
                     add(ChatListItem.ErrorMessage(message.id, message.text))
                 }
             }
-            else -> emptyList()
+            // 停止或中断时正文还没开始：仍要显示已有的思考和工具过程，不能整条消失。
+            else -> if (hasReviewableProcess) {
+                listOf(ChatListItem.AiMessageReasoning(message = message, activityStatusText = message.executionStatus))
+            } else emptyList()
         }
     }
 

@@ -725,6 +725,13 @@ class DataPersistenceManager(
     suspend fun saveConversationSettings(conversationId: String, systemPrompt: String, promptEnabled: Boolean) =
         withContext(Dispatchers.IO) { roomDataSource.saveConversationSettings(conversationId, systemPrompt, promptEnabled) }
 
+    // --- 强调色（色板来源见 ui/theme/AccentPalette.kt） ---
+    suspend fun loadAccentColorName(): String? =
+        withContext(Dispatchers.IO) { roomDataSource.loadAccentColor() }
+
+    suspend fun saveAccentColorName(name: String?) =
+        withContext(Dispatchers.IO) { roomDataSource.saveAccentColor(name) }
+
     suspend fun loadConversationSettings(): Map<String, Pair<String, Boolean>> =
         withContext(Dispatchers.IO) { roomDataSource.loadConversationSettings() }
 
