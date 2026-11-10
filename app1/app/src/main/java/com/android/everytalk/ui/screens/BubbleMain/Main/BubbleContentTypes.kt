@@ -1,5 +1,8 @@
 package com.android.everytalk.ui.screens.BubbleMain.Main
 
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.animation.togetherWith
 import androidx.compose.ui.res.painterResource
 import androidx.annotation.DrawableRes
 import com.android.everytalk.statecontroller.*
@@ -136,7 +139,42 @@ internal fun shouldConstrainUserBubbleHeight(
 internal fun resolveUserBubbleContentBottomPaddingDp(
     sender: Sender,
     isExpanded: Boolean,
-): Float = if (sender == Sender.User && isExpanded) 28f else 0f
+): Float = if (sender == Sender.User && isExpanded) USER_BUBBLE_TOGGLE_RESERVED_DP else 0f
+
+/** 展开态底部给“收起”胶囊留的空间：胶囊 28dp + 底边距 8dp + 4dp 呼吸。 */
+internal const val USER_BUBBLE_TOGGLE_RESERVED_DP = 40f
+private val UserBubbleFadeHeight = 88.dp
+private val UserBubbleToggleEasing = FastOutSlowInEasing
+
+/**
+ * 底部渐隐遮罩：直接降低内容自身透明度，露出气泡底色。
+ * 旧做法是在文字上盖一块同色渐变，过渡只有 38dp 且 80% 以上不透明，看起来像一块白板。
+ */
+private fun Modifier.userBubbleBottomFade(strength: () -> Float, fadeHeight: Dp): Modifier = this
+    .graphicsLayer { compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen }
+    .drawWithContent {
+        drawContent()
+        val k = strength()
+        if (k <= 0f) return@drawWithContent
+        val h = fadeHeight.toPx().coerceAtMost(size.height)
+        val top = size.height - h
+        // 缓入缓出的透明度曲线，避免线性渐变在中段出现明显分界。
+        fun a(v: Float) = Color.Black.copy(alpha = 1f - k * (1f - v))
+        drawRect(
+            brush = Brush.verticalGradient(
+                0f to a(1f),
+                0.3f to a(0.86f),
+                0.6f to a(0.45f),
+                0.85f to a(0.1f),
+                1f to a(0f),
+                startY = top,
+                endY = size.height,
+            ),
+            topLeft = Offset(0f, top),
+            size = androidx.compose.ui.geometry.Size(size.width, h),
+            blendMode = androidx.compose.ui.graphics.BlendMode.DstIn,
+        )
+    }
 
 
 @Composable
@@ -233,9 +271,14 @@ internal fun UserOrErrorMessageContent(
 
             LaunchedEffect(isExpanded, message.id) {
                 if (!isExpanded) {
-                    contentScrollState.scrollTo(0)
+                    contentScrollState.animateScrollTo(0, tween(300, easing = UserBubbleToggleEasing))
                 }
             }
+            val fadeStrength by animateFloatAsState(
+                targetValue = if (!isExpanded && hasOverflow) 1f else 0f,
+                animationSpec = tween(300, easing = UserBubbleToggleEasing),
+                label = "user-bubble-fade",
+            )
             
             // 使用 Box 作为主容器，让按钮浮动在底部
             Box(
@@ -255,11 +298,13 @@ internal fun UserOrErrorMessageContent(
                 Box(
                     modifier = Modifier
                         .wrapContentWidth()
-                        .animateContentSize() // 🔥 添加流畅的过渡动画
+                        .animateContentSize(tween(300, easing = UserBubbleToggleEasing))
                         .then(
                             if (constrainUserBubbleHeight) {
                                 Modifier
                                     .heightIn(max = maxUserBubbleHeight)
+                                    // 遮罩放在滚动之前，作用在可视区域而不是整段内容上。
+                                    .userBubbleBottomFade({ fadeStrength }, UserBubbleFadeHeight)
                                     .then(
                                         if (isExpanded && hasOverflow) {
                                             Modifier.verticalScroll(contentScrollState)
@@ -285,6 +330,15 @@ internal fun UserOrErrorMessageContent(
                         contentAlignment = Alignment.CenterStart,
                         modifier = Modifier
                             .wrapContentWidth()
+                            // 收起时按完整高度排版，文字一直延伸到气泡底部再由遮罩淡出；
+                            // 否则文字被自身边界在底部 18dp 处硬切，下方露出一条空白。
+                            .then(
+                                if (constrainUserBubbleHeight && !isExpanded) {
+                                    Modifier.wrapContentHeight(align = Alignment.Top, unbounded = true)
+                                } else {
+                                    Modifier
+                                }
+                            )
                             .offset(y = if (message.sender == Sender.User) USER_BUBBLE_TEXT_OPTICAL_OFFSET else 0.dp)
                             .padding(
                                 start = if (message.sender == Sender.User) 14.dp else 0.dp,
@@ -322,40 +376,86 @@ internal fun UserOrErrorMessageContent(
                     }
                 }
                 
-                // 展开/收起按钮 - 浮动在底部，带有渐变背景
+                // 展开/收起胶囊：浮在底部中央，不再铺整条渐变色块。
                 if (message.sender == Sender.User && (hasOverflow || isExpanded)) {
-                    Box(
+                    UserBubbleToggle(
+                        expanded = isExpanded,
+                        bubbleColor = bubbleColor,
+                        contentColor = contentColor,
+                        onToggle = { isExpanded = !isExpanded },
                         modifier = Modifier
-                            .fillMaxWidth()
                             .align(Alignment.BottomCenter)
-                            // 显式裁剪为底部圆角，解决点击波纹直角问题，匹配气泡圆角
-                            .clip(bubbleShape)
-                            .background(
-                                brush = Brush.verticalGradient(
-                                    colors = listOf(
-                                        bubbleColor.copy(alpha = 0f), // 顶部透明
-                                        bubbleColor.copy(alpha = 0.8f), // 中间过渡
-                                        bubbleColor                   // 底部实色
-                                    )
-                                )
-                            )
-                            .clickable { isExpanded = !isExpanded }
-                            .padding(vertical = 9.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            painter = painterResource(if (isExpanded) R.drawable.ic_gpt_chevron_up_md else R.drawable.ic_gpt_chevron_down_md),
-                            contentDescription = stringResource(
-                                if (isExpanded) R.string.action_collapse else R.string.action_expand,
-                            ),
-                            tint = contentColor.copy(alpha = 0.7f),
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
+                            .padding(bottom = 8.dp),
+                    )
                 }
             }
         }
 
+    }
+}
+
+@Composable
+private fun UserBubbleToggle(
+    expanded: Boolean,
+    bubbleColor: Color,
+    contentColor: Color,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val pressScale by animateFloatAsState(if (pressed) 0.94f else 1f, tween(120), label = "toggle-press")
+    val rotation by animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        animationSpec = tween(300, easing = UserBubbleToggleEasing),
+        label = "toggle-chevron",
+    )
+    val lightBubble = bubbleColor.luminance() > 0.5f
+    // 与气泡同色系：浅色气泡略压暗、深色气泡略提亮，不再用偏白色块。
+    val pillColor = androidx.compose.ui.graphics.lerp(
+        bubbleColor,
+        if (lightBubble) Color.Black else Color.White,
+        if (lightBubble) 0.05f else 0.10f,
+    )
+    androidx.compose.material3.Surface(
+        onClick = onToggle,
+        interactionSource = interaction,
+        shape = CircleShape,
+        color = pillColor,
+        contentColor = contentColor,
+        border = androidx.compose.foundation.BorderStroke(0.5.dp, contentColor.copy(alpha = if (lightBubble) 0.08f else 0.14f)),
+        modifier = modifier
+            .height(28.dp)
+            .graphicsLayer {
+                scaleX = pressScale
+                scaleY = pressScale
+            },
+    ) {
+        androidx.compose.foundation.layout.Row(
+            modifier = Modifier.padding(start = 12.dp, end = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            androidx.compose.animation.AnimatedContent(
+                targetState = expanded,
+                transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(120)) },
+                label = "toggle-label",
+            ) { isOpen ->
+                Text(
+                    text = stringResource(if (isOpen) R.string.action_collapse else R.string.action_expand),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = contentColor.copy(alpha = 0.78f),
+                )
+            }
+            Spacer(Modifier.width(2.dp))
+            Icon(
+                painter = painterResource(R.drawable.ic_gpt_chevron_down_md),
+                contentDescription = null,
+                tint = contentColor.copy(alpha = 0.78f),
+                modifier = Modifier
+                    .size(16.dp)
+                    .graphicsLayer { rotationZ = rotation },
+            )
+        }
     }
 }
 

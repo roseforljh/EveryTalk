@@ -1,9 +1,9 @@
 package com.android.everytalk.ui.screens.MainScreen.chat.text.ui
+import androidx.compose.ui.graphics.luminance
 import com.android.everytalk.statecontroller.*
-import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.max
-import kotlin.math.sin
+import kotlin.math.roundToInt
 import kotlin.math.sqrt
 import android.Manifest
 import android.content.Context
@@ -19,8 +19,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -57,6 +58,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -67,14 +69,12 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.PathOperation
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativePaint
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.SoftwareKeyboardController
@@ -1095,7 +1095,10 @@ fun ChatInputArea(
                 }
 
                 // 组合阶段只关心键盘是否可见；逐帧高度在下方协程里读取，键盘动画期间不重组整个输入区。
-                val isImeVisible by remember(imeInsets, density) { derivedStateOf { imeInsets.getBottom(density) > 0 } }
+                // 读键盘动画的“目标值”：键盘一开始下滑就判定为收起，输入框收起和键盘下滑同时进行；
+                // 读当前帧高度要等键盘完全落下才收起，两段动画首尾相接，看起来不连贯。
+                val imeTarget = WindowInsets.imeAnimationTarget
+                val isImeVisible by remember(imeTarget, density) { derivedStateOf { imeTarget.getBottom(density) > 0 } }
                 val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
                 LaunchedEffect(isImeVisible, localText) {
                     if (!isImeVisible && !showFunctionPanel && localText.isEmpty()) {
@@ -1111,35 +1114,26 @@ fun ChatInputArea(
                         (if (!isAgentEnabled && currentAgentResourceState != null) 1 else 0)
                 val hasActiveTags = !isImageModel && activeTagCount > 0
 
-                // 合并保护：只有输入框完全回到原始状态（无文本、无媒体、无标签），
-                // 且多行/标签收起的高度动画实际缩回单行附近后，才允许合并。
+                // 加号固定在输入框内部左侧，不再做分离动画：整条就是一个圆角输入框。
                 val hasAnyContent = localText.isNotEmpty() || selectedMediaItems.isNotEmpty() || hasActiveTags
-                var inputTall by remember { mutableStateOf(false) }
-                val inputTallThresholdPx = with(density) { 56.dp.roundToPx() }
-                val keepInputSeparated = hasAnyContent || inputTall
-                val separation = remember { Animatable(if (keepInputSeparated) 1f else 0f) }
-                var maxImeBottomPx by remember { mutableIntStateOf(0) }
-                LaunchedEffect(keepInputSeparated, imeInsets, density) {
-                    if (keepInputSeparated) {
-                        separation.animateTo(1f, separationSpring)
-                        return@LaunchedEffect
-                    }
-                    // 键盘自带缓动，逐帧直接跟随，不再叠加弹簧；只有进度跳变（刚恢复跟随、输入法无动画）时才补间。
-                    snapshotFlow { imeInsets.getBottom(density) }.collect { px ->
-                        maxImeBottomPx = max(maxImeBottomPx, px)
-                        val target = if (maxImeBottomPx > 0) px.toFloat() / maxImeBottomPx else 0f
-                        if (abs(target - separation.value) > 0.25f) separation.animateTo(target, separationSpring)
-                        else separation.snapTo(target)
-                    }
-                }
 
+                val accent = com.android.everytalk.ui.theme.LocalAccentColor.current
+                // GPT SendButtonContainerColor（z7.c）：选了彩色强调色时按钮用强调色，默认/黑色保持黑白。
                 val buttonBackgroundColor by animateColorAsState(
-                    targetValue = if (isDarkTheme) Color.White else Color.Black,
+                    targetValue = when {
+                        accent.isTinted -> accent.color
+                        isDarkTheme -> Color.White
+                        else -> Color.Black
+                    },
                     animationSpec = tween(durationMillis = 200),
                     label = "SendButtonBackground"
                 )
                 val iconColor by animateColorAsState(
-                    targetValue = if (isDarkTheme) Color.Black else Color.White,
+                    targetValue = when {
+                        accent.isTinted -> if (accent.color.luminance() > 0.5f) Color.Black else Color.White
+                        isDarkTheme -> Color.Black
+                        else -> Color.White
+                    },
                     animationSpec = tween(durationMillis = 200),
                     label = "SendButtonIcon"
                 )
@@ -1155,110 +1149,89 @@ fun ChatInputArea(
                         .graphicsLayer { clip = false },
                     contentAlignment = Alignment.Center
                 ) {
-                    // 所有尺寸、位移、边框共用同一条进度，保证加号、输入框和文字同步到位。
-                    val p = separation.value.coerceIn(0f, 1f)
-                    val verticalPadding = (4f - p).dp
-                    val inputMinHeight = (48f - 4f * p).dp
-                    // 展开态左侧按钮会占用约 80dp。旧算法先取屏宽 82% 再叠加这段位移，
-                    // 窄屏时输入框右侧会越过父布局，随后被裁剪成“压扁/消失”。
-                    // 这里先扣除按钮占用的空间，保证输入框和发送按钮始终落在可用宽度内。
-                    val expandedInputFieldWidth = (maxWidth - 80.dp).coerceAtLeast(0.dp)
-                    val collapsedInputFieldWidth = expandedInputFieldWidth + 16.dp
-                    val inputFieldWidth = collapsedInputFieldWidth + (expandedInputFieldWidth - collapsedInputFieldWidth) * p
-                    val plusBoxWidth = 64.dp
-
-                    // 加号像水滴一样先拉长再脱离：宽度 48 → 中段约 64 → 44，位移前慢后快，曲线全程连续无拐点。
-                    val plusTravel = -30f * p * (1f + p)
-                    val plusRawWidth = 48f - 4f * p + 18f * sin(PI.toFloat() * p)
-                    val plusWidth = plusRawWidth.dp
-                    val plusOffset = plusTravel.dp
-                    val groupLeft = if (plusOffset < 0.dp) plusOffset * p else 0.dp
-                    val groupWidth = inputFieldWidth - groupLeft
-                    val plusHeight = inputMinHeight
+                    // 反向自 ChatGPT Composer（fqo0.b 的调用参数 / qin 快照）：
+                    //   qin(progress, hPad, vPad)，最终 padding = 各分量 × progress，
+                    //   即收起态只有基准 padding，展开时在基准之上再叠加水平/垂直 padding。
+                    //   收起单行 52dp、左右留白 37dp；展开成卡片，左右收窄、上下加高。
+                    //   外层 Column 还有 6dp 内边距，所以这里要减掉，保证最终视觉边距是 37dp。
+                    // 时长/曲线对齐系统键盘动画（285ms, PathInterpolator(0.2,0,0,1)），和键盘升降同节奏。
+                    // 用 Animatable 而非 animateFloatAsState：值只在 placement 阶段读取，不触发整棵子树重组。
+                    val expanded = isFocused || hasAnyContent
+                    val expandProgress = remember { Animatable(if (expanded) 1f else 0f) }
+                    LaunchedEffect(expanded) {
+                        expandProgress.animateTo(
+                            targetValue = if (expanded) 1f else 0f,
+                            animationSpec = tween(285, easing = CubicBezierEasing(0.2f, 0f, 0f, 1f)),
+                        )
+                    }
+                    val plusBoxWidth = 48.dp
+                    val plusHeight = 48.dp
                     val borderColor = Color(0xFF48474C)
-                    // 文字起点贴着加号右缘走，过渡中途不会被加号盖住。
-                    val textStartPadding = (plusTravel + plusRawWidth).coerceIn(16f, 48f).dp
+                    val cornerRadius = 26.dp
+                    val composerShape = RoundedCornerShape(cornerRadius)
+                    // 供弹窗宽度和输入框宽度复用：跟水平 padding 同步收窄。
+                    // 外层 Column 已有 6dp 左右内边距，这里只补差额，让最终视觉边距是 37dp → 13dp。
+                    val composerSideGap = 37f + (13f - 37f) * expandProgress.value - 6f
+                    val inputFieldWidth = (maxWidth - composerSideGap.dp * 2).coerceAtLeast(0.dp)
 
                     Box(
                         modifier = Modifier
-                            .width(groupWidth)
+                            .fillMaxWidth()
+                            // 水平留白即 ChatGPT 的 horizontal padding：收起 37dp → 展开 13dp
+                            // 减去外层 Column 的 6dp，最终视觉边距才是 37dp。
+                            .padding(horizontal = composerSideGap.dp)
                             .wrapContentHeight()
-                            .graphicsLayer { clip = false }
-                            // 加号和输入框共用一个液态轮廓：两者合并成同一块填充、同一圈边框、同一层阴影，
-                            // 靠近时中间长出逐渐变细的液桥，不再是两个叠在一起的独立形状。
-                            .drawBehind {
-                                val inputLeft = -groupLeft.toPx()
-                                val plusLeft = inputLeft + plusOffset.toPx()
-                                val shape = liquidComposerPath(
-                                    plusLeft = plusLeft,
-                                    plusRight = plusLeft + plusWidth.toPx(),
-                                    inputLeft = inputLeft,
-                                    inputRight = inputLeft + inputFieldWidth.toPx(),
-                                    height = size.height,
-                                    radius = inputMinHeight.toPx() / 2,
-                                )
+                            // 背景、边框、阴影全部交给 RenderNode（Compose 原生 Modifier），
+                            // 宽度动画期间只更新图层属性，不再每帧跑一次 24dp 高斯模糊——
+                            // 这是之前展开/收起卡顿的根因。
+                            .shadow(
+                                elevation = if (isDarkTheme) 0.dp else 8.dp,
+                                shape = composerShape,
+                                clip = false,
+                            )
+                            .background(inputBackground, composerShape)
+                            .then(
                                 if (isDarkTheme) {
-                                    drawPath(shape, inputBackground)
-                                    drawPath(shape, borderColor, style = Stroke(1.dp.toPx()))
+                                    Modifier.border(1.dp, borderColor, composerShape)
                                 } else {
-                                    drawIntoCanvas { canvas ->
-                                        val shadow = Paint()
-                                        shadow.nativePaint.maskFilter = android.graphics.BlurMaskFilter(
-                                            24.dp.toPx(), android.graphics.BlurMaskFilter.Blur.NORMAL
-                                        )
-                                        shadow.nativePaint.color = Color.Black.copy(alpha = 0.12f).toArgb()
-                                        canvas.drawPath(shape, shadow)
-                                    }
-                                    drawPath(shape, inputBackground)
+                                    Modifier
                                 }
-                            },
-                        contentAlignment = Alignment.CenterStart
+                            ),
+                        // 子元素各自用 expandProgress.value 驱动的 BiasAlignment 定位，这里不再按 expanded 硬切对齐。
                     ) {
-                        // 加号按钮
+                        // 加号：收起态与文字同一行居中；展开态贴到卡片左下角（对齐底部操作行）。
+                        // 垂直偏移随进度从居中(0)连续滑到底部(1)，避免状态一变就整颗跳位。
                         Box(
                             modifier = Modifier
-                                .offset(x = -groupLeft)
+                                .align(BiasAlignment(-1f, expandProgress.value))
                                 .zIndex(2f)
-                                .graphicsLayer { clip = false }
+                                .width(plusBoxWidth)
+                                .height(plusHeight)
+                                .padding(bottom = (6f * expandProgress.value).dp),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .width(plusBoxWidth)
-                                    .height(plusHeight)
-                                    .wrapContentWidth(Alignment.Start)
-                                    .graphicsLayer { clip = false }
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .offset(x = plusOffset)
-                                        .width(plusWidth)
-                                        .height(plusHeight),
-                                    contentAlignment = Alignment.CenterStart
-                                ) {
-                                    IconButton(
-                                        onClick = {
-                                            val now = android.os.SystemClock.uptimeMillis()
-                                            if (!showFunctionPanel && now - lastFunctionPanelDismissAt < 200L) {
-                                                return@IconButton
-                                            }
-                                            showFunctionPanel = !showFunctionPanel
-                                        },
-                                        modifier = Modifier.size(44.dp)
-                                    ) {
-                                        Icon(
-                                            painter = painterResource(R.drawable.ic_plus),
-                                            contentDescription = stringResource(
-                                                if (showFunctionPanel) {
-                                                    R.string.chat_input_collapse_functions
-                                                } else {
-                                                    R.string.chat_input_expand_functions
-                                                }
-                                            ),
-                                            tint = if (isDarkTheme) Color.White else Color(0xFF0D0D0D),
-                                            modifier = Modifier.size(24.dp)
-                                        )
+                            IconButton(
+                                onClick = {
+                                    val now = android.os.SystemClock.uptimeMillis()
+                                    if (!showFunctionPanel && now - lastFunctionPanelDismissAt < 200L) {
+                                        return@IconButton
                                     }
-                                }
+                                    showFunctionPanel = !showFunctionPanel
+                                },
+                                modifier = Modifier.size(44.dp)
+                            ) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_plus),
+                                    contentDescription = stringResource(
+                                        if (showFunctionPanel) {
+                                            R.string.chat_input_collapse_functions
+                                        } else {
+                                            R.string.chat_input_expand_functions
+                                        }
+                                    ),
+                                    tint = if (isDarkTheme) Color.White else Color(0xFF0D0D0D),
+                                    modifier = Modifier.size(24.dp)
+                                )
                             }
 
                             AppFloatingCardPopup(
@@ -1470,9 +1443,8 @@ fun ChatInputArea(
 
                         // 输入框
                         val inputModifier = Modifier
-                            .offset(x = -groupLeft)
                             .width(inputFieldWidth)
-                            .align(Alignment.CenterStart)
+                            .align(Alignment.Center)
                             .zIndex(1f)
                             .graphicsLayer { clip = false }
                         
@@ -1541,157 +1513,130 @@ fun ChatInputArea(
                             ),
                             maxLines = 5,
                             decorationBox = { innerTextField ->
-                                val safeVerticalPadding = verticalPadding.coerceAtLeast(0.dp)
-                                Column(
-                                    modifier = Modifier
-                                        .onSizeChanged { inputTall = it.height > inputTallThresholdPx }
-                                        .heightIn(min = inputMinHeight)
-                                        .animateContentSize(animationSpec = spring(stiffness = Spring.StiffnessMediumLow))
-                                        .padding(start = textStartPadding, end = 5.dp, top = safeVerticalPadding, bottom = safeVerticalPadding)
-                                ) {
-                                    if (hasActiveTags) {
-                                        FlowRow(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                // 输入容器右侧只有 5dp，这里补齐到左侧的 16dp，保证标签首尾留白一致。
-                                                .padding(top = 4.dp, end = 11.dp, bottom = 2.dp),
-                                            maxItemsInEachRow = 3,
-                                            horizontalArrangement = if (activeTagCount == 3) {
-                                                Arrangement.SpaceBetween
-                                            } else {
-                                                Arrangement.spacedBy(2.dp)
-                                            },
-                                            verticalArrangement = Arrangement.spacedBy(2.dp),
-                                        ) {
-                                            if (isAgentEnabled) {
-                                                ActiveFunctionTag(
-                                                    iconRes = R.drawable.ic_gpt_terminal,
-                                                    label = stringResource(R.string.chat_input_agent),
-                                                    tint = ChatAgentColor,
-                                                    lightBackground = Color(0xFFE0F2F1),
-                                                    closeContentDescription = stringResource(R.string.chat_input_close_agent),
-                                                    onClick = { viewModel.setAgentEnabled(false) },
-                                                    onLongClick = {
-                                                        openComputerSelection(enableAgentAfterSelection = false)
-                                                    },
-                                                )
-                                            } else if (currentAgentResourceState != null) {
-                                                ActiveFunctionTag(
-                                                    iconRes = R.drawable.ic_gpt_terminal,
-                                                    label = stringResource(
-                                                        if (currentAgentResourceState == AgentResourceState.WORKSPACE_DELETED) {
-                                                            R.string.agent_resource_workspace_deleted
-                                                        } else {
-                                                            R.string.agent_resource_server_deleted
-                                                        },
-                                                    ),
-                                                    tint = MaterialTheme.colorScheme.error,
-                                                    lightBackground = MaterialTheme.colorScheme.errorContainer,
-                                                    closeContentDescription = stringResource(R.string.agent_resource_status_action),
-                                                    onClick = {
-                                                        if (currentAgentResourceState == AgentResourceState.SERVER_DELETED) {
-                                                            showDeletedServerDialog = true
-                                                        } else {
-                                                            toggleAgent()
-                                                        }
-                                                    },
-                                                    showCloseIcon = false,
-                                                )
-                                            }
-                                        }
-                                    }
+                                // 结构照 ChatGPT：收起是单行（加号在左、文字居中、发送在右），
+                                // 展开后文字占一行，底部再一行 [加号][标签...] ... [发送]。
+                                // 文字行的上下留白也随进度从 0 长到 8dp，光标始终落在行内垂直中心。
+                                Column(modifier = Modifier.fillMaxWidth()) {
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .heightIn(min = (inputMinHeight - safeVerticalPadding * 2).coerceAtLeast(0.dp)),
+                                            .heightIn(min = (52f + (48f - 52f) * expandProgress.value).dp)
+                                            .padding(
+                                                start = (48f + (14f - 48f) * expandProgress.value).dp,
+                                                end = (52f + (38f - 52f) * expandProgress.value).dp,
+                                                top = (8f * expandProgress.value).dp,
+                                            ),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                    Box(modifier = Modifier.weight(1f)) {
-                                        if (localText.isEmpty()) {
-                                            Text(
-                                                stringResource(R.string.chat_input_reply_hint),
-                                                style = MaterialTheme.typography.bodyLarge,
-                                                color = if (isDarkTheme) Color(0xFFAFAFAF) else Color(0xFF8F8F8F)
-                                            )
-                                        }
-                                        innerTextField()
-                                    }
-                                    Spacer(Modifier.width(8.dp))
-                                    val buttonState = primaryAction
-                                    AnimatedContent(
-                                        targetState = buttonState,
-                                        transitionSpec = {
-                                            (fadeIn(tween(220)) + scaleIn(
-                                                tween(220),
-                                                initialScale = 0.8f
-                                            )).togetherWith(
-                                                fadeOut(tween(150)) + scaleOut(
-                                                    tween(150),
-                                                    targetScale = 0.6f
-                                                )
-                                            )
-                                        },
-                                        label = "InputSendButton"
-                                    ) { state ->
-                                        val loadingDescription = when {
-                                            state == ComposerPrimaryAction.FORCE_STOP -> stringResource(R.string.chat_input_pausing_force_stop)
-                                            isRemoteCancellationPending -> stringResource(R.string.chat_input_stopping)
-                                            isConvertingLongText -> stringResource(R.string.chat_input_long_text_converting)
-                                            else -> stringResource(R.string.chat_input_preparing)
-                                        }
-                                        FilledIconButton(
-                                            onClick = onSendClick,
-                                            // 动画退出中的旧图标不可点击，以免旧图标执行新状态动作。
-                                            enabled = state == primaryAction && state != ComposerPrimaryAction.LOADING,
-                                            shape = CircleShape,
-                                            colors = IconButtonDefaults.filledIconButtonColors(
-                                                containerColor = buttonBackgroundColor,
-                                                contentColor = iconColor
-                                            ),
-                                            modifier = Modifier.size(36.dp)
+                                        // 光标的垂直位置由这个 Box 决定：默认 TopStart 会把文字顶在行首，
+                                        // 行高比文字高时视觉上光标就偏上。显式居中才和 ChatGPT 一致。
+                                        Box(
+                                            modifier = Modifier.weight(1f),
+                                            contentAlignment = Alignment.CenterStart,
                                         ) {
-                                            if (state == ComposerPrimaryAction.LOADING || state == ComposerPrimaryAction.FORCE_STOP) {
-                                                CircularProgressIndicator(
-                                                    modifier = Modifier.size(18.dp).semantics {
-                                                        contentDescription = loadingDescription
-                                                    },
-                                                    color = iconColor,
-                                                    strokeWidth = 2.dp,
-                                                )
-                                            } else {
-                                                Icon(
-                                                    painter = when (state) {
-                                                        ComposerPrimaryAction.RETRY_STOP,
-                                                        ComposerPrimaryAction.STOP -> painterResource(R.drawable.ic_stop)
-                                                        ComposerPrimaryAction.PAUSE -> painterResource(R.drawable.ic_pause)
-                                                        ComposerPrimaryAction.RESUME -> painterResource(R.drawable.ic_gpt_play)
-                                                        ComposerPrimaryAction.SEND -> painterResource(R.drawable.ic_arrow_up)
-                                                        ComposerPrimaryAction.RESTORE -> painterResource(R.drawable.ic_gpt_undo)
-                                                        else -> painterResource(R.drawable.ic_voice_bold)
-                                                    },
-                                                    contentDescription = when (state) {
-                                                        ComposerPrimaryAction.RETRY_STOP -> stringResource(R.string.chat_input_stop) + " · " + stringResource(R.string.action_retry)
-                                                        ComposerPrimaryAction.STOP -> stringResource(R.string.chat_input_stop)
-                                                        ComposerPrimaryAction.PAUSE -> stringResource(R.string.chat_input_pause)
-                                                        ComposerPrimaryAction.RESUME -> stringResource(R.string.chat_input_resume)
-                                                        ComposerPrimaryAction.SEND -> stringResource(R.string.chat_input_send)
-                                                        ComposerPrimaryAction.RESTORE -> stringResource(R.string.chat_input_restore_message)
-                                                        else -> stringResource(R.string.chat_input_voice)
-                                                    },
-                                                    modifier = Modifier.size(20.dp)
+                                            if (localText.isEmpty()) {
+                                                Text(
+                                                    stringResource(R.string.chat_input_reply_hint),
+                                                    style = MaterialTheme.typography.bodyLarge,
+                                                    color = if (isDarkTheme) Color(0xFFAFAFAF) else Color(0xFF8F8F8F)
                                                 )
                                             }
+                                            innerTextField()
                                         }
                                     }
+
+                                    // 底部操作行随展开进度长高，收起过程中同步收拢，不会整段跳变。
+                                    // 先按自然高度测量，再只上报 自然高度 × 进度：卡片高度从 0 连续增长，
+                                    // 之前的 heightIn(min = 48 × 进度) 在首帧就会被 6dp 内边距或标签高度顶开而跳一下。
+                                    if (expanded) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                // 裁剪到上报尺寸并同步淡入，露出一半时不会溢出卡片。
+                                                .graphicsLayer {
+                                                    clip = true
+                                                    alpha = expandProgress.value
+                                                }
+                                                .layout { measurable, constraints ->
+                                                    val placeable = measurable.measure(constraints)
+                                                    layout(placeable.width, (placeable.height * expandProgress.value).roundToInt()) {
+                                                        placeable.place(0, 0)
+                                                    }
+                                                }
+                                                .heightIn(min = 48.dp)
+                                                .padding(start = 48.dp, end = 10.dp, bottom = 6.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            if (hasActiveTags) {
+                                                FlowRow(
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                                                ) {
+                                                    if (isAgentEnabled) {
+                                                        ActiveFunctionTag(
+                                                            iconRes = R.drawable.ic_gpt_terminal,
+                                                            label = stringResource(R.string.chat_input_agent),
+                                                            tint = ChatAgentColor,
+                                                            lightBackground = Color(0xFFE0F2F1),
+                                                            closeContentDescription = stringResource(R.string.chat_input_close_agent),
+                                                            onClick = { viewModel.setAgentEnabled(false) },
+                                                            onLongClick = { openComputerSelection(enableAgentAfterSelection = false) },
+                                                        )
+                                                    } else if (currentAgentResourceState != null) {
+                                                        ActiveFunctionTag(
+                                                            iconRes = R.drawable.ic_gpt_terminal,
+                                                            label = stringResource(
+                                                                if (currentAgentResourceState == AgentResourceState.WORKSPACE_DELETED) {
+                                                                    R.string.agent_resource_workspace_deleted
+                                                                } else {
+                                                                    R.string.agent_resource_server_deleted
+                                                                },
+                                                            ),
+                                                            tint = MaterialTheme.colorScheme.error,
+                                                            lightBackground = MaterialTheme.colorScheme.errorContainer,
+                                                            closeContentDescription = stringResource(R.string.agent_resource_status_action),
+                                                            onClick = {
+                                                                if (currentAgentResourceState == AgentResourceState.SERVER_DELETED) {
+                                                                    showDeletedServerDialog = true
+                                                                } else {
+                                                                    toggleAgent()
+                                                                }
+                                                            },
+                                                            showCloseIcon = false,
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                            Spacer(Modifier.weight(1f))
+                                        }
                                     }
                                 }
                             }
                         )
+
+                        // 发送按钮只在这里渲染一次：收起态居中靠右，展开态落到底部行右侧。
+                        // 两个状态各渲一个会在过渡期间叠成两个圆钮。位置同样随进度连续滑动。
+                        Box(
+                            modifier = Modifier
+                                .align(BiasAlignment(1f, expandProgress.value))
+                                .zIndex(2f)
+                                .padding(
+                                    end = 8.dp,
+                                    bottom = (6f * expandProgress.value).dp,
+                                ),
+                        ) {
+                            SendButton(
+                                primaryAction = primaryAction,
+                                isRemoteCancellationPending = isRemoteCancellationPending,
+                                isConvertingLongText = isConvertingLongText,
+                                backgroundColor = buttonBackgroundColor,
+                                iconColor = iconColor,
+                                onClick = onSendClick,
+                            )
+                        }
                     }
                 }
             }
-            
-            // 已由 Column 自身处理 navigationBars + ime 内边距，移除额外 spacer
         }
     }
 
@@ -2044,6 +1989,81 @@ fun ChatInputArea(
 }
 
 /**
+ * 输入框右下角的发送/停止按钮。收起态和展开态共用同一实现，只有位置不同。
+ */
+@Composable
+private fun SendButton(
+    primaryAction: ComposerPrimaryAction,
+    isRemoteCancellationPending: Boolean,
+    isConvertingLongText: Boolean,
+    backgroundColor: Color,
+    iconColor: Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    AnimatedContent(
+        targetState = primaryAction,
+        modifier = modifier,
+        transitionSpec = {
+            (fadeIn(tween(220)) + scaleIn(tween(220), initialScale = 0.8f)).togetherWith(
+                fadeOut(tween(150)) + scaleOut(tween(150), targetScale = 0.6f)
+            )
+        },
+        label = "InputSendButton"
+    ) { state ->
+        val loadingDescription = when {
+            state == ComposerPrimaryAction.FORCE_STOP -> stringResource(R.string.chat_input_pausing_force_stop)
+            isRemoteCancellationPending -> stringResource(R.string.chat_input_stopping)
+            isConvertingLongText -> stringResource(R.string.chat_input_long_text_converting)
+            else -> stringResource(R.string.chat_input_preparing)
+        }
+        FilledIconButton(
+            onClick = onClick,
+            // 动画退出中的旧图标不可点击，以免旧图标执行新状态动作。
+            enabled = state == primaryAction && state != ComposerPrimaryAction.LOADING,
+            shape = CircleShape,
+            colors = IconButtonDefaults.filledIconButtonColors(
+                containerColor = backgroundColor,
+                contentColor = iconColor
+            ),
+            modifier = Modifier.size(36.dp)
+        ) {
+            if (state == ComposerPrimaryAction.LOADING || state == ComposerPrimaryAction.FORCE_STOP) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp).semantics {
+                        contentDescription = loadingDescription
+                    },
+                    color = iconColor,
+                    strokeWidth = 2.dp,
+                )
+            } else {
+                Icon(
+                    painter = when (state) {
+                        ComposerPrimaryAction.RETRY_STOP,
+                        ComposerPrimaryAction.STOP -> painterResource(R.drawable.ic_stop)
+                        ComposerPrimaryAction.PAUSE -> painterResource(R.drawable.ic_pause)
+                        ComposerPrimaryAction.RESUME -> painterResource(R.drawable.ic_gpt_play)
+                        ComposerPrimaryAction.SEND -> painterResource(R.drawable.ic_arrow_up)
+                        ComposerPrimaryAction.RESTORE -> painterResource(R.drawable.ic_gpt_undo)
+                        else -> painterResource(R.drawable.ic_voice_bold)
+                    },
+                    contentDescription = when (state) {
+                        ComposerPrimaryAction.RETRY_STOP -> stringResource(R.string.chat_input_stop) + " · " + stringResource(R.string.action_retry)
+                        ComposerPrimaryAction.STOP -> stringResource(R.string.chat_input_stop)
+                        ComposerPrimaryAction.PAUSE -> stringResource(R.string.chat_input_pause)
+                        ComposerPrimaryAction.RESUME -> stringResource(R.string.chat_input_resume)
+                        ComposerPrimaryAction.SEND -> stringResource(R.string.chat_input_send)
+                        ComposerPrimaryAction.RESTORE -> stringResource(R.string.chat_input_restore_message)
+                        else -> stringResource(R.string.chat_input_voice)
+                    },
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+    }
+}
+
+/**
  * CLI 风格的 `/` 候选行。名称和用途只占一行，整行点击即插入 Skill 标签。
  */
 @Composable
@@ -2133,59 +2153,4 @@ private fun EmptySkillSlashRow() {
     }
 }
 
-// 内容驱动的分离/合并（不跟随键盘时）统一用这条不回弹的弹簧。
-private val separationSpring = spring<Float>(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow)
 
-/**
- * 加号与输入框的合并轮廓：两个同高胶囊取并集，再补上中间的液桥。
- * 液桥连接加号右端圆和输入框左端圆，圆心距越大颈部越细，间隙达到半个半径时收细断开。
- */
-internal fun liquidComposerPath(
-    plusLeft: Float,
-    plusRight: Float,
-    inputLeft: Float,
-    inputRight: Float,
-    height: Float,
-    radius: Float,
-): Path {
-    val cy = height / 2
-    val corner = CornerRadius(radius)
-    val plus = Path().apply { addRoundRect(RoundRect(plusLeft, cy - radius, plusRight, cy + radius, corner)) }
-    val input = Path().apply { addRoundRect(RoundRect(inputLeft, 0f, inputRight, height, corner)) }
-    val body = Path.combine(PathOperation.Union, plus, input)
-    val x1 = plusRight - radius
-    val x2 = inputLeft + radius
-    val waist = liquidNeckWaist(x2 - x1, radius)
-    if (waist <= 0f) return body
-    // 附着点随颈部粗细在端圆上滑动：颈部满宽时贴着顶边，收细时退到约 30°；切线与端圆连续。
-    val sinA = (1f + waist / radius) / 2f
-    val cosA = sqrt(1f - sinA * sinA)
-    val p1x = x1 + radius * cosA
-    val p2x = x2 - radius * cosA
-    if (p2x <= p1x) return body
-    val mid = (x1 + x2) / 2
-    val h = (mid - p1x) * 0.55f
-    val top = cy - radius * sinA
-    val bottom = cy + radius * sinA
-    val neck = Path().apply {
-        moveTo(p1x, top)
-        cubicTo(p1x + sinA * h, top + cosA * h, mid - h, cy - waist, mid, cy - waist)
-        cubicTo(mid + h, cy - waist, p2x - sinA * h, top + cosA * h, p2x, top)
-        lineTo(p2x, bottom)
-        cubicTo(p2x - sinA * h, bottom - cosA * h, mid + h, cy + waist, mid, cy + waist)
-        cubicTo(mid - h, cy + waist, p1x + sinA * h, bottom - cosA * h, p1x, bottom)
-        close()
-    }
-    return Path.combine(PathOperation.Union, body, neck)
-}
-
-/**
- * 液桥半宽：两端圆还深度重叠（圆心距不超过半径）时保持满宽，把交叉处的尖角完全填平；
- * 之后按平方根收细，越接近断开收得越快，圆心距达到 2.5 倍半径（间隙半个半径）时收为 0。
- * 满足重叠期间半宽始终不低于两圆交点高度，不会再露出两层叠加的缺口。
- */
-internal fun liquidNeckWaist(centerDistance: Float, radius: Float): Float {
-    if (centerDistance <= 0f) return 0f
-    val t = ((centerDistance - radius) / (radius * 1.5f)).coerceIn(0f, 1f)
-    return if (t >= 1f) 0f else radius * sqrt(1f - t)
-}

@@ -95,8 +95,7 @@ class AgentTaskDrawerTest {
         rule.setContent { MaterialTheme {
             AgentTaskOverlay("s", tasks, emptyList(), 60.dp, 100.dp) { _, _, _ -> }
         } }
-        revealTaskEntry()
-        rule.onNodeWithTag("agent-task-entry").assertIsDisplayed().performClick()
+        openFromEdge()
         rule.onNodeWithTag("agent-task-tab-main").assertDoesNotExist()
         rule.onNodeWithText("主任务").assertDoesNotExist()
         rule.onNodeWithTag("agent-task-tab-a").assertIsSelected()
@@ -111,7 +110,7 @@ class AgentTaskDrawerTest {
         rule.onNodeWithText("检查 18").assertIsDisplayed()
         rule.onNodeWithTag("agent-task-drawer").performTouchInput { swipeRight() }
         rule.onNodeWithTag("agent-task-drawer").assertDoesNotExist()
-        rule.onNodeWithTag("agent-task-entry").assertIsDisplayed()
+        rule.onNodeWithTag("agent-task-handle").assertIsDisplayed()
     }
 
     @Test fun `工具结束但主任务未结束时不能提前显示服务器已完成`() {
@@ -140,34 +139,41 @@ class AgentTaskDrawerTest {
         rule.setContent { MaterialTheme {
             AgentTaskOverlay("restored-session", tasks, emptyList(), 60.dp, 100.dp) { _, _, _ -> }
         } }
-        revealTaskEntry()
-        rule.onNodeWithContentDescription("查看任务，共 2 台服务器").assertIsDisplayed()
-        rule.onNodeWithTag("agent-task-entry").assertIsDisplayed().performClick()
+        rule.onNodeWithContentDescription("查看任务，共 2 台服务器").assertExists()
+        openFromEdge()
         rule.onNodeWithTag("agent-task-tab-a").assertIsSelected()
         rule.onNodeWithText("已保存的检查").assertIsDisplayed()
     }
 
-    @Test fun `入口收起保留把手且仅横滑唤出并能滑回边缘再次唤出`() {
+    @Test fun `收起时只有竖条把手且横滑竖条直接拉出面板`() {
         val tasks = listOf(AgentTaskItem("a", "服务器 A", AgentTaskPhase.COMPLETED, emptyList()),
             AgentTaskItem("b", "服务器 B", AgentTaskPhase.COMPLETED, emptyList()))
         rule.setContent { MaterialTheme {
             AgentTaskOverlay("edge-session", tasks, emptyList(), 60.dp, 100.dp) { _, _, _ -> }
         } }
-        rule.onNodeWithTag("agent-task-entry").assertIsNotDisplayed()
+        rule.onNodeWithTag("agent-task-entry").assertDoesNotExist()
         rule.onNodeWithTag("agent-task-handle").assertIsDisplayed()
-            .assertWidthIsEqualTo(6.dp).assertHeightIsEqualTo(40.dp)
+            .assertWidthIsEqualTo(4.dp).assertHeightIsEqualTo(44.dp)
         rule.onNodeWithTag("agent-task-edge").performTouchInput { click() }
-        rule.onNodeWithTag("agent-task-entry").assertIsNotDisplayed()
+        rule.onNodeWithTag("agent-task-drawer").assertDoesNotExist()
         rule.onNodeWithTag("agent-task-edge").performTouchInput { swipeUp() }
-        rule.onNodeWithTag("agent-task-entry").assertIsNotDisplayed()
-        revealTaskEntry()
-        rule.onNodeWithTag("agent-task-handle").assertDoesNotExist()
-        rule.onNodeWithTag("agent-task-entry").assertIsDisplayed().performTouchInput { swipeRight() }
-        rule.onNodeWithTag("agent-task-entry").assertIsNotDisplayed()
+        rule.onNodeWithTag("agent-task-drawer").assertDoesNotExist()
+        openFromEdge()
+        rule.onNodeWithTag("agent-task-drawer").performTouchInput { swipeRight() }
+        rule.onNodeWithTag("agent-task-drawer").assertDoesNotExist()
         rule.onNodeWithTag("agent-task-handle").assertIsDisplayed()
-        revealTaskEntry()
-        rule.onNodeWithTag("agent-task-entry").assertIsDisplayed().performClick()
-        rule.onNodeWithTag("agent-task-drawer").assertIsDisplayed()
+        openFromEdge()
+    }
+
+    @Test fun `把手闲置淡出后仍可从边缘拉出面板`() {
+        val tasks = listOf(AgentTaskItem("a", "服务器 A", AgentTaskPhase.COMPLETED, emptyList()),
+            AgentTaskItem("b", "服务器 B", AgentTaskPhase.COMPLETED, emptyList()))
+        rule.setContent { MaterialTheme {
+            AgentTaskOverlay("idle-session", tasks, emptyList(), 60.dp, 100.dp) { _, _, _ -> }
+        } }
+        rule.mainClock.advanceTimeBy(AgentTaskHandleIntroMillis + 1_500L)
+        rule.onNodeWithTag("agent-task-handle").assertExists()
+        openFromEdge()
     }
 
     @Test fun `无障碍服务无需横滑即可从隐藏边缘打开任务`() {
@@ -180,41 +186,41 @@ class AgentTaskDrawerTest {
         rule.onNodeWithTag("agent-task-drawer").assertIsDisplayed()
     }
 
-    @Test fun `入口按住时跟手支持反向拖动并在松手后平滑吸附`() {
+    @Test fun `面板按住竖条跟手支持反向拖动并在松手后平滑吸附`() {
         val tasks = listOf(AgentTaskItem("a", "服务器 A", AgentTaskPhase.COMPLETED, emptyList()),
             AgentTaskItem("b", "服务器 B", AgentTaskPhase.COMPLETED, emptyList()))
         rule.setContent { MaterialTheme {
             AgentTaskOverlay("motion-session", tasks, emptyList(), 60.dp, 100.dp) { _, _, _ -> }
         } }
-        val entry = rule.onNodeWithTag("agent-task-entry")
         val edge = rule.onNodeWithTag("agent-task-edge")
-        val hiddenLeft = entry.getUnclippedBoundsInRoot().left
+        val drawer = rule.onNodeWithTag("agent-task-drawer")
         rule.mainClock.autoAdvance = false
         edge.performTouchInput {
             down(Offset(width - 2f, centerY))
             moveBy(Offset(-width * 4f, 0f))
         }
         rule.mainClock.advanceTimeByFrame()
-        val expandedLeft = entry.getUnclippedBoundsInRoot().left
-        assertTrue("未松手就应跟随拖动展开", expandedLeft < hiddenLeft)
+        rule.mainClock.advanceTimeByFrame()
+        val pulledLeft = drawer.getUnclippedBoundsInRoot().left
         edge.performTouchInput { moveBy(Offset(width * 2f, 0f)) }
         rule.mainClock.advanceTimeByFrame()
-        val reversedLeft = entry.getUnclippedBoundsInRoot().left
-        assertTrue("同一次手势应能反向拖回", reversedLeft > expandedLeft && reversedLeft < hiddenLeft)
+        val reversedLeft = drawer.getUnclippedBoundsInRoot().left
+        assertTrue("同一次手势应能反向拖回", reversedLeft > pulledLeft)
         edge.performTouchInput { advanceEventTime(500); up() }
         rule.mainClock.advanceTimeByFrame()
-        val settlingLeft = entry.getUnclippedBoundsInRoot().left
-        assertTrue("松手后应有中间过渡帧", settlingLeft < hiddenLeft)
+        drawer.assertExists()
+        assertTrue("松手后应有中间过渡帧", drawer.getUnclippedBoundsInRoot().left >= reversedLeft)
         rule.mainClock.advanceTimeBy(1_000)
-        entry.assertIsNotDisplayed()
+        drawer.assertDoesNotExist()
         rule.onNodeWithTag("agent-task-handle").assertIsDisplayed()
         rule.mainClock.autoAdvance = true
     }
 
-    private fun revealTaskEntry() {
-        // 手指从窄边缘区域滑入聊天区，位移超过触摸容差及唤出阈值。
+    private fun openFromEdge() {
+        // 手指从竖条区域滑入聊天区，位移超过唤出阈值，面板直接展开。
         rule.onNodeWithTag("agent-task-edge").performTouchInput {
-            swipe(start = Offset(width - 2f, centerY), end = Offset(-width * 4f, centerY))
+            swipe(start = Offset(width - 2f, centerY), end = Offset(-width * 6f, centerY))
         }
+        rule.onNodeWithTag("agent-task-drawer").assertIsDisplayed()
     }
 }

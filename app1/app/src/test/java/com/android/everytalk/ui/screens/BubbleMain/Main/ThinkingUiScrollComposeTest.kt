@@ -619,6 +619,10 @@ class ThinkingUiScrollComposeTest {
         composeRule.runOnIdle { streaming.value = false }
         composeRule.mainClock.advanceTimeBy(500L)
         composeRule.waitForIdle()
+        // 回复结束会收回运行中手动展开的过程区，需重新展开查看完成态标签。
+        composeRule.onNodeWithTag("reasoning-inline-status").performClick()
+        composeRule.mainClock.advanceTimeBy(500L)
+        composeRule.waitForIdle()
         val completedBounds = composeRule.onNodeWithTag("reasoning-chain-summary-0").fetchSemanticsNode().boundsInRoot
         assertTrue("完成后的操作数量标签也应自适应", completedBounds.width < availableBounds.width)
     }
@@ -673,6 +677,12 @@ class ThinkingUiScrollComposeTest {
             }
             composeRule.mainClock.advanceTimeBy(500L)
             composeRule.waitForIdle()
+            if (nextStatus == null) {
+                // 回复结束会收回过程区；重新展开后标签必须仍在原位。
+                composeRule.onNodeWithTag("reasoning-inline-status").performClick()
+                composeRule.mainClock.advanceTimeBy(500L)
+                composeRule.waitForIdle()
+            }
             val tag = if (nextStatus == null) "reasoning-chain-summary-static" else "reasoning-chain-summary-scanning"
             val labels = composeRule.onAllNodesWithTag(tag, useUnmergedTree = true).fetchSemanticsNodes()
             assertEquals(if (nextStatus == null) 2 else 1, labels.size)

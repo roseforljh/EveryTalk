@@ -55,7 +55,7 @@ class UserBubbleHeightPolicyTest {
             isExpanded = true,
         )
 
-        assertEquals(28f, bottomPadding, 0.0001f)
+        assertEquals(40f, bottomPadding, 0.0001f)
     }
 
 }

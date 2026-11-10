@@ -127,7 +127,8 @@ class PendingMessageInteractionTest {
         val input = File(root, "app/src/main/java/com/android/everytalk/ui/screens/MainScreen/chat/text/ui/ChatInputArea.kt").readText()
         val click = input.substringAfter("val onSendClick: () -> Unit").substringBefore("val inputBackgroundColor")
         assertTrue(input.contains("val hasContent = localText.isNotBlank()"))
-        assertTrue(input.contains("val buttonState = primaryAction"))
+        // 发送按钮抽成 SendButton 后直接以 primaryAction 作为图标动画状态，点击也读同一状态。
+        assertTrue(input.contains("targetState = primaryAction"))
         assertTrue(click.contains("onPauseStreaming(controlledMessageId)"))
         assertTrue(click.contains("onResumeStreaming()"))
         assertTrue(click.contains("viewModel.forceStopPendingPause(controlledMessageId)"))

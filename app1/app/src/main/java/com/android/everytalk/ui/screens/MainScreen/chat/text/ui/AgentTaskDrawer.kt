@@ -33,7 +33,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.AccountTree
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -83,6 +82,13 @@ import kotlinx.coroutines.launch
  * 任务入口默认收在聊天区域右侧中部，只露出小把手；左滑唤出、右滑收起，底部留给输入框和队列。
  * 抽屉通过独立模态窗口覆盖页面，开合与右滑收起共用同一个拖动状态，完全滑出后再移除窗口。
  */
+/** 进入会话后把手首次完整显示的时长。 */
+internal const val AgentTaskHandleIntroMillis = 6_000L
+/** 把手出现后闲置多久开始淡出。 */
+internal const val AgentTaskEntryIdleMillis = 4_000L
+/** 闲置把手几乎透明，但仍可从该区域滑出入口。 */
+internal const val AgentTaskHandleIdleAlpha = 0.12f
+
 @Composable
 internal fun AgentTaskOverlay(
     sessionKey: String,
@@ -95,15 +101,6 @@ internal fun AgentTaskOverlay(
     if (tasks.size < 2) return
     var open by rememberSaveable(sessionKey) { mutableStateOf(false) }
     val density = LocalDensity.current
-    // false 收在边缘，true 展开。原生拖动状态负责速度、吸附及动画打断，避免松手后才突然出现。
-    val entryTravelPx = with(density) { 60.dp.toPx() }
-    val entryDragState = remember(sessionKey, entryTravelPx) {
-        AnchoredDraggableState(false, DraggableAnchors {
-            false at 0f
-            true at -entryTravelPx
-        })
-    }
-    val entryProgress = (-entryDragState.requireOffset() / entryTravelPx).coerceIn(0f, 1f)
     val drawerWidth = min(440.dp, with(density) { LocalWindowInfo.current.containerSize.width.toDp() } * 0.9f)
     val drawerWidthPx = with(density) { drawerWidth.toPx() }
     // 抽屉 false 在屏幕外，true 完全展开；旋转重建时从 open 恢复。
@@ -118,7 +115,9 @@ internal fun AgentTaskOverlay(
         derivedStateOf { drawerState.targetValue || drawerState.requireOffset() < drawerWidthPx }
     }
     val scope = rememberCoroutineScope()
-    val setDrawer: (Boolean) -> Unit = { target -> scope.launch { drawerState.animateTo(target, drawerSpring) } }
+    val setDrawer: (Boolean) -> Unit = { target ->
+        scope.launch { drawerState.animateTo(target, if (target) drawerOpenSpec else drawerCloseSpec) }
+    }
     var selectedId by rememberSaveable(sessionKey) { mutableStateOf<String?>(null) }
     val pendingApproval = taskApprovalsForDisplay(tasks, approvals).firstOrNull()
     var presentedApprovalId by rememberSaveable(sessionKey) { mutableStateOf<String?>(null) }
@@ -129,62 +128,61 @@ internal fun AgentTaskOverlay(
         if (pending.approvalRequestId == presentedApprovalId) return@LaunchedEffect
         presentedApprovalId = pending.approvalRequestId
         selectedId = pending.request.context.computerId
-        drawerState.animateTo(true, drawerSpring)
+        drawerState.animateTo(true, drawerOpenSpec)
     }
     val selected = tasks.firstOrNull { it.computerId == selectedId } ?: tasks.first()
     val taskStateHolder = rememberSaveableStateHolder()
     val needsAttention = tasks.any { it.phase == AgentTaskPhase.APPROVAL }
     val openDescription = stringResource(R.string.agent_tasks_open, tasks.size)
-    val entryColor by animateColorAsState(
-        if (needsAttention) MaterialTheme.colorScheme.tertiary else ChatAgentColor,
-        tween(220), label = "task-entry-color",
+    // 把手用中性色，像系统侧边栏；只有待审批时才用强调色提醒。
+    val handleColor by animateColorAsState(
+        if (needsAttention) MaterialTheme.colorScheme.tertiary
+        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.34f),
+        tween(220), label = "task-handle-color",
     )
-    val entryContentColor = if (needsAttention) MaterialTheme.colorScheme.onTertiary else Color.White
-    val entryFling = AnchoredDraggableDefaults.flingBehavior(
-        state = entryDragState,
-        positionalThreshold = { distance -> distance / 2f },
-        animationSpec = drawerSpring,
+    // 0 = 收起，1 = 完全展开；把手、遮罩都跟随这一个进度。
+    val drawerProgress = (1f - drawerState.requireOffset() / drawerWidthPx).coerceIn(0f, 1f)
+    val drawerMoving = drawerProgress > 0f && drawerProgress < 1f
+    // 每次拖动都唤醒把手并重新计时；闲置后慢慢淡到几乎透明，但该区域仍可滑出面板。
+    var handleWakeTick by remember(sessionKey) { mutableIntStateOf(0) }
+    LaunchedEffect(drawerMoving) { if (drawerMoving) handleWakeTick++ }
+    // 进入会话时把手一定完整显示，且首次停留更久，方便发现。
+    var handleIdle by remember(sessionKey) { mutableStateOf(false) }
+    var handleIntroDone by remember(sessionKey) { mutableStateOf(false) }
+    LaunchedEffect(drawerState.currentValue, needsAttention, tasks.size, handleWakeTick) {
+        handleIdle = false
+        if (!drawerState.currentValue && !needsAttention) {
+            kotlinx.coroutines.delay(if (handleIntroDone) AgentTaskEntryIdleMillis else AgentTaskHandleIntroMillis)
+            handleIntroDone = true
+            handleIdle = true
+        }
+    }
+    val handleAlpha by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (handleIdle) AgentTaskHandleIdleAlpha else 1f,
+        animationSpec = tween(if (handleIdle) 900 else 160),
+        label = "task-handle-alpha",
     )
-    val entryDrag = Modifier.anchoredDraggable(
-        state = entryDragState, orientation = Orientation.Horizontal,
-        reverseDirection = false, flingBehavior = entryFling,
+    // 松手后用带速度承接的弹簧吸附，快速甩动时不会突兀减速。
+    val drawerFling = AnchoredDraggableDefaults.flingBehavior(
+        state = drawerState,
+        positionalThreshold = { distance -> distance / 3f },
+        animationSpec = drawerFlingSpring,
     )
     Box(Modifier.fillMaxSize().padding(top = topAvoidance, bottom = bottomAvoidance).clipToBounds()) {
         // 仅此 112dp 高的边缘区域排除系统返回手势，其余右侧边缘仍保持系统行为。
-        // 手势节点始终保留，拖到端点后反向移动也不会因为控件移除而中断。
+        // 竖条一滑直接驱动面板本身：手势从主窗口开始，面板窗口出现后整段手势仍由这里跟手。
         Box(Modifier.align(Alignment.CenterEnd).width(24.dp).height(112.dp)
-            .systemGestureExclusion().then(entryDrag).semantics {
-                if (entryProgress == 0f) {
-                    contentDescription = openDescription
-                    role = Role.Button
-                    onClick { setDrawer(true); true }
-                }
+            .systemGestureExclusion()
+            .anchoredDraggable(drawerState, reverseDirection = false, orientation = Orientation.Horizontal, flingBehavior = drawerFling)
+            .semantics {
+                contentDescription = openDescription
+                role = Role.Button
+                onClick { setDrawer(true); true }
             }.testTag("agent-task-edge")) {
-            // 可见把手贴住右边缘，入口滑出时把手同步淡出，看起来像被胶囊推开。
-            if (entryProgress < 1f) {
-                Box(Modifier.align(Alignment.CenterEnd).size(width = 6.dp, height = 40.dp)
-                    .graphicsLayer { alpha = 1f - entryProgress }
-                    .clip(RoundedCornerShape(topStart = 8.dp, bottomStart = 8.dp))
-                    .background(entryColor).testTag("agent-task-handle"))
-            }
-        }
-        // 贴边半胶囊直接从屏幕边缘被拖出，位置完全跟随手指，不再叠加淡入。
-        Surface(
-            onClick = { setDrawer(true) },
-            enabled = entryProgress == 1f,
-            modifier = Modifier.align(Alignment.CenterEnd)
-                .offset { IntOffset((entryTravelPx + entryDragState.requireOffset()).coerceIn(0f, entryTravelPx).roundToInt(), 0) }
-                .size(width = 60.dp, height = 44.dp)
-                .then(entryDrag).testTag("agent-task-entry"),
-            shape = RoundedCornerShape(topStartPercent = 50, bottomStartPercent = 50),
-            color = entryColor,
-            contentColor = entryContentColor,
-        ) {
-            Row(Modifier.padding(start = 14.dp, end = 10.dp), verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                Icon(Icons.Outlined.AccountTree, contentDescription = openDescription, modifier = Modifier.size(18.dp))
-                Text(tasks.size.toString(), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
-            }
+            Box(Modifier.align(Alignment.CenterEnd).padding(end = 4.dp).size(width = 4.dp, height = 44.dp)
+                .graphicsLayer { alpha = (1f - drawerProgress) * handleAlpha }
+                .clip(CircleShape)
+                .background(handleColor).testTag("agent-task-handle"))
         }
     }
     if (drawerVisible) {
@@ -192,15 +190,13 @@ internal fun AgentTaskOverlay(
             onDismissRequest = { setDrawer(false) },
             properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
         ) {
-            val drawerFling = AnchoredDraggableDefaults.flingBehavior(
-                state = drawerState,
-                positionalThreshold = { distance -> distance / 3f },
-                animationSpec = drawerSpring,
-            )
             Box(Modifier.fillMaxSize()) {
                 // 遮罩透明度跟随抽屉位置，拖动收起时同步变淡。
                 Box(Modifier.fillMaxSize()
-                    .graphicsLayer { alpha = 1f - drawerState.requireOffset() / drawerWidthPx }
+                    .graphicsLayer {
+                        alpha = androidx.compose.animation.core.LinearOutSlowInEasing
+                            .transform((1f - drawerState.requireOffset() / drawerWidthPx).coerceIn(0f, 1f))
+                    }
                     .background(Color.Black.copy(alpha = 0.32f))
                     .clickable { setDrawer(false) }.testTag("agent-task-scrim"))
                 ModalDrawerSheet(
@@ -250,7 +246,11 @@ internal fun AgentTaskOverlay(
     }
 }
 
-private val drawerSpring = spring<Float>(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow)
+// 非线性：打开用 Material 强调减速曲线（先快后慢），收起用强调加速曲线（先慢后快）。
+private val drawerOpenSpec = tween<Float>(420, easing = androidx.compose.animation.core.CubicBezierEasing(0.05f, 0.7f, 0.1f, 1f))
+private val drawerCloseSpec = tween<Float>(260, easing = androidx.compose.animation.core.CubicBezierEasing(0.3f, 0f, 0.8f, 0.15f))
+// 松手吸附：轻微阻尼的弹簧承接手指速度。
+private val drawerFlingSpring = spring<Float>(dampingRatio = 0.9f, stiffness = 420f)
 
 @Composable
 private fun TaskTab(task: AgentTaskItem, active: Boolean, onClick: () -> Unit) {
