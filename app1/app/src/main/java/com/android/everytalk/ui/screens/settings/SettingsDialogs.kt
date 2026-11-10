@@ -37,7 +37,7 @@ import androidx.compose.ui.res.stringResource
 import com.android.everytalk.R
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldDefaultBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldBorderColor
-import com.android.everytalk.ui.components.popup.AppFloatingCardElevation
+import com.android.everytalk.ui.components.popup.AppDropdownMenu
 import com.android.everytalk.ui.components.popup.AppFloatingCardShape
 import com.android.everytalk.ui.components.popup.appFloatingCardBorderColor
 import com.android.everytalk.ui.components.popup.appFloatingCardContainerColor
@@ -97,8 +97,7 @@ internal fun EditExternalWebSearchProviderDialog(
         title = {
             Text(
                 text = stringResource(R.string.web_provider_edit_title, provider.displayName),
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.headlineLarge,
                 color = contentColor
             )
         },
@@ -187,7 +186,7 @@ internal fun EditExternalWebSearchProviderDialog(
                     ),
                     border = BorderStroke(1.dp, borderColor)
                 ) {
-                    Text(stringResource(R.string.action_cancel), fontWeight = FontWeight.SemiBold)
+                    Text(stringResource(R.string.action_cancel))
                 }
                 Button(
                     onClick = {
@@ -203,7 +202,7 @@ internal fun EditExternalWebSearchProviderDialog(
                         contentColor = dialogBg
                     )
                 ) {
-                    Text(stringResource(R.string.action_save), fontWeight = FontWeight.SemiBold)
+                    Text(stringResource(R.string.action_save))
                 }
             }
         },
@@ -219,7 +218,6 @@ internal fun SettingsFieldLabel(
     Text(
         text = text,
         style = MaterialTheme.typography.labelLarge,
-        fontWeight = FontWeight.SemiBold,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = modifier.padding(bottom = 8.dp)
     )
@@ -248,8 +246,7 @@ internal fun AddProviderDialog(
         title = {
             Text(
                 stringResource(R.string.settings_add_model_platform_title),
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.headlineLarge,
                 color = contentColor
             )
         },
@@ -285,7 +282,7 @@ internal fun AddProviderDialog(
                     ),
                     border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
                 ) {
-                    Text(stringResource(R.string.action_cancel), fontWeight = FontWeight.SemiBold)
+                    Text(stringResource(R.string.action_cancel))
                 }
                 Button(
                     onClick = onConfirm,
@@ -298,7 +295,7 @@ internal fun AddProviderDialog(
                         disabledContentColor = contentColor.copy(alpha = 0.4f)
                     )
                 ) {
-                    Text(stringResource(R.string.action_add), fontWeight = FontWeight.SemiBold)
+                    Text(stringResource(R.string.action_add))
                 }
             }
         },
@@ -321,40 +318,14 @@ internal fun CustomStyledDropdownMenu(
     )
 
     if ((transitionState.currentState || transitionState.targetState) && anchorBounds != null) {
-        val density = LocalDensity.current
-        val menuWidth = with(density) { anchorBounds.width.toDp() }
-        val menuBg = appFloatingCardContainerColor()
-        val menuBorder = appFloatingCardBorderColor()
-
-        MaterialTheme(
-            shapes = MaterialTheme.shapes.copy(
-                extraSmall = AppFloatingCardShape
-            ),
-            colorScheme = MaterialTheme.colorScheme.copy(
-                surface = menuBg
-            )
-        ) {
-            DropdownMenu(
-                expanded = transitionState.currentState || transitionState.targetState,
-                onDismissRequest = onDismissRequest,
-                modifier = modifier
-                    .width(menuWidth)
-                    .heightIn(max = 280.dp)
-                    .border(1.dp, menuBorder, AppFloatingCardShape),
-                offset = DpOffset(0.dp, yOffsetDp),
-                properties = PopupProperties(
-                    focusable = true,
-                    dismissOnClickOutside = true,
-                    dismissOnBackPress = true
-                ),
-                shape = AppFloatingCardShape,
-                containerColor = menuBg,
-                tonalElevation = 0.dp,
-                shadowElevation = AppFloatingCardElevation,
-            ) {
-                content()
-            }
-        }
+        val menuWidth = with(LocalDensity.current) { anchorBounds.width.toDp() }
+        AppDropdownMenu(
+            expanded = transitionState.currentState || transitionState.targetState,
+            onDismissRequest = onDismissRequest,
+            modifier = modifier.width(menuWidth),
+            offset = DpOffset(0.dp, yOffsetDp),
+            content = content,
+        )
     } else if ((transitionState.currentState || transitionState.targetState) && anchorBounds == null) {
         Log.w(
             "DropdownAnimation",

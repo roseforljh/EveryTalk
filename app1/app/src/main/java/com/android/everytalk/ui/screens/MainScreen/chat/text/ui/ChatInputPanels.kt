@@ -279,13 +279,7 @@ internal fun ComputerSelectionCard(
             .widthIn(max = 320.dp)
             // 只设高度上限；服务器区域在剩余空间内滚动。
             .heightIn(max = 180.dp)
-            // 给弹层右侧和底部留一层柔和阴影，避免它贴在聊天内容上时边界不清楚。
-            .shadow(
-                elevation = 12.dp,
-                shape = RoundedCornerShape(22.dp),
-                ambientColor = Color.Black.copy(alpha = 0.20f),
-                spotColor = Color.Black.copy(alpha = 0.26f),
-            )
+            // 投影由外层统一悬浮卡片绘制，这里不再叠第二层。
             .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {

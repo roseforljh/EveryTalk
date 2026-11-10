@@ -37,6 +37,7 @@ import com.android.everytalk.data.agent.PendingIntervention
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.components.dialog.appDialogBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogContainerColor
+import com.android.everytalk.ui.components.popup.appFloatingCardShadow
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldColors
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -64,10 +65,9 @@ internal fun AgentAnswerCard(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 10.dp, vertical = 6.dp)
-            .border(BorderStroke(1.dp, appDialogBorderColor()), shape),
+            .appFloatingCardShadow(shape),
         shape = shape,
         color = appDialogContainerColor(),
-        shadowElevation = 10.dp,
     ) {
         Column(
             modifier = Modifier

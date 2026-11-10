@@ -104,7 +104,7 @@ import com.android.everytalk.ui.components.dialog.appDialogContainerColor
 import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.components.dialog.appDialogSubtextColor
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldDefaultBorderColor
-import com.android.everytalk.ui.components.popup.AppFloatingCardElevation
+import com.android.everytalk.ui.components.popup.AppDropdownMenu
 import com.android.everytalk.ui.components.popup.AppFloatingCardShape
 import com.android.everytalk.ui.components.popup.appFloatingCardBorderColor
 import com.android.everytalk.ui.components.popup.appFloatingCardContainerColor
@@ -773,14 +773,10 @@ private fun ProtocolDropdown(
                     .rotate(arrowRotation),
             )
         }
-        ExposedDropdownMenu(
+        AppDropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
-            modifier = Modifier.border(1.dp, appFloatingCardBorderColor(), AppFloatingCardShape),
-            shape = AppFloatingCardShape,
-            containerColor = appFloatingCardContainerColor(),
-            tonalElevation = 0.dp,
-            shadowElevation = AppFloatingCardElevation,
+            matchAnchorWidth = true,
         ) {
             modelParameterProtocols.forEach { option ->
                 val displayOption = localizedProtocol(option)
@@ -981,16 +977,11 @@ private fun ThinkingLevelDropdown(
                 .padding(horizontal = 12.dp)
                 .semantics { contentDescription = dropdownLabel },
         )
-        ExposedDropdownMenu(
+        AppDropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
-            modifier = Modifier
-                .border(1.dp, appFloatingCardBorderColor(), AppFloatingCardShape)
-                .dropdownMenuViewport(maxHeight = 280.dp),
-            shape = AppFloatingCardShape,
-            containerColor = appFloatingCardContainerColor(),
-            tonalElevation = 0.dp,
-            shadowElevation = AppFloatingCardElevation,
+            matchAnchorWidth = true,
+            focusable = !isEditingCustom,
         ) {
             if (allowCustom) {
                 val customLabel = stringResource(R.string.model_parameters_custom)

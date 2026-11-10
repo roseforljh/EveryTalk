@@ -10,7 +10,7 @@ class AppFloatingCardRulesTest {
     @Test
     fun `统一悬浮卡片使用当前黑白主题背景`() {
         assertEquals(Color.White, resolveAppFloatingCardContainerColor(isDarkTheme = false))
-        assertEquals(Color(0xFF242424), resolveAppFloatingCardContainerColor(isDarkTheme = true))
+        assertEquals(Color(0xFF303030), resolveAppFloatingCardContainerColor(isDarkTheme = true))
     }
 
     @Test
@@ -45,7 +45,7 @@ class AppFloatingCardRulesTest {
     }
 
     @Test
-    fun `Material 下拉浮层复用统一视觉参数`() {
+    fun `不再使用窗口只有菜单大的 Material 下拉浮层`() {
         val menuFiles = mainSourceRoot()
             .walkTopDown()
             .filter { it.isFile && it.extension == "kt" }
@@ -56,14 +56,7 @@ class AppFloatingCardRulesTest {
                 }
             }
             .toList()
-
-        assertTrue("至少应存在一个 Material 下拉浮层", menuFiles.isNotEmpty())
-        menuFiles.forEach { file ->
-            val source = file.readText(Charsets.UTF_8)
-            assertTrue("${file.name} 未统一圆角", source.contains("shape = AppFloatingCardShape"))
-            assertTrue("${file.name} 未统一背景", source.contains("appFloatingCardContainerColor()"))
-            assertTrue("${file.name} 未统一阴影", source.contains("shadowElevation = AppFloatingCardElevation"))
-        }
+        assertTrue("Material 菜单窗口会把大投影裁成直角，改用 AppDropdownMenu：$menuFiles", menuFiles.isEmpty())
     }
 
     @Test
@@ -76,7 +69,6 @@ class AppFloatingCardRulesTest {
         assertTrue(source.contains("AppFloatingCardShape = RoundedCornerShape(28.dp)"))
         assertTrue("浅色悬浮卡片必须使用当前白色背景", source.contains("else Color.White"))
         assertTrue(source.contains("fun AppFloatingCardContainer("))
-        assertTrue(source.contains("AppFloatingCardElevation = 8.dp"))
         assertTrue("统一悬浮卡片必须从顶部同步展开", source.contains("TransformOrigin(0.5f, 0f)"))
         assertTrue("统一悬浮卡片必须复用 0.8 起始缩放", source.contains("val scale = remember { Animatable(0.8f) }"))
         assertTrue("统一悬浮卡片必须复用 30ms 透明度动画", source.contains("durationMillis = 30"))
@@ -87,8 +79,8 @@ class AppFloatingCardRulesTest {
         assertTrue("圆角阴影外不得套矩形 AnimatedVisibility 图层", !source.contains("AnimatedVisibility"))
 
         val layerIndex = source.indexOf(".graphicsLayer {")
-        val shadowIndex = source.indexOf(".dropShadow(AppFloatingCardShape)")
-        val borderIndex = source.indexOf(".border(1.dp, appFloatingCardBorderColor(), AppFloatingCardShape)")
+        val shadowIndex = source.indexOf(".dropShadow(shape)")
+        val borderIndex = source.indexOf(".border(border, shape)")
         assertTrue(
             "阴影必须和卡片处于同一个入场动画链",
             layerIndex >= 0 && shadowIndex > layerIndex,
@@ -107,7 +99,11 @@ class AppFloatingCardRulesTest {
             "圆角阴影必须保持零偏移对称绘制",
             source.contains("offset = Offset.Zero"),
         )
-        assertTrue("统一悬浮卡片不得使用逐绘制透明度", !source.contains("CompositingStrategy"))
+        assertTrue("默认投影为 GPT 90dp", source.contains("GptShadowRadius = 90.dp"))
+        assertTrue("默认投影透明度 20%", source.contains("GptShadowAlpha = 0.2f"))
+        assertTrue("暗色描边 0.5dp #26FFFFFF", source.contains("BorderStroke(0.5.dp, Color(0x26FFFFFF))"))
+        assertTrue("可关闭弹层用铺满窗口避免投影被裁成直角", source.contains(".fillMaxSize()"))
+        assertTrue("统一悬浮卡片默认描边可配置", source.contains("border: BorderStroke?"))
     }
 
     @Test
