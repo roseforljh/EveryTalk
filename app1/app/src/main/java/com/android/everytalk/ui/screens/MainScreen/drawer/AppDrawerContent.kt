@@ -290,8 +290,8 @@ fun AppDrawerContent(
                     ) {
                 Text(
                     text = stringResource(R.string.drawer_groups),
-                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                    color = MaterialTheme.colorScheme.onSurface
                 )
                 // 使用 animateFloatAsState 为 alpha 值添加动画，避免布局跳动
                 val addGroupButtonAlpha by animateFloatAsState(
@@ -341,7 +341,6 @@ fun AppDrawerContent(
                                         stringResource(R.string.drawer_no_groups),
                                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                                         style = MaterialTheme.typography.bodySmall,
-                                        fontWeight = FontWeight.Bold,
                                     )
                                 }
                             } else {
@@ -390,7 +389,6 @@ fun AppDrawerContent(
                                                                 stringResource(R.string.drawer_no_groups),
                                                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                                                                 style = MaterialTheme.typography.bodySmall,
-                                                                fontWeight = FontWeight.Bold,
                                                             )
                                                         }
                                                     }
@@ -414,8 +412,8 @@ fun AppDrawerContent(
                     ) {
                         Text(
                             text = stringResource(R.string.drawer_conversations),
-                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                            color = MaterialTheme.colorScheme.onSurface,
                         )
                     }
                 }
@@ -549,7 +547,6 @@ fun AppDrawerContent(
                             Text(
                                 text = stringResource(R.string.drawer_conversation_name_label),
                                 style = MaterialTheme.typography.labelLarge,
-                                fontWeight = FontWeight.SemiBold,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(bottom = 8.dp)
                             )
@@ -581,9 +578,7 @@ fun AppDrawerContent(
                         ) {
                             Text(
                                 stringResource(R.string.action_confirm),
-                                style = MaterialTheme.typography.labelLarge.copy(
-                                    fontWeight = FontWeight.SemiBold
-                                )
+                                style = MaterialTheme.typography.labelLarge
                             )
                         }
                     },
@@ -602,9 +597,7 @@ fun AppDrawerContent(
                         ) {
                             Text(
                                 stringResource(R.string.action_cancel),
-                                style = MaterialTheme.typography.labelLarge.copy(
-                                    fontWeight = FontWeight.SemiBold
-                                )
+                                style = MaterialTheme.typography.labelLarge
                             )
                         }
                     },

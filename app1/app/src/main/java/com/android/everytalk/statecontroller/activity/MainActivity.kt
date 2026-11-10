@@ -1,5 +1,6 @@
 package com.android.everytalk.statecontroller
 
+import com.android.everytalk.util.locale.localizeUiMessage
 import android.app.Application
 import android.content.Intent
 import android.net.Uri
@@ -144,6 +145,8 @@ class MainActivity : AppCompatActivity() {
 
     private var fileContentToSave: String? = null
     private lateinit var appViewModel: AppViewModel
+    // 主题在 ViewModel 创建前就要组合，强调色先放在 Activity 级状态里，ViewModel 就绪后同步。
+    private val accentState = androidx.compose.runtime.mutableStateOf(com.android.everytalk.ui.theme.AccentColor.Default)
     /** 浏览器回调只请求打开账户页；是否登录成功仍由认证层核验。 */
     private var openAccountAfterCallback by mutableStateOf(false)
     private val createDocument = registerForActivityResult(ActivityResultContracts.CreateDocument("text/markdown")) { uri ->
@@ -200,7 +203,7 @@ class MainActivity : AppCompatActivity() {
         }
         
         setContent {
-            App1Theme(dynamicColor = false) {
+            App1Theme(dynamicColor = false, accentColor = accentState.value) {
                 // 根据当前主题动态设置状态栏和导航栏图标颜色
                 var showAnimatedSplash by remember { mutableStateOf(savedInstanceState == null) }
                 var mainContentStarted by remember { mutableStateOf(savedInstanceState != null) }
@@ -236,6 +239,8 @@ class MainActivity : AppCompatActivity() {
                             application
                         )
                     )
+                    val currentAccent by appViewModel.accentColor.collectAsState()
+                    SideEffect { accentState.value = currentAccent }
                     val downloadPermission by appViewModel.computerManager.downloadPermissionRequest.collectAsState()
                     val downloadPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
                         appViewModel.computerManager.downloadPermissionRequest.value?.complete(granted)
@@ -861,6 +866,24 @@ class MainActivity : AppCompatActivity() {
                                         )
                                     },
                                 ) {
+                                    val accentColor by appViewModel.accentColor.collectAsState()
+                                    val accountState by appViewModel.accountManager.state.collectAsState()
+                                    val avatarPicker = rememberLauncherForActivityResult(
+                                        ActivityResultContracts.PickVisualMedia(),
+                                    ) { uri ->
+                                        if (uri != null) appViewModel.accountManager.updateAvatar(this@MainActivity, uri)
+                                    }
+                                    // 只提示进入本页后新产生的消息（如换头像结果），不重放上一次账号操作的旧消息。
+                                    val staleAccountMessage = remember { accountState.message }
+                                    LaunchedEffect(accountState.message) {
+                                        accountState.message?.takeIf { it != staleAccountMessage }?.let {
+                                            android.widget.Toast.makeText(
+                                                this@MainActivity,
+                                                localizeUiMessage(it),
+                                                android.widget.Toast.LENGTH_SHORT,
+                                            ).show()
+                                        }
+                                    }
                                     AppInfoScreen(
                                         onBack = { navController.popBackStack() },
                                         onOpenAccountManagement = {
@@ -883,6 +906,22 @@ class MainActivity : AppCompatActivity() {
                                             }
                                         },
                                         subscriptionLocked = subscriptionLocked,
+                                        accentColor = accentColor,
+                                        onSelectAccent = { appViewModel.setAccentColor(it) },
+                                        accountAvatarUrl = accountState.user?.avatarUrl,
+                                        accountName = accountState.user?.displayName,
+                                        avatarEditingEnabled = !accountState.busy,
+                                        onEditAvatar = {
+                                            if (accountState.user == null) {
+                                                navController.navigate(Screen.ACCOUNT_SCREEN) { launchSingleTop = true }
+                                            } else {
+                                                avatarPicker.launch(
+                                                    androidx.activity.result.PickVisualMediaRequest(
+                                                        ActivityResultContracts.PickVisualMedia.ImageOnly,
+                                                    ),
+                                                )
+                                            }
+                                        },
                                     )
                                 }
                                 composable(

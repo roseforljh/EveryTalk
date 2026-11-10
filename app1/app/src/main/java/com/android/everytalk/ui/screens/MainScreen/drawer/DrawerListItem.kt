@@ -193,7 +193,6 @@ internal fun DrawerConversationListItem(
                         AnnotatedString(definitivePreviewText),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    fontWeight = FontWeight.Medium,
                     style = MaterialTheme.typography.bodyLarge,
                     modifier = Modifier
                         .weight(1f)

@@ -1463,6 +1463,8 @@
     <string name="mcp_oauth_description">通过浏览器登录，接入 MCP 工具</string>
     <string name="mcp_oauth_manage_hint">可在设置 → MCP 中重新登录。关闭开关可暂停工具，删除连接会清除本机授权。</string>
     <string name="mcp_action_edit">编辑连接</string>
+    <string name="account_accent_color">强调色</string>
+
     <string name="account_title">账号管理</string>
     <string name="account_local_sync_notice">登录后自动同步账号数据，API Key 等敏感数据会加密后同步；退出登录后停止同步，本机数据保留。</string>
     <string name="account_back">返回</string>

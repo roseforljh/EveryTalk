@@ -303,7 +303,6 @@ private fun DataManagementOverview(
                         Text(
                             text = stringResource(R.string.storage_detail_title),
                             style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
                         )
                         Text(
                             text = stringResource(
@@ -353,7 +352,6 @@ private fun StorageOverviewCard(snapshot: AppStorageSnapshot, palette: StoragePa
                 Text(
                     text = formatBytes(snapshot.totalBytes),
                     style = MaterialTheme.typography.displaySmall,
-                    fontWeight = FontWeight.Black,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
             }
@@ -432,8 +430,7 @@ private fun StorageMetric(
         }
         Text(
             text = formatBytes(bytes),
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
+            style = MaterialTheme.typography.titleLarge,
         )
     }
 }
@@ -465,8 +462,7 @@ private fun CleanerCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = stringResource(R.string.storage_cleanable_title),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.titleLarge,
                     )
                     Text(
                         text = stringResource(R.string.storage_cleanable_description),
@@ -476,8 +472,7 @@ private fun CleanerCard(
                 }
                 Text(
                     text = formatBytes(cleanableBytes),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Black,
+                    style = MaterialTheme.typography.titleLarge,
                     color = palette.safe,
                 )
             }
@@ -503,7 +498,6 @@ private fun CleanerCard(
                         } else {
                             stringResource(R.string.storage_already_clean)
                         },
-                        fontWeight = FontWeight.Bold,
                     )
                 }
             }
@@ -538,14 +532,12 @@ private fun StorageDetailsCard(
             ) {
                 Text(
                     text = stringResource(R.string.storage_data_total),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Black,
+                    style = MaterialTheme.typography.titleLarge,
                     modifier = Modifier.weight(1f),
                 )
                 Text(
                     text = formatBytes(dataBytes),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Black,
+                    style = MaterialTheme.typography.titleLarge,
                     color = palette.data,
                 )
             }
@@ -586,14 +578,12 @@ private fun StorageDetailRow(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = stringResource(visual.titleRes),
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
+                        style = MaterialTheme.typography.bodyLarge,
                         modifier = Modifier.weight(1f),
                     )
                     Text(
                         text = formatBytes(detail.bytes),
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.bodyLarge,
                     )
                     Spacer(Modifier.width(5.dp))
                     Icon(
@@ -645,8 +635,7 @@ private fun StorageErrorState(onRetry: () -> Unit) {
     ) {
         Text(
             text = stringResource(R.string.storage_scan_failed),
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
+            style = MaterialTheme.typography.titleLarge,
         )
         OutlinedButton(onClick = onRetry) {
             Icon(painterResource(R.drawable.ic_regenerate), contentDescription = null, modifier = Modifier.size(18.dp))

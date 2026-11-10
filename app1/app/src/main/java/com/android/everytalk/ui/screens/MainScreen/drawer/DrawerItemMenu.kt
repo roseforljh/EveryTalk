@@ -119,8 +119,7 @@ private fun DrawerMenuItem(
         Spacer(modifier = Modifier.width(8.dp))
         Text(
             text = text,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Normal,
+            style = MaterialTheme.typography.bodyLarge,
             color = tint,
             maxLines = 1
         )

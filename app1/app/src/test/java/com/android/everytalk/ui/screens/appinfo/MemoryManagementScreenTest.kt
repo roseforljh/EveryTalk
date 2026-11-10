@@ -48,6 +48,8 @@ class MemoryManagementScreenTest {
                 }
             }
         }
+        // 分组在懒加载列表里，先滚到所在分组让它被组合出来。
+        compose.onNode(hasScrollToKeyAction()).performScrollToKey("general_group")
         compose.onNodeWithText("记忆管理").performScrollTo().performClick()
         await("memory_enabled")
         compose.onNodeWithTag("memory_enabled").assertIsOff().performClick()
@@ -60,7 +62,7 @@ class MemoryManagementScreenTest {
         compose.onNodeWithTag("memory_enabled").performClick()
         compose.waitUntil(5_000) { !runBlocking { repository.settings().autoCaptureEnabled } }
         compose.onNodeWithContentDescription("返回").performClick()
-        compose.onNodeWithText("应用管理").assertExists()
+        compose.onNodeWithTag("app_info_screen").assertExists()
     }
 
     @Test fun `shared text can be edited saved and deleted through the same editor`() {

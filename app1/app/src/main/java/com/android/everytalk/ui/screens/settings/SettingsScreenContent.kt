@@ -87,7 +87,6 @@ private fun ImageDefaultPinnedCard(
                     Text(
                         text = stringResource(R.string.settings_default_configuration),
                         style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -131,7 +130,7 @@ private fun ImageDefaultPinnedCard(
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.fillMaxWidth().height(48.dp)
             ) {
-                Text(stringResource(R.string.settings_enable_default_configuration), fontWeight = FontWeight.SemiBold)
+                Text(stringResource(R.string.settings_enable_default_configuration))
             }
         }
     }
@@ -175,8 +174,7 @@ internal fun SettingsScreenContent(
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(
                     stringResource(R.string.settings_no_api_configuration),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.titleLarge,
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Spacer(modifier = Modifier.height(8.dp))
@@ -264,7 +262,6 @@ internal fun McpSettingsContent(
                 Text(
                     text = stringResource(R.string.settings_tab_mcp),
                     style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
                 )
                 ExternalWebSearchProviderCards(
                     selectedProviderId = selectedProviderId,
@@ -333,8 +330,7 @@ private fun ExternalWebSearchProviderCards(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = provider.displayName,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.titleLarge,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = contentAlpha),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -442,7 +438,6 @@ private fun ApiKeyItemGroup(
                     Text(
                         text = providerDisplayName,
                         style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -514,8 +509,7 @@ private fun ApiKeyItemGroup(
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = stringResource(R.string.settings_model_list),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
+                            style = MaterialTheme.typography.titleLarge,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Spacer(modifier = Modifier.height(2.dp))
@@ -651,7 +645,7 @@ private fun ModelItem(
                 style = MaterialTheme.typography.bodyLarge,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
                 color = MaterialTheme.colorScheme.onSurface
             )
             if (config.name.isNotEmpty() && config.name != config.model) {
@@ -740,7 +734,7 @@ private fun ModelListPopup(
             ) {
                 Text(
                     text = stringResource(R.string.settings_no_models),
-                    fontSize = 16.sp,
+                    style = MaterialTheme.typography.bodyLarge,
                     color = textColor.copy(alpha = 0.6f)
                 )
             }
@@ -787,7 +781,7 @@ private fun ModelListPopup(
                         }
                         Text(
                             text = config.name.ifEmpty { config.model },
-                            fontSize = 16.sp,
+                            style = MaterialTheme.typography.bodyLarge,
                             fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
                             color = if (isSelected) selectedColor else textColor,
                             maxLines = 1,

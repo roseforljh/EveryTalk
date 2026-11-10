@@ -1,15 +1,28 @@
 package com.android.everytalk.ui.screens.appinfo
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -18,6 +31,7 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -27,18 +41,19 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
+import com.android.everytalk.ui.theme.AccentColor
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Lock
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -48,16 +63,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.res.colorResource
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
-import com.android.everytalk.BuildConfig
 import com.android.everytalk.R
+import com.android.everytalk.ui.components.popup.AppFloatingCardPopup
 import com.android.everytalk.ui.components.floatingEdgeGradient
 import com.android.everytalk.ui.screens.MainScreen.AboutDialog
 import com.android.everytalk.util.locale.AppLanguage
@@ -120,118 +138,108 @@ fun AppInfoScreen(
     onOpenSubscription: () -> Unit,
     onOpenMemoryManagement: () -> Unit = {},
     subscriptionLocked: Boolean = false,
+    accentColor: AccentColor = AccentColor.Default,
+    onSelectAccent: (AccentColor) -> Unit = {},
+    accountAvatarUrl: String? = null,
+    accountName: String? = null,
+    onEditAvatar: () -> Unit = onOpenAccountManagement,
+    avatarEditingEnabled: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     var showAboutDialog by rememberSaveable { mutableStateOf(false) }
-    var showLanguageDialog by rememberSaveable { mutableStateOf(false) }
-    var showThemeDialog by rememberSaveable { mutableStateOf(false) }
     val context = LocalContext.current
     val currentLanguage = AppLanguageController.currentLanguage()
     var currentTheme by remember { mutableStateOf(AppThemeController.currentTheme(context)) }
     BackHandler(onBack = onBack)
 
     ImmersiveInfoPage(
-        title = stringResource(R.string.app_info_title),
+        title = "",
         onBack = onBack,
-        modifier = modifier,
+        modifier = modifier.testTag("app_info_screen"),
+        backgroundColor = if (MaterialTheme.colorScheme.background.luminance() < 0.5f) {
+            // u101.f → gn8.c 默认读取 pcm.g；普通 Dark 下为纯黑。
+            Color.Black
+        } else {
+            Color(0xFFFCFCFC)
+        },
     ) {
         item(key = "app_identity") {
-            AppIdentityHeader()
-        }
-        item(key = "app_info_section_title") {
-            Text(
-                text = stringResource(R.string.app_info_section_title),
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 4.dp, top = 8.dp),
+            AppIdentityHeader(
+                avatarUrl = accountAvatarUrl,
+                accountName = accountName,
+                onEditAvatar = onEditAvatar,
+                editingEnabled = avatarEditingEnabled,
             )
         }
+        // ChatGPT 是分多个独立卡片，不是一个大卡片：
+        //   1) 账户信息（邮箱/电话/年龄）
+        //   2) 外观（外观 / 强调色）
+        //   3) 自定义
+        //   4) 常规（通知/语音/安全/账户安全）
+        // 每张卡片圆角 16dp、行高 60dp、分隔线从标题列开始缩进 21dp。
         item(key = "app_info_entries") {
-            Surface(
-                shape = RoundedCornerShape(24.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.82f),
-                border = BorderStroke(
-                    width = 1.dp,
-                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f),
-                ),
-            ) {
-                Column {
-                    AppInfoEntry(
-                        iconRes = R.drawable.gpt_user,
-                        title = stringResource(R.string.account_title),
-                        description = stringResource(R.string.account_management_description),
-                        onClick = onOpenAccountManagement,
-                    )
-                    HorizontalDivider(
-                        modifier = Modifier.padding(start = 80.dp),
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
-                    )
-                    AppInfoEntry(
-                        iconRes = R.drawable.ic_gpt_sparkle,
-                        title = stringResource(R.string.subscription_title),
-                        description = stringResource(R.string.subscription_entry_description),
-                        onClick = onOpenSubscription,
-                        locked = subscriptionLocked,
-                    )
-                    HorizontalDivider(
-                        modifier = Modifier.padding(start = 80.dp),
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
-                    )
-                    AppInfoEntry(
-                        iconRes = R.drawable.ic_globe,
-                        title = stringResource(R.string.app_info_language_title),
-                        description = stringResource(currentLanguage.labelRes),
-                        onClick = { showLanguageDialog = true },
-                    )
-                    HorizontalDivider(
-                        modifier = Modifier.padding(start = 80.dp),
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
-                    )
-                    AppInfoEntry(
-                        iconRes = R.drawable.ic_theme,
-                        title = stringResource(R.string.app_info_theme_title),
-                        description = stringResource(currentTheme.labelRes),
-                        onClick = { showThemeDialog = true },
-                    )
-                    HorizontalDivider(
-                        modifier = Modifier.padding(start = 80.dp),
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
-                    )
-                    AppInfoEntry(
-                        iconRes = R.drawable.ic_folder,
-                        title = stringResource(R.string.app_info_data_management_title),
-                        description = stringResource(R.string.app_info_data_management_description),
-                        onClick = onOpenDataManagement,
-                    )
-                    HorizontalDivider(modifier = Modifier.padding(start = 80.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
-                    AppInfoEntry(
-                        iconRes = R.drawable.ic_gpt_sparkle,
-                        title = stringResource(R.string.memory_title),
-                        description = stringResource(R.string.memory_entry_description),
-                        onClick = onOpenMemoryManagement,
-                    )
-                    HorizontalDivider(
-                        modifier = Modifier.padding(start = 80.dp),
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
-                    )
-                    AppInfoEntry(
-                        iconRes = R.drawable.gpt_privacy,
-                        title = stringResource(R.string.app_info_privacy_title),
-                        description = stringResource(R.string.app_info_privacy_description),
-                        onClick = onOpenPrivacyPolicy,
-                    )
-                    HorizontalDivider(
-                        modifier = Modifier.padding(start = 80.dp),
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
-                    )
-                    AppInfoEntry(
-                        iconRes = R.drawable.ic_info,
-                        title = stringResource(R.string.app_info_about_title),
-                        description = stringResource(R.string.app_info_version, BuildConfig.VERSION_NAME),
-                        onClick = { showAboutDialog = true },
-                    )
-                }
+            SettingsGroupCard {
+                AppInfoEntry(
+                    iconRes = R.drawable.gpt_user_icon,
+                    title = stringResource(R.string.account_title),
+                    onClick = onOpenAccountManagement,
+                )
+                SettingsRowDivider()
+                AppInfoEntry(
+                    iconRes = R.drawable.gpt_sparkle,
+                    title = stringResource(R.string.subscription_title),
+                    onClick = onOpenSubscription,
+                    locked = subscriptionLocked,
+                )
+            }
+        }
+        item(key = "appearance_group") {
+            SettingsGroupCard {
+                // 主题：右侧显示当前值 + 向下的折叠箭头（不是 chevron>），点开悬浮卡片。
+                ThemeEntry(
+                    currentTheme = currentTheme,
+                    onThemeSelected = { theme ->
+                        currentTheme = theme
+                        AppThemeController.setTheme(context, theme)
+                    },
+                )
+                SettingsRowDivider()
+                AccentColorEntry(
+                    selected = accentColor,
+                    onSelect = onSelectAccent,
+                )
+            }
+        }
+        item(key = "general_group") {
+            SettingsGroupCard {
+                LanguageEntry(
+                    currentLanguage = currentLanguage,
+                    onLanguageSelected = AppLanguageController::setLanguage,
+                )
+                SettingsRowDivider()
+                AppInfoEntry(
+                    iconRes = R.drawable.gpt_folder,
+                    title = stringResource(R.string.app_info_data_management_title),
+                    onClick = onOpenDataManagement,
+                )
+                SettingsRowDivider()
+                AppInfoEntry(
+                    iconRes = R.drawable.gpt_memory,
+                    title = stringResource(R.string.memory_title),
+                    onClick = onOpenMemoryManagement,
+                )
+                SettingsRowDivider()
+                AppInfoEntry(
+                    iconRes = R.drawable.gpt_privacy,
+                    title = stringResource(R.string.app_info_privacy_title),
+                    onClick = onOpenPrivacyPolicy,
+                )
+                SettingsRowDivider()
+                AppInfoEntry(
+                    iconRes = R.drawable.gpt_info,
+                    title = stringResource(R.string.app_info_about_title),
+                    onClick = { showAboutDialog = true },
+                )
             }
         }
     }
@@ -239,27 +247,6 @@ fun AppInfoScreen(
     if (showAboutDialog) {
         AboutDialog(
             onDismiss = { showAboutDialog = false },
-        )
-    }
-    if (showLanguageDialog) {
-        LanguageSelectionDialog(
-            selectedLanguage = currentLanguage,
-            onLanguageSelected = { language ->
-                showLanguageDialog = false
-                AppLanguageController.setLanguage(language)
-            },
-            onDismiss = { showLanguageDialog = false },
-        )
-    }
-    if (showThemeDialog) {
-        ThemeSelectionDialog(
-            selectedTheme = currentTheme,
-            onThemeSelected = { theme ->
-                currentTheme = theme
-                showThemeDialog = false
-                AppThemeController.setTheme(context, theme)
-            },
-            onDismiss = { showThemeDialog = false },
         )
     }
 }
@@ -282,8 +269,7 @@ fun PrivacyPolicyScreen(
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
                     text = stringResource(R.string.privacy_policy_heading),
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.headlineLarge,
                     color = MaterialTheme.colorScheme.onBackground,
                 )
                 Text(
@@ -327,12 +313,11 @@ fun PrivacyPolicyScreen(
                     Spacer(Modifier.width(14.dp))
                     Text(
                         text = stringResource(R.string.privacy_project_link),
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
+                        style = MaterialTheme.typography.bodyLarge,
                         modifier = Modifier.weight(1f),
                     )
                     Icon(
-                        painter = painterResource(R.drawable.ic_gpt_chevron_right),
+                        painter = painterResource(R.drawable.gpt_chevron_right),
                         contentDescription = null,
                         modifier = Modifier.size(18.dp),
                     )
@@ -342,38 +327,57 @@ fun PrivacyPolicyScreen(
     }
 }
 
+/**
+ * 顶部身份区：ChatGPT 这里放的是用户头像（圆形，带编辑角标），不是 app logo。
+ * 未登录时退回 app 图标；名称优先显示账号名。
+ */
 @Composable
-private fun AppIdentityHeader() {
+private fun AppIdentityHeader(
+    avatarUrl: String? = null,
+    accountName: String? = null,
+    onEditAvatar: () -> Unit,
+    editingEnabled: Boolean,
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(top = 8.dp, bottom = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Surface(
-            modifier = Modifier.size(76.dp),
-            shape = RoundedCornerShape(24.dp),
-            color = colorResource(R.color.ic_launcher_background),
+        Box(
+            Modifier.size(88.dp).clickable(
+                enabled = editingEnabled,
+                role = Role.Button,
+                onClickLabel = stringResource(R.string.account_change_avatar),
+                onClick = onEditAvatar,
+            ),
         ) {
-            Box(contentAlignment = Alignment.Center) {
-                Image(
-                    painter = painterResource(R.drawable.pixel_penguin_logo),
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                )
+            com.android.everytalk.ui.screens.account.AccountAvatar(
+                avatarUrl = avatarUrl,
+                name = accountName ?: stringResource(R.string.app_name),
+                description = stringResource(R.string.account_change_avatar),
+                modifier = Modifier.fillMaxSize(),
+            )
+            Surface(
+                modifier = Modifier.size(28.dp).align(Alignment.BottomEnd),
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_gpt_edit),
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
             }
         }
         Text(
-            text = stringResource(R.string.app_name),
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
+            text = accountName ?: stringResource(R.string.app_name),
+            style = MaterialTheme.typography.headlineLarge,
             color = MaterialTheme.colorScheme.onBackground,
-        )
-        Text(
-            text = stringResource(R.string.app_info_tagline),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
@@ -382,49 +386,36 @@ private fun AppIdentityHeader() {
 private fun AppInfoEntry(
     @DrawableRes iconRes: Int,
     title: String,
-    description: String,
     onClick: () -> Unit,
     locked: Boolean = false,
+    expanded: Boolean = false,
 ) {
+    // 普通入口只显示图标、标题和箭头；当前值仅由主题/强调色行展示。
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(role = Role.Button, onClick = onClick)
-            .padding(horizontal = 18.dp, vertical = 16.dp),
+            .heightIn(min = 50.dp)
+            .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Surface(
-            modifier = Modifier.size(44.dp),
-            shape = RoundedCornerShape(14.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.9f),
-            contentColor = MaterialTheme.colorScheme.onSurface,
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    painter = painterResource(iconRes),
-                    contentDescription = null,
-                    modifier = Modifier.size(22.dp),
-                )
-            }
-        }
+        Icon(
+            painter = painterResource(iconRes),
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.size(24.dp),
+        )
         Spacer(Modifier.width(16.dp))
-        Column(
+        Text(
+            text = title,
             modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(3.dp),
-        ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-                text = description,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
         if (locked) {
+            Spacer(Modifier.width(8.dp))
             Icon(
                 imageVector = Icons.Outlined.Lock,
                 contentDescription = stringResource(R.string.feature_locked),
@@ -432,13 +423,282 @@ private fun AppInfoEntry(
                 modifier = Modifier.size(18.dp),
             )
         }
-        if (locked) Spacer(Modifier.width(8.dp))
-        Icon(
-            painter = painterResource(R.drawable.ic_gpt_chevron_right),
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(18.dp),
+        Spacer(Modifier.width(8.dp))
+        AnimatedChevron(
+            expanded = expanded,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
         )
+    }
+}
+
+/** 1.2026.279：qgr0 使用 pcm.a，普通暗色为 #303030；qwl0 使用 1dp qcm.a 描边。 */
+@Composable
+private fun SettingsGroupCard(content: @Composable ColumnScope.() -> Unit) {
+    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(27.dp),
+        color = if (dark) Color(0xFF303030) else Color.White,
+        border = BorderStroke(
+            1.dp,
+            if (dark) Color(0x26FFFFFF) else Color(0x1A000000),
+        ),
+    ) {
+        Column(content = content)
+    }
+}
+
+/** 行间分隔线：从左边距 16dp 开始（对齐 lgr0.d），右端留白同卡片内边距。 */
+@Composable
+private fun SettingsRowDivider() {
+    HorizontalDivider(
+        modifier = Modifier.padding(start = 16.dp, end = 16.dp),
+        thickness = 0.5.dp,
+        color = if (MaterialTheme.colorScheme.background.luminance() < 0.5f) {
+            Color(0x1AFFFFFF)
+        } else {
+            Color(0x0D000000)
+        },
+    )
+}
+
+/** 弹层复用统一动画容器：alpha图层包住阴影留白，不能用卡片大小的矩形图层裁剪。 */
+@Composable
+private fun AnchoredPopup(
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val density = LocalDensity.current
+    val maxHeight = with(density) { LocalWindowInfo.current.containerSize.height.toDp() } - 32.dp
+    val positionProvider = remember(density) {
+        object : PopupPositionProvider {
+            override fun calculatePosition(
+                anchorBounds: IntRect,
+                windowSize: IntSize,
+                layoutDirection: LayoutDirection,
+                popupContentSize: IntSize,
+            ): IntOffset = appInfoPopupOffset(
+                anchorBounds, windowSize, popupContentSize,
+                with(density) { 6.dp.roundToPx() },
+                with(density) { 8.dp.roundToPx() },
+            )
+        }
+    }
+    AppFloatingCardPopup(
+        visible = expanded,
+        popupPositionProvider = positionProvider,
+        onDismissRequest = onDismiss,
+        modifier = Modifier.width(226.dp).heightIn(max = maxHeight),
+        properties = PopupProperties(focusable = true),
+        shape = RoundedCornerShape(22.dp),
+    ) {
+        Column(
+            modifier = Modifier
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            content = content,
+        )
+    }
+}
+
+/** 优先贴行下方；放不下则贴行上方，两侧都不足时夹在窗口内，内容可滚动。 */
+internal fun appInfoPopupOffset(
+    anchor: IntRect,
+    window: IntSize,
+    popup: IntSize,
+    gap: Int,
+    margin: Int,
+): IntOffset {
+    val maxX = (window.width - popup.width - margin).coerceAtLeast(margin)
+    val maxY = (window.height - popup.height - margin).coerceAtLeast(margin)
+    val below = anchor.bottom + gap
+    val above = anchor.top - gap - popup.height
+    val y = when {
+        below <= maxY -> below
+        above >= margin -> above
+        else -> below.coerceIn(margin, maxY)
+    }
+    return IntOffset((anchor.right - popup.width).coerceIn(margin, maxX), y)
+}
+
+/** 行尾 chevron：展开时顺时针转 90°（朝下），收起转回。 */
+@Composable
+private fun AnimatedChevron(expanded: Boolean, tint: Color) {
+    val angle by animateFloatAsState(
+        targetValue = if (expanded) 90f else 0f,
+        animationSpec = tween(180, easing = FastOutSlowInEasing),
+        label = "chevron-rotate",
+    )
+    Icon(
+        painter = painterResource(R.drawable.gpt_chevron_right),
+        contentDescription = null,
+        tint = tint,
+        modifier = Modifier
+            .size(20.dp)
+            .rotate(angle),
+    )
+}
+
+/**
+ * 强调色行：右侧「色点 + 名称 + ⌄」，点开在行右下方弹出悬浮卡片。
+ *
+ * 逆向自 ChatGPT：弹窗内边距 io6.M(mod, 16f, 8f) 即水平 16dp、垂直 8dp，行高 54dp。
+ */
+@Composable
+private fun AccentColorEntry(
+    selected: AccentColor,
+    onSelect: (AccentColor) -> Unit,
+) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    Box(Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(role = Role.Button) { expanded = !expanded }
+                .heightIn(min = 50.dp)
+                .padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                painter = painterResource(R.drawable.gpt_paint_palette),
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.size(24.dp),
+            )
+            Spacer(Modifier.width(16.dp))
+            Text(
+                text = stringResource(R.string.account_accent_color),
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Box(
+                modifier = Modifier
+                    .size(14.dp)
+                    .clip(CircleShape)
+                    .background(selected.color)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = selected.displayName,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.width(8.dp))
+            AnimatedChevron(
+                expanded = expanded,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        AnchoredPopup(
+            expanded = expanded,
+            onDismiss = { expanded = false },
+        ) {
+            AccentColor.pickerEntries.forEach { accent ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSelect(accent); expanded = false }
+                        .heightIn(min = 48.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(14.dp)
+                            .clip(CircleShape)
+                            .background(accent.color)
+                    )
+                    Spacer(Modifier.width(11.dp))
+                    Text(
+                        text = accent.displayName,
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    if (accent == selected) {
+                        Icon(
+                            painter = painterResource(R.drawable.gpt_check),
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ThemeEntry(
+    currentTheme: AppTheme,
+    onThemeSelected: (AppTheme) -> Unit,
+) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    Box(Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(role = Role.Button) { expanded = !expanded }
+                .heightIn(min = 50.dp)
+                .padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                painter = painterResource(R.drawable.gpt_theme),
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.size(24.dp),
+            )
+            Spacer(Modifier.width(16.dp))
+            Text(
+                text = stringResource(R.string.app_info_theme_title),
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = stringResource(currentTheme.labelRes),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.width(8.dp))
+            AnimatedChevron(
+                expanded = expanded,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        AnchoredPopup(
+            expanded = expanded,
+            onDismiss = { expanded = false },
+        ) {
+            AppTheme.entries.forEach { theme ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onThemeSelected(theme); expanded = false }
+                        .heightIn(min = 48.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = stringResource(theme.labelRes),
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    if (theme == currentTheme) {
+                        Icon(
+                            painter = painterResource(R.drawable.gpt_check),
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -457,83 +717,51 @@ private val AppTheme.labelRes: Int
     }
 
 @Composable
-private fun LanguageSelectionDialog(
-    selectedLanguage: AppLanguage,
+internal fun LanguageEntry(
+    currentLanguage: AppLanguage,
     onLanguageSelected: (AppLanguage) -> Unit,
-    onDismiss: () -> Unit,
 ) {
-    OptionSelectionDialog(
-        titleRes = R.string.app_language_dialog_title,
-        options = AppLanguage.entries,
-        selectedOption = selectedLanguage,
-        labelRes = AppLanguage::labelRes,
-        onOptionSelected = onLanguageSelected,
-        onDismiss = onDismiss,
-    )
-}
-
-@Composable
-private fun ThemeSelectionDialog(
-    selectedTheme: AppTheme,
-    onThemeSelected: (AppTheme) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    OptionSelectionDialog(
-        titleRes = R.string.app_theme_dialog_title,
-        options = AppTheme.entries,
-        selectedOption = selectedTheme,
-        labelRes = AppTheme::labelRes,
-        onOptionSelected = onThemeSelected,
-        onDismiss = onDismiss,
-    )
-}
-
-@Composable
-private fun <T> OptionSelectionDialog(
-    @StringRes titleRes: Int,
-    options: List<T>,
-    selectedOption: T,
-    labelRes: (T) -> Int,
-    onOptionSelected: (T) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(titleRes)) },
-        text = {
-            Column {
-                options.forEach { option ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .selectable(
-                                selected = option == selectedOption,
-                                role = Role.RadioButton,
-                                onClick = { onOptionSelected(option) },
-                            )
-                            .padding(vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        RadioButton(
-                            selected = option == selectedOption,
-                            onClick = null,
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    Box(Modifier.fillMaxWidth()) {
+        AppInfoEntry(
+            iconRes = R.drawable.gpt_language,
+            title = stringResource(R.string.app_info_language_title),
+            onClick = { expanded = !expanded },
+            expanded = expanded,
+        )
+        AnchoredPopup(expanded = expanded, onDismiss = { expanded = false }) {
+            AppLanguage.entries.forEach { language ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .selectable(
+                            selected = language == currentLanguage,
+                            role = Role.RadioButton,
+                            onClick = {
+                                expanded = false
+                                onLanguageSelected(language)
+                            },
                         )
-                        Spacer(Modifier.width(12.dp))
-                        Text(
-                            text = stringResource(labelRes(option)),
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurface,
+                        .heightIn(min = 48.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = stringResource(language.labelRes),
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    if (language == currentLanguage) {
+                        Icon(
+                            painter = painterResource(R.drawable.gpt_check),
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
                         )
                     }
                 }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.action_close))
-            }
-        },
-    )
+        }
+    }
 }
 
 @Composable
@@ -552,8 +780,7 @@ private fun PrivacySectionCard(section: PrivacySection) {
         ) {
             Text(
                 text = stringResource(section.titleRes),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.titleLarge,
                 color = MaterialTheme.colorScheme.onSurface,
             )
             Text(
@@ -571,10 +798,10 @@ internal fun ImmersiveInfoPage(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     opaqueTopBar: Boolean = false,
+    backgroundColor: Color = MaterialTheme.colorScheme.background,
     bottomBar: (@Composable () -> Unit)? = null,
     content: LazyListScope.() -> Unit,
 ) {
-    val backgroundColor = MaterialTheme.colorScheme.background
     val statusBarInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val navigationBarInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     val topChromeHeight = statusBarInset + 68.dp
@@ -590,12 +817,13 @@ internal fun ImmersiveInfoPage(
                 .fillMaxSize()
                 .zIndex(0f),
             contentPadding = PaddingValues(
-                start = 20.dp,
+                start = 16.dp,
                 top = topChromeHeight + 12.dp,
-                end = 20.dp,
+                end = 16.dp,
                 bottom = if (bottomBar == null) bottomChromeHeight + 20.dp else navigationBarInset + 96.dp,
             ),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            // 分组间距 24dp，对齐 ChatGPT 的 SettingsListSectionSpacer。
+            verticalArrangement = Arrangement.spacedBy(24.dp),
             content = content,
         )
         if (bottomBar != null) {
@@ -648,13 +876,14 @@ internal fun ImmersiveInfoPage(
                     )
                 }
             }
-            Spacer(Modifier.width(14.dp))
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground,
-            )
+            if (title.isNotBlank()) {
+                Spacer(Modifier.width(14.dp))
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+            }
         }
         Box(
             modifier = Modifier

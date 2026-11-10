@@ -100,9 +100,7 @@ internal fun DeleteConfirmationDialog(
                     ) {
                         Text(
                             text = stringResource(R.string.action_cancel),
-                            style = MaterialTheme.typography.labelLarge.copy(
-                                fontWeight = FontWeight.SemiBold
-                            )
+                            style = MaterialTheme.typography.labelLarge
                         )
                     }
 
@@ -124,9 +122,7 @@ internal fun DeleteConfirmationDialog(
                     ) {
                         Text(
                             text = stringResource(R.string.action_confirm),
-                            style = MaterialTheme.typography.labelLarge.copy(
-                                fontWeight = FontWeight.SemiBold
-                            )
+                            style = MaterialTheme.typography.labelLarge
                         )
                     }
                 }
@@ -183,9 +179,7 @@ internal fun ClearAllConfirmationDialog(
                     ) {
                         Text(
                             text = stringResource(R.string.action_cancel),
-                            style = MaterialTheme.typography.labelLarge.copy(
-                                fontWeight = FontWeight.SemiBold
-                            )
+                            style = MaterialTheme.typography.labelLarge
                         )
                     }
 
@@ -207,9 +201,7 @@ internal fun ClearAllConfirmationDialog(
                     ) {
                         Text(
                             text = stringResource(R.string.drawer_confirm_clear),
-                            style = MaterialTheme.typography.labelLarge.copy(
-                                fontWeight = FontWeight.SemiBold
-                            )
+                            style = MaterialTheme.typography.labelLarge
                         )
                     }
                 }
@@ -259,9 +251,7 @@ internal fun ClearImageHistoryConfirmationDialog(
                    ) {
                        Text(
                            text = stringResource(R.string.action_cancel),
-                           style = MaterialTheme.typography.labelLarge.copy(
-                               fontWeight = FontWeight.SemiBold
-                           )
+                           style = MaterialTheme.typography.labelLarge
                        )
                    }
 
@@ -283,9 +273,7 @@ internal fun ClearImageHistoryConfirmationDialog(
                    ) {
                        Text(
                            text = stringResource(R.string.drawer_confirm_clear),
-                           style = MaterialTheme.typography.labelLarge.copy(
-                               fontWeight = FontWeight.SemiBold
-                           )
+                           style = MaterialTheme.typography.labelLarge
                        )
                    }
                }
@@ -314,7 +302,7 @@ internal fun CreateGroupDialog(
         containerColor = dialogBg,
         titleContentColor = contentColor,
         textContentColor = contentColor,
-        title = { Text(stringResource(R.string.drawer_create_group_title), style = MaterialTheme.typography.titleLarge) },
+        title = { Text(stringResource(R.string.drawer_create_group_title), style = MaterialTheme.typography.headlineLarge) },
         text = {
             OutlinedTextField(
                 value = groupName,
@@ -344,7 +332,7 @@ internal fun CreateGroupDialog(
                     disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                 )
             ) {
-                Text(stringResource(R.string.action_create), fontWeight = FontWeight.Bold)
+                Text(stringResource(R.string.action_create))
             }
         },
         dismissButton = {
@@ -358,7 +346,7 @@ internal fun CreateGroupDialog(
                 ),
                 border = BorderStroke(1.dp, cancelButtonColor)
             ) {
-                Text(stringResource(R.string.action_cancel), fontWeight = FontWeight.Medium)
+                Text(stringResource(R.string.action_cancel))
             }
         }
     )
@@ -387,7 +375,7 @@ internal fun MoveToGroupDialog(
         containerColor = dialogBg,
         titleContentColor = contentColor,
         textContentColor = contentColor,
-        title = { Text(stringResource(R.string.drawer_move_to_group_title), style = MaterialTheme.typography.titleLarge) },
+        title = { Text(stringResource(R.string.drawer_move_to_group_title), style = MaterialTheme.typography.headlineLarge) },
         text = {
             if (groups.isEmpty() && !isCurrentlyGrouped) {
                 Box(
@@ -427,10 +415,7 @@ internal fun MoveToGroupDialog(
                                 Spacer(modifier = Modifier.width(12.dp))
                                 Text(
                                     text = stringResource(R.string.drawer_remove_from_group),
-                                    style = MaterialTheme.typography.bodyMedium.copy(
-                                        color = removeColor,
-                                        fontWeight = FontWeight.Medium
-                                    ),
+                                    style = MaterialTheme.typography.bodyMedium.copy(color = removeColor),
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
@@ -460,10 +445,7 @@ internal fun MoveToGroupDialog(
                             Spacer(modifier = Modifier.width(12.dp))
                             Text(
                                 text = groupName,
-                                style = MaterialTheme.typography.bodyMedium.copy(
-                                    color = contentColor,
-                                    fontWeight = FontWeight.Medium
-                                ),
+                                style = MaterialTheme.typography.bodyMedium.copy(color = contentColor),
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -485,7 +467,7 @@ internal fun MoveToGroupDialog(
                 ),
                 border = BorderStroke(1.dp, cancelButtonColor)
             ) {
-                Text(stringResource(R.string.action_cancel), fontWeight = FontWeight.Medium)
+                Text(stringResource(R.string.action_cancel))
             }
         },
         dismissButton = {}
@@ -571,7 +553,7 @@ internal fun GroupComputerSelectionDialog(
                 ),
                 border = BorderStroke(1.dp, cancelButtonColor),
             ) {
-                Text(stringResource(R.string.action_cancel), fontWeight = FontWeight.Medium)
+                Text(stringResource(R.string.action_cancel))
             }
         },
         dismissButton = {},
@@ -603,7 +585,7 @@ private fun GroupComputerOption(
             Text(
                 text = title,
                 color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                fontWeight = FontWeight.Medium,
+                style = MaterialTheme.typography.bodyLarge,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )

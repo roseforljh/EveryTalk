@@ -56,7 +56,7 @@ import com.android.everytalk.ui.components.dialog.appDialogCancelColor
 import com.android.everytalk.ui.components.dialog.appDialogContainerColor
 import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldColors
-import com.android.everytalk.ui.components.popup.AppFloatingCardElevation
+import com.android.everytalk.ui.components.popup.AppDropdownMenu
 import com.android.everytalk.ui.components.popup.AppFloatingCardShape
 import com.android.everytalk.ui.components.popup.appFloatingCardBorderColor
 import com.android.everytalk.ui.components.popup.appFloatingCardContainerColor
@@ -117,7 +117,7 @@ fun CollapsibleGroupHeader(
             Spacer(Modifier.width(12.dp))
             Text(
                 text = groupName,
-                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.weight(1f)
             )
@@ -136,18 +136,9 @@ fun CollapsibleGroupHeader(
                         )
                     }
                     
-                    DropdownMenu(
+                    AppDropdownMenu(
                         expanded = showMenu,
                         onDismissRequest = { showMenu = false },
-                        modifier = Modifier.border(
-                            1.dp,
-                            appFloatingCardBorderColor(),
-                            AppFloatingCardShape,
-                        ),
-                        shape = AppFloatingCardShape,
-                        containerColor = appFloatingCardContainerColor(),
-                        tonalElevation = 0.dp,
-                        shadowElevation = AppFloatingCardElevation,
                     ) {
                         if (onCreateConversation != null) {
                             DropdownMenuItem(

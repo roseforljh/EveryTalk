@@ -201,8 +201,7 @@ private fun StorageCategorySummary(
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
                     text = formatBytes(detail.bytes),
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Black,
+                    style = MaterialTheme.typography.displaySmall,
                 )
                 Text(
                     text = stringResource(R.string.storage_category_item_count, itemCount),
@@ -247,7 +246,7 @@ private fun StorageSectionHeader(title: String, description: String) {
         modifier = Modifier.padding(start = 4.dp, top = 4.dp),
         verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
-        Text(text = title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Text(text = title, style = MaterialTheme.typography.titleLarge)
         Text(
             text = description,
             style = MaterialTheme.typography.bodySmall,
@@ -322,8 +321,7 @@ private fun StorageEntryRow(
                     Spacer(Modifier.width(7.dp))
                     Text(
                         text = entryTitle(entry),
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
+                        style = MaterialTheme.typography.bodyLarge,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
@@ -331,8 +329,7 @@ private fun StorageEntryRow(
                     Spacer(Modifier.width(8.dp))
                     Text(
                         text = formatBytes(entry.bytes),
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.bodyLarge,
                     )
                 }
                 Text(
@@ -444,7 +441,6 @@ private fun StorageSelectionBar(
                 } else {
                     stringResource(R.string.storage_delete_selected, selectedCount, formatBytes(selectedBytes))
                 },
-                fontWeight = FontWeight.Bold,
             )
         }
     }

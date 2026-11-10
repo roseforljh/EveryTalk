@@ -55,8 +55,7 @@ internal fun DrawerHeader(
             Spacer(Modifier.width(4.dp))
             Text(
                 text = stringResource(R.string.app_name),
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
                 color = MaterialTheme.colorScheme.onSurface,
             )
         }
@@ -149,9 +148,8 @@ private fun DrawerActionButton(
             Spacer(Modifier.width(20.dp))
             Text(
                 text = label,
-                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.titleLarge,
                 color = MaterialTheme.colorScheme.onSurface,
-                fontSize = MaterialTheme.typography.bodyLarge.fontSize,
             )
         }
     }

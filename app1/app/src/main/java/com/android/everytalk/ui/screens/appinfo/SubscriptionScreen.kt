@@ -62,8 +62,7 @@ internal fun SubscriptionScreen(
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     text = stringResource(R.string.subscription_heading),
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.headlineLarge,
                     color = MaterialTheme.colorScheme.onBackground,
                 )
                 Text(
@@ -184,7 +183,7 @@ private fun SubscriptionPlanCard(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                Text(name, style = MaterialTheme.typography.titleLarge)
                 if (locked) {
                     Icon(Icons.Outlined.Lock, contentDescription = stringResource(R.string.feature_locked))
                 }
@@ -193,7 +192,7 @@ private fun SubscriptionPlanCard(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(price, style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
+                Text(price, style = MaterialTheme.typography.displaySmall)
                 if (credit != null) {
                     Text(stringResource(R.string.subscription_month), color = colors.onSurfaceVariant)
                 }
@@ -205,7 +204,7 @@ private fun SubscriptionPlanCard(
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(stringResource(R.string.subscription_credit_label),
                         style = MaterialTheme.typography.labelLarge, color = colors.onSurfaceVariant)
-                    Text(credit, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+                    Text(credit, style = MaterialTheme.typography.titleLarge)
                     Text(stringResource(R.string.subscription_model_summary),
                         modifier = Modifier.padding(top = 4.dp),
                         style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
@@ -247,7 +246,7 @@ private fun SubscriptionPlanCard(
 @Composable
 private fun SubscriptionExplanation(title: String, body: String) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+        Text(title, style = MaterialTheme.typography.titleLarge)
         Text(body, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

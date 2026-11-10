@@ -1491,6 +1491,8 @@
     <string name="mcp_oauth_description">Sign in with your browser to connect MCP tools</string>
     <string name="mcp_oauth_manage_hint">Sign in again from Settings → MCP. Disable to pause tools, or remove this connection to delete the saved authorization.</string>
     <string name="mcp_action_edit">Edit connection</string>
+    <string name="account_accent_color">Accent color</string>
+
     <string name="account_title">Account management</string>
     <string name="account_local_sync_notice">Account data syncs automatically after sign-in, with API keys and other sensitive data encrypted before syncing. Signing out stops sync and keeps local data.</string>
     <string name="account_back">Back</string>

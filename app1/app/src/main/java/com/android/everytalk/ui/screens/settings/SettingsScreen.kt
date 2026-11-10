@@ -809,14 +809,8 @@ internal fun SettingsTabMenu(
         Column(
             modifier = Modifier.padding(vertical = 6.dp)
         ) {
-            Box(
-                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
-                    .clickable { onOpenAccount(); onDismiss() }.padding(horizontal = 14.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(stringResource(R.string.account_title), fontSize = 16.sp, color = textColor)
-            }
             // 菜单顺序与设置页页签一致，服务器入口固定紧跟 MCP。
+            // 账号管理不在设置菜单里：它属于侧栏头像进入的个人信息页。
             tabs.forEachIndexed { index, title ->
                 val isSelected = index == currentTabIndex
                 Box(
@@ -829,8 +823,8 @@ internal fun SettingsTabMenu(
                 ) {
                     Text(
                         text = title,
-                        fontSize = 16.sp,
-                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
                         color = textColor,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -860,8 +854,8 @@ internal fun SettingsTabMenu(
             ) {
                 Text(
                     text = stringResource(R.string.settings_servers),
-                    fontSize = 16.sp,
-                    fontWeight = if (isComputerSelected) FontWeight.SemiBold else FontWeight.Medium,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = if (isComputerSelected) FontWeight.Medium else FontWeight.Normal,
                     color = textColor,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -890,8 +884,8 @@ internal fun SettingsTabMenu(
             ) {
                 Text(
                     text = stringResource(R.string.settings_skills),
-                    fontSize = 16.sp,
-                    fontWeight = if (isSkillSelected) FontWeight.SemiBold else FontWeight.Medium,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = if (isSkillSelected) FontWeight.Medium else FontWeight.Normal,
                     color = textColor,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -918,8 +912,7 @@ internal fun SettingsTabMenu(
             ) {
                 Text(
                     text = stringResource(R.string.settings_import_export),
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Medium,
+                    style = MaterialTheme.typography.bodyLarge,
                     color = textColor,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis

@@ -174,7 +174,7 @@ internal fun AccountScreen(
                         Icon(painterResource(R.drawable.pixel_penguin_logo), contentDescription = null,
                             tint = colors.onBackground, modifier = Modifier.size(64.dp))
                         Text(stringResource(R.string.account_welcome),
-                            style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                            style = MaterialTheme.typography.headlineLarge,
                             textAlign = TextAlign.Center, color = colors.onBackground)
                         Text(stringResource(R.string.account_login_subtitle),
                             style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center,
@@ -376,7 +376,6 @@ internal fun AccountScreen(
                 Text(
                     text = stringResource(R.string.account_title),
                     style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
                     color = colors.onBackground,
                 )
             }
