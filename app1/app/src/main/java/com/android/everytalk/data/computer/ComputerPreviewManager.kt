@@ -10,11 +10,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.Closeable
-import java.net.InetAddress
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
-
-private const val PREVIEW_HELPER = "/usr/local/libexec/everytalk-containerctl"
 
 data class ComputerPreviewOpenResult(
     val preview: ComputerPreview,
@@ -28,7 +25,6 @@ data class ComputerPublicPreviewRequest(
     val port: Int,
     val protocol: String,
     val expiresInSeconds: Long?,
-    val target: ComputerExecTarget = ComputerExecTarget.HOST,
 )
 
 /** Private Preview 持有 SSH lease；Public Preview 只有显式确认后才创建。 */
@@ -47,29 +43,21 @@ class ComputerPreviewManager(private val repository: ComputerRepository) : Close
         context: ComputerRequestContext,
         port: Int,
         protocol: String = "http",
-        target: ComputerExecTarget = ComputerExecTarget.HOST,
     ): ComputerPreviewOpenResult {
         validatePortAndProtocol(port, protocol)
         val workspace = requireWorkspace(context)
         val foregroundActivity = repository.acquireForegroundActivity()
         val computer: Computer
-        val remoteHost: String
         try {
             computer = repository.getComputer(context.computerId)
                 ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
-            remoteHost = when (target) {
-                ComputerExecTarget.HOST -> "127.0.0.1"
-                ComputerExecTarget.CONTAINER -> repository.withConnection(computer.id) { connection, _ ->
-                    resolveContainerAddress(connection, computer, workspace.id)
-                }
-            }
         } catch (error: Throwable) {
             foregroundActivity.close()
             throw error
         }
         val (lease, _, forward) = try {
             repository.acquireConnectionAndOpen(context.computerId) { connection ->
-                connection.openLocalPortForward(port, remoteHost)
+                connection.openLocalPortForward(port, "127.0.0.1")
             }
         } catch (error: Throwable) {
             foregroundActivity.close()
@@ -79,7 +67,6 @@ class ComputerPreviewManager(private val repository: ComputerRepository) : Close
             val preview = ComputerPreview(
                 workspaceId = workspace.id,
                 remotePort = port,
-                target = target,
                 localPort = forward.localPort,
                 protocol = protocol,
                 visibility = ComputerPreviewVisibility.PRIVATE,
@@ -101,23 +88,12 @@ class ComputerPreviewManager(private val repository: ComputerRepository) : Close
         val computer = repository.getComputer(request.context.computerId)
             ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
         val previewId = "preview_${UUID.randomUUID().toString().replace("-", "")}"
-        val target = request.target
-        val publicPort = when (target) {
-            ComputerExecTarget.HOST -> verifyHostPublicPort(computer, request.port)
-            ComputerExecTarget.CONTAINER -> openContainerPublicPort(
-                computer,
-                workspace.id,
-                previewId,
-                request.port,
-                request.expiresInSeconds,
-            )
-        }
+        val publicPort = verifyHostPublicPort(computer, request.port)
         val now = System.currentTimeMillis()
         val preview = ComputerPreview(
             id = previewId,
             workspaceId = workspace.id,
             remotePort = request.port,
-            target = target,
             publicPort = publicPort,
             protocol = request.protocol,
             visibility = ComputerPreviewVisibility.PUBLIC,
@@ -148,38 +124,6 @@ class ComputerPreviewManager(private val repository: ComputerRepository) : Close
             active.forward.close()
             active.lease.close()
             active.foregroundActivity.close()
-        }
-        if (preview.visibility == ComputerPreviewVisibility.PUBLIC) {
-            val workspace = repository.dao().getWorkspaceById(preview.workspaceId)?.toModel()
-            if (workspace != null) {
-                val computer = repository.getComputer(workspace.computerId)
-                if (preview.target == ComputerExecTarget.CONTAINER && computer != null) {
-                    try {
-                        repository.withConnection(computer.id, requireReady = false) { connection, _ ->
-                            val result = connection.execute(
-                                command = "${helperPrefix(computer)} close-public $previewId",
-                                timeoutMillis = 30_000,
-                                maxOutputBytes = 64 * 1024,
-                            )
-                            if (result.timedOut || result.exitCode != 0) {
-                                throw ComputerException(
-                                    ComputerErrorCodes.PUBLIC_PORT_BLOCKED,
-                                    "无法确认 Public Preview 已撤销",
-                                    retryable = true,
-                                )
-                            }
-                        }
-                    } catch (error: Throwable) {
-                        repository.recordAudit(
-                            workspace.computerId,
-                            previewAuditEvent(targetStatus),
-                            "FAILED",
-                            "REMOTE_CLEANUP_PENDING",
-                        )
-                        throw error
-                    }
-                }
-            }
         }
         repository.dao().upsertPreview(preview.copy(status = targetStatus, localPort = null).toEntity())
         val workspace = repository.dao().getWorkspaceById(preview.workspaceId)
@@ -213,35 +157,6 @@ class ComputerPreviewManager(private val repository: ComputerRepository) : Close
         }
     }
 
-    /** 重连后核对 Public Preview 的真实进程状态，修正 VPS 重启或远端提前停止造成的陈旧记录。 */
-    suspend fun reconcileComputer(computerId: String) {
-        val computer = repository.getComputer(computerId) ?: return
-        if (computer.status != ComputerStatus.READY) return
-        val previews = repository.dao().getActivePublicPreviewsForComputer(computerId)
-            .map { it.toModel() }
-            .filter { it.target == ComputerExecTarget.CONTAINER }
-        if (previews.isEmpty()) return
-        val inactiveIds = repository.withConnection(computerId) { connection, _ ->
-            previews.filter { preview ->
-                val result = connection.execute(
-                    command = "${helperPrefix(computer)} preview-status ${preview.id}",
-                    timeoutMillis = 15_000,
-                    maxOutputBytes = 64 * 1024,
-                )
-                result.timedOut || result.exitCode != 0 || "status=active" !in result.stdout.lineSequence()
-            }.map(ComputerPreview::id)
-        }
-        inactiveIds.forEach { previewId ->
-            val preview = previews.first { it.id == previewId }
-            val status = if (preview.expiresAt?.let { it <= System.currentTimeMillis() } == true) {
-                ComputerPreviewStatus.EXPIRED
-            } else {
-                ComputerPreviewStatus.STOPPED
-            }
-            runCatching { stopWithStatus(previewId, status) }
-        }
-    }
-
     /** 网络切换会让本地转发地址失效，关闭全部进程内 lease，保留远端服务与历史记录。 */
     fun handleNetworkChanged() {
         activePrivatePreviews.values.forEach { active ->
@@ -250,27 +165,6 @@ class ComputerPreviewManager(private val repository: ComputerRepository) : Close
             active.foregroundActivity.close()
         }
         activePrivatePreviews.clear()
-    }
-
-    private suspend fun resolveContainerAddress(
-        connection: ComputerSshConnection,
-        computer: Computer,
-        workspaceId: String,
-    ): String {
-        val result = connection.execute(
-            command = "${helperPrefix(computer)} container-address $workspaceId",
-            timeoutMillis = 30_000,
-            maxOutputBytes = 64 * 1024,
-        )
-        val address = result.stdout.trim()
-        if (result.timedOut || result.exitCode != 0 || address.isEmpty() || address.any(Char::isWhitespace)) {
-            throw ComputerException(ComputerErrorCodes.PREVIEW_FORWARD_LOST, "无法解析 Workspace Container 地址")
-        }
-        return try {
-            InetAddress.getByName(address).hostAddress
-        } catch (error: Throwable) {
-            throw ComputerException(ComputerErrorCodes.PREVIEW_FORWARD_LOST, "Container 地址无效", cause = error)
-        }
     }
 
     private suspend fun verifyHostPublicPort(computer: Computer, port: Int): Int {
@@ -297,31 +191,6 @@ class ComputerPreviewManager(private val repository: ComputerRepository) : Close
         return port
     }
 
-    private suspend fun openContainerPublicPort(
-        computer: Computer,
-        workspaceId: String,
-        previewId: String,
-        remotePort: Int,
-        expiresInSeconds: Long?,
-    ): Int {
-        val serverExpiry = expiresInSeconds?.coerceIn(60, 604_800) ?: 0
-        val result = repository.withConnection(computer.id) { connection, _ ->
-            connection.execute(
-                command = "${helperPrefix(computer)} open-public $workspaceId $previewId $remotePort $serverExpiry",
-                timeoutMillis = 60_000,
-                maxOutputBytes = 64 * 1024,
-            )
-        }
-        val publicPort = result.stdout.lineSequence()
-            .firstOrNull { it.startsWith("public_port=") }
-            ?.substringAfter('=')
-            ?.toIntOrNull()
-        if (result.timedOut || result.exitCode != 0 || publicPort == null || publicPort !in 1..65_535) {
-            throw ComputerException(ComputerErrorCodes.PUBLIC_PORT_BLOCKED, "无法创建 Public Preview", retryable = true)
-        }
-        return publicPort
-    }
-
     private suspend fun requireWorkspace(context: ComputerRequestContext): ComputerWorkspace {
         val workspace = repository.dao().getWorkspaceById(context.workspaceId)?.toModel()
             ?: throw ComputerException(ComputerErrorCodes.WORKSPACE_NOT_READY, "Workspace 不存在")
@@ -335,12 +204,6 @@ class ComputerPreviewManager(private val repository: ComputerRepository) : Close
         if (port !in 1..65_535 || protocol !in setOf("http", "https")) {
             throw ComputerException(ComputerErrorCodes.PUBLIC_PORT_BLOCKED, "Preview 参数无效")
         }
-    }
-
-    private fun helperPrefix(computer: Computer): String = if (computer.username == "root") {
-        PREVIEW_HELPER
-    } else {
-        "sudo -n -- $PREVIEW_HELPER"
     }
 
     private fun scheduleExpiry(preview: ComputerPreview) {

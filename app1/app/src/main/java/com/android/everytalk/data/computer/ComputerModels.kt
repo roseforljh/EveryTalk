@@ -28,7 +28,7 @@ enum class ComputerStatus {
 }
 
 @Serializable
-enum class ComputerRunMode { CONTAINER, DIRECT }
+enum class ComputerRunMode { DIRECT }
 
 /**
  * Agent 操作这台服务器时采用的确认方式。
@@ -51,17 +51,11 @@ enum class ComputerSetupStage {
     AUTHENTICATING,
     INSPECTING_VPS,
     SECURING_CONNECTION,
-    PREPARING_CONTAINER,
-    PREPARING_DOCKER,
-    INSTALLING_HELPER,
-    BUILDING_IMAGE,
-    CONFIGURING_NETWORK,
-    VERIFYING,
 }
 
-/** 单次 exec 的执行位置。服务器连接始终使用 SSH，代码任务默认进入 Container。 */
+/** 单次 exec 的执行位置：服务器只作为 SSH 主机工具使用。 */
 @Serializable
-enum class ComputerExecTarget { CONTAINER, HOST }
+enum class ComputerExecTarget { HOST }
 
 @Serializable
 enum class ComputerAuthKind { PASSWORD, PRIVATE_KEY }
@@ -278,48 +272,6 @@ data class ComputerExecution(
 )
 
 /**
- * VPS Runtime V2 的小型状态快照。
- * 日志正文不放入状态文件，只通过 execution-result 按偏移读取。
- */
-data class ComputerRemoteExecutionSnapshot(
-    val executionId: String,
-    val processId: String,
-    val status: ComputerRemoteStatus,
-    val target: ComputerExecTarget? = null,
-    val requestHash: String? = null,
-    val pid: Long? = null,
-    val startTicks: Long? = null,
-    val exitCode: Int? = null,
-    val startedAt: Long? = null,
-    val updatedAt: Long? = null,
-    val stdoutBytes: Long = 0,
-    val stderrBytes: Long = 0,
-    /** STOPPED 时用于区分 VPS 重启和进程被外部终止。 */
-    val terminationReason: String? = null,
-)
-
-/** execution-result 的一次增量读取结果。 */
-data class ComputerRemoteExecutionResult(
-    val snapshot: ComputerRemoteExecutionSnapshot,
-    val stdoutOffset: Long,
-    val stderrOffset: Long,
-    val stdout: String,
-    val stderr: String,
-    val stdoutTruncated: Boolean = false,
-    val stderrTruncated: Boolean = false,
-)
-
-/** 长轮询 Channel 返回的一次增量事件。游标由 VPS 按日志字节数计算。 */
-data class ComputerRemoteExecutionWatchEvent(
-    val result: ComputerRemoteExecutionResult,
-    val eventType: String,
-    val eventSequence: Long,
-    val stdoutCursor: Long,
-    val stderrCursor: Long,
-    val observedAt: Long,
-)
-
-/**
  * 注入下一轮模型请求的精简远端状态。
  * 命令正文和日志不放进来，避免把状态轮询重新变成上下文膨胀来源。
  */
@@ -361,7 +313,7 @@ data class ComputerPreview(
     val id: String = "preview_${UUID.randomUUID()}",
     val workspaceId: String,
     val remotePort: Int,
-    val target: ComputerExecTarget = ComputerExecTarget.CONTAINER,
+    val target: ComputerExecTarget = ComputerExecTarget.HOST,
     val localPort: Int? = null,
     val publicPort: Int? = null,
     val protocol: String = "http",
@@ -387,7 +339,6 @@ data class ComputerAuditEvent(
 /** 删除服务器后的远端清理结果。无论远端是否在线，本地删除都可以完成。 */
 data class ComputerDeleteResult(
     val remoteKeyRemoved: Boolean,
-    val remoteWorkspaceCleanupSucceeded: Boolean = true,
 )
 
 data class HostKeyProbeResult(

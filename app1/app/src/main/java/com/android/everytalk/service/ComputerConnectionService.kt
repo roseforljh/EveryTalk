@@ -27,7 +27,6 @@ import com.android.everytalk.data.agent.AgentToolExecutorRegistry
 import com.android.everytalk.data.network.AppToolExecutionResult
 import com.android.everytalk.data.agent.AgentTerminalReasons
 import com.android.everytalk.data.computer.ComputerException
-import com.android.everytalk.data.computer.ComputerExecutionReconciliationOutcome
 import com.android.everytalk.data.computer.ComputerRepository
 import com.android.everytalk.data.computer.ComputerPreviewManager
 import com.android.everytalk.data.computer.ComputerToolExecutor
@@ -43,7 +42,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -154,7 +152,7 @@ object ComputerConnectionServiceController {
     /**
      * 冷启动恢复入口。
      *
-     * 只有进程内令牌、Room AgentRun 或远端 Execution 至少存在一项时才启动前台服务。
+     * 只有进程内令牌或 Room AgentRun 至少存在一项时才启动前台服务。
      * 返回值表示是否真的发出了服务启动请求，方便调用方和测试确认空闲启动不会弹通知。
      */
     suspend fun resumeActiveTasksIfNeeded(context: Context): Boolean {
@@ -165,8 +163,7 @@ object ComputerConnectionServiceController {
                 AgentTerminalReasons.VISIBLE_MESSAGE_TERMINAL,
                 System.currentTimeMillis(),
             )
-            database.agentDao().getActiveRuns().isNotEmpty() ||
-                database.computerDao().getActiveRemoteExecutions().isNotEmpty()
+            database.agentDao().getActiveRuns().isNotEmpty()
         }
     }
 
@@ -201,7 +198,6 @@ class ComputerConnectionService : Service() {
     private var taskMonitorJob: Job? = null
     private var safetyReconcileJob: Job? = null
     private var notificationTickerJob: Job? = null
-    private val executionWatchJobs = ConcurrentHashMap<String, Job>()
     private val taskReconcileMutex = Mutex()
     private val connectivityManager by lazy { getSystemService(ConnectivityManager::class.java) }
     private val wakeLock by lazy {
@@ -222,18 +218,15 @@ class ComputerConnectionService : Service() {
     private var notificationState = ForegroundNotificationState()
 
     private val database by lazy { AppDatabase.getDatabase(this) }
-    private val computerDao by lazy { database.computerDao() }
     private val agentDao by lazy { database.agentDao() }
     private val agentRunStore by lazy { AgentRunStore(agentDao) }
     private val computerRepository by lazy { ComputerRepository(this) }
-    private val workspaceManager by lazy { ComputerWorkspaceManager(computerRepository) }
     private val previewManager by lazy { ComputerPreviewManager(computerRepository) }
     private val secretManager by lazy { ComputerWorkspaceSecretManager(computerRepository) }
     private val serviceToolExecutor by lazy {
         ComputerToolExecutor(
             context = this,
             repository = computerRepository,
-            workspaceManager = workspaceManager,
             previewManager = previewManager,
             secretManager = secretManager,
         )
@@ -301,7 +294,6 @@ class ComputerConnectionService : Service() {
                     )
                 }
             }
-            recordRecoveredTasks()
         }
         startTaskMonitoringAfterRecovery()
     }
@@ -312,15 +304,6 @@ class ComputerConnectionService : Service() {
                 serviceScope.launch {
                     ComputerConnectionServiceController.stopAll()
                     agentRunCoordinator.cancelAllActiveRuns()
-                    computerDao.getActiveRemoteExecutions().forEach { execution ->
-                        runCatching { computerRepository.cancelRemoteExecution(execution.id) }
-                            .onFailure { error ->
-                                AppLogger.warn(
-                                    "ComputerConnectionService",
-                                    "Unable to cancel execution ${execution.id}: ${error.message}",
-                                )
-                            }
-                    }
                     AgentRecoveryScheduler.cancel(this@ComputerConnectionService)
                     updateWakeLock(false)
                     stopForeground(STOP_FOREGROUND_REMOVE)
@@ -363,17 +346,8 @@ class ComputerConnectionService : Service() {
         taskMonitorJob = serviceScope.launch {
             while (isActive) {
                 try {
-                    combine(
-                        agentDao.observeServiceRuns(),
-                        computerDao.observeExecutionChanges(),
-                    ) { activeRuns, _ -> activeRuns }
-                        .collect { activeRuns ->
-                            reconcileTaskSnapshot(
-                                activeRuns = activeRuns,
-                                activeExecutions = computerDao.getActiveRemoteExecutions(),
-                                source = "room_change",
-                            )
-                        }
+                    agentDao.observeServiceRuns()
+                        .collect { activeRuns -> reconcileTaskSnapshot(activeRuns = activeRuns, source = "room_change") }
                 } catch (error: CancellationException) {
                     throw error
                 } catch (error: Exception) {
@@ -403,17 +377,12 @@ class ComputerConnectionService : Service() {
                 System.currentTimeMillis(),
             )
         }
-        reconcileTaskSnapshot(
-            activeRuns = agentDao.getActiveRuns(),
-            activeExecutions = computerDao.getActiveRemoteExecutions(),
-            source = source,
-        )
+        reconcileTaskSnapshot(activeRuns = agentDao.getActiveRuns(), source = source)
     }
 
     /** Room、网络回调和安全检查共用同一入口，避免并发启动重复 Watch 或重复续写。 */
     private suspend fun reconcileTaskSnapshot(
         activeRuns: List<com.android.everytalk.data.database.entities.AgentRunEntity>,
-        activeExecutions: List<com.android.everytalk.data.database.entities.ComputerExecutionEntity>,
         source: String,
     ) = taskReconcileMutex.withLock {
         val waitingApproval = activeRuns.filter { it.status == AgentRunStatus.WAITING_APPROVAL.name }
@@ -421,7 +390,7 @@ class ComputerConnectionService : Service() {
         val interruptedToolRuns = activeRuns.filter { it.status == AgentRunStatus.INTERRUPTED.name }
         val hasTokens = ComputerConnectionServiceController.hasActiveTokens()
         val activeAgentRunCount = ComputerConnectionServiceController.activeAgentRunCount()
-        val hasActiveWork = activeExecutions.isNotEmpty() || activeRuns.isNotEmpty() || activeAgentRunCount > 0 || hasTokens
+        val hasActiveWork = activeRuns.isNotEmpty() || activeAgentRunCount > 0 || hasTokens
         updateWakeLock(hasActiveWork)
 
         if (!hasActiveWork) {
@@ -434,7 +403,7 @@ class ComputerConnectionService : Service() {
 
         val runningRuns = activeRuns.size - waitingApproval.size - pendingContinuation.size
         updateNotification(
-            activeTaskCount = activeExecutions.size + maxOf(activeAgentRunCount, runningRuns),
+            activeTaskCount = maxOf(activeAgentRunCount, runningRuns),
             pendingApprovalCount = waitingApproval.size + pendingContinuation.size,
         )
         waitingApproval.forEach { run ->
@@ -449,15 +418,9 @@ class ComputerConnectionService : Service() {
         }
         if (pendingContinuation.isNotEmpty()) agentRunCoordinator.resumePendingContinuationRuns()
         if (interruptedToolRuns.isNotEmpty()) agentRunCoordinator.resumeInterruptedToolRuns()
-        activeExecutions.forEach { execution -> startExecutionWatch(execution.id) }
-        val activeIds = activeExecutions.mapTo(hashSetOf()) { it.id }
-        executionWatchJobs.entries.removeIf { (executionId, job) ->
-            if (executionId !in activeIds) job.cancel()
-            executionId !in activeIds
-        }
         AppLogger.debug(
             "ComputerConnectionService",
-            "Reconciled source=$source runs=${activeRuns.size} executions=${activeExecutions.size}",
+            "Reconciled source=$source runs=${activeRuns.size}",
         )
     }
 
@@ -476,190 +439,6 @@ class ComputerConnectionService : Service() {
         }
     }
 
-    /** 进程或服务重新建立后，把“监听曾中断、现已恢复”写入原 Run，供模型续接时解释。 */
-    private suspend fun recordRecoveredTasks() {
-        computerDao.getActiveRemoteExecutions().forEach { execution ->
-            execution.runId?.let { runId ->
-                agentRunStore.appendStatusEvent(
-                    runId = runId,
-                    reason = AgentTerminalReasons.APP_INTERRUPTED,
-                    message = "手机端监听曾因进程或服务中断而停止，VPS 任务没有被取消",
-                    executionId = execution.id,
-                )
-                agentRunStore.appendStatusEvent(
-                    runId = runId,
-                    reason = AgentTerminalReasons.SYSTEM_RECOVERED,
-                    message = "手机端监听曾中断，现已按原 execution_id 恢复",
-                    executionId = execution.id,
-                )
-            }
-        }
-    }
-
-    /** 单任务监听独立运行，某台 VPS 断线不会拖住其他 VPS 或其他任务。 */
-    private fun startExecutionWatch(executionId: String) {
-        if (executionWatchJobs[executionId]?.isActive == true) return
-        executionWatchJobs[executionId] = serviceScope.launch {
-            var backoffMillis = 2_000L
-            var connectionLost = false
-            while (isActive) {
-                val current = computerDao.getExecutionById(executionId) ?: break
-                val runId = current.runId
-                val workspace = computerDao.getWorkspaceById(current.workspaceId)
-                val conversationId = workspace?.conversationId.orEmpty()
-                try {
-                    val event = computerRepository.watchRemoteExecution(executionId)
-                    if (connectionLost) {
-                        runId?.let {
-                            agentRunStore.appendStatusEvent(
-                                runId = it,
-                                reason = AgentTerminalReasons.RECONNECTED,
-                                message = "SSH 已恢复，正在继续接管原任务",
-                                executionId = executionId,
-                            )
-                        }
-                        AgentNotificationManager.notifyTaskEvent(
-                            this@ComputerConnectionService,
-                            conversationId = conversationId,
-                            executionId = executionId,
-                            eventType = AgentTerminalReasons.RECONNECTED,
-                            title = "SSH 连接已恢复",
-                            message = "已继续监听原任务",
-                        )
-                        connectionLost = false
-                    }
-                    backoffMillis = 2_000L
-                    if (event.eventType == "TERMINAL") {
-                        handleTerminalExecution(executionId, event.result.snapshot.terminationReason)
-                        break
-                    }
-                } catch (error: ComputerException) {
-                    if (!error.retryable) {
-                        runId?.let {
-                            agentRunStore.appendStatusEvent(
-                                runId = it,
-                                reason = AgentTerminalReasons.CONFIG_ERROR,
-                                message = error.message,
-                                executionId = executionId,
-                            )
-                        }
-                        AgentNotificationManager.notifyTaskEvent(
-                            this@ComputerConnectionService,
-                            conversationId = conversationId,
-                            executionId = executionId,
-                            eventType = AgentTerminalReasons.CONFIG_ERROR,
-                            title = "服务器需要处理",
-                            message = error.message,
-                        )
-                        // 协议或身份错误已经确定不会自行恢复。立即走统一对账，把旧任务
-                        // 从活动集合移出并让原 AgentRun 得到明确结果，禁止下次服务启动再监听。
-                        handleTerminalExecution(executionId, null)
-                        break
-                    }
-                    if (!connectionLost) {
-                        connectionLost = true
-                        runId?.let {
-                            agentRunStore.appendStatusEvent(
-                                runId = it,
-                                reason = AgentTerminalReasons.CONNECTION_LOST,
-                                message = "SSH 连接中断，VPS 上的任务仍可能继续运行",
-                                executionId = executionId,
-                            )
-                        }
-                        AgentNotificationManager.notifyTaskEvent(
-                            this@ComputerConnectionService,
-                            conversationId = conversationId,
-                            executionId = executionId,
-                            eventType = AgentTerminalReasons.CONNECTION_LOST,
-                            title = "SSH 连接断开",
-                            message = "任务仍在 VPS 运行，正在自动重连",
-                        )
-                    }
-                    delay(backoffMillis)
-                    backoffMillis = (backoffMillis * 2).coerceAtMost(60_000L)
-                } catch (error: Throwable) {
-                    if (error is CancellationException) throw error
-                    // 最后一层只负责保护进程。业务异常应在 Repository 转换为 ComputerException；
-                    // 即使未来出现遗漏，也只能结束这一条监听，不能结束整个 App。
-                    AppLogger.error(
-                        "ComputerConnectionService",
-                        "Execution watch crashed for $executionId: ${error.message}",
-                        error,
-                    )
-                    break
-                }
-            }
-        }
-    }
-
-    /** 终态只对账一次，先保存 Tool Result，再把原 AgentRun 交回模型续写。 */
-    private suspend fun handleTerminalExecution(executionId: String, terminationReason: String?) {
-        val reconciliation = computerRepository.reconcileRemoteExecution(executionId) ?: return
-        val latest = reconciliation.execution ?: computerDao.getExecutionById(executionId) ?: return
-        val workspace = computerDao.getWorkspaceById(latest.workspaceId)
-        if (reconciliation.outcome == ComputerExecutionReconciliationOutcome.MISSING) {
-            latest.runId?.let {
-                agentRunStore.appendStatusEvent(
-                    runId = it,
-                    reason = AgentTerminalReasons.REMOTE_TASK_MISSING,
-                    message = "VPS 已找不到原任务，未自动重跑",
-                    executionId = executionId,
-                )
-            }
-        }
-        if (terminationReason == AgentTerminalReasons.VPS_RESTARTED ||
-            terminationReason == AgentTerminalReasons.REMOTE_PROCESS_TERMINATED
-        ) {
-            latest.runId?.let {
-                agentRunStore.appendStatusEvent(
-                    runId = it,
-                    reason = terminationReason,
-                    message = if (terminationReason == AgentTerminalReasons.VPS_RESTARTED) {
-                        "VPS 已重启，原进程不存在，未自动重跑"
-                    } else {
-                        "VPS 进程被外部终止，未自动重跑"
-                    },
-                    executionId = executionId,
-                )
-            }
-        }
-        if (latest.remoteStatus == null) return
-        val run = latest.runId?.let { agentDao.getRun(it) }
-            ?: workspace?.let { currentWorkspace ->
-                agentDao.getWaitingRemoteExecutionRuns()
-                    .firstOrNull { it.sessionId == currentWorkspace.conversationId }
-            }
-            ?: return
-        // 原 AgentLoop 仍在等同一条远端命令时，由它读取结果并继续模型请求。
-        // 此处抢先恢复会让两套循环使用相同 request ordinal，最终触发 Room 外键错误。
-        if (agentRunCoordinator.isRunActive(run)) {
-            AppLogger.debug(
-                "ComputerConnectionService",
-                "Agent run ${run.id} is still active; keeping terminal result for the original loop",
-            )
-            return
-        }
-        // RETURN_HANDLE 的远端进程可能晚于 AgentRun 结束。已结束的 Run 禁止再次恢复，
-        // 单条 VPS 命令终态也不再发送“任务完成”，最终通知统一由协调器按 Run 发送。
-        if (run.status == AgentRunStatus.COMPLETED.name ||
-            run.status == AgentRunStatus.FAILED.name ||
-            run.status == AgentRunStatus.CANCELLED.name
-        ) {
-            AppLogger.debug(
-                "ComputerConnectionService",
-                "Agent run ${run.id} is already terminal; skipping execution-driven resume",
-            )
-            return
-        }
-        val pendingRun = run.copy(
-            status = AgentRunStatus.MODEL_CONTINUATION_PENDING.name,
-            terminalReason = AgentTerminalReasons.MODEL_CONTINUATION_PENDING,
-            updatedAt = System.currentTimeMillis(),
-        )
-        agentDao.upsertRun(pendingRun)
-        agentRunCoordinator.resumeRun(pendingRun)
-    }
-
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
@@ -667,8 +446,6 @@ class ComputerConnectionService : Service() {
         taskMonitorJob?.cancel()
         safetyReconcileJob?.cancel()
         notificationTickerJob?.cancel()
-        executionWatchJobs.values.forEach(Job::cancel)
-        executionWatchJobs.clear()
         runCatching { connectivityManager.unregisterNetworkCallback(networkCallback) }
         updateWakeLock(false)
         serviceScope.cancel()

@@ -41,16 +41,12 @@ internal object ComputerToolCallSafety {
     }
 
     private fun isReadOnlyExec(arguments: JsonObject): Boolean {
-        if (arguments.stringValue("target")?.lowercase() !in setOf(null, "host", "container")) return false
-        if (arguments["env"] is JsonObject && (arguments["env"] as JsonObject).isNotEmpty()) return false
-        if (!arguments.stringValue("stdin").isNullOrEmpty()) return false
-        if (arguments.booleanValue("background") == true || arguments.booleanValue("as_root") == true) return false
         val secretNames = arguments["secret_names"] as? JsonArray
         if (secretNames?.isNotEmpty() == true) return false
         val command = arguments.stringValue("command") ?: return false
         val cwd = arguments.stringValue("cwd") ?: "~"
         return !ComputerHostCommandPolicy.assess(
-            ComputerExecRequest(command = command, cwd = cwd, target = ComputerExecTarget.HOST),
+            ComputerExecRequest(command = command, cwd = cwd),
         ).requiresConfirmation
     }
 

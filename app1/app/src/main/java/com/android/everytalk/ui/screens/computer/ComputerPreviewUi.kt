@@ -53,7 +53,6 @@ import com.android.everytalk.data.computer.Computer
 import com.android.everytalk.data.computer.ComputerPreview
 import com.android.everytalk.data.computer.ComputerPreviewStatus
 import com.android.everytalk.data.computer.ComputerPreviewVisibility
-import com.android.everytalk.data.computer.ComputerRunMode
 import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.statecontroller.respondToComputerPublicPreview
 import com.android.everytalk.ui.components.dialog.AppDialogButtonShape
@@ -480,12 +479,7 @@ fun ComputerPublicPreviewConfirmationDialog(viewModel: AppViewModel) {
                         ),
                     )
                 }
-                if (
-                    pending.target == com.android.everytalk.data.computer.ComputerExecTarget.HOST ||
-                    computer?.runMode == ComputerRunMode.DIRECT
-                ) {
-                    Text(stringResource(R.string.computer_public_confirmation_direct))
-                }
+                Text(stringResource(R.string.computer_public_confirmation_direct))
                 Text(
                     text = stringResource(R.string.computer_preview_firewall_warning),
                     style = MaterialTheme.typography.bodySmall,

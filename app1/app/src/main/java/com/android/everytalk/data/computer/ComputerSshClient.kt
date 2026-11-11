@@ -4,8 +4,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import net.schmizz.sshj.SSHClient
 import net.schmizz.sshj.common.Buffer
@@ -14,6 +13,7 @@ import net.schmizz.sshj.connection.channel.direct.LocalPortForwarder
 import net.schmizz.sshj.connection.channel.direct.PTYMode
 import net.schmizz.sshj.connection.channel.direct.Parameters
 import net.schmizz.sshj.connection.channel.direct.Session
+import net.schmizz.sshj.connection.channel.direct.Signal
 import net.schmizz.sshj.sftp.SFTPClient
 import net.schmizz.sshj.transport.verification.HostKeyVerifier
 import net.schmizz.sshj.userauth.UserAuthException
@@ -466,7 +466,6 @@ class ComputerSshConnection internal constructor(private val client: SSHClient) 
     private val resources = CopyOnWriteArraySet<Closeable>()
     private val closed = AtomicBoolean(false)
     private val startedChannels = AtomicLong(0)
-    private val runtimeWrapperCache = ComputerRuntimeWrapperCache()
 
     val isUsable: Boolean
         get() = !closed.get() && client.isConnected && client.isAuthenticated
@@ -505,7 +504,17 @@ class ComputerSshConnection internal constructor(private val client: SSHClient) 
                     }
 
                     inputWriter.await()
-                    remoteCommand.join(timeoutMillis, TimeUnit.MILLISECONDS)
+                    // 分片等待以响应协程取消：用户停止时先给远端进程发 TERM，再由 finally 关闭通道。
+                    val deadline = System.currentTimeMillis() + timeoutMillis
+                    try {
+                        while (remoteCommand.isOpen && System.currentTimeMillis() < deadline) {
+                            ensureActive()
+                            remoteCommand.join(200, TimeUnit.MILLISECONDS)
+                        }
+                    } catch (error: CancellationException) {
+                        runCatching { remoteCommand.signal(Signal.TERM) }
+                        throw error
+                    }
                     val timedOut = remoteCommand.isOpen
                     if (timedOut) runCatching { remoteCommand.close() }
 
@@ -543,15 +552,6 @@ class ComputerSshConnection internal constructor(private val client: SSHClient) 
         startedChannels.incrementAndGet()
         sftp.use { block(it) }
     }
-
-    /**
-     * 每条 SSH Transport 只安装一次相同版本的 Runtime Wrapper。
-     * 新连接拥有独立缓存，安装失败不会留下成功状态。
-     */
-    internal suspend fun ensureRuntimeWrapper(
-        expectedHash: ByteArray,
-        installer: suspend () -> Boolean,
-    ): Boolean = runtimeWrapperCache.ensureInstalled(expectedHash, installer)
 
     suspend fun openPty(columns: Int = 120, rows: Int = 40): ComputerPtyHandle = withContext(Dispatchers.IO) {
         require(columns > 0 && rows > 0) { "PTY 尺寸必须大于 0" }
@@ -622,27 +622,6 @@ class ComputerSshConnection internal constructor(private val client: SSHClient) 
 
 }
 
-/**
- * 保存单条 SSH 连接已经安装的 Runtime Wrapper 版本。
- * 首次并发安装通过 Mutex 合并，成功后同版本调用走无锁快路径。
- */
-internal class ComputerRuntimeWrapperCache {
-    private val installationMutex = Mutex()
-
-    @Volatile
-    private var installedHash: ByteArray? = null
-
-    /** 返回 true 表示本次调用实际完成了安装。 */
-    suspend fun ensureInstalled(expectedHash: ByteArray, installer: suspend () -> Boolean): Boolean {
-        if (installedHash?.contentEquals(expectedHash) == true) return false
-        return installationMutex.withLock {
-            if (installedHash?.contentEquals(expectedHash) == true) return@withLock false
-            val installed = installer()
-            installedHash = expectedHash.copyOf()
-            installed
-        }
-    }
-}
 
 internal class ComputerSshChannelOpenException(cause: Throwable) : IOException(
     "SSH Channel 建立失败",

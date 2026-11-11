@@ -197,29 +197,8 @@ object ComputerToolCatalog {
             description = execDescription(permissionMode),
             properties = buildMap {
                 put("command", string("Command or shell script to run."))
-                put(
-                    "target",
-                    enumStringWithDefault(
-                        description = "Execution location. Defaults to SSH on the host. Choose container only for an operation that needs isolation, such as running untrusted code.",
-                        default = "host",
-                        "container",
-                        "host",
-                    ),
-                )
-                put("cwd", string("Working directory. Container defaults to /workspace; host defaults to the SSH user's home directory."))
-                put(
-                    "env",
-                    mapOf(
-                        "type" to "object",
-                        "description" to "Non-secret environment variables for target=container only.",
-                        "additionalProperties" to mapOf("type" to "string"),
-                    ),
-                )
-                // Secret 不再作为通用 exec 参数暴露；必须由可信语义 Adapter 履行。
-                put("stdin", string("Optional UTF-8 stdin for target=container only."))
-                put("timeout_ms", integer("Foreground timeout in milliseconds.", 1, 3_600_000))
-                put("background", boolean("Start a persistent background process inside the Container only."))
-                put("as_root", boolean("Run as root inside the Container only. Never use for target=host; use an explicit sudo command there."))
+                put("cwd", string("Absolute working directory or ~. Defaults to the SSH user's home directory."))
+                put("timeout_ms", integer("Timeout in milliseconds.", 1, 3_600_000))
                 if (permissionMode == ComputerPermissionMode.SMART) {
                     put(
                         "ask_user_approval",
@@ -234,9 +213,9 @@ object ComputerToolCatalog {
         ),
         function(
             name = ComputerToolNames.READ_FILE,
-            description = "Read one page of a file in the current SSH working directory.",
+            description = "Read one page of a file on the SSH server.",
             properties = mapOf(
-                "path" to string("Relative path in the current SSH file-tool directory."),
+                "path" to string("Absolute path, or a path relative to the SSH user's home."),
                 "offset" to integer("Byte offset.", 0, Long.MAX_VALUE),
                 "limit" to integer("Maximum bytes to return.", 1, 1_048_576),
                 "encoding" to enumString("utf8", "base64"),
@@ -245,9 +224,9 @@ object ComputerToolCatalog {
         ),
         function(
             name = ComputerToolNames.WRITE_FILE,
-            description = "Write a UTF-8 or base64 file in the current SSH working directory.",
+            description = "Write a UTF-8 or base64 file on the SSH server. Existing file permissions are kept.",
             properties = mapOf(
-                "path" to string("Relative path in the current SSH file-tool directory."),
+                "path" to string("Absolute path, or a path relative to the SSH user's home."),
                 "content" to string("UTF-8 text or base64 data."),
                 "encoding" to enumString("utf8", "base64"),
                 "mode" to enumString("overwrite", "append"),
@@ -259,7 +238,7 @@ object ComputerToolCatalog {
             name = ComputerToolNames.EDIT,
             description = "Edit one file with one or more precise text replacements. Every oldText must be unique in the original file, and edits must not overlap.",
             properties = mapOf(
-                "path" to string("Relative path in the current SSH file-tool directory."),
+                "path" to string("Absolute path, or a path relative to the SSH user's home."),
                 "edits" to mapOf(
                     "type" to "array",
                     "description" to "Targeted replacements matched against the original file.",
@@ -279,7 +258,7 @@ object ComputerToolCatalog {
         ),
         function(
             name = ComputerToolNames.TERMINAL,
-            description = "Open and interact with a PTY terminal on the SSH host in the current working directory.",
+            description = "Open and interact with a PTY terminal on the SSH server, starting in the user's home.",
             properties = mapOf(
                 "action" to enumString("open", "write", "read", "resize", "close"),
                 "terminal_id" to string("Terminal ID returned by open."),
@@ -292,10 +271,10 @@ object ComputerToolCatalog {
         ),
         function(
             name = ComputerToolNames.UPLOAD,
-            description = "Upload a conversation attachment into the selected SSH server's file-tool directory. Accepts attachment_id returned by download from another selected server in this conversation; no session switch or server-to-server SSH credentials are needed.",
+            description = "Upload a conversation attachment to the selected SSH server. Accepts attachment_id returned by download from another selected server in this conversation; no session switch or server-to-server SSH credentials are needed.",
             properties = mapOf(
                 "attachment_id" to string("Local attachment ID from the current conversation."),
-                "destination_path" to string("Relative destination in the current SSH file-tool directory."),
+                "destination_path" to string("Absolute destination path, or a path relative to the SSH user's home."),
                 "overwrite" to boolean("Allow replacing an existing file."),
             ),
             required = listOf("attachment_id", "destination_path"),
@@ -304,25 +283,16 @@ object ComputerToolCatalog {
             name = ComputerToolNames.DOWNLOAD,
             description = "把服务器生成的交付文件发送到客户端：自动保存到手机 Download/App/AppTalk，并添加聊天附件。创建用户需要的文件后必须调用此工具，不能只返回服务器路径；成功后在介绍文件的正文位置使用 [文件名](返回的file_link)，让用户直接点击。跨服务器传输时可将返回的 attachment_id 交给另一服务器的 upload。",
             properties = mapOf(
-                "source_path" to string("Relative source path in the current SSH file-tool directory."),
+                "source_path" to string("Absolute source path, or a path relative to the SSH user's home."),
                 "suggested_name" to string("Optional local file name."),
             ),
             required = listOf("source_path"),
         ),
         function(
             name = ComputerToolNames.OPEN_PORT,
-            description = "Open an HTTP or HTTPS service on the SSH host by default. Choose target=container only for a service explicitly started in a sandbox.",
+            description = "Open an HTTP or HTTPS service running on the SSH server.",
             properties = buildMap {
-                put("port", integer("Service port on the VPS or Workspace Container.", 1, 65_535))
-                put(
-                    "target",
-                    enumStringWithDefault(
-                        description = "Service location. Defaults to the SSH host.",
-                        default = "host",
-                        "container",
-                        "host",
-                    ),
-                )
+                put("port", integer("Service port on the VPS.", 1, 65_535))
                 put("protocol", enumString("http", "https"))
                 put("visibility", enumString("private", "public"))
                 put("expires_in_seconds", integer("Optional public preview expiry.", 60, 604_800))
@@ -368,9 +338,7 @@ object ComputerToolCatalog {
             ComputerPermissionMode.FULL ->
                 "Valid operations execute without an approval prompt."
         }
-        return "Run a command directly on the user's selected server over SSH (target=host by default). " +
-            "Choose target=container only when this specific operation needs isolation, such as testing untrusted code; it does not change later calls. " +
-            approvalText
+        return "Run a command directly on the user's selected server over SSH. " + approvalText
     }
 
     private fun string(description: String): Map<String, Any> = mapOf(
@@ -393,16 +361,5 @@ object ComputerToolCatalog {
     private fun enumString(vararg values: String): Map<String, Any> = mapOf(
         "type" to "string",
         "enum" to values.toList(),
-    )
-
-    private fun enumStringWithDefault(
-        description: String,
-        default: String,
-        vararg values: String,
-    ): Map<String, Any> = mapOf(
-        "type" to "string",
-        "description" to description,
-        "enum" to values.toList(),
-        "default" to default,
     )
 }

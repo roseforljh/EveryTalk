@@ -6,27 +6,20 @@ import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.util.UUID
 
-private const val WORKSPACE_COMMAND_TIMEOUT_MILLIS = 30_000L
-private const val CONTAINER_HELPER = "/usr/local/libexec/everytalk-containerctl"
-
-/** 会话在每台服务器上拥有独立持久 Workspace，关闭 Agent 或切换服务器都不会删除它。 */
+/**
+ * Workspace 只是“会话 ↔ 服务器”的本地绑定，用来关联执行记录、终端和预览。
+ * 服务器只作为 SSH 工具使用，不在上面创建任何会话目录。
+ */
 class ComputerWorkspaceManager(private val repository: ComputerRepository) {
     private val workspaceLocks = ComputerKeyedMutexPool()
 
-    /**
-     * 在模型请求前只创建本地 Workspace 映射，不连接 VPS。
-     * 远端目录由 prepare 在后台准备，模型首轮思考因此可以与 SSH 冷启动并行。
-     */
+    /** 在模型请求前只创建本地 Workspace 映射，不连接 VPS。 */
     suspend fun getOrCreateLocal(computerId: String, conversationId: String): ComputerWorkspace {
         require(conversationId.isNotBlank()) { "Conversation ID 不能为空" }
         val lockKey = "$computerId\u0000$conversationId"
         return workspaceLocks.forKey(lockKey).withLock {
             val dao = repository.dao()
-            dao.getWorkspace(computerId, conversationId)?.toModel()?.let { existing ->
-                // 兼容旧容器会话：只恢复 SSH 默认模式，保留 ID、主机文件和按需容器信息。
-                if (existing.runMode != ComputerRunMode.DIRECT) dao.useSshWorkspaceDefault(existing.id)
-                return@withLock existing.copy(runMode = ComputerRunMode.DIRECT)
-            }
+            dao.getWorkspace(computerId, conversationId)?.toModel()?.let { return@withLock it }
             val computer = repository.getComputer(computerId)
                 ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
             newWorkspace(computer, conversationId).also { workspace ->
@@ -81,94 +74,23 @@ class ComputerWorkspaceManager(private val repository: ComputerRepository) {
         }
     }
 
-    /**
-     * 按模型请求已经冻结的 Workspace ID 准备远端目录。
-     * 会话 ID 在首条消息入库时会变化，Workspace ID 始终不变，因此它才是并发准备的稳定主键。
-     */
+    /** 按模型请求已经冻结的 Workspace ID 标记就绪；不连接服务器。 */
     suspend fun prepare(workspaceId: String): ComputerWorkspace {
         ComputerIdentifier.requireValid(workspaceId, "Workspace ID")
         return workspaceLocks.forKey(workspaceId).withLock {
             val dao = repository.dao()
             val existing = dao.getWorkspaceById(workspaceId)?.toModel()
                 ?: throw ComputerException(ComputerErrorCodes.WORKSPACE_NOT_READY, "Workspace 不存在")
-            val computerId = existing.computerId
-            if (repository.getComputer(computerId)?.provider == ComputerProvider.CLOUDFLARE) {
+            if (repository.getComputer(existing.computerId)?.provider == ComputerProvider.CLOUDFLARE) {
                 throw ComputerException("PROVIDER_MISMATCH", "Cloudflare Workspace 不支持 SSH 准备")
             }
-            if (existing.status == ComputerWorkspaceStatus.READY) {
-                val restored = existing.copy(lastUsedAt = System.currentTimeMillis())
-                dao.updateWorkspaceRuntimeState(
-                    workspaceId = existing.id,
-                    hostPath = restored.hostPath,
-                    status = restored.status.name,
-                    lastUsedAt = restored.lastUsedAt,
-                )
-                return@withLock dao.getWorkspaceById(existing.id)?.toModel() ?: restored
-            }
-
             dao.updateWorkspaceRuntimeState(
                 workspaceId = existing.id,
-                hostPath = existing.hostPath,
-                status = ComputerWorkspaceStatus.CREATING.name,
+                hostPath = SSH_HOME_PATH,
+                status = ComputerWorkspaceStatus.READY.name,
+                lastUsedAt = System.currentTimeMillis(),
             )
-
-            try {
-                val ready = repository.withConnection(computerId) { connection, _ ->
-                    val hostPath = ensureHostWorkspace(connection, existing.id)
-                    existing.copy(
-                        hostPath = hostPath,
-                        status = ComputerWorkspaceStatus.READY,
-                        lastUsedAt = System.currentTimeMillis(),
-                    )
-                }
-                dao.updateWorkspaceRuntimeState(
-                    workspaceId = ready.id,
-                    hostPath = ready.hostPath,
-                    status = ready.status.name,
-                    lastUsedAt = ready.lastUsedAt,
-                )
-                dao.getWorkspaceById(ready.id)?.toModel() ?: ready
-            } catch (error: Throwable) {
-                dao.updateWorkspaceRuntimeState(
-                    workspaceId = existing.id,
-                    hostPath = existing.hostPath,
-                    status = ComputerWorkspaceStatus.ERROR.name,
-                )
-                throw error
-            }
-        }
-    }
-
-    /** 只有模型明确选择 CONTAINER 时才启动或创建容器，Host SSH 不受容器故障影响。 */
-    suspend fun prepareContainer(workspaceId: String): ComputerWorkspace {
-        ComputerIdentifier.requireValid(workspaceId, "Workspace ID")
-        return workspaceLocks.forKey(workspaceId).withLock {
-            val workspace = repository.dao().getWorkspaceById(workspaceId)?.toModel()
-                ?: throw ComputerException(ComputerErrorCodes.WORKSPACE_NOT_READY, "Workspace 不存在")
-            val computer = repository.getComputer(workspace.computerId)
-                ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
-            if (computer.status != ComputerStatus.READY) {
-                throw ComputerException(
-                    ComputerErrorCodes.HELPER_INTEGRITY_FAILED,
-                    "隔离环境尚未就绪，请先修复运行环境",
-                    action = "REPAIR_COMPUTER",
-                )
-            }
-            val runtime = repository.ensureContainerRuntime(workspace.computerId)
-            // Container 只是本次执行的视图。准备失败也不能把正常 SSH 目录标为故障，
-            // 更不能整行写回旧快照，覆盖首条消息落库时正在迁移的会话编号。
-            repository.withConnection(workspace.computerId) { connection, _ ->
-                ensureContainerWorkspace(connection, runtime, workspace.id)
-            }
-            val containerName = "everytalk-${workspace.id}"
-            repository.dao().updateWorkspaceContainer(workspace.id, containerName, runtime.sandboxImage)
-            val latest = repository.dao().getWorkspaceById(workspace.id)?.toModel() ?: workspace
-            latest.copy(
-                runMode = ComputerRunMode.CONTAINER,
-                containerName = containerName,
-                containerImage = runtime.sandboxImage,
-                status = ComputerWorkspaceStatus.READY,
-            )
+            dao.getWorkspaceById(existing.id)?.toModel() ?: existing
         }
     }
 
@@ -179,130 +101,6 @@ class ComputerWorkspaceManager(private val repository: ComputerRepository) {
         repository.dao().deleteWorkspace(workspaceId)
     }
 
-    /**
-     * 按详情页选择清理远端 Workspace。
-     * Container 模式始终删除对应 Container；Host Path 只有二次确认后才删除。
-     */
-    suspend fun deleteRemote(workspaceId: String, deleteFiles: Boolean) {
-        ComputerIdentifier.requireValid(workspaceId, "Workspace ID")
-        val workspace = repository.dao().getWorkspaceById(workspaceId)?.toModel()
-            ?: throw ComputerException(ComputerErrorCodes.WORKSPACE_NOT_READY, "Workspace 不存在")
-        val computer = repository.getComputer(workspace.computerId)
-            ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
-        if (computer.provider == ComputerProvider.CLOUDFLARE) {
-            // Cloudflare Workspace 是 App 私有目录，没有远端 SSH 资源可清理。
-            // 调用方随后删除映射；这里绝不进入 SSH 连接池。
-            return
-        }
-        repository.dao().upsertWorkspace(workspace.copy(status = ComputerWorkspaceStatus.DELETING).toEntity())
-        try {
-            repository.withConnection(workspace.computerId, requireReady = false) { connection, computer ->
-                val result = if (workspace.containerName != null || workspace.runMode == ComputerRunMode.CONTAINER) {
-                    val helper = if (computer.username == "root") {
-                        CONTAINER_HELPER
-                    } else {
-                        "sudo -n -- $CONTAINER_HELPER"
-                    }
-                    connection.execute(
-                        command = "$helper delete-workspace $workspaceId $deleteFiles",
-                        timeoutMillis = WORKSPACE_COMMAND_TIMEOUT_MILLIS,
-                        maxOutputBytes = 64 * 1024,
-                    )
-                } else {
-                    connection.execute(
-                        command = directWorkspaceDeleteCommand(workspaceId, deleteFiles),
-                        timeoutMillis = WORKSPACE_COMMAND_TIMEOUT_MILLIS,
-                        maxOutputBytes = 64 * 1024,
-                    )
-                }
-                if (result.timedOut || result.exitCode != 0) {
-                    throw ComputerException(
-                        ComputerErrorCodes.WORKSPACE_NOT_READY,
-                        "清理远端 Workspace 失败",
-                        retryable = true,
-                    )
-                }
-            }
-        } catch (error: Throwable) {
-            repository.dao().upsertWorkspace(workspace.copy(status = ComputerWorkspaceStatus.ERROR).toEntity())
-            throw error
-        }
-    }
-
-    private fun directWorkspaceDeleteCommand(workspaceId: String, deleteFiles: Boolean): String = """
-        set -eu
-        workspace="${'$'}HOME/.everytalk/workspaces/$workspaceId"
-        background_root="${'$'}workspace/.everytalk/background"
-        if [ -d "${'$'}background_root" ] && [ ! -L "${'$'}background_root" ]; then
-            for process_dir in "${'$'}background_root"/process_*; do
-                [ -d "${'$'}process_dir" ] && [ ! -L "${'$'}process_dir" ] || continue
-                process_id="${'$'}{process_dir##*/}"
-                case "${'$'}process_id" in process_*[!A-Za-z0-9_-]*|process_) continue ;; esac
-                state_file="${'$'}process_dir/state"
-                [ -f "${'$'}state_file" ] && [ ! -L "${'$'}state_file" ] || continue
-                pid="${'$'}(awk -F= '${'$'}1 == "pid" { print ${'$'}2; exit }' "${'$'}state_file")"
-                start_ticks="${'$'}(awk -F= '${'$'}1 == "start_ticks" { print ${'$'}2; exit }' "${'$'}state_file")"
-                execution_id="${'$'}(awk -F= '${'$'}1 == "execution_id" { print ${'$'}2; exit }' "${'$'}state_file")"
-                status="${'$'}(awk -F= '${'$'}1 == "status" { print ${'$'}2; exit }' "${'$'}state_file")"
-                case "${'$'}pid" in ''|*[!0-9]*) pid=0 ;; esac
-                case "${'$'}start_ticks" in ''|*[!0-9]*) start_ticks=0 ;; esac
-                case "${'$'}execution_id" in ''|*[!A-Za-z0-9_-]*) execution_id=unknown ;; esac
-                if [ "${'$'}status" = RUNNING ] && [ "${'$'}pid" -gt 1 ] && [ -r "/proc/${'$'}pid/stat" ]; then
-                    actual_ticks="${'$'}(awk '{print ${'$'}22}' "/proc/${'$'}pid/stat" 2>/dev/null || true)"
-                    actual_sid="${'$'}(ps -o sid= -p "${'$'}pid" 2>/dev/null | tr -d ' ' || true)"
-                    wrapper_argument="${'$'}(tr '\000' '\n' < "/proc/${'$'}pid/cmdline" | while IFS= read -r argument; do
-                        case "${'$'}argument" in
-                            "${'$'}HOME/.everytalk/bin/everytalk-runtime-wrapper") printf '%s' "${'$'}argument"; break ;;
-                            "${'$'}HOME/.everytalk/bin/everytalk-runtime-wrapper-"*) printf '%s' "${'$'}argument"; break ;;
-                        esac
-                    done)"
-                    if [ "${'$'}wrapper_argument" != "${'$'}HOME/.everytalk/bin/everytalk-runtime-wrapper" ]; then
-                        wrapper_version="${'$'}{wrapper_argument##*-}"
-                        case "${'$'}wrapper_version" in
-                            *[!0-9a-f]*|'') wrapper_argument='' ;;
-                        esac
-                        [ "${'$'}{#wrapper_version}" -eq 64 ] || wrapper_argument=''
-                    fi
-                    if [ "${'$'}actual_ticks" = "${'$'}start_ticks" ] && [ "${'$'}actual_sid" = "${'$'}pid" ] &&
-                        [ -n "${'$'}wrapper_argument" ] &&
-                        tr '\000' '\n' < "/proc/${'$'}pid/cmdline" | grep -Fqx -- "${'$'}wrapper_argument" &&
-                        tr '\000' '\n' < "/proc/${'$'}pid/cmdline" | grep -Fqx -- "${'$'}process_dir"; then
-                        kill -TERM "-${'$'}pid" 2>/dev/null || true
-                        attempt=0
-                        while kill -0 "${'$'}pid" 2>/dev/null && [ "${'$'}attempt" -lt 50 ]; do
-                            sleep 0.1
-                            attempt="${'$'}((attempt + 1))"
-                        done
-                        if kill -0 "${'$'}pid" 2>/dev/null; then
-                            final_ticks="${'$'}(awk '{print ${'$'}22}' "/proc/${'$'}pid/stat" 2>/dev/null || true)"
-                            final_sid="${'$'}(ps -o sid= -p "${'$'}pid" 2>/dev/null | tr -d ' ' || true)"
-                            if [ "${'$'}final_ticks" = "${'$'}start_ticks" ] && [ "${'$'}final_sid" = "${'$'}pid" ]; then
-                                kill -KILL "-${'$'}pid" 2>/dev/null || true
-                            fi
-                        fi
-                    fi
-                fi
-                temporary_state="${'$'}process_dir/state.tmp.${'$'}${'$'}"
-                {
-                    printf 'process_id=%s\n' "${'$'}process_id"
-                    printf 'execution_id=%s\n' "${'$'}execution_id"
-                    printf 'pid=%s\n' "${'$'}pid"
-                    printf 'start_ticks=%s\n' "${'$'}start_ticks"
-                    printf 'status=STOPPED\n'
-                    printf 'updated_at=%s\n' "${'$'}(date +%s)"
-                } > "${'$'}temporary_state"
-                chmod 600 "${'$'}temporary_state"
-                mv -f "${'$'}temporary_state" "${'$'}state_file"
-            done
-        fi
-        if [ '$deleteFiles' = true ]; then
-            case "${'$'}workspace" in
-                */.everytalk/workspaces/ws_*) rm -rf -- "${'$'}workspace" ;;
-                *) exit 61 ;;
-            esac
-        fi
-    """.trimIndent()
-
     private fun newWorkspace(computer: Computer, conversationId: String): ComputerWorkspace {
         val id = "ws_${UUID.randomUUID().toString().replace("-", "")}"
         ComputerIdentifier.requireValid(id, "Workspace ID")
@@ -311,69 +109,13 @@ class ComputerWorkspaceManager(private val repository: ComputerRepository) {
             computerId = computer.id,
             conversationId = conversationId,
             runMode = ComputerRunMode.DIRECT,
-            hostPath = "~/.everytalk/workspaces/$id",
+            hostPath = SSH_HOME_PATH,
         )
-    }
-
-    private suspend fun ensureHostWorkspace(connection: ComputerSshConnection, workspaceId: String): String {
-        ComputerIdentifier.requireValid(workspaceId, "Workspace ID")
-        val result = connection.execute(
-            command = """
-                umask 077
-                workspace="${'$'}HOME/.everytalk/workspaces/$workspaceId"
-                mkdir -p "${'$'}workspace/.everytalk/runtime" "${'$'}workspace/.everytalk/executions" "${'$'}workspace/.everytalk/background" "${'$'}workspace/.everytalk/previews"
-                chmod 700 "${'$'}HOME/.everytalk" "${'$'}HOME/.everytalk/workspaces" "${'$'}workspace" "${'$'}workspace/.everytalk" "${'$'}workspace/.everytalk/runtime" "${'$'}workspace/.everytalk/executions" "${'$'}workspace/.everytalk/background" "${'$'}workspace/.everytalk/previews"
-                metadata="${'$'}workspace/.everytalk/workspace.json"
-                if [ ! -f "${'$'}metadata" ]; then
-                    temporary="${'$'}metadata.tmp.${'$'}${'$'}"
-                    printf '%s\n' '{"version":1,"workspace_id":"$workspaceId"}' > "${'$'}temporary"
-                    chmod 600 "${'$'}temporary"
-                    mv -f "${'$'}temporary" "${'$'}metadata"
-                fi
-                cd "${'$'}workspace" && pwd -P
-            """.trimIndent(),
-            timeoutMillis = WORKSPACE_COMMAND_TIMEOUT_MILLIS,
-            maxOutputBytes = 64 * 1024,
-        )
-        if (result.timedOut || result.exitCode != 0) {
-            throw ComputerException(
-                ComputerErrorCodes.WORKSPACE_NOT_READY,
-                "创建 Workspace 失败",
-                retryable = true,
-            )
-        }
-        val hostPath = result.stdout.lineSequence().lastOrNull(String::isNotBlank)?.trim().orEmpty()
-        if (!hostPath.startsWith('/') || hostPath.any { it == '\u0000' || it == '\n' || it == '\r' }) {
-            throw ComputerException(ComputerErrorCodes.WORKSPACE_PATH_INVALID, "Workspace 路径无效")
-        }
-        return hostPath
-    }
-
-    private suspend fun ensureContainerWorkspace(
-        connection: ComputerSshConnection,
-        computer: Computer,
-        workspaceId: String,
-    ) {
-        ComputerIdentifier.requireValid(workspaceId, "Workspace ID")
-        val helperCommand = if (computer.username == "root") {
-            "$CONTAINER_HELPER ensure-workspace $workspaceId"
-        } else {
-            "sudo -n -- $CONTAINER_HELPER ensure-workspace $workspaceId"
-        }
-        val result = connection.execute(
-            command = helperCommand,
-            timeoutMillis = 5 * 60 * 1000L,
-            maxOutputBytes = 256 * 1024,
-        )
-        if (result.timedOut || result.exitCode != 0) {
-            throw ComputerException(
-                ComputerErrorCodes.WORKSPACE_NOT_READY,
-                "创建 Workspace Container 失败",
-                retryable = true,
-            )
-        }
     }
 }
+
+/** SSH 会话的默认工作目录：登录用户的 Home。 */
+internal const val SSH_HOME_PATH = "~"
 
 internal object ComputerIdentifier {
     fun requireValid(value: String, fieldName: String, maxLength: Int = 128): String {

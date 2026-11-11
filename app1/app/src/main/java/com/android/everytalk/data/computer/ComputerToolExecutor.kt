@@ -28,7 +28,6 @@ private const val MAX_COMPLETED_RESULTS_IN_MEMORY = 32
 class ComputerToolExecutor(
     context: Context,
     private val repository: ComputerRepository,
-    private val workspaceManager: ComputerWorkspaceManager,
     private val previewManager: ComputerPreviewManager,
     private val secretManager: ComputerWorkspaceSecretManager,
     private val attachmentBridge: ComputerAttachmentBridge? = null,
@@ -36,7 +35,6 @@ class ComputerToolExecutor(
     private val hostCommandConfirmer: suspend (ComputerHostCommandConfirmationRequest) -> Boolean = { false },
 ) : AutoCloseable {
     private val fileTransfer = ComputerFileTransfer()
-    private val runtimeEnvelope = ComputerRuntimeEnvelope(context.applicationContext)
     private val terminalManager = ComputerTerminalManager(repository)
     /**
      * 只缓存最近的完整工具结果，保证短期重试能拿到原响应。
@@ -71,65 +69,10 @@ class ComputerToolExecutor(
         }
     }
 
-    /**
-     * 用户停止会收尾指定 Run 的前台和后台受管任务，以远端确认的终态为准。
-     * 未指定 Run 的 Workspace 删除流程保留原来的全量停止语义；两者不能互相回退。
-     */
-    suspend fun cancelActiveExecutions(conversationId: String, runId: String? = null): Boolean {
-        val executions = if (!runId.isNullOrBlank()) {
-            // 明确指定 Run 就只取消它，空结果不代表可以扩大到整个会话。
-            repository.dao().getCancellableRemoteExecutionsForRun(runId)
-        } else {
-            if (conversationId.isBlank()) return true
-            repository.dao().getCancellableRemoteExecutionsForConversation(conversationId)
-        }
-        var allSucceeded = true
-        for (execution in executions) {
-            try {
-                // 先落库取消意图再进入 SSH；本地 Agent 的取消独立进行，
-                // 断网后恢复扫描仍能识别这条远端任务需要补发停止请求。
-                repository.dao().markRemoteExecutionCancellationRequested(execution.id)
-                // 本地记录还在但服务器/Workspace 已被删除时，返回 null 不能向用户报告“已取消”。
-                val snapshot = repository.cancelRemoteExecution(execution.id)
-                if (snapshot == null || snapshot.status in setOf(
-                        ComputerRemoteStatus.UNKNOWN,
-                        ComputerRemoteStatus.STOPPED,
-                        ComputerRemoteStatus.MISSING,
-                        ComputerRemoteStatus.STARTING,
-                        ComputerRemoteStatus.RUNNING,
-                    )) {
-                    allSucceeded = false
-                }
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Throwable) {
-                allSucceeded = false
-                AppLogger.warn(
-                    "ComputerRuntime",
-                    "取消远端 Execution 失败 execution=${execution.id}: ${error.message}",
-                )
-                val observedAt = System.currentTimeMillis()
-                // 网络错误统一保持可重试取消状态，身份/权限错误则保留原码并停止自动重试。
-                val errorCode = (error as? ComputerException)?.takeUnless { it.retryable }?.code
-                    ?: ComputerErrorCodes.EXECUTION_CANCEL_FAILED
-                repository.dao().markRemoteExecutionUnknown(
-                    executionId = execution.id,
-                    errorCode = errorCode,
-                    observedAt = observedAt,
-                    localStatus = ComputerExecutionStatus.UNKNOWN.name,
-                    finishedAt = observedAt,
-                )
-            }
-        }
-        return allSucceeded
-    }
-
-    /** 在模型首轮思考期间建立 SSH Transport，并完成 Runtime 版本校验。 */
+    /** 在模型首轮思考期间建立 SSH Transport，后续工具调用直接复用这条连接。 */
     suspend fun prewarm(requestContext: ComputerRequestContext) {
         val workspace = requireRequestWorkspace(requestContext)
-        repository.withConnection(requestContext.computerId) { connection, computer ->
-            runtimeEnvelope.prewarm(connection, computer)
-        }
+        repository.withConnection(requestContext.computerId) { _, _ -> }
         // 读取 Workspace 能确保预热和后续工具调用绑定同一个本地请求快照。
         check(workspace.id == requestContext.workspaceId)
     }
@@ -206,20 +149,6 @@ class ComputerToolExecutor(
                     durationMillis = executionDurationMillis(existing),
                 )
             }
-            if (
-                existing.toolName == ComputerToolNames.EXEC &&
-                existing.remoteStatePath != null &&
-                existing.remoteStatus in setOf(
-                    ComputerRemoteStatus.SUCCEEDED,
-                    ComputerRemoteStatus.FAILED,
-                    ComputerRemoteStatus.TIMED_OUT,
-                    ComputerRemoteStatus.CANCELLED,
-                )
-            ) {
-                // 远端已经有终态时优先补取结果。即使上次因协议读取失败落成 UNKNOWN，
-                // 也不能让“重新执行”覆盖这份可恢复结果并重复修改 VPS。
-                return recoverCompletedExecution(existing, arguments, currentRequestContext, workspace)
-            }
             if (existing.status == ComputerExecutionStatus.UNKNOWN &&
                 currentRequestContext.retryUnknownToolCallId == toolCallId
             ) {
@@ -281,38 +210,13 @@ class ComputerToolExecutor(
             requestHash = requestHash,
             status = ComputerExecutionStatus.STARTING,
             startedAt = System.currentTimeMillis(),
-            target = initialExecRequest?.target,
-            completionMode = initialExecRequest?.let {
-                if (it.background) ComputerExecutionCompletionMode.RETURN_HANDLE
-                else ComputerExecutionCompletionMode.WAIT_FOR_RESULT
-            },
-            remoteProcessId = initialExecRequest?.let { "process_$executionId" },
-            remoteStatePath = initialExecRequest?.let {
-                initialRemoteStatePath(workspace, executionId, it.target)
-            },
-            remoteStatus = initialExecRequest?.let { ComputerRemoteStatus.STARTING },
+            target = initialExecRequest?.let { ComputerExecTarget.HOST },
+            completionMode = initialExecRequest?.let { ComputerExecutionCompletionMode.WAIT_FOR_RESULT },
             runId = currentRequestContext.runId,
         )
         dao.upsertExecution(execution.toEntity())
 
         return try {
-            if (toolName == ComputerToolNames.EXEC) {
-                // 在真正建立 SSH 前先落下目标和固定状态路径，停止按钮不会错过“刚要启动”的命令。
-                val request = requireNotNull(initialExecRequest)
-                dao.updateRemoteExecutionReference(
-                    executionId = execution.id,
-                    target = request.target.name,
-                    completionMode = if (request.background) {
-                        ComputerExecutionCompletionMode.RETURN_HANDLE.name
-                    } else {
-                        ComputerExecutionCompletionMode.WAIT_FOR_RESULT.name
-                    },
-                    remoteProcessId = "process_${execution.id}",
-                    remoteStatePath = initialRemoteStatePath(workspace, execution.id, request.target),
-                    remoteStatus = ComputerRemoteStatus.STARTING.name,
-                    runId = currentRequestContext.runId,
-                )
-            }
             execution = execution.copy(status = ComputerExecutionStatus.RUNNING)
             dao.upsertExecution(execution.toEntity())
             val data = dispatch(
@@ -325,23 +229,20 @@ class ComputerToolExecutor(
                 requestHash,
                 updateStatus,
             )
-            // 远端轮询期间会单独写入 target、remoteStatus 等字段，收尾必须读取最新行，
-            // 否则用最初的本地对象 Upsert 会把这些状态覆盖为空。
             val observed = dao.getExecutionById(execution.id)?.toModel() ?: execution
-            val finalStatus = when {
-                toolName != ComputerToolNames.EXEC -> ComputerExecutionStatus.SUCCEEDED
-                observed.remoteStatus == ComputerRemoteStatus.FAILED -> ComputerExecutionStatus.FAILED
-                observed.remoteStatus == ComputerRemoteStatus.TIMED_OUT -> ComputerExecutionStatus.TIMED_OUT
-                observed.remoteStatus == ComputerRemoteStatus.CANCELLED -> ComputerExecutionStatus.CANCELLED
-                observed.remoteStatus in setOf(
-                    ComputerRemoteStatus.UNKNOWN,
-                    ComputerRemoteStatus.MISSING,
-                    ComputerRemoteStatus.STOPPED,
-                ) -> ComputerExecutionStatus.UNKNOWN
+            // exec 的结果状态和退出码来自本次通道返回的数据，其他工具成功返回即成功。
+            val execResult = (data as? JsonObject)?.takeIf { toolName == ComputerToolNames.EXEC }
+            val remoteStatus = (execResult?.get("status") as? JsonPrimitive)?.content
+                ?.let { status -> ComputerRemoteStatus.entries.firstOrNull { it.name == status } }
+            val finalStatus = when (remoteStatus) {
+                ComputerRemoteStatus.FAILED -> ComputerExecutionStatus.FAILED
+                ComputerRemoteStatus.TIMED_OUT -> ComputerExecutionStatus.TIMED_OUT
                 else -> ComputerExecutionStatus.SUCCEEDED
             }
             execution = observed.copy(
                 status = finalStatus,
+                remoteStatus = remoteStatus ?: observed.remoteStatus,
+                remoteExitCode = (execResult?.get("exit_code") as? JsonPrimitive)?.content?.toIntOrNull(),
                 finishedAt = System.currentTimeMillis(),
                 safeSummary = safeSummary(toolName),
             )
@@ -354,27 +255,13 @@ class ComputerToolExecutor(
             completedResults[toolCallKey] = response
             response
         } catch (error: CancellationException) {
+            // 取消时 SSH 层已向远端进程发 TERM，通道随之关闭，本地直接收尾。
             val observed = dao.getExecutionById(execution.id)?.toModel() ?: execution
-            val remoteStillActive = observed.remoteStatus == null || observed.remoteStatus in setOf(
-                ComputerRemoteStatus.STARTING,
-                ComputerRemoteStatus.RUNNING,
-            )
-            // 本地协程取消不等于 VPS 已停止。远端仍活跃时保留取消意图并继续对账，
-            // 只有收到 VPS 终态后才写入 finishedAt。
-            val localStatus = if (observed.remoteStatus == ComputerRemoteStatus.UNKNOWN && !remoteStillActive) {
-                ComputerExecutionStatus.UNKNOWN
-            } else {
-                ComputerExecutionStatus.CANCELLED
-            }
             dao.upsertExecution(
                 observed.copy(
-                    status = localStatus,
-                    finishedAt = if (remoteStillActive) null else System.currentTimeMillis(),
-                    errorCode = when {
-                        remoteStillActive -> ComputerErrorCodes.EXECUTION_CANCEL_REQUESTED
-                        localStatus == ComputerExecutionStatus.UNKNOWN -> ComputerErrorCodes.EXECUTION_CANCEL_FAILED
-                        else -> observed.errorCode
-                    },
+                    status = ComputerExecutionStatus.CANCELLED,
+                    remoteStatus = if (toolName == ComputerToolNames.EXEC) ComputerRemoteStatus.CANCELLED else observed.remoteStatus,
+                    finishedAt = System.currentTimeMillis(),
                     safeSummary = "$toolName 已取消",
                 ).toEntity(),
             )
@@ -382,12 +269,6 @@ class ComputerToolExecutor(
         } catch (error: Throwable) {
             val computerError = when (error) {
                 is ComputerException -> error
-                is ComputerRemoteExecutionProtocolException -> ComputerException(
-                    code = error.protocolCode,
-                    message = error.message ?: "远端执行协议无效",
-                    retryable = false,
-                    cause = error,
-                )
                 else -> ComputerException(
                     ComputerErrorCodes.EXECUTION_UNKNOWN,
                     "Computer Tool 执行失败",
@@ -440,13 +321,13 @@ class ComputerToolExecutor(
         requestHash: String,
         updateStatus: suspend (String?) -> Unit,
     ): JsonElement = when (toolName) {
-        ComputerToolNames.EXEC -> executeCommand(arguments, toolCallId, requestContext, workspace, executionId, requestHash, updateStatus)
-        ComputerToolNames.READ_FILE -> readFile(arguments, requestContext, workspace)
-        ComputerToolNames.WRITE_FILE -> writeFile(arguments, requestContext, workspace, executionId)
-        ComputerToolNames.EDIT -> editFile(arguments, requestContext, workspace, executionId)
+        ComputerToolNames.EXEC -> executeCommand(arguments, toolCallId, requestContext, executionId, requestHash, updateStatus)
+        ComputerToolNames.READ_FILE -> readFile(arguments, requestContext)
+        ComputerToolNames.WRITE_FILE -> writeFile(arguments, requestContext, executionId)
+        ComputerToolNames.EDIT -> editFile(arguments, requestContext, executionId)
         ComputerToolNames.TERMINAL -> terminal(arguments, requestContext, workspace)
-        ComputerToolNames.UPLOAD -> upload(arguments, requestContext, workspace, executionId)
-        ComputerToolNames.DOWNLOAD -> download(arguments, requestContext, workspace)
+        ComputerToolNames.UPLOAD -> upload(arguments, requestContext, executionId)
+        ComputerToolNames.DOWNLOAD -> download(arguments, requestContext)
         ComputerToolNames.OPEN_PORT -> openPort(arguments, toolCallId, requestContext)
         else -> throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "Computer Tool 不存在")
     }
@@ -455,55 +336,44 @@ class ComputerToolExecutor(
         arguments: JsonObject,
         toolCallId: String,
         context: ComputerRequestContext,
-        workspace: ComputerWorkspace,
         executionId: String,
         requestHash: String,
         updateStatus: suspend (String?) -> Unit,
     ): JsonElement {
         val request = parseExecRequest(arguments, context, loadSecrets = true)
         val readOnlyRequest = ComputerToolCallSafety.isReadOnly(ComputerToolNames.EXEC, arguments)
-        val result = run {
-            var executionWorkspace = workspace
-            if (request.target == ComputerExecTarget.CONTAINER) {
-                executionWorkspace = workspaceManager.prepareContainer(workspace.id)
-            }
-            val runRequest: suspend (ComputerExecRequest) -> ComputerExecResult = { frozenRequest ->
-                executeManagedRequestWithRecovery(
-                    context = context,
-                    workspace = executionWorkspace,
-                    executionId = executionId,
-                    requestHash = requestHash,
-                    request = frozenRequest,
-                    readOnlyRequest = readOnlyRequest,
-                    updateStatus = updateStatus,
-                )
-            }
-            if (request.target == ComputerExecTarget.HOST && context.approvedToolCallId != toolCallId) {
-                val computer = repository.getComputer(context.computerId)
-                    ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
-                executeHostCommandWithConfirmation(
-                    request = request,
-                    permissionMode = context.permissionMode,
-                    askUserApproval = arguments.optionalBoolean("ask_user_approval"),
-                    confirmationRequest = { assessment ->
-                        ComputerHostCommandConfirmationRequest(
-                            requestId = executionId,
-                            context = context,
-                            computerName = computer.displayName,
-                            command = request.command,
-                            cwd = request.cwd,
-                            requestsPrivilege = request.asRoot ||
-                                ComputerHostCommandRisk.PRIVILEGE_ESCALATION in assessment.risks,
-                            reason = assessment.reason ?: "AI 请求确认这次 VPS 命令",
-                            risks = assessment.risks,
-                        )
-                    },
-                    confirmer = hostCommandConfirmer,
-                    execute = runRequest,
-                )
-            } else {
-                runRequest(request)
-            }
+        val runRequest: suspend (ComputerExecRequest) -> ComputerExecResult = { frozenRequest ->
+            executeDirectRequestWithRetry(
+                context = context,
+                request = frozenRequest,
+                readOnlyRequest = readOnlyRequest,
+                updateStatus = updateStatus,
+            )
+        }
+        val result = if (context.approvedToolCallId != toolCallId) {
+            val computer = repository.getComputer(context.computerId)
+                ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
+            executeHostCommandWithConfirmation(
+                request = request,
+                permissionMode = context.permissionMode,
+                askUserApproval = arguments.optionalBoolean("ask_user_approval"),
+                confirmationRequest = { assessment ->
+                    ComputerHostCommandConfirmationRequest(
+                        requestId = executionId,
+                        context = context,
+                        computerName = computer.displayName,
+                        command = request.command,
+                        cwd = request.cwd,
+                        requestsPrivilege = ComputerHostCommandRisk.PRIVILEGE_ESCALATION in assessment.risks,
+                        reason = assessment.reason ?: "AI 请求确认这次 VPS 命令",
+                        risks = assessment.risks,
+                    )
+                },
+                confirmer = hostCommandConfirmer,
+                execute = runRequest,
+            )
+        } else {
+            runRequest(request)
         }
         return buildJsonObject {
             val status = result.remoteStatus ?: when {
@@ -519,341 +389,48 @@ class ComputerToolExecutor(
             put("stdout_truncated", result.stdoutTruncated)
             put("stderr_truncated", result.stderrTruncated)
             put("duration_ms", result.durationMillis ?: 0L)
-            result.target?.let { put("target", it.name) }
-            result.processId?.let { put("process_id", it) }
-            result.pid?.let { put("pid", it) }
-            result.logPath?.let {
-                put("log_path", it)
-                put("log_reference", it)
-            }
         }
     }
 
-    /**
-     * 只读命令的单次断线恢复。
-     *
-     * Wrapper 使用固定 Execution ID 和 request hash 做幂等判断，因此恢复时重新接入
-     * 同一 Execution 只会读取已有状态，不会再次创建一条命令。写操作不进入这里的自动重试。
-     */
-    private suspend fun executeManagedRequestWithRecovery(
+    /** 只读命令在连接中断时换一条新连接重跑一次；写操作不自动重跑，避免重复修改 VPS。 */
+    private suspend fun executeDirectRequestWithRetry(
         context: ComputerRequestContext,
-        workspace: ComputerWorkspace,
-        executionId: String,
-        requestHash: String,
         request: ComputerExecRequest,
         readOnlyRequest: Boolean,
         updateStatus: suspend (String?) -> Unit,
     ): ComputerExecResult {
         try {
-            return executeManagedRequest(
-                context = context,
-                workspace = workspace,
-                executionId = executionId,
-                requestHash = requestHash,
-                request = request,
-                updateStatus = updateStatus,
-            )
+            return executeDirectRequest(context, request, updateStatus)
         } catch (error: CancellationException) {
             throw error
         } catch (error: Throwable) {
             if (!shouldRetryReadOnlyExecution(readOnlyRequest, error)) throw error
-            updateStatus("SSH 连接中断，正在恢复命令")
-            // 连接可能仍被池误判为可用，先丢弃旧 Transport，再用同一 Execution ID 接回。
+            updateStatus("SSH 连接中断，正在重新执行只读命令")
             repository.invalidateConnection(context.computerId)
-            return executeManagedRequest(
-                context = context,
-                workspace = workspace,
-                executionId = executionId,
-                requestHash = requestHash,
-                request = request,
-                updateStatus = updateStatus,
-            )
+            return executeDirectRequest(context, request, updateStatus)
         }
     }
 
-    /**
-     * 以固定 Execution ID 启动 VPS 进程，再按状态协议等待或返回句柄。
-     * 远端引用先写 Room，启动确认丢失时恢复流程仍能按同一 ID 查询，禁止重复执行。
-     */
-    private suspend fun executeManagedRequest(
+    private suspend fun executeDirectRequest(
         context: ComputerRequestContext,
-        workspace: ComputerWorkspace,
-        executionId: String,
-        requestHash: String,
         request: ComputerExecRequest,
         updateStatus: suspend (String?) -> Unit,
-    ): ComputerExecResult = repository.withConnection(context.computerId) { connection, computer ->
-        val startedAtMillis = System.currentTimeMillis()
-        val processId = "process_$executionId"
-        updateStatus("正在启动命令")
-        val statePath = when (request.target) {
-            ComputerExecTarget.HOST -> "~/.everytalk/host-executions/$executionId/state"
-            // 执行目标由本次 Tool 请求决定。服务器记录仍为 Direct 时，首次使用沙箱也必须记录容器路径。
-            ComputerExecTarget.CONTAINER -> "/workspace/.everytalk/executions/$executionId/state"
-        }
-        repository.dao().updateRemoteExecutionReference(
-            executionId = executionId,
-            target = request.target.name,
-            completionMode = if (request.background) {
-                ComputerExecutionCompletionMode.RETURN_HANDLE.name
-            } else {
-                ComputerExecutionCompletionMode.WAIT_FOR_RESULT.name
-            },
-            remoteProcessId = processId,
-            remoteStatePath = statePath,
-            remoteStatus = ComputerRemoteStatus.STARTING.name,
-            runId = context.runId,
-        )
-        val started = runtimeEnvelope.startManagedExecution(
-            connection = connection,
-            computer = computer,
-            workspace = workspace,
-            executionId = executionId,
-            requestHash = requestHash,
-            request = request,
-        )
-        // Wrapper 可能先落 STARTING 再切 RUNNING。后台 Tool 已经拿到可恢复句柄，
-        // 对模型和 Room 都统一呈现 RUNNING，避免返回 STARTING 后下一轮被误判成未启动。
-        val observedStart = if (request.background && started.status == ComputerRemoteStatus.STARTING) {
-            started.copy(status = ComputerRemoteStatus.RUNNING)
-        } else {
-            started
-        }
-        observeRemoteExecution(executionId, request, observedStart)
-
-        if (request.background) {
-            updateStatus("后台任务已启动")
-            return@withConnection ComputerExecResult(
-                exitCode = null,
-                stdout = "",
-                stderr = "",
-                timedOut = false,
-                stdoutTruncated = false,
-                stderrTruncated = false,
-                processId = observedStart.processId,
-                pid = observedStart.pid,
-                logPath = statePath.removeSuffix("/state"),
-                // Tool 已拿到可恢复句柄，STARTING 对用户和模型统一呈现为 RUNNING。
-                remoteStatus = observedStart.status,
-                durationMillis = (System.currentTimeMillis() - startedAtMillis).coerceAtLeast(0L),
-                target = request.target,
-            )
-        }
-
-        var snapshot = started
-        var waitMillis = 100L
-        val deadline = System.currentTimeMillis() + request.timeoutMillis + 30_000L
-        updateStatus("正在运行，已用时 ${formatElapsed(System.currentTimeMillis() - startedAtMillis)}")
-        while (snapshot.status !in setOf(
-                ComputerRemoteStatus.SUCCEEDED,
-                ComputerRemoteStatus.FAILED,
-                ComputerRemoteStatus.TIMED_OUT,
-                ComputerRemoteStatus.CANCELLED,
-                ComputerRemoteStatus.STOPPED,
-                ComputerRemoteStatus.MISSING,
-                ComputerRemoteStatus.UNKNOWN,
-            )) {
-            if (System.currentTimeMillis() >= deadline) {
-                throw ComputerException(
-                    ComputerErrorCodes.EXECUTION_UNKNOWN,
-                    "等待 VPS Execution 超时，远端状态仍需恢复确认",
-                    retryable = true,
-                )
-            }
-            delay(waitMillis)
-            snapshot = runtimeEnvelope.queryExecutionStatus(
-                connection = connection,
-                computer = computer,
-                workspace = workspace,
-                executionId = executionId,
-                target = request.target,
-                expectedProcessId = "process_$executionId",
-                expectedRequestHash = requestHash,
-            )
-            observeRemoteExecution(executionId, request, snapshot)
-            if (snapshot.status in setOf(
-                    ComputerRemoteStatus.STARTING,
-                    ComputerRemoteStatus.RUNNING,
-                )
-            ) {
-                updateStatus("正在运行，已用时 ${formatElapsed(System.currentTimeMillis() - startedAtMillis)}")
-            }
-            waitMillis = (waitMillis * 2).coerceAtMost(1_000L)
-        }
-
-        if (snapshot.status in setOf(ComputerRemoteStatus.MISSING, ComputerRemoteStatus.UNKNOWN, ComputerRemoteStatus.STOPPED)) {
-            throw ComputerException(
-                ComputerErrorCodes.EXECUTION_UNKNOWN,
-                "无法确认 VPS Execution 的最终结果",
-                retryable = true,
-            )
-        }
-        val remoteResult = runtimeEnvelope.readExecutionResult(
-            connection = connection,
-            computer = computer,
-            workspace = workspace,
-            executionId = executionId,
-            maxBytes = COMPUTER_EXEC_OUTPUT_BYTES,
-            target = request.target,
-            expectedProcessId = "process_$executionId",
-            expectedRequestHash = requestHash,
-        )
-        observeRemoteExecution(executionId, request, remoteResult.snapshot)
-        updateStatus(
-            when (remoteResult.snapshot.status) {
-                ComputerRemoteStatus.SUCCEEDED -> "命令执行完成"
-                ComputerRemoteStatus.TIMED_OUT -> "命令执行超时"
-                ComputerRemoteStatus.CANCELLED -> "命令已取消"
-                else -> "命令执行失败"
-            },
-        )
-        ComputerExecResult(
-            exitCode = remoteResult.snapshot.exitCode,
-            stdout = remoteResult.stdout,
-            stderr = remoteResult.stderr,
-            timedOut = remoteResult.snapshot.status == ComputerRemoteStatus.TIMED_OUT,
-            stdoutTruncated = remoteResult.stdoutTruncated,
-            stderrTruncated = remoteResult.stderrTruncated,
-            remoteStatus = remoteResult.snapshot.status,
-            durationMillis = (
-                (remoteResult.snapshot.updatedAt ?: System.currentTimeMillis()) - startedAtMillis
-            ).coerceAtLeast(0L),
-            target = request.target,
-        )
-    }
-
-    /**
-     * App 崩溃后补取已经完成的远端 exec，禁止重新执行同一个写操作。
-     * 远端日志仍按固定上限读取，读取失败会交给 AgentToolRuntime 转成错误 Tool Result。
-     */
-    private suspend fun recoverCompletedExecution(
-        execution: ComputerExecution,
-        arguments: JsonObject,
-        context: ComputerRequestContext,
-        workspace: ComputerWorkspace,
-    ): JsonElement {
-        val request = parseExecRequest(arguments, context, loadSecrets = true)
-        return try {
-            val target = execution.target ?: request.target
-            if (target != request.target) {
-                throw ComputerException(ComputerErrorCodes.EXECUTION_PROTOCOL_MISMATCH, "恢复的执行目标与原请求不一致")
-            }
-            val remoteResult = repository.withConnection(context.computerId) { connection, computer ->
-                runtimeEnvelope.readExecutionResult(
-                    connection = connection,
-                    computer = computer,
-                    workspace = workspace,
-                    executionId = execution.id,
-                    maxBytes = COMPUTER_EXEC_OUTPUT_BYTES,
-                    target = target,
-                    expectedProcessId = execution.remoteProcessId,
-                    expectedRequestHash = execution.requestHash,
-                )
-            }
-            if (remoteResult.snapshot.status !in setOf(
-                    ComputerRemoteStatus.SUCCEEDED,
-                    ComputerRemoteStatus.FAILED,
-                    ComputerRemoteStatus.TIMED_OUT,
-                    ComputerRemoteStatus.CANCELLED,
-                )
-            ) {
-                throw ComputerException(
-                    ComputerErrorCodes.EXECUTION_UNKNOWN,
-                    "远端 Execution 尚未形成最终结果",
-                    retryable = true,
-                )
-            }
-            observeRemoteExecution(execution.id, request, remoteResult.snapshot)
-            val response = successEnvelope(
-                execution.id,
-                buildJsonObject {
-                put("ok", remoteResult.snapshot.status == ComputerRemoteStatus.SUCCEEDED)
-                put("status", remoteResult.snapshot.status.name)
-                put("exit_code", remoteResult.snapshot.exitCode?.let(::JsonPrimitive) ?: JsonNull)
-                put("stdout", remoteResult.stdout)
-                put("stderr", remoteResult.stderr)
-                put("timed_out", remoteResult.snapshot.status == ComputerRemoteStatus.TIMED_OUT)
-                put("stdout_truncated", remoteResult.stdoutTruncated)
-                put("stderr_truncated", remoteResult.stderrTruncated)
-                put(
-                    "duration_ms",
-                    ((remoteResult.snapshot.updatedAt ?: System.currentTimeMillis()) -
-                        (execution.startedAt ?: System.currentTimeMillis())).coerceAtLeast(0L),
-                )
-                put("target", target.name)
-                put("recovered", true)
-                put("process_id", remoteResult.snapshot.processId)
-                execution.remoteStatePath?.removeSuffix("/state")?.let {
-                    put("log_path", it)
-                    put("log_reference", it)
-                }
+    ): ComputerExecResult = repository.withConnection(context.computerId) { connection, _ ->
+        updateStatus("正在运行")
+        connection.runComputerExec(request).also { result ->
+            updateStatus(
+                when (result.remoteStatus) {
+                    ComputerRemoteStatus.SUCCEEDED -> "命令执行完成"
+                    ComputerRemoteStatus.TIMED_OUT -> "命令执行超时"
+                    else -> "命令执行失败"
                 },
-                ok = remoteResult.snapshot.status == ComputerRemoteStatus.SUCCEEDED,
             )
-            completedResults[execution.toolCallId] = response
-            response
-        } finally {
         }
-    }
-
-    private suspend fun observeRemoteExecution(
-        executionId: String,
-        request: ComputerExecRequest,
-        snapshot: ComputerRemoteExecutionSnapshot,
-    ) {
-        val terminal = snapshot.status in setOf(
-            ComputerRemoteStatus.SUCCEEDED,
-            ComputerRemoteStatus.FAILED,
-            ComputerRemoteStatus.TIMED_OUT,
-            ComputerRemoteStatus.CANCELLED,
-        )
-        val backgroundHandle = request.background
-        val localStatus = if (backgroundHandle) {
-            null
-        } else {
-            when (snapshot.status) {
-                ComputerRemoteStatus.SUCCEEDED -> ComputerExecutionStatus.SUCCEEDED.name
-                ComputerRemoteStatus.FAILED -> ComputerExecutionStatus.FAILED.name
-                ComputerRemoteStatus.TIMED_OUT -> ComputerExecutionStatus.TIMED_OUT.name
-                ComputerRemoteStatus.CANCELLED -> ComputerExecutionStatus.CANCELLED.name
-                ComputerRemoteStatus.UNKNOWN,
-                ComputerRemoteStatus.MISSING,
-                ComputerRemoteStatus.STOPPED,
-                -> ComputerExecutionStatus.UNKNOWN.name
-                else -> null
-            }
-        }
-        repository.dao().updateRemoteExecutionObservation(
-            executionId = executionId,
-            target = request.target.name,
-            remoteProcessId = snapshot.processId,
-            remoteStatus = snapshot.status.name,
-            remoteExitCode = snapshot.exitCode,
-            observedAt = System.currentTimeMillis(),
-            localStatus = localStatus,
-            finishedAt = if (terminal && localStatus != null) System.currentTimeMillis() else null,
-            localExitCode = if (terminal) snapshot.exitCode else null,
-            errorCode = when (snapshot.status) {
-                ComputerRemoteStatus.UNKNOWN,
-                ComputerRemoteStatus.MISSING,
-                ComputerRemoteStatus.STOPPED,
-                -> ComputerErrorCodes.EXECUTION_UNKNOWN
-                else -> null
-            },
-        )
-    }
-
-
-    /** 执行链只显示短时间，不把轮询细节写入 AgentEntry。 */
-    private fun formatElapsed(millis: Long): String {
-        val totalSeconds = (millis / 1_000L).coerceAtLeast(0L)
-        return "%02d:%02d".format(totalSeconds / 60L, totalSeconds % 60L)
     }
 
     private suspend fun readFile(
         arguments: JsonObject,
         context: ComputerRequestContext,
-        workspace: ComputerWorkspace,
     ): JsonElement {
         val encoding = when (arguments.optionalString("encoding") ?: "utf8") {
             "utf8" -> ComputerFileEncoding.UTF8
@@ -863,7 +440,6 @@ class ComputerToolExecutor(
         val page = repository.withConnection(context.computerId) { connection, _ ->
             fileTransfer.read(
                 connection = connection,
-                workspace = workspace,
                 path = arguments.requiredString("path"),
                 offset = arguments.optionalLong("offset") ?: 0,
                 limit = (arguments.optionalLong("limit") ?: DEFAULT_FILE_READ_LIMIT.toLong()).toIntChecked("limit"),
@@ -884,7 +460,6 @@ class ComputerToolExecutor(
     private suspend fun writeFile(
         arguments: JsonObject,
         context: ComputerRequestContext,
-        workspace: ComputerWorkspace,
         executionId: String,
     ): JsonElement {
         val encoding = when (arguments.optionalString("encoding") ?: "utf8") {
@@ -900,7 +475,6 @@ class ComputerToolExecutor(
         val result = repository.withConnection(context.computerId) { connection, _ ->
             fileTransfer.write(
                 connection = connection,
-                workspace = workspace,
                 toolCallId = executionId,
                 path = arguments.requiredString("path"),
                 content = arguments.requiredString("content"),
@@ -919,7 +493,6 @@ class ComputerToolExecutor(
     private suspend fun editFile(
         arguments: JsonObject,
         context: ComputerRequestContext,
-        workspace: ComputerWorkspace,
         executionId: String,
     ): JsonElement {
         val rawEdits = arguments["edits"] as? JsonArray ?: throw invalidArgument("edits")
@@ -934,7 +507,6 @@ class ComputerToolExecutor(
         val result = repository.withConnection(context.computerId) { connection, _ ->
             fileTransfer.edit(
                 connection = connection,
-                workspace = workspace,
                 toolCallId = executionId,
                 path = arguments.requiredString("path"),
                 edits = edits,
@@ -994,7 +566,6 @@ class ComputerToolExecutor(
     private suspend fun upload(
         arguments: JsonObject,
         context: ComputerRequestContext,
-        workspace: ComputerWorkspace,
         executionId: String,
     ): JsonElement {
         val bridge = attachmentBridge
@@ -1006,7 +577,6 @@ class ComputerToolExecutor(
             repository.withConnection(context.computerId) { connection, _ ->
                 fileTransfer.upload(
                     connection = connection,
-                    workspace = workspace,
                     toolCallId = executionId,
                     destinationPath = arguments.requiredString("destination_path"),
                     source = input,
@@ -1027,7 +597,6 @@ class ComputerToolExecutor(
     private suspend fun download(
         arguments: JsonObject,
         context: ComputerRequestContext,
-        workspace: ComputerWorkspace,
     ): JsonElement {
         val bridge = attachmentBridge
             ?: throw ComputerException(ComputerErrorCodes.DOWNLOAD_INTERRUPTED, "当前请求没有下载桥接器")
@@ -1038,7 +607,7 @@ class ComputerToolExecutor(
             ?: sourcePath.substringAfterLast('/').ifBlank { "download.bin" }
         val downloaded = bridge.receiveDownload(context.conversationId, runId, name) { output ->
             repository.withConnection(context.computerId) { connection, _ ->
-                fileTransfer.download(connection, workspace, sourcePath, output)
+                fileTransfer.download(connection, sourcePath, output)
             }
         }
         return buildJsonObject {
@@ -1061,20 +630,14 @@ class ComputerToolExecutor(
         val port = (arguments.optionalLong("port") ?: throw invalidArgument("port")).toIntChecked("port")
         val protocol = arguments.optionalString("protocol") ?: "http"
         val visibility = arguments.optionalString("visibility") ?: "private"
-        val target = when (arguments.optionalString("target") ?: "host") {
-            "container" -> ComputerExecTarget.CONTAINER
-            "host" -> ComputerExecTarget.HOST
-            else -> throw invalidArgument("target")
-        }
         val result = when (visibility) {
-            "private" -> previewManager.openPrivate(context, port, protocol, target)
+            "private" -> previewManager.openPrivate(context, port, protocol)
             "public" -> {
                 val request = ComputerPublicPreviewRequest(
                     context = context,
                     port = port,
                     protocol = protocol,
                     expiresInSeconds = arguments.optionalLong("expires_in_seconds"),
-                    target = target,
                 )
                 val requiresConfirmation = when (context.permissionMode) {
                     ComputerPermissionMode.MANUAL -> true
@@ -1099,7 +662,6 @@ class ComputerToolExecutor(
             put("preview_id", result.preview.id)
             put("url", result.url)
             put("visibility", result.preview.visibility.name.lowercase())
-            put("target", result.preview.target.name.lowercase())
             result.preview.expiresAt?.let { put("expires_at", it) }
             result.warning?.let { put("warning", it) }
         }
@@ -1175,7 +737,6 @@ class ComputerToolExecutor(
         computer: Computer,
     ): ComputerToolApprovalRequest? {
         val request = parseExecRequest(arguments, context, loadSecrets = false)
-        if (request.target != ComputerExecTarget.HOST) return null
         requireValidComputerExecRequest(request)
         val assessment = ComputerHostCommandPolicy.assess(request)
         val requiresConfirmation = when (context.permissionMode) {
@@ -1193,8 +754,7 @@ class ComputerToolExecutor(
                 computerName = computer.displayName,
                 command = request.command,
                 cwd = request.cwd,
-                requestsPrivilege = request.asRoot ||
-                    ComputerHostCommandRisk.PRIVILEGE_ESCALATION in assessment.risks,
+                requestsPrivilege = ComputerHostCommandRisk.PRIVILEGE_ESCALATION in assessment.risks,
                 reason = assessment.reason ?: "AI 请求确认这次 VPS 命令",
                 risks = assessment.risks,
             ),
@@ -1215,11 +775,6 @@ class ComputerToolExecutor(
             ComputerPermissionMode.FULL -> false
         }
         if (!requiresConfirmation) return null
-        val target = when (arguments.optionalString("target") ?: "host") {
-            "container" -> ComputerExecTarget.CONTAINER
-            "host" -> ComputerExecTarget.HOST
-            else -> throw invalidArgument("target")
-        }
         return ComputerToolApprovalRequest.PublicPreview(
             toolCallId = toolCallId,
             computerName = computer.displayName,
@@ -1228,7 +783,6 @@ class ComputerToolExecutor(
                 port = (arguments.optionalLong("port") ?: throw invalidArgument("port")).toIntChecked("port"),
                 protocol = arguments.optionalString("protocol") ?: "http",
                 expiresInSeconds = arguments.optionalLong("expires_in_seconds"),
-                target = target,
             ),
         )
     }
@@ -1260,13 +814,7 @@ class ComputerToolExecutor(
 
     /** 审批预检只解析参数，不读取 Keystore，避免用户批准前触碰 Secret。 */
     private fun parseExecRequestWithoutSecrets(arguments: JsonObject): ComputerExecRequest {
-        val target = when (arguments.optionalString("target") ?: "host") {
-            "container" -> ComputerExecTarget.CONTAINER
-            "host" -> ComputerExecTarget.HOST
-            else -> throw invalidArgument("target")
-        }
-        val secretNames = arguments.stringList("secret_names")
-        if (secretNames.isNotEmpty()) {
+        if (arguments.stringList("secret_names").isNotEmpty()) {
             throw ComputerException(
                 ComputerErrorCodes.CREDENTIAL_MISSING,
                 "通用 exec 不允许携带 Secret；请使用已注册的语义 capability Adapter",
@@ -1274,26 +822,9 @@ class ComputerToolExecutor(
         }
         return ComputerExecRequest(
             command = arguments.requiredString("command"),
-            cwd = arguments.optionalString("cwd") ?: if (target == ComputerExecTarget.HOST) "~" else "/workspace",
-            environment = arguments.objectOrEmpty("env").mapValues { (name, value) -> value.stringValue("env.$name") },
-            stdin = arguments.optionalString("stdin"),
+            cwd = arguments.optionalString("cwd") ?: "~",
             timeoutMillis = arguments.optionalLong("timeout_ms") ?: 120_000,
-            background = arguments.optionalBoolean("background") ?: false,
-            asRoot = arguments.optionalBoolean("as_root") ?: false,
-            target = target,
         )
-    }
-
-    /** 生成可由停止按钮复用的固定状态路径，不接受模型传入绝对路径。 */
-    private fun initialRemoteStatePath(
-        workspace: ComputerWorkspace,
-        executionId: String,
-        target: ComputerExecTarget,
-    ): String = when {
-        target == ComputerExecTarget.HOST -> "~/.everytalk/host-executions/$executionId/state"
-        // 沙箱目标可以在服务器仍是 Direct 记录时才首次准备，路径必须由本次目标决定。
-        target == ComputerExecTarget.CONTAINER -> "/workspace/.everytalk/executions/$executionId/state"
-        else -> "~/.everytalk/workspaces/${workspace.id}/.everytalk/executions/$executionId/state"
     }
 
     /** 删除 Workspace 前关闭仍在本机进程中的 PTY，避免留下失效会话。 */
@@ -1368,12 +899,6 @@ private fun JsonObject.optionalBoolean(name: String): Boolean? {
     val value = this[name] ?: return null
     if (value is JsonNull) return null
     return (value as? JsonPrimitive)?.booleanOrNull ?: throw invalidArgument(name)
-}
-
-private fun JsonObject.objectOrEmpty(name: String): JsonObject {
-    val value = this[name] ?: return JsonObject(emptyMap())
-    if (value is JsonNull) return JsonObject(emptyMap())
-    return value as? JsonObject ?: throw invalidArgument(name)
 }
 
 private fun JsonObject.stringList(name: String): List<String> {

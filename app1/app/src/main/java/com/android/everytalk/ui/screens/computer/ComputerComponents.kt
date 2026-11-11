@@ -76,13 +76,7 @@ internal fun ComputerCard(
     onRefresh: () -> Unit,
 ) {
     val isReady = computer.status == ComputerStatus.READY
-    val mode = stringResource(
-        if (computer.runMode == ComputerRunMode.CONTAINER) {
-            R.string.computer_mode_container
-        } else {
-            R.string.computer_mode_direct
-        },
-    )
+    val mode = stringResource(R.string.computer_mode_direct)
     val status = stringResource(computerStatusLabelRes(computer))
     Card(
         onClick = onClick,

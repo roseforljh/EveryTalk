@@ -103,7 +103,6 @@ object ComputerHostCommandPolicy {
         if (words.firstOrNull() in setOf("sudo", "su", "doas", "pkexec")) {
             risks += ComputerHostCommandRisk.PRIVILEGE_ESCALATION
         }
-        if (request.asRoot) risks += ComputerHostCommandRisk.PRIVILEGE_ESCALATION
         if (words.firstOrNull() == "sudo" && words.drop(1).none { it.startsWith('-') }) {
             when {
                 isMutatingSystemctl(words.drop(1)) -> risks += ComputerHostCommandRisk.HOST_WRITE

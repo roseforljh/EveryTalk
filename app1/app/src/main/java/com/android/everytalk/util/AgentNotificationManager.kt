@@ -26,7 +26,6 @@ object AgentNotificationManager {
     const val CHANNEL_EVENTS_ID = "agent_events_channel"
     private val notifiedEvents = ConcurrentHashMap<String, Long>()
     private val executionTerminalStates = ConcurrentHashMap<String, TerminalEvent>()
-    private val lostConnections = ConcurrentHashMap<String, Long>()
     private val appInForeground = AtomicBoolean(false)
 
     /** 普通事件能否出现在通知栏，只影响提醒，不影响 Agent 和前台服务运行。 */
@@ -139,7 +138,7 @@ object AgentNotificationManager {
         )
     }
 
-    /** 服务重建时清掉上个版本遗留的断线通知，真实故障会在本轮对账后重新生成一条。 */
+    /** 服务重建时清掉旧版本遗留的断线通知；新版本不再产生这类通知。 */
     fun clearConnectionFailureNotifications(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -153,7 +152,6 @@ object AgentNotificationManager {
                 ) manager.cancel(statusBarNotification.id)
             }
         }
-        lostConnections.clear()
         notifiedEvents.keys.filter { it.endsWith("_CONNECTION_LOST") }.forEach(notifiedEvents::remove)
     }
 
@@ -164,7 +162,7 @@ object AgentNotificationManager {
         context: Context,
         conversationId: String,
         executionId: String,
-        eventType: String, // "SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "WAITING_APPROVAL", "CONNECTION_LOST", "RECONNECTED"
+        eventType: String, // "SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "WAITING_APPROVAL"
         title: String,
         message: String,
     ) {
@@ -178,24 +176,9 @@ object AgentNotificationManager {
         val terminal = executionTerminalStates[executionId]
         if (terminal != null) return
 
-        // 2. 从未通知断线时禁止单独发送重新连接通知
-        if (eventType == "RECONNECTED" && !lostConnections.containsKey(executionId)) {
-            return
-        }
+        if (isTerminal) executionTerminalStates[executionId] = TerminalEvent(now)
 
-        if (eventType == "CONNECTION_LOST") {
-            // 同一 Execution 的自动重试只允许发第一次断线通知，恢复前不再每分钟刷屏。
-            if (lostConnections.putIfAbsent(executionId, now) != null) return
-        } else if (eventType == "RECONNECTED") {
-            lostConnections.remove(executionId)
-        }
-
-        if (isTerminal) {
-            executionTerminalStates[executionId] = TerminalEvent(now)
-            lostConnections.remove(executionId)
-        }
-
-        // 状态照常推进，前台只是不展示系统通知。这样前台发生重连后，下一次断线仍能正确提醒。
+        // 状态照常推进，前台只是不展示系统通知。
         if (appInForeground.get()) return
 
         val dedupKey = "${executionId}_${eventType}"
@@ -208,9 +191,9 @@ object AgentNotificationManager {
         ensureEventChannel(context)
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
 
-        // 终态到达后，撤销同一 Execution 的旧非终态通知（如 CONNECTION_LOST / RECONNECTED / WAITING_APPROVAL）
+        // 终态到达后，撤销同一 Execution 的旧等待确认通知。
         if (isTerminal) {
-            listOf("CONNECTION_LOST", "RECONNECTED", "WAITING_APPROVAL").forEach { prevEvent ->
+            listOf("WAITING_APPROVAL").forEach { prevEvent ->
                 val prevId = ((executionId.hashCode() xor prevEvent.hashCode()).let { if (it < 0) -it else it } % 100000) + 10000
                 manager.cancel(prevId)
             }
@@ -249,7 +232,6 @@ object AgentNotificationManager {
     private fun trimOldEventState(now: Long) {
         executionTerminalStates.entries.removeIf { now - it.value.savedAt > EVENT_STATE_TTL_MILLIS }
         notifiedEvents.entries.removeIf { now - it.value > EVENT_STATE_TTL_MILLIS }
-        lostConnections.entries.removeIf { now - it.value > EVENT_STATE_TTL_MILLIS }
         if (executionTerminalStates.size >= MAX_EVENT_STATE_ENTRIES) {
             executionTerminalStates.entries
                 .sortedBy { it.value.savedAt }
@@ -261,12 +243,6 @@ object AgentNotificationManager {
                 .sortedBy { it.value }
                 .take(notifiedEvents.size - MAX_EVENT_STATE_ENTRIES + 1)
                 .forEach { notifiedEvents.remove(it.key, it.value) }
-        }
-        if (lostConnections.size >= MAX_EVENT_STATE_ENTRIES) {
-            lostConnections.entries
-                .sortedBy { it.value }
-                .take(lostConnections.size - MAX_EVENT_STATE_ENTRIES + 1)
-                .forEach { lostConnections.remove(it.key, it.value) }
         }
     }
 

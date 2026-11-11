@@ -392,7 +392,6 @@ class ComputerManager(
     private val toolExecutor = ComputerToolExecutor(
         context = context.applicationContext,
         repository = repository,
-        workspaceManager = workspaceManager,
         previewManager = previewManager,
         secretManager = secretManager,
         attachmentBridge = attachmentBridge,
@@ -845,38 +844,6 @@ class ComputerManager(
         )
     }
 
-    /** 停止按钮仅取消当前 Run 的前台和后台任务，不影响其他 Run。 */
-    fun cancelActiveExecutions(
-        conversationId: String,
-        runId: String? = null,
-        onComplete: (Boolean) -> Unit = {},
-    ): Job {
-        if (conversationId.isBlank() && runId.isNullOrBlank()) return scope.launch { onComplete(true) }
-        return scope.launch(
-            context = Dispatchers.IO,
-            start = CoroutineStart.UNDISPATCHED,
-        ) {
-            var success = true
-            runCatching { toolExecutor.cancelActiveExecutions(conversationId, runId) }
-                .onSuccess { remoteCancelSucceeded ->
-                    success = remoteCancelSucceeded
-                }
-                .onFailure { error ->
-                    success = false
-                    if (error !is kotlinx.coroutines.CancellationException) {
-                        AppLogger.warn("ComputerRuntime", "停止会话远端任务失败：${error.message}")
-                    }
-                }
-            onComplete(success)
-        }
-    }
-
-    /** 应用恢复轮询使用统一对账入口，网络不可用时保留本地最后状态。 */
-    suspend fun reconcileRemoteExecutions(
-        conversationIds: Set<String> = emptySet(),
-    ): List<com.android.everytalk.data.computer.ComputerExecutionReconciliation> =
-        repository.reconcileRemoteExecutions(conversationIds)
-
     /** 每轮刷新环境与权限说明，让恢复的旧请求和压缩摘要也服从当前 SSH 默认规则。 */
     suspend fun computerSessionState(requestContext: ComputerRequestContext?): String? {
         requestContext ?: return null
@@ -973,17 +940,7 @@ class ComputerManager(
         clearComputerPreparations(computerId)
         val refreshed = repository.refreshComputer(computerId)
         previewManager.reconcileExpirations()
-        previewManager.reconcileComputer(computerId)
         return refreshed
-    }
-
-    suspend fun provisionContainer(
-        computerId: String,
-        onProgress: suspend (com.android.everytalk.data.computer.ComputerSetupStage) -> Unit = {},
-    ): Computer {
-        val provisioned = repository.provisionContainer(computerId, onProgress)
-        previewManager.reconcileComputer(computerId)
-        return provisioned
     }
 
     suspend fun cancelComputerOperation(computerId: String) = repository.cancelComputerOperation(computerId)
@@ -1029,7 +986,6 @@ class ComputerManager(
             port = port,
             protocol = protocol,
             expiresInSeconds = expiresInSeconds,
-            target = ComputerExecTarget.HOST,
         ),
     )
 
@@ -1043,59 +999,32 @@ class ComputerManager(
         replacement: HostKeyProbeResult,
     ): Computer = repository.confirmReplacementHostKey(computerId, replacement)
 
-    suspend fun setPrivateNetworkAllowed(computerId: String, allowed: Boolean): Computer =
-        repository.setPrivateNetworkAllowed(computerId, allowed)
-
     suspend fun setPermissionMode(computerId: String, permissionMode: ComputerPermissionMode): Computer {
         clearComputerPreparations(computerId)
         return repository.setPermissionMode(computerId, permissionMode)
     }
 
-    /** 删除单个 Workspace；Host Path 只有用户二次确认后才从 VPS 删除。 */
-    suspend fun deleteWorkspace(workspaceId: String, deleteRemoteFiles: Boolean): ComputerWorkspace {
+    /** Workspace 只是本地的会话绑定记录，删除不连接服务器。 */
+    suspend fun deleteWorkspace(workspaceId: String): ComputerWorkspace {
         val workspace = repository.getWorkspace(workspaceId)
             ?: throw ComputerException(ComputerErrorCodes.WORKSPACE_NOT_READY, "Workspace 不存在")
-        toolExecutor.cancelActiveExecutions(workspace.conversationId)
-        toolExecutor.closeWorkspace(workspaceId)
-        previewManager.stopByWorkspace(workspaceId)
-        workspaceManager.deleteRemote(workspaceId, deleteRemoteFiles)
-        secretManager.deleteAll(workspaceId)
-        workspaceManager.deleteMapping(workspaceId)
+        removeLocalWorkspace(workspace.id)
         repository.recordAudit(workspace.computerId, "WORKSPACE_DELETED", "SUCCESS", null)
         return workspace
     }
 
-    /** 删除会话时，先取消该会话所有远端任务，再在后台清理对应 Workspace。 */
-    suspend fun deleteWorkspacesForConversation(
-        conversationId: String,
-        deleteRemoteFiles: Boolean = false,
-    ): Boolean {
+    /** 删除会话只清掉本地绑定；服务器上没有需要清理的文件或任务。 */
+    suspend fun deleteWorkspacesForConversation(conversationId: String): Boolean {
         if (conversationId.isBlank()) return true
-        if (!toolExecutor.cancelActiveExecutions(conversationId)) return false
-        val workspaces = repository.dao().getWorkspacesForConversation(conversationId)
-        // 远端清理要走 SSH（断线时重连握手最长 15 秒，删除命令最长 30 秒），结果又不影响会话能否删除，
-        // 所以不让会话列表等它；失败时 Workspace 记录保留在服务器详情页，可手动再删。
-        scope.launch(Dispatchers.IO) {
-            workspaces.forEach { entity ->
-                runCatching {
-                    val workspace = entity.toModel()
-                    toolExecutor.closeWorkspace(workspace.id)
-                    previewManager.stopByWorkspace(workspace.id)
-                    workspaceManager.deleteRemote(workspace.id, deleteRemoteFiles)
-                    secretManager.deleteAll(workspace.id)
-                    workspaceManager.deleteMapping(workspace.id)
-                }.onFailure { error ->
-                    // 会话删除的前置安全条件是取消活动任务；服务器或 Workspace 清理失败
-                    // 不能继续阻止本地会话删除，否则一个失效绑定会永久锁住历史记录。
-                    if (error is kotlinx.coroutines.CancellationException) throw error
-                    AppLogger.warn(
-                        "ComputerRuntime",
-                        "删除会话 Workspace 失败，保留待清理记录：${error.message}",
-                    )
-                }
-            }
-        }
+        repository.dao().getWorkspacesForConversation(conversationId).forEach { removeLocalWorkspace(it.id) }
         return true
+    }
+
+    private suspend fun removeLocalWorkspace(workspaceId: String) {
+        toolExecutor.closeWorkspace(workspaceId)
+        runCatching { previewManager.stopByWorkspace(workspaceId) }
+        secretManager.deleteAll(workspaceId)
+        workspaceManager.deleteMapping(workspaceId)
     }
 
     suspend fun syncSkills(
@@ -1114,31 +1043,15 @@ class ComputerManager(
         repository.disconnect(computerId)
     }
 
-    /**
-     * 删除 Computer 时始终销毁本地 Secret 和凭据。
-     * 远端清理失败不会阻止本地删除，返回值用于提示残留公钥或 Workspace。
-     */
-    suspend fun deleteComputer(
-        computerId: String,
-        cleanupContainers: Boolean,
-        deleteRemoteFiles: Boolean,
-    ): ComputerDeleteResult {
+    /** 删除 Computer 时销毁本地凭据和绑定；唯一的远端操作是移除 EveryTalk 专用公钥。 */
+    suspend fun deleteComputer(computerId: String): ComputerDeleteResult {
         clearComputerPreparations(computerId)
-        val workspaces = repository.getWorkspaces(computerId)
-        var remoteWorkspaceCleanupSucceeded = true
-        workspaces.forEach { workspace ->
+        repository.getWorkspaces(computerId).forEach { workspace ->
             toolExecutor.closeWorkspace(workspace.id)
             runCatching { previewManager.stopByWorkspace(workspace.id) }
-                .onFailure { remoteWorkspaceCleanupSucceeded = false }
-            if (deleteRemoteFiles || (cleanupContainers && (workspace.containerName != null ||
-                    workspace.runMode == com.android.everytalk.data.computer.ComputerRunMode.CONTAINER))) {
-                runCatching { workspaceManager.deleteRemote(workspace.id, deleteRemoteFiles) }
-                    .onFailure { remoteWorkspaceCleanupSucceeded = false }
-            }
             secretManager.deleteAll(workspace.id)
         }
-        val deleted = repository.deleteComputer(computerId)
-        return deleted.copy(remoteWorkspaceCleanupSucceeded = remoteWorkspaceCleanupSucceeded)
+        return repository.deleteComputer(computerId)
     }
 
     fun respondToPublicPreview(approved: Boolean) {
@@ -1215,7 +1128,7 @@ class ComputerManager(
         "$computerId\u0000$workspaceId"
 }
 
-/** 当前运行规则独立于旧聊天记录和服务器模式；按需沙箱不会改变后续工具的默认执行位置。 */
+/** 当前运行规则独立于旧聊天记录：服务器就是一台通过 SSH 直接操作的主机。 */
 internal fun buildComputerEnvironmentPrompt(computer: Computer, workspace: ComputerWorkspace): String {
     val architecture = computer.capabilities?.architecture?.takeIf(String::isNotBlank) ?: "unknown"
     val permissionInstruction = when (computer.permissionMode) {
@@ -1225,14 +1138,14 @@ internal fun buildComputerEnvironmentPrompt(computer: Computer, workspace: Compu
     }
     if (computer.provider == ComputerProvider.CLOUDFLARE) return "当前目标是 Cloudflare Computer，工具操作当前 Account 的资源。" +
         "本地 just-bash 使用私有 Workspace 内存快照；local_file_save 保存文件并返回附件。在介绍文件的正文位置使用 [文件名](返回的file_link) 提供可点击链接。$permissionInstruction"
-    return "Agent server tools connect to the selected VPS directly over SSH. " +
-        "exec defaults to target=host; choose target=container when isolation is needed. The app prepares it on demand; later calls still default to host. " +
-        "These current environment facts supersede earlier container defaults in conversation history. " +
+    return "Agent server tools operate the selected VPS directly over SSH, like a person logged in to it. " +
+        "There is no sandbox or app-specific directory; these facts supersede any container or /workspace rules in earlier conversation history. " +
+        "For long-running services use the server's own tools (systemd, tmux, nohup). " +
         "用户需要的交付文件生成后必须调用 download，不能仅返回服务器路径。" +
         "download 自动保存到手机 Download/App/AppTalk，并返回 saved_path、attachment_id 和 file_link；只有成功后才能告知用户已保存。" +
         "在介绍每个交付文件的正文位置使用 Markdown 链接 [文件名](file_link的实际值)，不要只写路径或把所有文件堆到回复末尾。" +
         "$permissionInstruction " +
-        "File, terminal, upload and download paths are relative to ${workspace.hostPath}. exec starts in the SSH user's home; set cwd as needed. " +
+        "File, upload and download paths may be absolute or relative to the SSH user's home; exec and terminal start in home, set cwd as needed. " +
         "Architecture: $architecture. Available tools: ${ComputerToolNames.all.sorted().joinToString(", ")}."
 }
 

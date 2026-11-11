@@ -171,10 +171,6 @@ internal fun ComputerWorkspaceCard(
 
             if (expanded) {
                 ComputerDetailValue(
-                    label = stringResource(R.string.computer_workspace_path),
-                    value = workspace.hostPath,
-                )
-                ComputerDetailValue(
                     label = stringResource(R.string.computer_workspace_last_used),
                     value = formatComputerDate(workspace.lastUsedAt),
                 )
@@ -309,9 +305,9 @@ internal fun ComputerWorkspaceCard(
         isBusy = busyAction == "workspace-delete",
         errorText = dialogError,
         onDismiss = { if (busyAction == null) deleteDialogVisible = false },
-        onDelete = { deleteRemoteFiles ->
+        onDelete = {
             launchAction("workspace-delete") {
-                viewModel.deleteComputerWorkspace(workspace.id, deleteRemoteFiles)
+                viewModel.deleteComputerWorkspace(workspace.id)
                 withContext(Dispatchers.Main) {
                     deleteDialogVisible = false
                     onMessage(workspaceDeletedMessage)
@@ -454,11 +450,9 @@ private fun ComputerWorkspaceDeleteDialog(
     isBusy: Boolean,
     errorText: String?,
     onDismiss: () -> Unit,
-    onDelete: (Boolean) -> Unit,
+    onDelete: () -> Unit,
 ) {
     if (workspace == null) return
-    var deleteFiles by remember(workspace.id) { mutableStateOf(false) }
-    var confirmedFiles by remember(workspace.id) { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = { if (!isBusy) onDismiss() },
         modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
@@ -469,48 +463,14 @@ private fun ComputerWorkspaceDeleteDialog(
         title = { Text(stringResource(R.string.computer_workspace_delete_title)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    stringResource(
-                        if (workspace.runMode == ComputerRunMode.CONTAINER) {
-                            R.string.computer_workspace_delete_container_body
-                        } else {
-                            R.string.computer_workspace_delete_direct_body
-                        },
-                    ),
-                )
-                Text(
-                    text = workspace.hostPath,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    androidx.compose.material3.Checkbox(
-                        checked = deleteFiles,
-                        onCheckedChange = { deleteFiles = it; if (!it) confirmedFiles = false },
-                        enabled = !isBusy,
-                    )
-                    Text(stringResource(R.string.computer_workspace_delete_files))
-                }
-                if (deleteFiles) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        androidx.compose.material3.Checkbox(
-                            checked = confirmedFiles,
-                            onCheckedChange = { confirmedFiles = it },
-                            enabled = !isBusy,
-                        )
-                        Text(
-                            text = stringResource(R.string.computer_workspace_delete_files_confirm),
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
-                }
+                Text(stringResource(R.string.computer_workspace_delete_direct_body))
                 errorText?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
         },
         confirmButton = {
             Button(
-                onClick = { onDelete(deleteFiles) },
-                enabled = !isBusy && (!deleteFiles || confirmedFiles),
+                onClick = onDelete,
+                enabled = !isBusy,
                 modifier = Modifier.height(48.dp),
                 shape = AppDialogButtonShape,
             ) {

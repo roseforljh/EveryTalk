@@ -188,9 +188,6 @@ interface ComputerDao {
 
     @Upsert
     suspend fun upsertTemporaryWorker(deployment: TemporaryWorkerDeploymentEntity)
-    /** 只作为 Room 表变更信号，Service 收到后再执行带恢复语义的活动任务查询。 */
-    @Query("SELECT COUNT(*) FROM computer_executions")
-    fun observeExecutionChanges(): Flow<Int>
 
     @Query("SELECT * FROM computers WHERE status != 'DELETED' ORDER BY createdAt ASC")
     fun observeComputers(): Flow<List<ComputerEntity>>
@@ -306,38 +303,6 @@ interface ComputerDao {
         lastUsedAt: Long = System.currentTimeMillis(),
     )
 
-    /** 工作区默认通过 SSH 访问；只修改模式，不能覆盖并发迁移的会话编号或删除旧文件元数据。 */
-    @Query("UPDATE computer_workspaces SET runMode = 'DIRECT' WHERE id = :workspaceId")
-    suspend fun useSshWorkspaceDefault(workspaceId: String)
-
-    /** 记录按需容器信息供复用和清理，不改变主机目录的状态、默认模式和会话归属。 */
-    @Query("UPDATE computer_workspaces SET containerName = :containerName, containerImage = :containerImage WHERE id = :workspaceId")
-    suspend fun updateWorkspaceContainer(workspaceId: String, containerName: String, containerImage: String?)
-
-    /** Container 配置成功后更新所有已创建容器的镜像元数据。 */
-    @Query("UPDATE computer_workspaces SET containerImage = :containerImage WHERE computerId = :computerId AND containerName IS NOT NULL")
-    suspend fun updateContainerWorkspaceImage(computerId: String, containerImage: String)
-
-    /**
-     * 服务器切换 Direct/Container 后同步已有会话的运行目标。
-     * 标记为 RECOVERING，让下一次请求重新准备目录或 Container，避免继续使用旧模式。
-     */
-    @Query(
-        """
-        UPDATE computer_workspaces
-        SET runMode = :runMode,
-            containerName = CASE WHEN :runMode = 'CONTAINER' THEN 'everytalk-' || id ELSE containerName END,
-            containerImage = CASE WHEN :runMode = 'CONTAINER' THEN :containerImage ELSE containerImage END,
-            status = 'RECOVERING'
-        WHERE computerId = :computerId
-        """,
-    )
-    suspend fun updateComputerWorkspaceRunMode(
-        computerId: String,
-        runMode: String,
-        containerImage: String?,
-    )
-
     /** 服务器地址、端口或账号改变后，旧 Workspace 保留文件映射并等待新目标重新校验。 */
     @Query("UPDATE computer_workspaces SET status = 'RECOVERING' WHERE computerId = :computerId")
     suspend fun markComputerWorkspacesRecovering(computerId: String)
@@ -379,250 +344,14 @@ interface ComputerDao {
     @Query("SELECT * FROM computer_executions WHERE id = :executionId LIMIT 1")
     suspend fun getExecutionById(executionId: String): ComputerExecutionEntity?
 
-    /**
-     * 找出需要和 VPS 对账的执行。
-     *
-     * 旧记录没有 remoteStatus，因此在本地仍处于 STARTING/RUNNING 时也必须纳入恢复，
-     * 否则升级后第一轮已经发出的命令会被遗漏。前台执行还必须关联等待远端结果的
-     * AgentRun；已结束 Run 遗留的 RUNNING 快照不能继续启动服务或发送断线通知。
-     * RETURN_HANDLE 和尚未确认的取消请求仍由服务持续监听。
-     */
-    @Query(
-        """
-        SELECT execution.* FROM computer_executions AS execution
-        INNER JOIN computer_workspaces AS workspace ON workspace.id = execution.workspaceId
-        WHERE execution.toolName = 'exec' AND (
-                execution.remoteStatus IN ('STARTING', 'RUNNING')
-                AND (
-                    execution.status IN ('QUEUED', 'STARTING', 'RUNNING', 'CANCELLED')
-                    OR (execution.completionMode = 'RETURN_HANDLE' AND execution.status = 'SUCCEEDED')
-                    OR (execution.status = 'UNKNOWN' AND execution.errorCode IN (
-                        'EXECUTION_CANCEL_FAILED', 'EXECUTION_RESULT_UNAVAILABLE', 'EXECUTION_UNKNOWN'
-                    ))
-                )
-           OR (execution.remoteStatus IS NULL AND execution.status IN ('QUEUED', 'STARTING', 'RUNNING', 'CANCELLED'))
-           OR (execution.remoteStatus = 'UNKNOWN' AND execution.status = 'UNKNOWN' AND execution.errorCode IN (
-                'EXECUTION_CANCEL_FAILED', 'EXECUTION_RESULT_UNAVAILABLE', 'EXECUTION_UNKNOWN'
-              ))
-              )
-          AND (
-                execution.completionMode = 'RETURN_HANDLE'
-                OR execution.errorCode IN ('EXECUTION_CANCEL_REQUESTED', 'EXECUTION_CANCEL_FAILED')
-                OR EXISTS (
-                    SELECT 1 FROM agent_runs AS run
-                    WHERE run.status IN ('WAITING_REMOTE_EXECUTION', 'INTERRUPTED')
-                      AND (
-                            run.id = execution.runId
-                            OR (execution.runId IS NULL AND run.sessionId = workspace.conversationId)
-                          )
-                )
-              )
-        ORDER BY COALESCE(execution.lastObservedAt, execution.startedAt, 0) ASC
-        """,
-    )
-    suspend fun getActiveRemoteExecutions(): List<ComputerExecutionEntity>
-
-    /** App 启动和 Agent 恢复只主动查询等待结果的前台任务，避免唤醒历史后台服务。 */
-    @Query(
-        """
-        SELECT * FROM computer_executions
-        WHERE toolName = 'exec'
-          AND (completionMode IS NULL OR completionMode != 'RETURN_HANDLE')
-          AND (
-                (remoteStatus IN ('STARTING', 'RUNNING') AND (
-                    status IN ('QUEUED', 'STARTING', 'RUNNING', 'CANCELLED')
-                    OR (status = 'UNKNOWN' AND errorCode IN (
-                        'EXECUTION_CANCEL_FAILED', 'EXECUTION_RESULT_UNAVAILABLE', 'EXECUTION_UNKNOWN'
-                    ))
-                 ))
-                OR (remoteStatus IS NULL AND status IN ('QUEUED', 'STARTING', 'RUNNING', 'CANCELLED'))
-                OR (remoteStatus = 'UNKNOWN' AND status = 'UNKNOWN' AND errorCode IN (
-                    'EXECUTION_CANCEL_FAILED', 'EXECUTION_RESULT_UNAVAILABLE', 'EXECUTION_UNKNOWN'
-                  ))
-              )
-        ORDER BY COALESCE(lastObservedAt, startedAt, 0) ASC
-        """,
-    )
-    suspend fun getActiveForegroundRemoteExecutions(): List<ComputerExecutionEntity>
-
-    /** 仅查询指定会话的前台执行，供 AgentRun 恢复使用。 */
-    @Query(
-        """
-        SELECT execution.* FROM computer_executions AS execution
-        INNER JOIN computer_workspaces AS workspace ON workspace.id = execution.workspaceId
-        WHERE execution.toolName = 'exec'
-          AND workspace.conversationId IN (:conversationIds)
-          AND (execution.completionMode IS NULL OR execution.completionMode != 'RETURN_HANDLE')
-          AND EXISTS (
-                SELECT 1 FROM agent_runs AS run
-                WHERE run.sessionId = workspace.conversationId
-                  AND run.status IN ('WAITING_REMOTE_EXECUTION', 'INTERRUPTED')
-          )
-          AND (
-                (execution.remoteStatus IN ('STARTING', 'RUNNING') AND (
-                    execution.status IN ('QUEUED', 'STARTING', 'RUNNING')
-                    OR execution.status = 'CANCELLED'
-                    OR (execution.status = 'UNKNOWN' AND execution.errorCode IN (
-                        'EXECUTION_CANCEL_FAILED', 'EXECUTION_RESULT_UNAVAILABLE', 'EXECUTION_UNKNOWN'
-                    ))
-                ))
-                OR (execution.remoteStatus IS NULL AND execution.status IN ('QUEUED', 'STARTING', 'RUNNING', 'CANCELLED'))
-                OR (execution.remoteStatus = 'UNKNOWN' AND execution.status = 'UNKNOWN' AND execution.errorCode IN (
-                    'EXECUTION_CANCEL_FAILED', 'EXECUTION_RESULT_UNAVAILABLE', 'EXECUTION_UNKNOWN'
-                ))
-              )
-        ORDER BY COALESCE(execution.lastObservedAt, execution.startedAt, 0) ASC
-        """,
-    )
-    suspend fun getActiveForegroundRemoteExecutionsForConversations(
-        conversationIds: List<String>,
-    ): List<ComputerExecutionEntity>
-
-    @Query(
-        """
-        SELECT * FROM computer_executions
-        WHERE toolName = 'exec'
-          AND computerId = :computerId
-          AND (
-                (remoteStatus IN ('STARTING', 'RUNNING')
-                 AND (
-                    status IN ('QUEUED', 'STARTING', 'RUNNING', 'CANCELLED')
-                    OR (completionMode = 'RETURN_HANDLE' AND status = 'SUCCEEDED')
-                    OR (status = 'UNKNOWN' AND errorCode IN (
-                        'EXECUTION_CANCEL_FAILED', 'EXECUTION_RESULT_UNAVAILABLE', 'EXECUTION_UNKNOWN'
-                    ))
-                 ))
-                OR (remoteStatus IS NULL AND status IN ('QUEUED', 'STARTING', 'RUNNING', 'CANCELLED'))
-                OR (remoteStatus = 'UNKNOWN' AND status = 'UNKNOWN' AND errorCode IN (
-                    'EXECUTION_CANCEL_FAILED', 'EXECUTION_RESULT_UNAVAILABLE', 'EXECUTION_UNKNOWN'
-                ))
-              )
-        ORDER BY COALESCE(lastObservedAt, startedAt, 0) ASC
-        """,
-    )
-    suspend fun getActiveRemoteExecutionsForComputer(computerId: String): List<ComputerExecutionEntity>
-
-    /** 删除服务器前实时显示会失去管理的受管远端任务数量。 */
+    /** 删除服务器前实时显示仍在这台服务器上执行的命令数量。 */
     @Query(
         """
         SELECT COUNT(*) FROM computer_executions
-        WHERE toolName = 'exec'
-          AND computerId = :computerId
-          AND (
-                remoteStatus IN ('STARTING', 'RUNNING')
-                OR (remoteStatus IS NULL AND status IN ('QUEUED', 'STARTING', 'RUNNING', 'CANCELLED'))
-              )
+        WHERE toolName = 'exec' AND computerId = :computerId AND status IN ('QUEUED', 'STARTING', 'RUNNING')
         """,
     )
-    fun observeActiveRemoteExecutionCountForComputer(computerId: String): Flow<Int>
-
-    /**
-     * 获取某个会话 Workspace 下仍在 VPS 运行的受管 Execution。
-     * Workspace 是会话与服务器的稳定映射，不需要把会话 ID 再复制到 Execution 表。
-     */
-    @Query(
-        """
-        SELECT execution.* FROM computer_executions AS execution
-        INNER JOIN computer_workspaces AS workspace ON workspace.id = execution.workspaceId
-        WHERE execution.toolName = 'exec'
-          AND workspace.conversationId = :conversationId
-          AND (execution.completionMode IS NULL OR execution.completionMode != 'RETURN_HANDLE')
-          AND (
-                (execution.remoteStatus IN ('STARTING', 'RUNNING')
-                 AND (
-                    execution.status IN ('QUEUED', 'STARTING', 'RUNNING')
-                    OR execution.status = 'CANCELLED'
-                    OR (execution.status = 'UNKNOWN' AND execution.errorCode IN (
-                        'EXECUTION_CANCEL_FAILED', 'EXECUTION_RESULT_UNAVAILABLE', 'EXECUTION_UNKNOWN'
-                    ))
-                 ))
-                OR (execution.remoteStatus IS NULL AND execution.status IN ('QUEUED', 'STARTING', 'RUNNING', 'CANCELLED'))
-                OR (execution.remoteStatus = 'UNKNOWN' AND execution.status = 'UNKNOWN' AND execution.errorCode IN (
-                    'EXECUTION_CANCEL_FAILED', 'EXECUTION_RESULT_UNAVAILABLE', 'EXECUTION_UNKNOWN'
-                ))
-              )
-        ORDER BY COALESCE(execution.lastObservedAt, execution.startedAt, 0) ASC
-        """,
-    )
-    suspend fun getActiveForegroundRemoteExecutionsForConversation(
-        conversationId: String,
-    ): List<ComputerExecutionEntity>
-
-    /** 返回指定 Run 的前台和后台停止候选；空结果不能扩大为会话级取消。 */
-    @Query(
-        """
-        SELECT * FROM computer_executions
-        WHERE runId = :runId
-          AND toolName = 'exec'
-          AND (
-                remoteStatus IN ('STARTING', 'RUNNING')
-                OR (remoteStatus IS NULL AND status IN ('QUEUED', 'STARTING', 'RUNNING', 'CANCELLED'))
-                OR (remoteStatus = 'UNKNOWN' AND status = 'UNKNOWN' AND errorCode IN (
-                    'EXECUTION_CANCEL_FAILED', 'EXECUTION_CANCEL_REQUESTED', 'EXECUTION_RESULT_UNAVAILABLE', 'EXECUTION_UNKNOWN'
-                ))
-              )
-        ORDER BY COALESCE(lastObservedAt, startedAt, 0) ASC
-        """,
-    )
-    suspend fun getCancellableRemoteExecutionsForRun(
-        runId: String,
-    ): List<ComputerExecutionEntity>
-
-    /** 停止按钮备用查询，取消该会话下当前所有仍在运行的前台和后台受管任务。 */
-    @Query(
-        """
-        SELECT execution.* FROM computer_executions AS execution
-        INNER JOIN computer_workspaces AS workspace ON workspace.id = execution.workspaceId
-        WHERE workspace.conversationId = :conversationId
-          AND execution.toolName = 'exec'
-          AND (
-                execution.remoteStatus IN ('STARTING', 'RUNNING')
-                OR (execution.remoteStatus IS NULL AND execution.status IN ('QUEUED', 'STARTING', 'RUNNING', 'CANCELLED'))
-              )
-        ORDER BY COALESCE(execution.lastObservedAt, execution.startedAt, 0) ASC
-        """,
-    )
-    suspend fun getCancellableRemoteExecutionsForConversation(
-        conversationId: String,
-    ): List<ComputerExecutionEntity>
-
-    /** 先记录取消意图，再发 SSH 请求，App 在这段竞态窗口退出后仍会继续对账。 */
-    @Query(
-        """
-        UPDATE computer_executions
-        SET errorCode = 'EXECUTION_CANCEL_REQUESTED',
-            cancelRequestedAt = :observedAt,
-            lastObservedAt = :observedAt
-        WHERE id = :executionId
-          AND toolName = 'exec'
-          AND (
-                remoteStatus IN ('STARTING', 'RUNNING')
-                OR (remoteStatus IS NULL AND status IN ('QUEUED', 'STARTING', 'RUNNING', 'CANCELLED'))
-                OR (remoteStatus = 'UNKNOWN' AND status = 'UNKNOWN' AND errorCode IN (
-                    'EXECUTION_CANCEL_FAILED', 'EXECUTION_CANCEL_REQUESTED', 'EXECUTION_RESULT_UNAVAILABLE', 'EXECUTION_UNKNOWN'
-                ))
-          )
-        """,
-    )
-    suspend fun markRemoteExecutionCancellationRequested(
-        executionId: String,
-        observedAt: Long = System.currentTimeMillis(),
-    )
-
-    /** 按 AgentRun 查询全部活动 Execution。 */
-    @Query(
-        """
-        SELECT * FROM computer_executions
-        WHERE runId = :runId
-          AND toolName = 'exec'
-          AND (
-                remoteStatus IN ('STARTING', 'RUNNING')
-                OR (remoteStatus IS NULL AND status IN ('QUEUED', 'STARTING', 'RUNNING', 'CANCELLED'))
-          )
-        ORDER BY COALESCE(lastObservedAt, startedAt, 0) ASC
-        """,
-    )
-    suspend fun getActiveExecutionsForAgentRun(runId: String): List<ComputerExecutionEntity>
+    fun observeActiveExecutionCountForComputer(computerId: String): Flow<Int>
 
     /** 判断 AgentRun 是否真正创建过 VPS 操作，普通聊天不会命中。 */
     @Query("SELECT COUNT(*) FROM computer_executions WHERE runId = :runId")
@@ -690,106 +419,6 @@ interface ComputerDao {
     )
     suspend fun getRemoteExecutionsForWorkspace(workspaceId: String): List<ComputerExecutionEntity>
 
-    /** 启动确认后一次性写入远端引用，避免把状态目录交给模型参数。 */
-    @Query(
-        """
-        UPDATE computer_executions
-        SET target = COALESCE(:target, target),
-            completionMode = COALESCE(:completionMode, completionMode),
-            remoteProcessId = :remoteProcessId,
-            remoteStatePath = :remoteStatePath,
-            remoteStatus = :remoteStatus,
-            runId = COALESCE(:runId, runId),
-            lastObservedAt = :observedAt
-        WHERE id = :executionId
-        """,
-    )
-    suspend fun updateRemoteExecutionReference(
-        executionId: String,
-        target: String?,
-        completionMode: String?,
-        remoteProcessId: String?,
-        remoteStatePath: String?,
-        remoteStatus: String?,
-        runId: String? = null,
-        observedAt: Long = System.currentTimeMillis(),
-    )
-
-    /**
-     * 写入一次已解析的远端观测。
-     * localStatus 只由协调器根据当前执行语义计算，DAO 不自行把 background 的 Tool 状态改回 RUNNING。
-     */
-    @Query(
-        """
-        UPDATE computer_executions
-        SET target = COALESCE(:target, target),
-            remoteProcessId = COALESCE(:remoteProcessId, remoteProcessId),
-            remoteStatus = :remoteStatus,
-            remoteExitCode = :remoteExitCode,
-            lastObservedAt = :observedAt,
-            status = COALESCE(:localStatus, status),
-            finishedAt = COALESCE(:finishedAt, finishedAt),
-            exitCode = COALESCE(:localExitCode, exitCode),
-            errorCode = :errorCode
-        WHERE id = :executionId
-        """,
-    )
-    suspend fun updateRemoteExecutionObservation(
-        executionId: String,
-        target: String?,
-        remoteProcessId: String?,
-        remoteStatus: String,
-        remoteExitCode: Int?,
-        observedAt: Long,
-        localStatus: String?,
-        finishedAt: Long?,
-        localExitCode: Int?,
-        errorCode: String?,
-    )
-
-    /** 合并一次 Runtime Watch 事件。日志正文仍留在 VPS，只保存已消费字节游标和状态事实。 */
-    @Query(
-        """
-        UPDATE computer_executions
-        SET stdoutCursor = CASE WHEN :stdoutCursor > stdoutCursor THEN :stdoutCursor ELSE stdoutCursor END,
-            stderrCursor = CASE WHEN :stderrCursor > stderrCursor THEN :stderrCursor ELSE stderrCursor END,
-            lastEventAt = :eventAt,
-            lastObservedAt = :observedAt,
-            remoteStatus = :remoteStatus,
-            remoteExitCode = :remoteExitCode
-        WHERE id = :executionId
-        """,
-    )
-    suspend fun updateRemoteExecutionProgress(
-        executionId: String,
-        stdoutCursor: Long,
-        stderrCursor: Long,
-        eventAt: Long,
-        observedAt: Long,
-        remoteStatus: String,
-        remoteExitCode: Int?,
-    )
-
-    /** 状态协议损坏或查询结果无法核实时，只保留 UNKNOWN，不猜测远端成功或失败。 */
-    @Query(
-        """
-        UPDATE computer_executions
-        SET remoteStatus = 'UNKNOWN',
-            errorCode = :errorCode,
-            lastObservedAt = :observedAt,
-            status = COALESCE(:localStatus, status),
-            finishedAt = COALESCE(:finishedAt, finishedAt)
-        WHERE id = :executionId
-        """,
-    )
-    suspend fun markRemoteExecutionUnknown(
-        executionId: String,
-        errorCode: String = "EXECUTION_UNKNOWN",
-        observedAt: Long = System.currentTimeMillis(),
-        localStatus: String? = null,
-        finishedAt: Long? = null,
-    )
-
     @Query("SELECT * FROM computer_executions WHERE status = 'UNKNOWN' ORDER BY finishedAt ASC")
     suspend fun getUnknownExecutions(): List<ComputerExecutionEntity>
 
@@ -810,17 +439,16 @@ interface ComputerDao {
     suspend fun deleteExecution(executionId: String)
 
     /**
-     * 普通 Computer Tool 没有 VPS 状态文件，进程退出后无法继续确认结果。
-     * exec 由远端对账器恢复，不能在这里提前覆盖成 UNKNOWN。
+     * VPS 上不保存任何执行状态，App 进程退出后所有未完成的工具调用都无法再确认结果。
      */
     @Query(
         """
         UPDATE computer_executions
         SET status = 'UNKNOWN', finishedAt = :finishedAt, errorCode = 'EXECUTION_UNKNOWN'
-        WHERE toolName != 'exec' AND status IN ('QUEUED', 'STARTING', 'RUNNING')
+        WHERE status IN ('QUEUED', 'STARTING', 'RUNNING')
         """,
     )
-    suspend fun markInterruptedNonExecExecutionsUnknown(finishedAt: Long = System.currentTimeMillis())
+    suspend fun markInterruptedExecutionsUnknown(finishedAt: Long = System.currentTimeMillis())
 
     @Query("SELECT * FROM computer_previews WHERE workspaceId = :workspaceId ORDER BY createdAt DESC")
     fun observePreviews(workspaceId: String): Flow<List<ComputerPreviewEntity>>
@@ -843,26 +471,9 @@ interface ComputerDao {
         updatedAt: Long = System.currentTimeMillis(),
     )
 
-    /**
-     * Android 进程可能在 SSH 探测或 Container 配置期间被系统直接结束。
-     * Container 版本落后时回到待修复，其余情况回到离线，禁止永久保留不可操作的中间状态。
-     */
-    @Query(
-        """
-        UPDATE computers
-        SET status = CASE
-                WHEN runMode = 'CONTAINER' AND (bootstrapVersion IS NULL OR bootstrapVersion != :expectedVersion)
-                    THEN 'CONFIGURATION_REQUIRED'
-                ELSE 'OFFLINE'
-            END,
-            updatedAt = :updatedAt
-        WHERE status IN ('PROBING', 'PROVISIONING', 'VERIFYING')
-        """,
-    )
-    suspend fun recoverInterruptedComputerOperations(
-        expectedVersion: String,
-        updatedAt: Long = System.currentTimeMillis(),
-    )
+    /** Android 进程可能在 SSH 探测期间被系统结束，中间状态统一回到离线。 */
+    @Query("UPDATE computers SET status = 'OFFLINE', updatedAt = :updatedAt WHERE status IN ('PROBING', 'PROVISIONING', 'VERIFYING')")
+    suspend fun recoverInterruptedComputerOperations(updatedAt: Long = System.currentTimeMillis())
 
     @Query("SELECT * FROM computer_previews WHERE id = :previewId LIMIT 1")
     suspend fun getPreview(previewId: String): ComputerPreviewEntity?

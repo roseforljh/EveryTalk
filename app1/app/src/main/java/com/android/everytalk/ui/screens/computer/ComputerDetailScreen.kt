@@ -30,7 +30,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -59,7 +58,6 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -77,7 +75,6 @@ import com.android.everytalk.data.computer.ComputerDiagnostics
 import com.android.everytalk.data.computer.ComputerFailureStage
 import com.android.everytalk.data.computer.ComputerPermissionMode
 import com.android.everytalk.data.computer.ComputerRunMode
-import com.android.everytalk.data.computer.ComputerSetupStage
 import com.android.everytalk.data.computer.ComputerStatus
 import com.android.everytalk.data.computer.HostKeyProbeResult
 import com.android.everytalk.statecontroller.AppViewModel
@@ -91,16 +88,13 @@ import com.android.everytalk.statecontroller.observeComputerActiveTaskCount
 import com.android.everytalk.statecontroller.observeComputerWorkspaces
 import com.android.everytalk.statecontroller.probeUpdatedComputerHostKey
 import com.android.everytalk.statecontroller.probeComputerReplacementHostKey
-import com.android.everytalk.statecontroller.provisionComputerContainer
 import com.android.everytalk.statecontroller.refreshComputer
-import com.android.everytalk.statecontroller.setComputerPrivateNetworkAllowed
 import com.android.everytalk.statecontroller.setComputerPermissionMode
 import com.android.everytalk.statecontroller.showSnackbar
 import com.android.everytalk.statecontroller.updateComputer
 import com.android.everytalk.statecontroller.logoutCloudflareComputer
 import com.android.everytalk.statecontroller.deleteLocalCloudflareComputer
 import com.android.everytalk.ui.components.floatingEdgeGradient
-import com.android.everytalk.ui.components.EveryTalkTimedLoadingStatus
 import com.android.everytalk.ui.components.dialog.AppDialogShape
 import com.android.everytalk.ui.components.dialog.AppDialogButtonShape
 import com.android.everytalk.ui.components.dialog.AppDialogActionContent
@@ -134,11 +128,6 @@ fun ComputerDetailScreen(
     val auditFlow = remember(computerId) { viewModel.observeComputerAuditEvents(computerId) }
     val workspaces by workspacesFlow.collectAsState(initial = emptyList())
     val activeTaskCount by activeTaskCountFlow.collectAsState(initial = 0)
-    val containerCount = remember(workspaces) {
-        workspaces.count { workspace ->
-            workspace.runMode == ComputerRunMode.CONTAINER && workspace.containerName != null
-        }
-    }
     val audits by auditFlow.collectAsState(initial = emptyList())
     val screenOpenedAt = remember(computerId) { System.currentTimeMillis() }
     var lastShownHostKeyAuditId by remember(computerId) { mutableStateOf<String?>(null) }
@@ -172,8 +161,6 @@ fun ComputerDetailScreen(
     var editHostKey by remember { mutableStateOf<HostKeyProbeResult?>(null) }
     var editProgressText by remember { mutableStateOf<String?>(null) }
     var editErrorText by remember { mutableStateOf<String?>(null) }
-    var repairDialogVisible by remember { mutableStateOf(false) }
-    var repairSetupStage by remember { mutableStateOf<ComputerSetupStage?>(null) }
     var deleteDialogVisible by remember { mutableStateOf(false) }
     var cloudflareLocalAction by remember { mutableStateOf<String?>(null) }
     var replacementHostKey by remember { mutableStateOf<HostKeyProbeResult?>(null) }
@@ -194,7 +181,6 @@ fun ComputerDetailScreen(
             } else {
                 prepared?.clear()
             }
-            if (latestBusyAction == "repair") viewModel.cancelComputerOperation(computerId)
         }
     }
 
@@ -226,10 +212,6 @@ fun ComputerDetailScreen(
 
     fun cancelActiveAction() {
         actionGeneration += 1
-        if (busyAction == "repair") {
-            repairSetupStage = null
-            viewModel.cancelComputerOperation(computerId)
-        }
         val cancellingJob = actionJob
         if (cancellingJob == null) {
             busyAction = null
@@ -245,7 +227,6 @@ fun ComputerDetailScreen(
             }
         }
         cancellingJob.cancel()
-        repairDialogVisible = false
     }
 
     fun navigateBack() {
@@ -322,28 +303,12 @@ fun ComputerDetailScreen(
             onCompletion = current::clear,
         ) {
             try {
-                val updated = viewModel.updateComputer(
+                viewModel.updateComputer(
                     request = current.request,
                     confirmedHostKey = confirmed,
                     sudoPassword = current.sudoPassword,
                     replaceSudoPassword = current.replaceSudoPassword,
                 )
-                if (
-                    updated.runMode == ComputerRunMode.CONTAINER &&
-                    updated.status == ComputerStatus.CONFIGURATION_REQUIRED
-                ) {
-                    withContext(Dispatchers.Main) {
-                        editProgressText = context.getString(R.string.computer_progress_preparing_container)
-                    }
-                    viewModel.provisionComputerContainer(
-                        computerId = updated.id,
-                        onProgress = { stage ->
-                            withContext(Dispatchers.Main) {
-                                editProgressText = context.getString(stage.labelRes())
-                            }
-                        },
-                    )
-                }
                 withContext(Dispatchers.Main) {
                     editPrepared = null
                     editProgressText = null
@@ -450,14 +415,7 @@ fun ComputerDetailScreen(
                         )
                     }
                     item {
-                        ComputerSectionTitle(
-                            title = stringResource(R.string.computer_workspace_section),
-                            detail = pluralStringResource(
-                                R.plurals.computer_workspace_container_count,
-                                containerCount,
-                                containerCount,
-                            ),
-                        )
+                        ComputerSectionTitle(title = stringResource(R.string.computer_workspace_section))
                     }
                     if (workspaces.isEmpty()) {
                         item {
@@ -485,22 +443,6 @@ fun ComputerDetailScreen(
                                     withContext(Dispatchers.Main) {
                                         viewModel.showSnackbar(genericSuccessMessage(viewModel, R.string.computer_refresh_success))
                                     }
-                                }
-                            },
-                            onRepair = {
-                                // 同步的服务器基础信息不包含 SSH 凭据；先使用已有编辑表单补齐，不能假装可直接修复。
-                                if (computer.credentialState == ComputerCredentialState.MISSING) {
-                                    editForm = computer.toEditFormState()
-                                    editErrorText = "这台设备没有服务器登录凭据，请先填写密码或私钥；服务器信息已保留。"
-                                    editDialogVisible = true
-                                } else {
-                                    repairSetupStage = null
-                                    repairDialogVisible = true
-                                }
-                            },
-                            onNetworkChange = { allowed ->
-                                launchAction("network") {
-                                    viewModel.setComputerPrivateNetworkAllowed(computer.id, allowed)
                                 }
                             },
                             onDisconnect = {
@@ -609,35 +551,6 @@ fun ComputerDetailScreen(
         },
     )
 
-    ComputerContainerRepairDialog(
-        visible = repairDialogVisible,
-        isBusy = busyAction == "repair",
-        setupStage = repairSetupStage,
-        onDismiss = {
-            if (busyAction == "repair") {
-                cancelActiveAction()
-            } else {
-                repairSetupStage = null
-                repairDialogVisible = false
-            }
-        },
-        onRepair = {
-            repairSetupStage = ComputerSetupStage.AUTHENTICATING
-            launchAction(
-                action = "repair",
-                onCompletion = { repairSetupStage = null },
-            ) {
-                viewModel.provisionComputerContainer(
-                    computerId,
-                    onProgress = { stage ->
-                        withContext(Dispatchers.Main) { repairSetupStage = stage }
-                    },
-                )
-                withContext(Dispatchers.Main) { repairDialogVisible = false }
-            }
-        },
-    )
-
     ComputerReplacementHostKeyDialog(
         computer = computer,
         replacement = replacementHostKey,
@@ -653,18 +566,17 @@ fun ComputerDetailScreen(
 
     ComputerDeleteDialog(
         computer = computer.takeIf { deleteDialogVisible },
-        workspacePaths = workspaces.map { it.hostPath },
         activeTaskCount = activeTaskCount,
         isBusy = busyAction == "delete",
         onDismiss = { if (busyAction == null) deleteDialogVisible = false },
-        onDelete = { cleanupContainers, deleteFiles ->
+        onDelete = {
             launchAction("delete") {
-                val result = viewModel.deleteComputer(computerId, cleanupContainers, deleteFiles)
+                val result = viewModel.deleteComputer(computerId)
                 withContext(Dispatchers.Main) {
-                    val message = when {
-                        !result.remoteKeyRemoved -> R.string.computer_delete_key_warning
-                        !result.remoteWorkspaceCleanupSucceeded -> R.string.computer_delete_workspace_warning
-                        else -> R.string.computer_delete_success
+                    val message = if (result.remoteKeyRemoved) {
+                        R.string.computer_delete_success
+                    } else {
+                        R.string.computer_delete_key_warning
                     }
                     viewModel.showSnackbar(genericSuccessMessage(viewModel, message))
                     navController.popBackStack()
@@ -842,8 +754,6 @@ private fun ComputerMaintenanceCard(
     computer: Computer,
     busyAction: String?,
     onRefresh: () -> Unit,
-    onRepair: () -> Unit,
-    onNetworkChange: (Boolean) -> Unit,
     onDisconnect: () -> Unit,
 ) {
     ComputerSectionCard {
@@ -864,16 +774,6 @@ private fun ComputerMaintenanceCard(
             ) {
                 Text(stringResource(R.string.computer_action_reconnect_probe))
             }
-            if (computer.runMode == ComputerRunMode.CONTAINER) {
-                OutlinedButton(
-                    onClick = onRepair,
-                    enabled = busyAction == null,
-                    modifier = Modifier.height(48.dp),
-                    shape = AppDialogButtonShape,
-                ) {
-                    Text(stringResource(R.string.computer_action_repair))
-                }
-            }
             OutlinedButton(
                 onClick = onDisconnect,
                 enabled = busyAction == null,
@@ -881,26 +781,6 @@ private fun ComputerMaintenanceCard(
                 shape = AppDialogButtonShape,
             ) {
                 Text(stringResource(R.string.computer_action_disconnect))
-            }
-        }
-        if (computer.runMode == ComputerRunMode.CONTAINER) {
-            Row(
-                modifier = Modifier.padding(top = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(stringResource(R.string.computer_private_network_title))
-                    Text(
-                        text = stringResource(R.string.computer_private_network_body),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Switch(
-                    checked = computer.allowPrivateNetwork,
-                    onCheckedChange = onNetworkChange,
-                    enabled = busyAction == null && computer.status == ComputerStatus.READY,
-                )
             }
         }
     }
@@ -942,7 +822,7 @@ private fun ComputerMoreSettingsCard(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    if (busyAction != null && busyAction != "repair") {
+                    if (busyAction != null) {
                         CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                     } else {
                         Icon(
@@ -1281,69 +1161,6 @@ private fun auditSafeSummary(event: ComputerAuditEvent): String? {
 }
 
 @Composable
-private fun ComputerContainerRepairDialog(
-    visible: Boolean,
-    isBusy: Boolean,
-    setupStage: ComputerSetupStage?,
-    onDismiss: () -> Unit,
-    onRepair: () -> Unit,
-) {
-    if (!visible) return
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
-        shape = AppDialogShape,
-        containerColor = appDialogContainerColor(),
-        titleContentColor = appDialogContentColor(),
-        textContentColor = appDialogContentColor(),
-        title = { Text(stringResource(R.string.computer_repair_title)) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                Text(stringResource(R.string.computer_repair_body))
-                if (isBusy && setupStage != null) {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        EveryTalkTimedLoadingStatus(
-                            text = stringResource(setupStage.labelRes()),
-                            size = 20.dp,
-                            showIndicator = false,
-                            textStyle = MaterialTheme.typography.bodyMedium,
-                        )
-                        Text(
-                            text = stringResource(setupStage.detailRes()),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = onRepair,
-                enabled = !isBusy,
-                modifier = Modifier.height(48.dp),
-                shape = AppDialogButtonShape,
-            ) {
-                AppDialogActionContent(
-                    label = stringResource(R.string.computer_action_repair),
-                    isLoading = isBusy,
-                    loadingContentDescription = stringResource(R.string.computer_action_working),
-                )
-            }
-        },
-        dismissButton = {
-            TextButton(
-                onClick = onDismiss,
-                modifier = Modifier.height(48.dp),
-                shape = AppDialogButtonShape,
-            ) {
-                Text(stringResource(if (isBusy) R.string.action_stop else R.string.action_cancel))
-            }
-        },
-    )
-}
-
-@Composable
 internal fun ComputerFullApprovalWarningDialog(
     visible: Boolean,
     isBusy: Boolean,
@@ -1460,16 +1277,12 @@ private fun ComputerReplacementHostKeyDialog(
 @Composable
 private fun ComputerDeleteDialog(
     computer: Computer?,
-    workspacePaths: List<String>,
     activeTaskCount: Int = 0,
     isBusy: Boolean,
     onDismiss: () -> Unit,
-    onDelete: (cleanupContainers: Boolean, deleteFiles: Boolean) -> Unit,
+    onDelete: () -> Unit,
 ) {
     if (computer == null) return
-    var cleanupContainers by remember(computer.id) { mutableStateOf(false) }
-    var deleteFiles by remember(computer.id) { mutableStateOf(false) }
-    var confirmFiles by remember(computer.id) { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = { if (!isBusy) onDismiss() },
         modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
@@ -1488,50 +1301,6 @@ private fun ComputerDeleteDialog(
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
-                if (computer.runMode == ComputerRunMode.CONTAINER) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(
-                            checked = cleanupContainers,
-                            onCheckedChange = { cleanupContainers = it },
-                            enabled = !isBusy,
-                        )
-                        Text(stringResource(R.string.computer_delete_containers))
-                    }
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(
-                        checked = deleteFiles,
-                        onCheckedChange = {
-                            deleteFiles = it
-                            if (!it) confirmFiles = false
-                            if (it && computer.runMode == ComputerRunMode.CONTAINER) cleanupContainers = true
-                        },
-                        enabled = !isBusy,
-                    )
-                    Text(stringResource(R.string.computer_delete_files))
-                }
-                if (deleteFiles) {
-                    workspacePaths.forEach { path ->
-                        Text(
-                            text = path,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(
-                            checked = confirmFiles,
-                            onCheckedChange = { confirmFiles = it },
-                            enabled = !isBusy,
-                        )
-                        Text(
-                            text = stringResource(R.string.computer_delete_files_confirm),
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
-                }
                 Text(
                     text = stringResource(R.string.computer_delete_remote_key_note),
                     style = MaterialTheme.typography.bodySmall,
@@ -1541,8 +1310,8 @@ private fun ComputerDeleteDialog(
         },
         confirmButton = {
             Button(
-                onClick = { onDelete(cleanupContainers, deleteFiles) },
-                enabled = !isBusy && (!deleteFiles || confirmFiles),
+                onClick = onDelete,
+                enabled = !isBusy,
                 modifier = Modifier.height(48.dp),
                 shape = AppDialogButtonShape,
             ) {

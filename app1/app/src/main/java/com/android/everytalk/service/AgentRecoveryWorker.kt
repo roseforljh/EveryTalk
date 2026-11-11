@@ -29,7 +29,6 @@ class AgentRecoveryWorker(
     override suspend fun doWork(): Result {
         val database = AppDatabase.getDatabase(applicationContext)
         val agentDao = database.agentDao()
-        val computerDao = database.computerDao()
         if (!ComputerConnectionServiceController.hasActiveTokens() &&
             ComputerConnectionServiceController.activeAgentRunCount() == 0
         ) {
@@ -49,8 +48,7 @@ class AgentRecoveryWorker(
             }
         }
 
-        val hasRecoverableWork = agentDao.getActiveRuns().isNotEmpty() ||
-            computerDao.getActiveRemoteExecutions().isNotEmpty()
+        val hasRecoverableWork = agentDao.getActiveRuns().isNotEmpty()
         if (!hasRecoverableWork) return Result.success()
 
         return runCatching {

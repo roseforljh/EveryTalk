@@ -498,12 +498,6 @@ internal fun ComputerSetupStage.labelRes(): Int = when (this) {
     ComputerSetupStage.AUTHENTICATING -> R.string.computer_progress_authenticating
     ComputerSetupStage.INSPECTING_VPS -> R.string.computer_progress_inspecting
     ComputerSetupStage.SECURING_CONNECTION -> R.string.computer_progress_securing_connection
-    ComputerSetupStage.PREPARING_CONTAINER -> R.string.computer_progress_preparing_container
-    ComputerSetupStage.PREPARING_DOCKER -> R.string.computer_progress_preparing_docker
-    ComputerSetupStage.INSTALLING_HELPER -> R.string.computer_progress_installing_helper
-    ComputerSetupStage.BUILDING_IMAGE -> R.string.computer_progress_building_image
-    ComputerSetupStage.CONFIGURING_NETWORK -> R.string.computer_progress_configuring_network
-    ComputerSetupStage.VERIFYING -> R.string.computer_progress_verifying
 }
 
 internal fun ComputerSetupStage.detailRes(): Int = when (this) {
@@ -511,12 +505,6 @@ internal fun ComputerSetupStage.detailRes(): Int = when (this) {
     ComputerSetupStage.AUTHENTICATING -> R.string.computer_progress_detail_authenticating
     ComputerSetupStage.INSPECTING_VPS -> R.string.computer_progress_detail_inspecting
     ComputerSetupStage.SECURING_CONNECTION -> R.string.computer_progress_detail_securing_connection
-    ComputerSetupStage.PREPARING_CONTAINER -> R.string.computer_progress_detail_preparing_container
-    ComputerSetupStage.PREPARING_DOCKER -> R.string.computer_progress_detail_preparing_docker
-    ComputerSetupStage.INSTALLING_HELPER -> R.string.computer_progress_detail_installing_helper
-    ComputerSetupStage.BUILDING_IMAGE -> R.string.computer_progress_detail_building_image
-    ComputerSetupStage.CONFIGURING_NETWORK -> R.string.computer_progress_detail_configuring_network
-    ComputerSetupStage.VERIFYING -> R.string.computer_progress_detail_verifying
 }
 
 @Composable

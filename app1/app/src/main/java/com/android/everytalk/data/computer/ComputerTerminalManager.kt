@@ -81,11 +81,7 @@ class ComputerTerminalManager(private val repository: ComputerRepository) : Clos
             }
             val session = TerminalSession(requestContext, lease, foregroundActivity, pty, ringBuffer, jobs, lost)
             terminals[terminalId] = session
-
-            // 终端始终是 SSH 主机终端，不继承旧服务器记录或上一次命令的容器选择。
-            val initialization = "cd \"${'$'}HOME/.everytalk/workspaces/${workspace.id}\" && exec \"${'$'}{SHELL:-/bin/sh}\" -l"
-            pty.output.write("$initialization\n".toByteArray(Charsets.UTF_8))
-            pty.output.flush()
+            // SSH 登录 Shell 本身就在用户 Home，不再切换到任何 EveryTalk 目录。
             return ComputerTerminalReadResult(terminalId, "", 0, false, true)
         } catch (error: Throwable) {
             lease.close()

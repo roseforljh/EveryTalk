@@ -170,16 +170,8 @@ class WorkspaceSecretCapabilityAdapter(
             }
             com.android.everytalk.data.computer.ComputerEnvironmentName.requireValid(name)
             com.android.everytalk.data.computer.ComputerSecretEnvWriter.requireTargetPath(path)
-            val workspace = repository.getWorkspace(workspaceId)
+            repository.getWorkspace(workspaceId)
                 ?: return AdapterFulfillmentResult(AdapterDeliveryFact.NOT_DELIVERED, failureCode = "WORKSPACE_NOT_FOUND")
-            // Direct 和 Container 都有对应的安全写入路径；其它模式在保存密钥前拒绝，
-            // 避免让用户反复输入一个当前目标无法使用的密钥。
-            if (workspace.runMode !in setOf(
-                    com.android.everytalk.data.computer.ComputerRunMode.DIRECT,
-                    com.android.everytalk.data.computer.ComputerRunMode.CONTAINER,
-                ) || (workspace.runMode == com.android.everytalk.data.computer.ComputerRunMode.CONTAINER && workspace.containerName.isNullOrBlank())) {
-                return AdapterFulfillmentResult(AdapterDeliveryFact.NOT_DELIVERED, failureCode = "SECRET_ENV_TARGET_NOT_READY")
-            }
             secrets.save(workspaceId, name, material.borrow())
             if (!repository.writeWorkspaceSecretToEnv(workspaceId, name, path, hostTarget = true)) {
                 return AdapterFulfillmentResult(AdapterDeliveryFact.UNKNOWN)

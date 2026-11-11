@@ -1,8 +1,8 @@
 package com.android.everytalk.data.computer
 
 import kotlinx.coroutines.sync.withLock
-import net.schmizz.sshj.sftp.FileMode
 import net.schmizz.sshj.sftp.FileAttributes
+import net.schmizz.sshj.sftp.FileMode
 import net.schmizz.sshj.sftp.OpenMode
 import net.schmizz.sshj.sftp.RenameFlags
 import net.schmizz.sshj.sftp.Response
@@ -16,9 +16,8 @@ import java.util.EnumSet
 
 private const val MAX_READ_BYTES = 1024 * 1024
 private const val MAX_WRITE_BYTES = 8 * 1024 * 1024
-private val PRIVATE_FILE_ATTRIBUTES = FileAttributes.Builder().withPermissions(0b110000000).build()
-private val PRIVATE_EXECUTABLE_ATTRIBUTES = FileAttributes.Builder().withPermissions(0b111000000).build()
-private val PRIVATE_DIRECTORY_ATTRIBUTES = FileAttributes.Builder().withPermissions(0b111000000).build()
+/** 新建文件沿用常见默认权限；覆盖已有文件时保留原权限，避免把服务配置改成只有自己可读。 */
+private const val DEFAULT_FILE_PERMISSIONS = 0b110100100
 
 enum class ComputerFileEncoding { UTF8, BASE64 }
 enum class ComputerFileWriteMode { OVERWRITE, APPEND }
@@ -51,13 +50,15 @@ data class ComputerStreamTransferResult(
     val sha256: String,
 )
 
-/** SFTP 文件读写只允许当前 Workspace，逐级拒绝符号链接。 */
+/**
+ * 服务器就是 AI 的工具：文件工具与 exec 拥有同样的范围。
+ * 路径可以是绝对路径，也可以相对 SSH 用户 Home（支持 `~/` 前缀）；返回值统一给出真实绝对路径。
+ */
 class ComputerFileTransfer {
     private val writeLocks = ComputerKeyedMutexPool()
 
     suspend fun read(
         connection: ComputerSshConnection,
-        workspace: ComputerWorkspace,
         path: String,
         offset: Long = 0,
         limit: Int = 256 * 1024,
@@ -65,9 +66,8 @@ class ComputerFileTransfer {
     ): ComputerFilePage {
         require(offset >= 0) { "读取偏移不能小于 0" }
         require(limit in 1..MAX_READ_BYTES) { "单次读取大小无效" }
-        val relative = ComputerWorkspacePath.normalize(path)
         return connection.withSftp { sftp ->
-            val target = resolveExistingFile(sftp, workspace, relative)
+            val target = resolveExistingFile(sftp, path)
             sftp.open(target, EnumSet.of(OpenMode.READ)).use { file ->
                 val size = file.length()
                 val bytesToRead = minOf(limit.toLong(), (size - offset).coerceAtLeast(0)).toInt()
@@ -81,7 +81,7 @@ class ComputerFileTransfer {
                 val actual = if (total == bytes.size) bytes else bytes.copyOf(total)
                 val next = (offset + total).takeIf { it < size }
                 ComputerFilePage(
-                    path = ComputerWorkspacePath.display(relative),
+                    path = target,
                     content = when (encoding) {
                         ComputerFileEncoding.UTF8 -> actual.toString(Charsets.UTF_8)
                         ComputerFileEncoding.BASE64 -> Base64.getEncoder().encodeToString(actual)
@@ -98,7 +98,6 @@ class ComputerFileTransfer {
 
     suspend fun write(
         connection: ComputerSshConnection,
-        workspace: ComputerWorkspace,
         toolCallId: String,
         path: String,
         content: String,
@@ -107,7 +106,7 @@ class ComputerFileTransfer {
         createParents: Boolean = false,
     ): ComputerFileWriteResult {
         ComputerIdentifier.requireValid(toolCallId, "Tool Call ID")
-        val relative = ComputerWorkspacePath.normalize(path)
+        requireValidPath(path)
         val bytes = when (encoding) {
             ComputerFileEncoding.UTF8 -> content.toByteArray(Charsets.UTF_8)
             ComputerFileEncoding.BASE64 -> try {
@@ -120,24 +119,16 @@ class ComputerFileTransfer {
             bytes.fill(0)
             throw ComputerException(ComputerErrorCodes.WORKSPACE_PATH_INVALID, "单次写入不能超过 8 MiB")
         }
-
-        val lock = writeLocks.forKey("${workspace.id}\u0000$relative")
         return try {
-            lock.withLock {
+            writeLocks.forKey(path).withLock {
                 connection.withSftp { sftp ->
-                    val root = resolveWorkspaceRoot(sftp, workspace)
-                    val target = resolveWritablePath(sftp, root, relative, createParents)
+                    val target = resolveWritablePath(sftp, path, createParents)
                     when (mode) {
-                        ComputerFileWriteMode.OVERWRITE -> overwriteAtomically(
-                            sftp,
-                            target,
-                            toolCallId,
-                            bytes,
-                        )
+                        ComputerFileWriteMode.OVERWRITE -> overwriteAtomically(sftp, target, toolCallId, bytes)
                         ComputerFileWriteMode.APPEND -> append(sftp, target, bytes)
                     }
                     ComputerFileWriteResult(
-                        path = ComputerWorkspacePath.display(relative),
+                        path = target,
                         bytesWritten = bytes.size.toLong(),
                         size = sftp.size(target),
                     )
@@ -154,17 +145,15 @@ class ComputerFileTransfer {
      */
     internal suspend fun edit(
         connection: ComputerSshConnection,
-        workspace: ComputerWorkspace,
         toolCallId: String,
         path: String,
         edits: List<ComputerTextEdit>,
     ): ComputerFileEditResult {
         ComputerIdentifier.requireValid(toolCallId, "Tool Call ID")
-        val relative = ComputerWorkspacePath.normalize(path)
-        val lock = writeLocks.forKey("${workspace.id}\u0000$relative")
-        return lock.withLock {
+        requireValidPath(path)
+        return writeLocks.forKey(path).withLock {
             connection.withSftp { sftp ->
-                val target = resolveExistingFile(sftp, workspace, relative)
+                val target = resolveExistingFile(sftp, path)
                 val size = sftp.size(target)
                 if (size > MAX_WRITE_BYTES) {
                     throw ComputerException(ComputerErrorCodes.WORKSPACE_PATH_INVALID, "edit 文件不能超过 8 MiB")
@@ -194,7 +183,7 @@ class ComputerFileTransfer {
                         }
                         overwriteAtomically(sftp, target, toolCallId, editedBytes)
                         ComputerFileEditResult(
-                            path = ComputerWorkspacePath.display(relative),
+                            path = target,
                             replacements = result.replacements,
                             size = editedBytes.size.toLong(),
                         )
@@ -210,7 +199,6 @@ class ComputerFileTransfer {
 
     suspend fun upload(
         connection: ComputerSshConnection,
-        workspace: ComputerWorkspace,
         toolCallId: String,
         destinationPath: String,
         source: InputStream,
@@ -218,16 +206,15 @@ class ComputerFileTransfer {
         overwrite: Boolean,
     ): ComputerStreamTransferResult {
         ComputerIdentifier.requireValid(toolCallId, "Tool Call ID")
-        val relative = ComputerWorkspacePath.normalize(destinationPath)
-        val lock = writeLocks.forKey("${workspace.id}\u0000$relative")
-        return lock.withLock {
+        requireValidPath(destinationPath)
+        return writeLocks.forKey(destinationPath).withLock {
             connection.withSftp { sftp ->
-                val root = resolveWorkspaceRoot(sftp, workspace)
-                val target = resolveWritablePath(sftp, root, relative, createParents = true)
-                if (!overwrite && lstatOrNull(sftp, target) != null) {
+                val target = resolveWritablePath(sftp, destinationPath, createParents = true)
+                val existing = statOrNull(sftp, target)
+                if (!overwrite && existing != null) {
                     throw ComputerException(ComputerErrorCodes.WORKSPACE_PATH_INVALID, "目标文件已存在")
                 }
-                val temporary = "${target}.everytalk-$toolCallId.upload"
+                val temporary = "$target.everytalk-$toolCallId.upload"
                 val digest = MessageDigest.getInstance("SHA-256")
                 var total = 0L
                 try {
@@ -245,7 +232,7 @@ class ComputerFileTransfer {
                         }
                         buffer.fill(0)
                     }
-                    sftp.chmod(temporary, 0b110000000)
+                    sftp.chmod(temporary, existing?.permissionsOrDefault() ?: DEFAULT_FILE_PERMISSIONS)
                     if ((expectedSize != null && total != expectedSize) || sftp.size(temporary) != total) {
                         throw ComputerException(ComputerErrorCodes.UPLOAD_INTERRUPTED, "上传文件大小校验失败", retryable = true)
                     }
@@ -258,12 +245,12 @@ class ComputerFileTransfer {
                     }
                     sftp.rename(temporary, target, flags)
                     ComputerStreamTransferResult(
-                        path = ComputerWorkspacePath.display(relative),
+                        path = target,
                         bytes = total,
                         sha256 = digest.digest().toHex(),
                     )
                 } finally {
-                    runCatching { if (lstatOrNull(sftp, temporary) != null) sftp.rm(temporary) }
+                    runCatching { if (statOrNull(sftp, temporary) != null) sftp.rm(temporary) }
                 }
             }
         }
@@ -271,157 +258,85 @@ class ComputerFileTransfer {
 
     suspend fun download(
         connection: ComputerSshConnection,
-        workspace: ComputerWorkspace,
         sourcePath: String,
         destination: OutputStream,
-    ): ComputerStreamTransferResult {
-        val relative = ComputerWorkspacePath.normalize(sourcePath)
-        return connection.withSftp { sftp ->
-            val target = resolveExistingFile(sftp, workspace, relative)
-            val digest = MessageDigest.getInstance("SHA-256")
-            var total = 0L
-            sftp.open(target, EnumSet.of(OpenMode.READ)).use { file ->
-                val buffer = ByteArray(64 * 1024)
-                while (true) {
-                    val count = file.read(total, buffer, 0, buffer.size)
-                    if (count <= 0) break
-                    destination.write(buffer, 0, count)
-                    digest.update(buffer, 0, count)
-                    total += count
-                }
-                buffer.fill(0)
+    ): ComputerStreamTransferResult = connection.withSftp { sftp ->
+        val target = resolveExistingFile(sftp, sourcePath)
+        val digest = MessageDigest.getInstance("SHA-256")
+        var total = 0L
+        sftp.open(target, EnumSet.of(OpenMode.READ)).use { file ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val count = file.read(total, buffer, 0, buffer.size)
+                if (count <= 0) break
+                destination.write(buffer, 0, count)
+                digest.update(buffer, 0, count)
+                total += count
             }
-            destination.flush()
-            if (total != sftp.size(target)) {
-                throw ComputerException(ComputerErrorCodes.DOWNLOAD_INTERRUPTED, "下载文件大小校验失败", retryable = true)
-            }
-            ComputerStreamTransferResult(
-                path = ComputerWorkspacePath.display(relative),
-                bytes = total,
-                sha256 = digest.digest().toHex(),
-            )
+            buffer.fill(0)
+        }
+        destination.flush()
+        if (total != sftp.size(target)) {
+            throw ComputerException(ComputerErrorCodes.DOWNLOAD_INTERRUPTED, "下载文件大小校验失败", retryable = true)
+        }
+        ComputerStreamTransferResult(
+            path = target,
+            bytes = total,
+            sha256 = digest.digest().toHex(),
+        )
+    }
+
+    private fun requireValidPath(path: String) {
+        if (path.isBlank() || path.length > 4096 || path.any { it == '\u0000' || it == '\n' || it == '\r' }) {
+            throw ComputerException(ComputerErrorCodes.WORKSPACE_PATH_INVALID, "文件路径无效")
         }
     }
 
-    internal fun writePrivateFile(
-        sftp: SFTPClient,
-        remotePath: String,
-        bytes: ByteArray,
-        executable: Boolean = false,
-    ) {
-        sftp.open(
-            remotePath,
-            EnumSet.of(OpenMode.WRITE, OpenMode.CREAT, OpenMode.TRUNC),
-            if (executable) PRIVATE_EXECUTABLE_ATTRIBUTES else PRIVATE_FILE_ATTRIBUTES,
-        ).use { file -> writeAll(file::write, bytes) }
-    }
-
-    /** 创建时直接设置 0700，避免高延迟 SSH 上再发一次 chmod 请求。 */
-    internal fun createPrivateDirectory(sftp: SFTPClient, remotePath: String) {
-        sftp.sftpEngine.makeDir(remotePath, PRIVATE_DIRECTORY_ATTRIBUTES)
-    }
-
-    internal fun resolveWorkspaceRoot(sftp: SFTPClient, workspace: ComputerWorkspace): String {
-        ComputerIdentifier.requireValid(workspace.id, "Workspace ID")
-        val rawAttributes = sftp.lstat(workspace.hostPath)
-        if (rawAttributes.type != FileMode.Type.DIRECTORY) {
-            throw ComputerException(ComputerErrorCodes.WORKSPACE_PATH_INVALID, "Workspace 根目录已变化")
-        }
-        val root = sftp.canonicalize(workspace.hostPath).trimEnd('/')
+    /** `~`、`~/x` 和相对路径都以 SSH 用户 Home 为基准。 */
+    private fun absolutePath(sftp: SFTPClient, path: String): String {
+        requireValidPath(path)
+        if (path.startsWith('/')) return path
         val home = sftp.canonicalize(".").trimEnd('/')
-        val expectedPrefix = "$home/.everytalk/workspaces/"
-        if (root != "$expectedPrefix${workspace.id}" || !root.startsWith(expectedPrefix)) {
-            throw ComputerException(ComputerErrorCodes.WORKSPACE_PATH_INVALID, "Workspace 根目录越界")
+        val relative = when {
+            path == "~" -> ""
+            path.startsWith("~/") -> path.substring(2)
+            else -> path
         }
-        return root
+        return if (relative.isEmpty()) home else "$home/$relative"
     }
 
-    private fun resolveExistingFile(sftp: SFTPClient, workspace: ComputerWorkspace, relative: String): String {
-        val root = resolveWorkspaceRoot(sftp, workspace)
-        val target = walkWithoutSymlinks(sftp, root, relative, allowMissingLeaf = false)
-        val canonical = sftp.canonicalize(target)
-        requireWithinRoot(root, canonical)
-        if (sftp.lstat(target).type != FileMode.Type.REGULAR) {
-            throw ComputerException(ComputerErrorCodes.WORKSPACE_PATH_INVALID, "目标不是普通文件")
+    /** 跟随符号链接得到真实文件，必须是普通文件。 */
+    private fun resolveExistingFile(sftp: SFTPClient, path: String): String {
+        val absolute = absolutePath(sftp, path)
+        val attributes = statOrNull(sftp, absolute)
+            ?: throw ComputerException(ComputerErrorCodes.WORKSPACE_PATH_INVALID, "文件不存在：$absolute")
+        if (attributes.type != FileMode.Type.REGULAR) {
+            throw ComputerException(ComputerErrorCodes.WORKSPACE_PATH_INVALID, "目标不是普通文件：$absolute")
         }
-        return canonical
+        return sftp.canonicalize(absolute)
     }
 
-    private fun resolveWritablePath(
-        sftp: SFTPClient,
-        root: String,
-        relative: String,
-        createParents: Boolean,
-    ): String {
-        val parentRelative = relative.substringBeforeLast('/', "")
-        val filename = relative.substringAfterLast('/')
-        val parent = if (parentRelative.isEmpty()) {
-            root
-        } else if (createParents) {
-            createDirectoriesWithoutSymlinks(sftp, root, parentRelative)
-        } else {
-            walkWithoutSymlinks(sftp, root, parentRelative, allowMissingLeaf = false)
-        }
-        val canonicalParent = sftp.canonicalize(parent)
-        requireWithinRoot(root, canonicalParent)
-        val target = "$canonicalParent/$filename"
-        val existing = lstatOrNull(sftp, target)
-        if (existing?.type == FileMode.Type.SYMLINK) {
-            throw ComputerException(ComputerErrorCodes.WORKSPACE_PATH_INVALID, "禁止写入符号链接")
-        }
-        return target
-    }
-
-    private fun createDirectoriesWithoutSymlinks(sftp: SFTPClient, root: String, relative: String): String {
-        var current = root
-        relative.split('/').forEach { component ->
-            current = "$current/$component"
-            val existing = lstatOrNull(sftp, current)
-            if (existing == null) {
-                createPrivateDirectory(sftp, current)
+    /** 已存在的符号链接写到它指向的真实文件，不把链接替换成普通文件。 */
+    private fun resolveWritablePath(sftp: SFTPClient, path: String, createParents: Boolean): String {
+        val absolute = absolutePath(sftp, path)
+        statOrNull(sftp, absolute)?.let { existing ->
+            if (existing.type == FileMode.Type.DIRECTORY) {
+                throw ComputerException(ComputerErrorCodes.WORKSPACE_PATH_INVALID, "目标是目录：$absolute")
             }
-            val attributes = sftp.lstat(current)
-            if (attributes.type != FileMode.Type.DIRECTORY) {
-                throw ComputerException(ComputerErrorCodes.WORKSPACE_PATH_INVALID, "Workspace 路径包含非目录节点")
-            }
+            return sftp.canonicalize(absolute)
         }
-        return current
+        val parent = absolute.substringBeforeLast('/').ifEmpty { "/" }
+        if (statOrNull(sftp, parent) == null) {
+            if (!createParents) {
+                throw ComputerException(ComputerErrorCodes.WORKSPACE_PATH_INVALID, "父目录不存在：$parent")
+            }
+            sftp.mkdirs(parent)
+        }
+        return "${sftp.canonicalize(parent).trimEnd('/')}/${absolute.substringAfterLast('/')}"
     }
 
-    private fun walkWithoutSymlinks(
-        sftp: SFTPClient,
-        root: String,
-        relative: String,
-        allowMissingLeaf: Boolean,
-    ): String {
-        var current = root
-        val components = relative.split('/')
-        components.forEachIndexed { index, component ->
-            current = "$current/$component"
-            val attributes = lstatOrNull(sftp, current)
-            if (attributes == null && allowMissingLeaf && index == components.lastIndex) return@forEachIndexed
-            if (attributes == null) throw ComputerException(
-                ComputerErrorCodes.WORKSPACE_PATH_INVALID,
-                "Workspace 路径不存在",
-            )
-            if (attributes.type == FileMode.Type.SYMLINK) {
-                throw ComputerException(ComputerErrorCodes.WORKSPACE_PATH_INVALID, "Workspace 路径禁止符号链接")
-            }
-            if (index < components.lastIndex && attributes.type != FileMode.Type.DIRECTORY) {
-                throw ComputerException(ComputerErrorCodes.WORKSPACE_PATH_INVALID, "Workspace 路径包含非目录节点")
-            }
-        }
-        return current
-    }
-
-    private fun requireWithinRoot(root: String, candidate: String) {
-        if (candidate != root && !candidate.startsWith("$root/")) {
-            throw ComputerException(ComputerErrorCodes.WORKSPACE_PATH_INVALID, "Workspace 路径越界")
-        }
-    }
-
-    private fun lstatOrNull(sftp: SFTPClient, path: String) = try {
-        sftp.lstat(path)
+    private fun statOrNull(sftp: SFTPClient, path: String): FileAttributes? = try {
+        sftp.stat(path)
     } catch (error: SFTPException) {
         if (
             error.statusCode == Response.StatusCode.NO_SUCH_FILE ||
@@ -433,23 +348,27 @@ class ComputerFileTransfer {
         }
     }
 
+    private fun FileAttributes.permissionsOrDefault(): Int =
+        mode?.permissionsMask?.takeIf { it != 0 } ?: DEFAULT_FILE_PERMISSIONS
+
     private fun overwriteAtomically(
         sftp: SFTPClient,
         target: String,
         toolCallId: String,
         bytes: ByteArray,
     ) {
-        val temporary = "${target}.everytalk-$toolCallId.tmp"
+        val permissions = statOrNull(sftp, target)?.permissionsOrDefault() ?: DEFAULT_FILE_PERMISSIONS
+        val temporary = "$target.everytalk-$toolCallId.tmp"
         try {
             sftp.open(
                 temporary,
                 EnumSet.of(OpenMode.WRITE, OpenMode.CREAT, OpenMode.TRUNC, OpenMode.EXCL),
             ).use { file -> writeAll(file::write, bytes) }
-            sftp.chmod(temporary, 0b110000000)
+            sftp.chmod(temporary, permissions)
             check(sftp.size(temporary) == bytes.size.toLong()) { "远端临时文件大小不一致" }
             sftp.rename(temporary, target, EnumSet.of(RenameFlags.OVERWRITE, RenameFlags.ATOMIC))
         } finally {
-            runCatching { if (sftp.statExistence(temporary) != null) sftp.rm(temporary) }
+            runCatching { if (statOrNull(sftp, temporary) != null) sftp.rm(temporary) }
         }
     }
 
@@ -461,7 +380,6 @@ class ComputerFileTransfer {
             val offset = file.length()
             writeAll({ _, data, dataOffset, length -> file.write(offset + dataOffset, data, dataOffset, length) }, bytes)
         }
-        sftp.chmod(target, 0b110000000)
     }
 
     private fun writeAll(

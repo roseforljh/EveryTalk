@@ -17,7 +17,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
-import com.android.everytalk.util.AppLogger
 import java.io.Closeable
 import java.util.Base64
 import java.util.UUID
@@ -46,12 +45,6 @@ internal fun Computer.canAutoReconnect(): Boolean =
         !hostKeyBlobBase64.isNullOrBlank() &&
         credentialState != ComputerCredentialState.MISSING
 
-/** 只有受管 Container 任务会被 Wrapper 升级后的容器重建影响。 */
-internal fun hasActiveContainerExecution(executions: List<ComputerExecutionEntity>): Boolean =
-    executions.any { execution ->
-        execution.target == null || execution.target == ComputerExecTarget.CONTAINER.name
-    }
-
 /**
  * Computer 功能的本地统一入口。Room 保存非敏感状态，CredentialStore 保存加密凭据，SSH 直连用户 VPS。
  */
@@ -73,16 +66,8 @@ class ComputerRepository(
     )
     private val probe = ComputerProbe()
     private val dedicatedKeyManager = ComputerDedicatedKeyManager(sshClient)
-    private val provisioner = ComputerProvisioner(applicationContext)
-    private val runtimeEnvelope = ComputerRuntimeEnvelope(applicationContext)
     /** 串行化“检查重复服务器 + 写入服务器记录”，避免并发添加绕过重复检查。 */
     private val addComputerMutex = Mutex()
-    private val executionReconciler by lazy {
-        ComputerExecutionReconciler(
-            dao = dao,
-            gateway = ComputerRemoteExecutionGateway { execution -> queryRemoteExecution(execution) },
-        )
-    }
     private val connectionStopListener = ComputerConnectionServiceController.addStopListener {
         ComputerConnectionPoolRegistry.closeAll("service_controller_stop")
     }
@@ -99,7 +84,7 @@ class ComputerRepository(
         dao.observeWorkspaces(computerId).map { entities -> entities.map { it.toModel() } }
 
     fun observeActiveTaskCount(computerId: String): Flow<Int> =
-        dao.observeActiveRemoteExecutionCountForComputer(computerId)
+        dao.observeActiveExecutionCountForComputer(computerId)
 
     fun observePreviews(workspaceId: String): Flow<List<ComputerPreview>> =
         dao.observePreviews(workspaceId).map { entities -> entities.map { it.toModel() } }
@@ -137,12 +122,6 @@ class ComputerRepository(
     ): Boolean {
         val workspace = getWorkspace(workspaceId)
             ?: throw ComputerException(ComputerErrorCodes.WORKSPACE_NOT_READY, "Workspace 不存在")
-        if (!hostTarget && workspace.runMode != ComputerRunMode.DIRECT && workspace.runMode != ComputerRunMode.CONTAINER) {
-            throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "当前执行模式不支持服务器 .env")
-        }
-        if (!hostTarget && workspace.runMode == ComputerRunMode.CONTAINER && workspace.containerName.isNullOrBlank()) {
-            throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "Container 尚未就绪")
-        }
         val secret = credentialStore.loadWorkspaceSecret(
             dao.getWorkspaceSecret(workspaceId, name)?.id
                 ?: throw ComputerException(ComputerErrorCodes.CREDENTIAL_MISSING, "Workspace Secret 不存在"),
@@ -150,11 +129,7 @@ class ComputerRepository(
         return try {
             val command = if (hostTarget) {
                 ComputerSecretEnvWriter.buildHostUpsertCommand(path, name)
-            } else if (workspace.runMode == ComputerRunMode.CONTAINER) {
-                ComputerSecretEnvWriter.buildContainerUpsertCommand(
-                    checkNotNull(workspace.containerName), path, name,
-                )
-            } else ComputerSecretEnvWriter.buildUpsertCommand(workspace.hostPath, path, name)
+            } else ComputerSecretEnvWriter.buildUpsertCommand(path, name)
             val secretBytes = secret.concatToString().toByteArray(Charsets.UTF_8)
             try {
                 var executeRequested = false
@@ -326,128 +301,6 @@ class ComputerRepository(
         }
     }
 
-    suspend fun provisionContainer(
-        computerId: String,
-        onProgress: suspend (ComputerSetupStage) -> Unit = {},
-    ): Computer {
-        val current = requireComputer(computerId)
-        val runtimeOnlyUpgrade = current.canUseRuntimeOnlyUpgrade()
-        // 轻量升级不再重建容器，可以保留正常服务；完整配置仍要求没有活动 Container 任务。
-        if (!runtimeOnlyUpgrade && hasActiveContainerExecution(dao.getActiveRemoteExecutionsForComputer(computerId))) {
-            throw ComputerException(
-                code = ComputerErrorCodes.COMPUTER_NOT_READY,
-                message = "当前还有 Container 任务在运行，请等待任务完成后升级",
-                retryable = true,
-                action = "WAIT_FOR_CONTAINER_TASKS",
-            )
-        }
-        val sudoPassword = if (current.username == "root") {
-            null
-        } else {
-            resolveComputerProvisionPassword(
-                savedSudoPassword = credentialStore.loadComputerSudoPassword(computerId),
-                originalCredential = credentialStore.loadOriginalComputerCredential(computerId)
-                    ?: credentialStore.loadComputerCredential(computerId),
-            )
-        }
-        val foregroundActivity = acquireForegroundActivity()
-        // Docker 是可选能力。安装失败或取消时保留原先可用的 SSH 状态，不能阻断后续主机工具。
-        val failureStatus = if (current.status == ComputerStatus.READY) ComputerStatus.READY else ComputerStatus.CONFIGURATION_REQUIRED
-        try {
-            if (current.status != ComputerStatus.READY) {
-                dao.updateComputerStatus(computerId, ComputerStatus.PROVISIONING.name, null)
-            }
-            return try {
-                val result = withConnection(computerId, requireReady = false) { connection, computer ->
-                    provisioner.provision(
-                        connection = connection,
-                        computer = computer,
-                        sudoPassword = sudoPassword,
-                        runtimeOnly = runtimeOnlyUpgrade,
-                        onProgress = onProgress,
-                    )
-                }
-                // 连接期间 Host Key 可能已自动更新，不能用进入配置前的旧快照回写。
-                val configured = requireComputer(computerId).copy(
-                    bootstrapVersion = result.bootstrapVersion,
-                    sandboxImage = result.sandboxImage,
-                    status = if (current.status == ComputerStatus.READY) ComputerStatus.READY else ComputerStatus.VERIFYING,
-                    lastErrorCode = null,
-                    updatedAt = System.currentTimeMillis(),
-                )
-                dao.upsertComputer(configured.toEntity(json))
-                dao.updateContainerWorkspaceImage(computerId, result.sandboxImage)
-                recordAudit(computerId, "CONTAINER_PROVISION", "SUCCESS", null)
-                onProgress(ComputerSetupStage.VERIFYING)
-                refreshComputer(computerId)
-            } catch (error: CancellationException) {
-                withContext(NonCancellable) {
-                    connectionPool.disconnect(computerId)
-                    dao.updateComputerStatus(
-                        computerId,
-                        failureStatus.name,
-                        current.lastErrorCode,
-                    )
-                }
-                throw error
-            } catch (error: ComputerException) {
-                val reportedError = if (
-                    error.code == ComputerErrorCodes.SUDO_REQUIRED &&
-                    current.username != "root" &&
-                    sudoPassword == null
-                ) {
-                    ComputerException(
-                        code = ComputerErrorCodes.SUDO_REQUIRED,
-                        message = "缺少可用的 sudo 密码，请先编辑服务器补充",
-                        retryable = true,
-                        action = "UPDATE_CREDENTIAL",
-                        cause = error,
-                    )
-                } else {
-                    error
-                }
-                dao.updateComputerStatus(
-                    computerId,
-                    failureStatus.name,
-                    if (failureStatus == ComputerStatus.READY) current.lastErrorCode else reportedError.code,
-                )
-                recordAudit(computerId, "CONTAINER_PROVISION", "FAILED", reportedError.code)
-                throw reportedError
-            } catch (error: Throwable) {
-                withContext(NonCancellable) {
-                    connectionPool.disconnect(computerId)
-                    dao.updateComputerStatus(
-                        computerId,
-                        failureStatus.name,
-                        current.lastErrorCode,
-                    )
-                }
-                throw error
-            }
-        } finally {
-            sudoPassword?.fill('\u0000')
-            foregroundActivity.close()
-        }
-    }
-
-    /**
-     * 只有执行目标明确选择 Container 时才调用。
-     * 添加服务器和普通 SSH 操作不会触发 Docker 安装或沙箱初始化。
-     */
-    suspend fun ensureContainerRuntime(
-        computerId: String,
-        onProgress: suspend (ComputerSetupStage) -> Unit = {},
-    ): Computer {
-        val current = requireComputer(computerId)
-        if (
-            current.capabilities?.dockerAvailable == true &&
-            current.bootstrapVersion == COMPUTER_BOOTSTRAP_VERSION
-        ) {
-            return current
-        }
-        return provisionContainer(computerId, onProgress)
-    }
-
     /** 修复页取消后立即关闭该服务器的 SSH Transport，让阻塞中的 Channel 尽快退出。 */
     suspend fun cancelComputerOperation(computerId: String) {
         val current = requireComputer(computerId)
@@ -494,7 +347,6 @@ class ComputerRepository(
                 current.hostKeyBlobBase64 == confirmedKeyBlob
             val remoteAccountChanged = endpointChanged && !sameRemoteAccount
             val suppliedCredential = request.credential != null
-            val runModeChanged = current.runMode != ComputerRunMode.DIRECT
             val credential = request.credential ?: if (remoteAccountChanged) {
                 credentialStore.loadOriginalComputerCredential(request.id)
                     ?: credentialStore.loadComputerCredential(request.id)
@@ -559,19 +411,11 @@ class ComputerRepository(
             var updated = candidate.copy(
                 status = ComputerStatus.READY,
                 capabilities = capabilities,
-                bootstrapVersion = current.bootstrapVersion.takeUnless { remoteAccountChanged },
-                sandboxImage = current.sandboxImage.takeUnless { remoteAccountChanged },
                 lastConnectedAt = System.currentTimeMillis(),
                 updatedAt = System.currentTimeMillis(),
             )
             dao.upsertComputer(updated.toEntity(json))
-            if (runModeChanged) {
-                dao.updateComputerWorkspaceRunMode(
-                    computerId = updated.id,
-                    runMode = updated.runMode.name,
-                    containerImage = updated.sandboxImage,
-                )
-            } else if (remoteAccountChanged) {
+            if (remoteAccountChanged) {
                 dao.markComputerWorkspacesRecovering(updated.id)
             }
             if (replaceActiveCredential) updated = tryUpgradeToDedicatedKey(updated)
@@ -665,41 +509,6 @@ class ComputerRepository(
         )
     }
 
-    /** Container 模式允许用户在详情页显式调整是否访问 VPS 私有网络。 */
-    suspend fun setPrivateNetworkAllowed(computerId: String, allowed: Boolean): Computer {
-        val current = requireComputer(computerId)
-        if (current.runMode != ComputerRunMode.CONTAINER) {
-            throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "Direct SSH 模式沿用 SSH 账号的网络权限")
-        }
-        val helper = if (current.username == "root") {
-            "/usr/local/libexec/everytalk-containerctl"
-        } else {
-            "sudo -n -- /usr/local/libexec/everytalk-containerctl"
-        }
-        val mode = if (allowed) "private" else "restricted"
-        val result = withConnection(computerId) { connection, _ ->
-            connection.execute(
-                command = "$helper set-network $mode",
-                timeoutMillis = 30_000,
-                maxOutputBytes = 64 * 1024,
-            )
-        }
-        if (result.timedOut || result.exitCode != 0) {
-            throw ComputerException(
-                ComputerErrorCodes.HELPER_INTEGRITY_FAILED,
-                "更新 Container 网络权限失败",
-                retryable = true,
-            )
-        }
-        val updated = current.copy(
-            allowPrivateNetwork = allowed,
-            updatedAt = System.currentTimeMillis(),
-        )
-        dao.upsertComputer(updated.toEntity(json))
-        recordAudit(computerId, "PRIVATE_NETWORK", "SUCCESS", if (allowed) "ALLOWED" else "BLOCKED")
-        return updated
-    }
-
     /**
      * 删除本地服务器记录前尝试移除 EveryTalk 专用公钥。
      * 远端不可达时仍销毁本地凭据，并通过返回值让 UI 准确提示残留公钥。
@@ -730,23 +539,13 @@ class ComputerRepository(
     }
 
     suspend fun recoverLocalState() {
-        // 普通工具无法从 VPS 续接；exec 保留原状态交给 ExecutionReconciler 查询。
-        dao.markInterruptedNonExecExecutionsUnknown()
+        // VPS 上不保存执行状态，进程退出前未完成的调用一律标为结果未知，不自动重跑。
+        dao.markInterruptedExecutionsUnknown()
         dao.markPrivatePreviewsStopped()
         dao.migrateSshExecutionDefaults()
-        dao.recoverInterruptedComputerOperations(COMPUTER_BOOTSTRAP_VERSION)
+        dao.recoverInterruptedComputerOperations()
         connectionPool.closeIdle(maxIdleMillis = 0)
     }
-
-    /** 供应用恢复入口再次刷新活动远端任务，查询失败只保留上次状态。 */
-    suspend fun reconcileRemoteExecutions(
-        conversationIds: Set<String> = emptySet(),
-    ): List<ComputerExecutionReconciliation> =
-        if (conversationIds.isEmpty()) {
-            executionReconciler.reconcileActive()
-        } else {
-            executionReconciler.reconcileForegroundActiveForConversations(conversationIds)
-        }
 
     /**
      * 读取当前 Workspace 的本地活动任务快照，供下一轮模型请求使用。
@@ -755,19 +554,20 @@ class ComputerRepository(
     suspend fun getComputerSessionState(workspaceId: String): ComputerSessionState? {
         if (dao.getWorkspaceById(workspaceId) == null) return null
         val executions = dao.getRemoteExecutionsForWorkspace(workspaceId)
+        // 命令只在本进程的 SSH 通道里运行，活动任务就是本地仍在执行的 exec。
         val active = executions.filter { execution ->
-            execution.shouldReconcileRemote() ||
-                execution.remoteStatus == ComputerRemoteStatus.UNKNOWN.name
+            execution.toolName == ComputerToolNames.EXEC &&
+                execution.status in setOf("QUEUED", "STARTING", "RUNNING")
         }
         val now = System.currentTimeMillis()
         val tasks = active.take(8).map { execution ->
             ComputerSessionTask(
                 executionId = execution.id,
                 target = execution.target?.let { runCatching { ComputerExecTarget.valueOf(it) }.getOrNull() }
-                    ?: ComputerExecTarget.CONTAINER,
+                    ?: ComputerExecTarget.HOST,
                 status = execution.remoteStatus?.let {
                     runCatching { ComputerRemoteStatus.valueOf(it) }.getOrNull()
-                } ?: ComputerRemoteStatus.UNKNOWN,
+                } ?: ComputerRemoteStatus.RUNNING,
                 elapsedSeconds = ((now - (execution.startedAt ?: now)) / 1_000L).coerceAtLeast(0L),
             )
         }
@@ -776,265 +576,6 @@ class ComputerRepository(
             activeTasks = tasks,
             totalActiveTasks = active.size,
         )
-    }
-
-    /**
-     * 为单个活动任务打开一次长轮询 Channel。
-     * Transport 仍由连接池按 computerId 复用，返回后立即把游标写入 Room。
-     */
-    suspend fun watchRemoteExecution(executionId: String): ComputerRemoteExecutionWatchEvent {
-        val execution = dao.getExecutionById(executionId)
-            ?: throw ComputerException(ComputerErrorCodes.EXECUTION_NOT_FOUND, "远端任务不存在")
-        // 重连后先补发这条任务已登记的停止请求，不能只恢复日志监听而让命令继续跑。
-        if (execution.shouldRetryRemoteCancellation()) cancelRemoteExecution(execution.id)
-        val computer = dao.getComputer(execution.computerId)?.toModel(json)
-            ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
-        val workspace = dao.getWorkspaceById(execution.workspaceId)?.toModel()
-            ?: throw ComputerException(ComputerErrorCodes.WORKSPACE_NOT_READY, "Workspace 不存在")
-        val target = execution.target?.let { runCatching { ComputerExecTarget.valueOf(it) }.getOrNull() }
-            ?: ComputerExecTarget.CONTAINER
-        val event = try {
-            withConnection(computer.id, requireReady = false) { connection, currentComputer ->
-                runtimeEnvelope.watchExecution(
-                    connection = connection,
-                    computer = currentComputer,
-                    workspace = workspace,
-                    executionId = execution.id,
-                    stdoutCursor = execution.stdoutCursor,
-                    stderrCursor = execution.stderrCursor,
-                    target = target,
-                    expectedProcessId = execution.remoteProcessId,
-                    expectedRequestHash = execution.requestHash,
-                )
-            }
-        } catch (error: ComputerRemoteExecutionProtocolException) {
-            // 长监听不负责保存原始协议文本。转换成统一业务错误，交给服务对账收尾，
-            // 禁止解析异常逃出 SupervisorJob 并结束整个 App 进程。
-            throw ComputerException(
-                code = error.protocolCode,
-                message = error.message ?: "远端 Execution 状态无效",
-                retryable = false,
-                cause = error,
-            )
-        }
-
-        val now = System.currentTimeMillis()
-        dao.updateRemoteExecutionProgress(
-            executionId = execution.id,
-            stdoutCursor = event.stdoutCursor,
-            stderrCursor = event.stderrCursor,
-            eventAt = now,
-            observedAt = now,
-            remoteStatus = event.result.snapshot.status.name,
-            remoteExitCode = event.result.snapshot.exitCode,
-        )
-        markComputerReadyAfterRecovery(computer)
-        return event
-    }
-
-    /** 长轮询收到终态后只对账对应任务，避免重新扫描其他 VPS。 */
-    suspend fun reconcileRemoteExecution(executionId: String): ComputerExecutionReconciliation? =
-        executionReconciler.reconcile(executionId)
-
-    /**
-     * 取消一个仍在 VPS 上运行的受管 Execution。
-     *
-     * 与本地 Agent 协程的取消独立进行；仅凭本地取消不能宣称 VPS 已停止。
-     * 查询和重试始终固定 Execution ID 与请求哈希，不扩大到会话或其他命令。
-     */
-    suspend fun cancelRemoteExecution(executionId: String): ComputerRemoteExecutionSnapshot? {
-        val execution = dao.getExecutionById(executionId) ?: return null
-        val computer = dao.getComputer(execution.computerId)?.toModel(json) ?: return null
-        val workspace = dao.getWorkspaceById(execution.workspaceId)?.toModel() ?: return null
-        if (!computer.status.canAttemptExecutionRecovery()) {
-            throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "当前服务器状态不允许取消远端任务")
-        }
-        val target = execution.target?.let { runCatching { ComputerExecTarget.valueOf(it) }.getOrNull() }
-            ?: ComputerExecTarget.CONTAINER
-        val snapshot = withConnection(computer.id, requireReady = false) { connection, currentComputer ->
-            runtimeEnvelope.cancelExecution(
-                connection = connection,
-                computer = currentComputer,
-                workspace = workspace,
-                executionId = execution.id,
-                target = target,
-                expectedProcessId = execution.remoteProcessId,
-                expectedRequestHash = execution.requestHash,
-            )
-        }
-        markComputerReadyAfterRecovery(computer)
-        val terminal = snapshot.status in setOf(
-            ComputerRemoteStatus.SUCCEEDED,
-            ComputerRemoteStatus.FAILED,
-            ComputerRemoteStatus.TIMED_OUT,
-            ComputerRemoteStatus.CANCELLED,
-        )
-        val remoteStillActive = snapshot.status in setOf(
-            ComputerRemoteStatus.STARTING,
-            ComputerRemoteStatus.RUNNING,
-        )
-        val backgroundHandle = execution.completionMode == ComputerExecutionCompletionMode.RETURN_HANDLE.name
-        val localStatus = when {
-            backgroundHandle && execution.status in setOf(
-                ComputerExecutionStatus.SUCCEEDED.name,
-                ComputerExecutionStatus.FAILED.name,
-                ComputerExecutionStatus.TIMED_OUT.name,
-                ComputerExecutionStatus.CANCELLED.name,
-            ) -> null
-            snapshot.status == ComputerRemoteStatus.SUCCEEDED -> ComputerExecutionStatus.SUCCEEDED.name
-            snapshot.status == ComputerRemoteStatus.FAILED -> ComputerExecutionStatus.FAILED.name
-            snapshot.status == ComputerRemoteStatus.TIMED_OUT -> ComputerExecutionStatus.TIMED_OUT.name
-            snapshot.status == ComputerRemoteStatus.CANCELLED -> ComputerExecutionStatus.CANCELLED.name
-            remoteStillActive && execution.completionMode != ComputerExecutionCompletionMode.RETURN_HANDLE.name ->
-                ComputerExecutionStatus.CANCELLED.name
-            else -> ComputerExecutionStatus.UNKNOWN.name
-        }
-        dao.updateRemoteExecutionObservation(
-            executionId = execution.id,
-            target = target.name,
-            remoteProcessId = snapshot.processId,
-            remoteStatus = snapshot.status.name,
-            remoteExitCode = snapshot.exitCode,
-            observedAt = System.currentTimeMillis(),
-            localStatus = localStatus,
-            finishedAt = if (terminal) System.currentTimeMillis() else null,
-            localExitCode = if (terminal) snapshot.exitCode else null,
-            errorCode = when (snapshot.status) {
-                ComputerRemoteStatus.MISSING -> ComputerErrorCodes.EXECUTION_NOT_FOUND
-                ComputerRemoteStatus.UNKNOWN,
-                ComputerRemoteStatus.STOPPED,
-                -> ComputerErrorCodes.EXECUTION_UNKNOWN
-                ComputerRemoteStatus.STARTING,
-                ComputerRemoteStatus.RUNNING,
-                -> ComputerErrorCodes.EXECUTION_CANCEL_REQUESTED
-                else -> null
-            },
-        )
-        return snapshot
-    }
-
-    private suspend fun queryRemoteExecution(
-        execution: ComputerExecutionEntity,
-    ): ComputerRemoteExecutionQuery {
-        val computer = dao.getComputer(execution.computerId)?.toModel(json)
-            ?: return ComputerRemoteExecutionQuery.Missing
-        val workspace = dao.getWorkspaceById(execution.workspaceId)?.toModel()
-            ?: return ComputerRemoteExecutionQuery.Missing
-        if (!computer.status.canAttemptExecutionRecovery()) {
-            return ComputerRemoteExecutionQuery.Unavailable("当前服务器尚未处于可恢复连接状态")
-        }
-        val target = execution.target?.let { runCatching { ComputerExecTarget.valueOf(it) }.getOrNull() }
-            ?: ComputerExecTarget.CONTAINER
-        return try {
-            // 恢复查询允许 OFFLINE/DISCONNECTED 服务器受控重连；真正连接失败由 Unavailable 保留原状态。
-            val snapshot = withConnection(computer.id, requireReady = false) { connection, currentComputer ->
-                // 只有停止按钮已落库的取消意图才允许补发 cancel；普通断线恢复仍然只查询。
-                // 不根据 Run 的 CANCELLED 状态批量停止任务，避免误杀已经交付的后台服务。
-                if (execution.shouldRetryRemoteCancellation()) {
-                    runtimeEnvelope.cancelExecution(
-                        connection = connection,
-                        computer = currentComputer,
-                        workspace = workspace,
-                        executionId = execution.id,
-                        target = target,
-                        expectedProcessId = execution.remoteProcessId,
-                        expectedRequestHash = execution.requestHash,
-                    )
-                } else runtimeEnvelope.queryExecutionStatus(
-                    connection = connection,
-                    computer = computer,
-                    workspace = workspace,
-                    executionId = execution.id,
-                    target = target,
-                    expectedProcessId = execution.remoteProcessId,
-                    expectedRequestHash = execution.requestHash,
-                )
-            }
-            markComputerReadyAfterRecovery(computer)
-            if (snapshot.status == ComputerRemoteStatus.MISSING) {
-                ComputerRemoteExecutionQuery.Missing
-            } else {
-                ComputerRemoteExecutionQuery.State(
-                    buildRemoteStatePayload(target, snapshot),
-                )
-            }
-        } catch (error: ComputerRemoteExecutionProtocolException) {
-            // 协议响应已到达但格式不可信，交给严格解析器写 UNKNOWN，不能伪装成网络暂时不可用。
-            ComputerRemoteExecutionQuery.State(error.payload)
-        } catch (error: ComputerException) {
-            if (error.retryable) {
-                invalidateRemoteQueryConnection(computer.id, error)
-            }
-            if (error.code == ComputerErrorCodes.EXECUTION_NOT_FOUND) {
-                ComputerRemoteExecutionQuery.Missing
-            } else if (error.code == ComputerErrorCodes.EXECUTION_REQUEST_HASH_CONFLICT ||
-                error.code == ComputerErrorCodes.EXECUTION_STATE_INVALID
-            ) {
-                ComputerRemoteExecutionQuery.Invalid(
-                    message = error.message,
-                    code = error.code,
-                )
-            } else {
-                ComputerRemoteExecutionQuery.Unavailable(
-                    message = error.message,
-                    connectionFailure = error.code == ComputerErrorCodes.SSH_TIMEOUT ||
-                        error.code == ComputerErrorCodes.HOST_RESOLUTION_FAILED,
-                )
-            }
-        } catch (error: Throwable) {
-            if (error is CancellationException) throw error
-            invalidateRemoteQueryConnection(computer.id, error)
-            ComputerRemoteExecutionQuery.Unavailable(
-                message = error.message,
-                connectionFailure = isComputerConnectionFailure(error),
-            )
-        }
-    }
-
-    /**
-     * Runtime 已经把网络异常转换成业务异常后，连接池看不到原始异常，无法自动清理坏连接。
-     * 这里在返回 Unavailable 前主动丢弃当前 Transport，下一轮查询或用户命令才会重新认证。
-     */
-    private suspend fun invalidateRemoteQueryConnection(computerId: String, error: Throwable) {
-        if (error is ComputerException && !error.retryable) return
-        if (error is ComputerException || isComputerConnectionFailure(error)) {
-            val code = (error as? ComputerException)?.code ?: error::class.java.simpleName
-            AppLogger.warn(
-                "ComputerSsh",
-                "远端状态查询失败，丢弃 SSH Transport computer=$computerId code=$code message=${error.message}",
-            )
-            connectionPool.disconnect(computerId, reason = "remote_query_failed:$code")
-        }
-    }
-
-    /** RuntimeEnvelope 已完成严格解析，这里补上对账器需要的原始身份字段。 */
-    private fun buildRemoteStatePayload(
-        target: ComputerExecTarget,
-        snapshot: ComputerRemoteExecutionSnapshot,
-    ): String = buildString {
-        appendLine("protocol=2")
-        appendLine("execution_id=${snapshot.executionId}")
-        appendLine("process_id=${snapshot.processId}")
-        // 这里必须保留 VPS 实际返回的身份字段，让严格解析器能够发现篡改或串任务，
-        // 不能用本地值覆盖远端值后再进行“自证”。
-        appendLine("request_hash=${snapshot.requestHash.orEmpty()}")
-        appendLine("target=${snapshot.target?.name ?: target.name}")
-        appendLine("pid=${snapshot.pid ?: 0}")
-        appendLine("start_ticks=${snapshot.startTicks ?: 0}")
-        appendLine("status=${snapshot.status.name}")
-        appendLine("exit_code=${snapshot.exitCode ?: ""}")
-        val startedAt = snapshot.startedAt ?: 0L
-        appendLine("started_at=$startedAt")
-        appendLine("updated_at=${maxOf(startedAt, snapshot.updatedAt ?: startedAt)}")
-        appendLine("stdout_bytes=${snapshot.stdoutBytes}")
-        appendLine("stderr_bytes=${snapshot.stderrBytes}")
-    }
-
-    /** 状态查询已经证明 SSH、Helper 和固定 Runtime 可用时，解除网络断开造成的 READY 锁定。 */
-    private suspend fun markComputerReadyAfterRecovery(computer: Computer) {
-        if (computer.status == ComputerStatus.OFFLINE || computer.status == ComputerStatus.DISCONNECTED) {
-            dao.updateComputerStatus(computer.id, ComputerStatus.READY.name, null)
-        }
     }
 
     /** 手机网络发生切换时丢弃旧 Transport，下一次操作会重新解析并验证固定 Host Key。 */

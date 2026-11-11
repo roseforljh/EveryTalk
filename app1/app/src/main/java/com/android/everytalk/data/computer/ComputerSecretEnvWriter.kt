@@ -12,9 +12,9 @@ internal object ComputerSecretEnvWriter {
         return value
     }
 
-    /** 从 stdin 写入 Workspace 内指定文件，Secret 不会出现在命令行或日志中。 */
-    fun buildUpsertCommand(workspaceRoot: String, relativePath: String, name: String): String {
-        val safePath = resolveTargetPath(workspaceRoot, relativePath)
+    /** 从 stdin 写入指定文件（相对路径基于 SSH 用户 Home），Secret 不会出现在命令行或日志中。 */
+    fun buildUpsertCommand(path: String, name: String): String {
+        val safePath = resolveTargetPath(path)
         ComputerEnvironmentName.requireValid(name)
         val safeName = shellQuote(name)
         return "set -eu; umask 077; f=$safePath; parent=\$(dirname -- \"${'$'}f\"); " +
@@ -27,33 +27,21 @@ internal object ComputerSecretEnvWriter {
             "chmod 600 \"${'$'}d\"; mv -f \"${'$'}d\" \"${'$'}f\""
     }
 
-    /**
-     * Container 模式使用容器内固定的 `/workspace` 根目录。
-     * Secret 仍从最外层 SSH stdin 传入 docker exec，不拼进命令行。
-     */
-    fun buildContainerUpsertCommand(containerName: String, path: String, name: String): String {
-        require(containerName.matches(Regex("[A-Za-z0-9][A-Za-z0-9_.-]{0,127}"))) { "Container 名称无效" }
-        val targetPath = requireTargetPath(path)
-        val inner = buildUpsertCommand("/workspace", targetPath, name)
-        return "docker exec -i ${shellQuote(containerName)} sh -c ${shellQuote(inner)}"
-    }
-
     /** SERVER_ENV 明确表示 SSH 宿主机文件；宿主机目标必须使用绝对路径，避免歧义。 */
     fun buildHostUpsertCommand(path: String, name: String): String {
         val target = requireTargetPath(path)
         require(target.startsWith('/') || Regex("^[A-Za-z]:[\\\\/]").containsMatchIn(target)) {
             "SERVER_ENV 的目标路径必须是宿主机绝对路径"
         }
-        return buildUpsertCommand("/", target, name)
+        return buildUpsertCommand(target, name)
     }
 
-    private fun resolveTargetPath(workspaceRoot: String, path: String): String {
+    private fun resolveTargetPath(path: String): String {
         val target = requireTargetPath(path)
         return if (target.startsWith('/') || Regex("^[A-Za-z]:[\\\\/]").containsMatchIn(target)) {
             shellQuote(target)
         } else {
-            val root = shellQuote(workspaceRoot.trimEnd('/', '\\'))
-            "\$(cd -- $root && pwd -P)/${shellQuote(target)}"
+            "\"\$HOME\"/${shellQuote(target.removePrefix("~/"))}"
         }
     }
 
