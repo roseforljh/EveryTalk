@@ -25,26 +25,22 @@ class ComputerCancellationScopeTest {
         val repository = mockk<ComputerRepository>()
         val dao = mockk<ComputerDao>()
         val request = ComputerRequestContext("session", "server", "ws_legacy")
-        val workspace = ComputerWorkspace("ws_legacy", "server", "session", ComputerRunMode.CONTAINER,
-            "/home/user/work", containerName = "legacy-container", status = ComputerWorkspaceStatus.READY)
+        val workspace = ComputerWorkspace("ws_legacy", "server", "session", ComputerRunMode.DIRECT,
+            "/home/user/work", status = ComputerWorkspaceStatus.READY)
         every { repository.dao() } returns dao
         coEvery { dao.getWorkspaceById(workspace.id) } returns workspace.toEntity()
         coEvery { repository.refreshPermissionMode(any()) } answers { firstArg() }
         coEvery { repository.getComputer("server") } returns Computer(
             id = "server", displayName = "server", host = "example.com", port = 22, username = "user",
-            authKind = ComputerAuthKind.PASSWORD, runMode = ComputerRunMode.CONTAINER)
+            authKind = ComputerAuthKind.PASSWORD, runMode = ComputerRunMode.DIRECT)
         ComputerToolExecutor(appContext, repository, mockk(), mockk(), mockk()).use { executor ->
             val args = buildJsonObject { put("command", "systemctl restart nginx") }
             val approval = executor.approvalRequest(ComputerToolNames.EXEC, args, "call", request,
                 ComputerToolApprovalPhase.BEFORE_EXECUTION) as ComputerToolApprovalRequest.HostCommand
             assertEquals("~", approval.request.cwd)
-            assertNull(executor.approvalRequest(ComputerToolNames.EXEC,
-                buildJsonObject { put("command", "printf test"); put("target", "container") }, "sandbox", request,
-                ComputerToolApprovalPhase.BEFORE_EXECUTION))
-            val preview = executor.approvalRequest(ComputerToolNames.OPEN_PORT,
+            assertTrue(executor.approvalRequest(ComputerToolNames.OPEN_PORT,
                 buildJsonObject { put("port", 8080); put("visibility", "public") }, "preview", request,
-                ComputerToolApprovalPhase.BEFORE_EXECUTION) as ComputerToolApprovalRequest.PublicPreview
-            assertEquals(ComputerExecTarget.HOST, preview.request.target)
+                ComputerToolApprovalPhase.BEFORE_EXECUTION) is ComputerToolApprovalRequest.PublicPreview)
         }
     }
 
@@ -56,61 +52,4 @@ class ComputerCancellationScopeTest {
             else ComputerExecutionCompletionMode.WAIT_FOR_RESULT,
     ).toEntity()
 
-    @Test
-    fun `强制停止取消当前Run的前台和后台任务但不扩大到会话`() = runTest {
-        val context = mockk<Context>()
-        every { context.applicationContext } returns context
-        val dao = mockk<ComputerDao>(relaxed = true)
-        val repository = mockk<ComputerRepository>()
-        every { repository.dao() } returns dao
-        coEvery { dao.getCancellableRemoteExecutionsForRun("run-1") } returns listOf(
-            execution("execution_current"), execution("execution_service", background = true),
-        )
-        coEvery { repository.cancelRemoteExecution("execution_current") } returns ComputerRemoteExecutionSnapshot(
-            executionId = "execution_current", processId = "process_execution_current",
-            status = ComputerRemoteStatus.CANCELLED,
-        )
-        coEvery { repository.cancelRemoteExecution("execution_service") } returns ComputerRemoteExecutionSnapshot(
-            executionId = "execution_service", processId = "process_execution_service",
-            status = ComputerRemoteStatus.CANCELLED,
-        )
-        ComputerToolExecutor(context, repository, mockk(), mockk(), mockk()).use { executor ->
-            assertTrue(executor.cancelActiveExecutions("session-1", "run-1"))
-            coVerify(exactly = 1) { repository.cancelRemoteExecution("execution_current") }
-            coVerify(exactly = 1) { repository.cancelRemoteExecution("execution_service") }
-            coVerify(exactly = 1) { dao.markRemoteExecutionCancellationRequested("execution_service", any()) }
-            coVerify(exactly = 0) { dao.getCancellableRemoteExecutionsForConversation(any()) }
-        }
-    }
-
-    @Test
-    fun `只有明确登记的停止才允许重试且终态不再重试`() {
-        val running = execution("execution_current")
-        assertFalse(running.shouldRetryRemoteCancellation())
-        assertFalse(running.copy(status = "CANCELLED").shouldRetryRemoteCancellation())
-        assertTrue(running.copy(cancelRequestedAt = 1L).shouldRetryRemoteCancellation())
-        assertTrue(running.copy(cancelRequestedAt = 1L, status = "UNKNOWN", remoteStatus = "UNKNOWN",
-            errorCode = ComputerErrorCodes.EXECUTION_CANCEL_FAILED).shouldRetryRemoteCancellation())
-        for (terminal in listOf("SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT")) {
-            assertFalse(running.copy(cancelRequestedAt = 1L, remoteStatus = terminal).shouldRetryRemoteCancellation())
-        }
-        assertFalse(execution("execution_service", background = true).shouldRetryRemoteCancellation())
-        assertTrue(execution("execution_service", background = true).copy(cancelRequestedAt = 1L).shouldRetryRemoteCancellation())
-    }
-
-    @Test
-    fun `指定Run没有远端任务时不能取消同会话其他任务`() = runTest {
-        val context = mockk<Context>()
-        every { context.applicationContext } returns context
-        val dao = mockk<ComputerDao>()
-        val repository = mockk<ComputerRepository>()
-        every { repository.dao() } returns dao
-        coEvery { dao.getCancellableRemoteExecutionsForRun("run-1") } returns emptyList()
-        coEvery { dao.getCancellableRemoteExecutionsForConversation(any()) } returns emptyList()
-        ComputerToolExecutor(context, repository, mockk(), mockk(), mockk()).use { executor ->
-            assertTrue(executor.cancelActiveExecutions("session-1", "run-1"))
-            coVerify(exactly = 0) { dao.getCancellableRemoteExecutionsForConversation(any()) }
-            coVerify(exactly = 0) { repository.cancelRemoteExecution(any()) }
-        }
-    }
 }

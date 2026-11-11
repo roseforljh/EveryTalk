@@ -27,7 +27,7 @@ class ComputerConnectionPoolRegistryTest {
         hostKeyBlobBase64 = Base64.getEncoder().encodeToString(byteArrayOf(1)),
         hostKeyFingerprint = "SHA256:original",
         authKind = ComputerAuthKind.PASSWORD,
-        runMode = ComputerRunMode.CONTAINER,
+        runMode = ComputerRunMode.DIRECT,
         status = ComputerStatus.READY,
     )
 

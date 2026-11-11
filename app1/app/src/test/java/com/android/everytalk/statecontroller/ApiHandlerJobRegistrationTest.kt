@@ -97,20 +97,6 @@ class ApiHandlerJobRegistrationTest {
         job.complete()
     }
 
-    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    @Test
-    fun `远端停止永不返回时等待有上限但后台Job不被取消`() = runTest {
-        val remote = Job()
-        val startedAt = testScheduler.currentTime
-        assertFalse(awaitRemoteStopConfirmation(remote) { true })
-        assertEquals(REMOTE_STOP_CONFIRMATION_TIMEOUT_MS, testScheduler.currentTime - startedAt)
-        assertTrue(remote.isActive)
-        // 后台确认成功后，下一次核对可以立即结束，不必重复发起停止。
-        remote.complete()
-        assertTrue(awaitRemoteStopConfirmation(remote) { true })
-        assertFalse(awaitRemoteStopConfirmation(remote) { false })
-    }
-
     @Test
     fun `立即完成的恢复任务也能识别自己并清除处理中状态`() {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)

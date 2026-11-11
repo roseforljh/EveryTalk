@@ -8,7 +8,7 @@ class ComputerDisclosurePolicyTest {
     fun `Container 只需要模型数据流确认`() {
         assertEquals(
             setOf(ComputerDisclosureKind.MODEL_DATA_FLOW),
-            ComputerDisclosurePolicy.requiredFor(computer(ComputerRunMode.CONTAINER, "ubuntu")),
+            ComputerDisclosurePolicy.requiredFor(computer(ComputerRunMode.DIRECT, "ubuntu")),
         )
     }
 

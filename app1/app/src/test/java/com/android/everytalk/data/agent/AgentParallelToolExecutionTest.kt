@@ -132,7 +132,7 @@ class AgentParallelToolExecutionTest {
         assertFalse(system.contains("For exec, use target=container by default"))
         val exec = sent.tools!!.single { (it["function"] as? Map<*, *>)?.get("name") == "exec" }
         val params = (exec["function"] as Map<*, *>)["parameters"] as Map<*, *>
-        assertEquals("host", ((params["properties"] as Map<*, *>)["target"] as Map<*, *>)["default"])
+        assertFalse("exec 不再暴露执行目标", (params["properties"] as Map<*, *>).containsKey("target"))
     }
 
     @Test
@@ -202,6 +202,10 @@ class AgentParallelToolExecutionTest {
         assertTrue(assistantIndex > observedRequests[1].messages.indexOf(replayedState.last()))
         // 新建 Store 模拟进程重建，确认历史前缀来自数据库而非内存 transcript。
         val run = store.getRunsForSession("parallel-session").single()
+        val trace = store.executionTrace(run.id).filterIsInstance<com.android.everytalk.data.DataClass.ExecutionTraceEvent.Tool>()
+        assertEquals(3, trace.size)
+        assertTrue(trace.all { it.step.durationMs != null })
+        assertTrue(trace.single { it.step.id == "call-2" }.step.isError == true)
         val restored = AgentRunStore(database.agentDao())
             .appendRunTranscript(run.id, loopRequest("parallel-session").request.messages)
         val restoredState = restored.filterIsInstance<SimpleTextApiMessage>()
@@ -241,6 +245,70 @@ class AgentParallelToolExecutionTest {
             assertTrue(estimateToolLoopJsonTokens(result.content) < 8_300L)
             assertFalse(result.content.toString().contains("A".repeat(40_000)))
         }
+    }
+
+    @Test
+    fun `脚本收到完整结构化对象且超限明确失败`() = runBlocking {
+        val large = buildJsonObject { put("padding", "A".repeat(100_000)); put("middle", "target"); put("tail", "B".repeat(100_000)) }
+        val runtime = AgentToolRuntime(executorProvider = {
+            { _, _, _, _, _ -> AppToolExecutionResult(JsonPrimitive("summary"), scriptContent = large, isError = false) }
+        }, approvalProvider = { null })
+        val call = AgentContentBlock.ToolCall("script", "exec", buildJsonObject {})
+        assertEquals(large, runtime.execute(call, null, forScript = true, emit = {}).content)
+        assertEquals(JsonPrimitive("summary"), runtime.execute(call, null, emit = {}).content)
+        val tooLarge = AgentToolRuntime(executorProvider = {
+            { _, _, _, _, _ -> AppToolExecutionResult(JsonPrimitive("字".repeat(400_000))) }
+        }, approvalProvider = { null }).execute(call, null, forScript = true, emit = {})
+        assertTrue(tooLarge.isError)
+        assertTrue(tooLarge.content.toString().contains("1 MiB"))
+        val protocolSuccess = AgentToolRuntime(executorProvider = {
+            { _, _, _, _, _ -> AppToolExecutionResult(buildJsonObject { put("ok", false) }, isError = false) }
+        }, approvalProvider = { null }).execute(call, null, emit = {})
+        assertFalse(protocolSuccess.isError)
+    }
+
+    @Test
+    fun `大结果归档回读获得中间值且原工具只执行一次`() = runBlocking {
+        val session = "archive-read-loop"
+        seedSession(session)
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val archives = AgentToolResultStore(context)
+        val calls = AtomicInteger()
+        val payload = "A".repeat(50_000) + "MIDDLE_VALUE" + "B".repeat(50_000)
+        val requests = mutableListOf<ChatRequest>()
+        val loop = AgentLoop(runStore = store, toolRuntime = AgentToolRuntime(executorProvider = {
+            { _, _, _, _, _ -> calls.incrementAndGet(); AppToolExecutionResult(JsonPrimitive(payload)) }
+        }, approvalProvider = { null }, resultStore = archives), modelTransport = ModelTurnTransport { model ->
+            requests += model.request
+            when (requests.size) {
+                1 -> flowOf(AppStreamEvent.ToolCall("big", "exec", buildJsonObject {}), AppStreamEvent.Finish("tool_calls"))
+                2 -> flowOf(AppStreamEvent.ToolCall("read", AgentToolResultReadTool.NAME, buildJsonObject {
+                    put("tool_call_id", "big"); put("offset", 49_990); put("limit", 100)
+                }), AppStreamEvent.Finish("tool_calls"))
+                else -> flowOf(AppStreamEvent.Content("done"), AppStreamEvent.Finish("stop"))
+            }
+        })
+        val request = loopRequest(session)
+        val events = loop.run(request.copy(request = request.request.copy(tools = listOf(mapOf(
+            "type" to "function", "function" to mapOf("name" to "exec", "parameters" to mapOf("type" to "object"))
+        ))))).toList()
+        assertTrue(events.none { it is AppStreamEvent.Error })
+        assertEquals(1, calls.get())
+        val short = requests[1].messages.filterIsInstance<AgentToolResultApiMessage>().single { it.toolCallId == "big" }
+        assertTrue(short.content.toString().contains("tool_result_read"))
+        assertFalse(short.content.toString().contains("MIDDLE_VALUE"))
+        val page = requests.last().messages.filterIsInstance<AgentToolResultApiMessage>().single { it.toolCallId == "read" }
+        assertFalse(page.isError)
+        assertTrue(page.content.toString().contains("MIDDLE_VALUE"))
+        assertFalse(requests.last().messages.toString().contains("agent_tool_results/"))
+        val run = requireNotNull(database.agentDao().getRunByVisibleMessage(request.visibleAssistantMessageId))
+        val rebuilt = AgentRunStore(database.agentDao())
+        val saved = rebuilt.archivedToolResult(run.id, "big")
+        assertEquals("big", saved.toolCallId)
+        assertTrue(runCatching { rebuilt.archivedToolResult("another-run", "big") }.isFailure)
+        store.appendToolResult(run.id, "another-request", saved)
+        assertTrue(runCatching { rebuilt.archivedToolResult(run.id, "big") }.isFailure)
+        archives.deleteRun(run.id)
     }
 
     @Test
@@ -346,7 +414,18 @@ class AgentParallelToolExecutionTest {
             },
         )
 
-        loop.run(loopRequest(sessionId)).toList()
+        val events = loop.run(loopRequest(sessionId)).toList()
+        val run = requireNotNull(database.agentDao().getRunByVisibleMessage("assistant-$sessionId"))
+        val result = database.agentDao().getEntries(run.id)
+            .first { it.kind == AgentEntryKind.TOOL_RESULT.name }
+            .let { kotlinx.serialization.json.Json.decodeFromString<AgentContentBlock.ToolResult>(it.payloadJson) }
+        assertTrue(requireNotNull(result.durationMs) >= 0L)
+        assertEquals(result.durationMs, lifecycle.last { it.phase == AgentLifecyclePhase.TOOL_EXECUTION_END }.durationMs)
+        assertEquals(result.durationMs, events.filterIsInstance<AppStreamEvent.ExecutionStatusUpdate>()
+            .last { it.toolCallId == "tool-lifecycle-call" }.durationMs)
+        val restored = AgentRunStore(database.agentDao()).executionTrace(run.id)
+            .filterIsInstance<com.android.everytalk.data.DataClass.ExecutionTraceEvent.Tool>().single()
+        assertEquals(result.durationMs, restored.step.durationMs)
 
         val toolEvents = lifecycle.filter { it.toolCallId == "tool-lifecycle-call" }
         assertEquals(
@@ -358,6 +437,101 @@ class AgentParallelToolExecutionTest {
             toolEvents.map(AgentLifecycleEvent::phase),
         )
         assertTrue(toolEvents.none { sensitiveArgument in it.toString() || sensitiveResult in it.toString() })
+    }
+
+    @Test
+    fun `Codemode状态随唯一成功回执提交且新Store可重建与隔离`() = runBlocking {
+        seedSession("cm-state")
+        val input = loopRequest("cm-state")
+        val run = store.createRun(input.sessionId, input.userMessageId, input.visibleAssistantMessageId, null, input.request)
+        val result = AgentContentBlock.ToolResult("cm1", CodemodeTool.NAME, JsonPrimitive("ok"),
+            codemodeStoreDelta = mapOf("k" to JsonPrimitive(1)), durationMs = 42L)
+        store.appendToolResult(run.id, "r1", result)
+        store.appendToolResult(run.id, "r1", result.copy(codemodeStoreDelta = mapOf("k" to JsonPrimitive(99))))
+        assertEquals(mapOf("k" to JsonPrimitive(1)), AgentRunStore(database.agentDao()).codemodeStore(run.id))
+        store.appendToolResult(run.id, "r2", result.copy(toolCallId = "cm2", isError = true,
+            codemodeStoreDelta = mapOf("k" to JsonPrimitive(88))))
+        assertEquals(mapOf("k" to JsonPrimitive(1)), store.codemodeStore(run.id))
+        assertTrue(store.codemodeStore("other-run").isEmpty())
+        store.appendToolResult(run.id, "r3", result.copy(toolCallId = "cm3",
+            codemodeStoreDelta = mapOf("k" to kotlinx.serialization.json.JsonNull, "constructor" to JsonPrimitive(2))))
+        assertEquals(mapOf("constructor" to JsonPrimitive(2)), AgentRunStore(database.agentDao()).codemodeStore(run.id))
+        assertTrue(store.appendRunTranscript(run.id, emptyList()).none { "codemodeStoreDelta" in it.toString() })
+    }
+
+    @Test
+    fun `大型MCP搜索只解锁下一轮且恢复保留加载顺序`() = runBlocking {
+        val session = "mcp-discovery"
+        seedSession(session)
+        val all = (1..25).map { n -> mapOf<String, Any>("type" to "function", "function" to mapOf(
+            "name" to "mcp_hash_tool$n", "description" to "task$n", "parameters" to mapOf("type" to "object"))) }
+        assertEquals(all.take(24), McpToolDiscovery.project(all.take(24), emptyList()))
+        val requests = mutableListOf<ChatRequest>()
+        val executed = mutableListOf<String>()
+        var turn = 0
+        val loop = AgentLoop(runStore = store, toolRuntime = AgentToolRuntime(executorProvider = {
+            { name, _, _, _, _ -> executed += name; AppToolExecutionResult(JsonPrimitive("ok")) }
+        }, approvalProvider = { null }), modelTransport = ModelTurnTransport { request ->
+            requests += request.request
+            kotlinx.coroutines.flow.flow {
+                val activeRun = requireNotNull(database.agentDao().getRunByVisibleMessage("assistant-$session"))
+                assertEquals(25, store.restoreChatRequest(activeRun, "key")!!.tools!!.count { McpToolDiscovery.name(it).startsWith("mcp_") })
+                val response = when (++turn) {
+                    1 -> flowOf(AppStreamEvent.ToolCall("find", McpToolDiscovery.NAME, buildJsonObject { put("query", "mcp_hash_tool25"); put("limit", 1) }),
+                        AppStreamEvent.ToolCall("early", "mcp_hash_tool25", buildJsonObject {}), AppStreamEvent.Finish("tool_calls"))
+                    2 -> flowOf(AppStreamEvent.ToolCall("allowed", "mcp_hash_tool25", buildJsonObject {}), AppStreamEvent.Finish("tool_calls"))
+                    else -> flowOf(AppStreamEvent.Content("done"), AppStreamEvent.Finish("stop"))
+                }
+                response.collect { emit(it) }
+            }
+        })
+        loop.run(loopRequest(session, tools = all)).toList()
+        assertEquals(listOf(AgentToolResultReadTool.NAME, McpToolDiscovery.NAME), requests.first().tools!!.map(McpToolDiscovery::name))
+        assertEquals(listOf(AgentToolResultReadTool.NAME, "mcp_hash_tool25", McpToolDiscovery.NAME), requests[1].tools!!.map(McpToolDiscovery::name))
+        assertEquals(listOf("mcp_hash_tool25"), executed)
+        assertTrue(requests[1].messages.filterIsInstance<AgentToolResultApiMessage>().single { it.toolCallId == "early" }.isError)
+        val run = requireNotNull(database.agentDao().getRunByVisibleMessage("assistant-$session"))
+        assertEquals(listOf("mcp_hash_tool25"), AgentRunStore(database.agentDao()).loadedMcpToolIds(run.id))
+        assertTrue(McpToolDiscovery.project(all.dropLast(1), listOf("mcp_hash_tool25"))!!.none { McpToolDiscovery.name(it) == "mcp_hash_tool25" })
+    }
+
+    @Test
+    fun `中断Codemode不重放脚本且不恢复未提交状态`() = runBlocking {
+        val session = "cm-interrupted"
+        seedSession(session)
+        val input = loopRequest(session)
+        val run = store.createRun(session, input.userMessageId, input.visibleAssistantMessageId, null, input.request)
+        val call = AgentContentBlock.ToolCall("cm-started", CodemodeTool.NAME, buildJsonObject { put("code", "store('k', 9); await tools.exec({})") })
+        store.appendAssistant(run.id, "r", AgentAssistantTurn(listOf(call)))
+        store.appendToolExecutionStarted(run.id, "r", call)
+        val recovered = store.recoverInterruptedToolBatch(run.id, database.computerDao())
+        assertTrue(recovered!!.toolResultAlreadyPersisted)
+        assertTrue(recovered.pendingToolCalls.isEmpty())
+        val result = store.finalToolResult(run.id, "r", call.id)!!
+        assertTrue(result.isError)
+        assertTrue(result.content.toString().contains("禁止自动重跑"))
+        assertTrue(AgentRunStore(database.agentDao()).codemodeStore(run.id).isEmpty())
+        assertEquals(null, result.durationMs)
+    }
+
+    @Test
+    fun `取消工具保留结束耗时并传播取消且不写成功回执`() = runBlocking {
+        val session = "tool-cancel-duration"
+        seedSession(session)
+        val lifecycle = mutableListOf<AgentLifecycleEvent>()
+        val loop = AgentLoop(runStore = store, lifecycleSink = { lifecycle += it },
+            toolRuntime = AgentToolRuntime(executorProvider = {
+                { _, _, _, _, _ -> throw kotlinx.coroutines.CancellationException("cancelled") }
+            }, approvalProvider = { null }),
+            modelTransport = ModelTurnTransport { flowOf(toolCall("cancel-call", "tool-one"), AppStreamEvent.Finish("tool_calls")) })
+        var cancelled = false
+        try { loop.run(loopRequest(session)).toList() } catch (_: kotlinx.coroutines.CancellationException) { cancelled = true }
+        assertTrue(cancelled)
+        val end = lifecycle.single { it.phase == AgentLifecyclePhase.TOOL_EXECUTION_END }
+        assertTrue(end.isError == true)
+        assertTrue(requireNotNull(end.durationMs) >= 0)
+        val run = store.getRunsForSession(session).single()
+        assertTrue(database.agentDao().getEntries(run.id).none { it.kind == AgentEntryKind.TOOL_RESULT.name })
     }
 
     @Test
@@ -527,6 +701,8 @@ class AgentParallelToolExecutionTest {
         loop.run(loopRequest("schema-validation-session", tools = tools)).toList()
 
         assertEquals(0, executions.get())
+        val run = requireNotNull(database.agentDao().getRunByVisibleMessage("assistant-schema-validation-session"))
+        assertEquals(null, store.executionTrace(run.id).filterIsInstance<com.android.everytalk.data.DataClass.ExecutionTraceEvent.Tool>().single().step.durationMs)
         val result = observedRequests[1].messages.filterIsInstance<AgentToolResultApiMessage>().single()
         assertTrue(result.isError)
         assertTrue(result.content.toString().contains("Validation failed for tool"))

@@ -51,13 +51,13 @@ class AgentBackgroundPlanNotificationContractTest {
     fun `前台不展示Agent事件且返回前台清除已有事件通知`() {
         val context = notificationContext()
 
-        notify(context, UUID.randomUUID().toString(), "CONNECTION_LOST", "SSH 连接断开")
+        notify(context, UUID.randomUUID().toString(), "WAITING_APPROVAL", "Agent 需要你的确认")
         assertEquals(1, notifications(context).size)
 
         AgentNotificationManager.onAppForeground(context)
         assertTrue("返回前台后必须清除 Agent 事件通知", notifications(context).isEmpty())
 
-        notify(context, UUID.randomUUID().toString(), "CONNECTION_LOST", "SSH 连接断开")
+        notify(context, UUID.randomUUID().toString(), "WAITING_APPROVAL", "Agent 需要你的确认")
         assertTrue("App 在前台时禁止弹 Agent 事件通知", notifications(context).isEmpty())
     }
 
@@ -90,11 +90,11 @@ class AgentBackgroundPlanNotificationContractTest {
     }
 
     @Test
-    fun `任务成功后必须撤销同一Execution的旧断线通知`() {
+    fun `任务成功后必须撤销同一Execution的旧等待确认通知`() {
         val context = notificationContext()
         val executionId = UUID.randomUUID().toString()
 
-        notify(context, executionId, "CONNECTION_LOST", "SSH 连接断开")
+        notify(context, executionId, "WAITING_APPROVAL", "Agent 需要你的确认")
         notify(context, executionId, "SUCCEEDED", "任务完成")
 
         val notifications = notifications(context)
@@ -103,36 +103,16 @@ class AgentBackgroundPlanNotificationContractTest {
     }
 
     @Test
-    fun `任务已经成功时必须丢弃迟到的断线事件`() {
+    fun `任务已经成功时必须丢弃迟到的过程事件`() {
         val context = notificationContext()
         val executionId = UUID.randomUUID().toString()
 
         notify(context, executionId, "SUCCEEDED", "任务完成")
-        notify(context, executionId, "CONNECTION_LOST", "SSH 连接断开")
+        notify(context, executionId, "WAITING_APPROVAL", "Agent 需要你的确认")
 
         val notifications = notifications(context)
-        assertEquals("成功后的迟到断线事件不能生成第二条通知", 1, notifications.size)
+        assertEquals("成功后的迟到过程事件不能生成第二条通知", 1, notifications.size)
         assertEquals(context.localizeUiMessage("任务完成"), notifications.single().extras.getCharSequence(Notification.EXTRA_TITLE)?.toString())
-    }
-
-    @Test
-    fun `从未通知断线时禁止单独发送重新连接通知`() {
-        val context = notificationContext()
-
-        notify(context, UUID.randomUUID().toString(), "RECONNECTED", "SSH 连接已恢复")
-
-        assertTrue("没有 CONNECTION_LOST 状态时，RECONNECTED 属于假通知", notifications(context).isEmpty())
-    }
-
-    @Test
-    fun `自动重试期间同一Execution只发送一次断线通知`() {
-        val context = notificationContext()
-        val executionId = UUID.randomUUID().toString()
-
-        notify(context, executionId, "CONNECTION_LOST", "SSH 连接断开")
-        notify(context, executionId, "CONNECTION_LOST", "SSH 连接断开")
-
-        assertEquals("同一任务的重复重连不能刷出多条通知", 1, notifications(context).size)
     }
 
     @Test
@@ -199,11 +179,11 @@ class AgentBackgroundPlanNotificationContractTest {
     }
 
     @Test
-    fun `任务事件通知必须覆盖完成失败审批断线和恢复并做去重`() {
+    fun `任务事件通知必须覆盖完成失败审批并做去重`() {
         val notificationSources = allSources
             .filter { (file, text) -> file.name.contains("Notification") || text.contains("NotificationCompat.Builder") }
             .joinToString("\n") { it.second }
-        listOf("SUCCEEDED", "FAILED", "WAITING_APPROVAL", "CONNECTION_LOST", "RECONNECTED").forEach { event ->
+        listOf("SUCCEEDED", "FAILED", "WAITING_APPROVAL").forEach { event ->
             assertTrue("通知系统缺少 $event 事件", notificationSources.contains(event))
         }
         assertTrue(

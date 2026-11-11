@@ -85,7 +85,7 @@ class ComputerAddFormTest {
             username = "ubuntu",
             authKind = ComputerAuthKind.PASSWORD,
             credentialState = ComputerCredentialState.DEDICATED_KEY,
-            runMode = ComputerRunMode.CONTAINER,
+            runMode = ComputerRunMode.DIRECT,
             status = ComputerStatus.READY,
         )
 
@@ -115,7 +115,7 @@ class ComputerAddFormTest {
             port = 22,
             username = "root",
             authKind = ComputerAuthKind.PASSWORD,
-            runMode = ComputerRunMode.CONTAINER,
+            runMode = ComputerRunMode.DIRECT,
         )
 
         assertEquals(

@@ -11,7 +11,6 @@ class AgentBackgroundPlanServiceContractTest {
     private val viewModel = AgentBackgroundPlanTestFiles.source("statecontroller/viewmodel/AppViewModel.kt")
     private val computerManager = AgentBackgroundPlanTestFiles.source("statecontroller/viewmodel/ComputerManager.kt")
     private val apiHandlerCode = AgentBackgroundPlanTestFiles.code("statecontroller/api/ApiHandler.kt")
-    private val wrapper = AgentBackgroundPlanTestFiles.asset("runtime-wrapper.sh")
     private val repository = AgentBackgroundPlanTestFiles.source("data/computer/ComputerRepository.kt")
     private val dao = AgentBackgroundPlanTestFiles.source("data/database/daos/ComputerDao.kt")
     private val agentDao = AgentBackgroundPlanTestFiles.source("data/database/daos/AgentDao.kt")
@@ -120,8 +119,6 @@ class AgentBackgroundPlanServiceContractTest {
     @Test
     fun `Room变更和网络恢复必须立即触发对账`() {
         assertTrue("服务必须观察 AgentRun 的 Room Flow", service.contains("agentDao.observeServiceRuns()"))
-        assertTrue("服务必须观察 Execution 的 Room Flow", service.contains("computerDao.observeExecutionChanges()"))
-        assertTrue("两个 Room 信号必须合并到同一对账入口", service.contains("combine("))
         assertTrue("网络恢复必须立即触发对账", service.contains("onAvailable") && service.contains("network_available"))
         assertFalse("禁止恢复三秒数据库轮询", service.contains("delay(3_000L)"))
     }
@@ -151,11 +148,7 @@ class AgentBackgroundPlanServiceContractTest {
     }
 
     @Test
-    fun `服务退出前必须查询持久化活动任务和待审批任务`() {
-        assertTrue(
-            "服务生命周期必须考虑 Room 中的 ComputerExecution",
-            service.contains("activeExecution") || service.contains("hasActiveExecution") || service.contains("loadActive"),
-        )
+    fun `服务退出前必须查询待审批任务`() {
         assertTrue(
             "WAITING_APPROVAL 也必须阻止服务自然退出",
             service.contains("WAITING_APPROVAL") || service.contains("waitingApproval"),
@@ -177,31 +170,13 @@ class AgentBackgroundPlanServiceContractTest {
     }
 
     @Test
-    fun `服务必须按VPS复用Transport并按Execution区分Channel`() {
+    fun `服务必须按VPS复用Transport`() {
         val monitorAndPool = AgentBackgroundPlanTestFiles.allProductionKotlin()
             .filter { (file, text) -> file.name.contains("ConnectionPool") || file.name.contains("Service") || text.contains("taskMonitor") }
             .joinToString("\n") { it.second }
         assertTrue("必须按 computerId 复用 Transport", monitorAndPool.contains("computerId"))
-        assertTrue("必须按 executionId 管理任务 Channel", monitorAndPool.contains("executionId") || monitorAndPool.contains("execution_id"))
         val repositorySource = AgentBackgroundPlanTestFiles.source("data/computer/ComputerRepository.kt")
         assertTrue("Service 与 ComputerManager 的 Repository 必须共用进程级连接池", repositorySource.contains("ComputerConnectionPoolRegistry.get"))
-        assertTrue("每条活动任务必须启动独立 Watch Job", service.contains("startExecutionWatch(execution.id)"))
-    }
-
-    @Test
-    fun `远端协议异常只能结束单条监听不能结束App`() {
-        assertTrue("Repository 必须把 Watch 协议异常转成业务错误", repository.contains("catch (error: ComputerRemoteExecutionProtocolException)"))
-        assertTrue("单条 Watch 必须保留最终异常保护", serviceCode.contains("catch (error: Throwable)"))
-        assertTrue("确定无法恢复时必须对账收尾", serviceCode.contains("handleTerminalExecution(executionId, null)"))
-    }
-
-    @Test
-    fun `进度写库必须在二百到五百毫秒窗口内合并`() {
-        assertTrue("Wrapper 必须用约 300ms 的采样窗口合并密集输出", wrapper.contains("sleep 0.3"))
-        assertTrue("Repository 必须真实提交进度游标", repository.contains("updateRemoteExecutionProgress("))
-        assertTrue("DAO 必须原子推进 stdout 游标", dao.contains("stdoutCursor = CASE WHEN"))
-        assertTrue("DAO 必须原子推进 stderr 游标", dao.contains("stderrCursor = CASE WHEN"))
-        assertFalse("Service 不能再用空 delay 冒充进度监听", serviceCode.contains("delay(300L)"))
     }
 
     @Test

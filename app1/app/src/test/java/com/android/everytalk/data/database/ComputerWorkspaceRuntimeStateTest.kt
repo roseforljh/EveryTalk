@@ -49,7 +49,7 @@ class ComputerWorkspaceRuntimeStateTest {
                 port = 22,
                 username = "root",
                 authKind = ComputerAuthKind.PASSWORD,
-                runMode = ComputerRunMode.CONTAINER,
+                runMode = ComputerRunMode.DIRECT,
                 status = ComputerStatus.READY,
             ).toEntity(Json),
         )
@@ -58,7 +58,7 @@ class ComputerWorkspaceRuntimeStateTest {
                 id = "workspace_1",
                 computerId = "computer_1",
                 conversationId = "new_chat_1",
-                runMode = ComputerRunMode.CONTAINER,
+                runMode = ComputerRunMode.DIRECT,
                 hostPath = "~/.everytalk/workspaces/workspace_1",
             ).toEntity(),
         )

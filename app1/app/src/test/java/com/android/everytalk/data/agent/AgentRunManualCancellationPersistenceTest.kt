@@ -66,7 +66,7 @@ class AgentRunManualCancellationPersistenceTest {
         val snapshot = run("run-stopped", "message-stopped", AgentRunStatus.MODEL_CONTINUATION_PENDING)
         database.agentDao().upsertRun(snapshot)
         store.cancelActiveRunByVisibleMessage(snapshot.visibleAssistantMessageId, AgentTerminalReasons.USER_STOP)
-        store.updateRunStatus(snapshot, AgentRunStatus.WAITING_REMOTE_EXECUTION)
+        store.updateRunStatus(snapshot, AgentRunStatus.EXECUTING_TOOL)
         store.updateRunStatus(snapshot, AgentRunStatus.MODEL_CONTINUATION_PENDING)
         val persisted = database.agentDao().getRun(snapshot.id)
         assertEquals(AgentRunStatus.CANCELLED.name, persisted?.status)

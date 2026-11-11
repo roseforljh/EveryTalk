@@ -21,7 +21,7 @@ class ComputerHostKeyRecoveryTest {
         hostKeyBlobBase64 = Base64.getEncoder().encodeToString(byteArrayOf(1)),
         hostKeyFingerprint = "SHA256:old",
         authKind = ComputerAuthKind.PASSWORD,
-        runMode = ComputerRunMode.CONTAINER,
+        runMode = ComputerRunMode.DIRECT,
         status = ComputerStatus.READY,
     )
     private val replacement = HostKeyProbeResult(

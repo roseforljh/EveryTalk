@@ -17,38 +17,6 @@ class ComputerConnectionRetryPolicyTest {
     }
 
     @Test
-    fun `旧容器可按需轻量升级且SSH默认模式不要求升级`() {
-        val container = computer(
-            runMode = ComputerRunMode.CONTAINER,
-            bootstrapVersion = "8",
-            dockerAvailable = true,
-        )
-
-        assertTrue(container.needsContainerRuntimeUpgrade())
-        assertTrue(container.canUseRuntimeOnlyUpgrade())
-        assertTrue(container.copy(bootstrapVersion = "9").canUseRuntimeOnlyUpgrade())
-        assertTrue(container.copy(bootstrapVersion = "10").canUseRuntimeOnlyUpgrade())
-        assertTrue(container.copy(bootstrapVersion = "11").canUseRuntimeOnlyUpgrade())
-        assertFalse(container.copy(bootstrapVersion = null).needsContainerRuntimeUpgrade())
-        assertFalse(container.copy(capabilities = ComputerCapabilities(dockerAvailable = false)).canUseRuntimeOnlyUpgrade())
-        assertFalse(container.copy(runMode = ComputerRunMode.DIRECT).needsContainerRuntimeUpgrade())
-        assertTrue(container.copy(runMode = ComputerRunMode.DIRECT).canUseRuntimeOnlyUpgrade())
-        assertEquals(false, container.copy(bootstrapVersion = COMPUTER_BOOTSTRAP_VERSION).needsContainerRuntimeUpgrade())
-    }
-
-    @Test
-    fun `只有活动Container任务会阻止升级`() {
-        val container = execution(ComputerExecTarget.CONTAINER.name)
-        val legacyContainer = execution(null)
-        val host = execution(ComputerExecTarget.HOST.name)
-
-        assertTrue(hasActiveContainerExecution(listOf(container)))
-        assertTrue(hasActiveContainerExecution(listOf(legacyContainer)))
-        assertFalse(hasActiveContainerExecution(listOf(host)))
-        assertFalse(hasActiveContainerExecution(emptyList()))
-    }
-
-    @Test
     fun `SSH 通道包装异常也必须视为坏连接`() {
         assertTrue(isComputerConnectionFailure(ComputerSshChannelOpenException(java.io.IOException("channel closed"))))
     }

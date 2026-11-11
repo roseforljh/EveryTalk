@@ -23,8 +23,7 @@ import java.util.zip.ZipOutputStream
 
 /** 覆盖默认上传真正发布文件的步骤；原有附件桥接测试没有执行到 SFTP rename。 */
 class ComputerFileTransferTest {
-    private val root = "/home/test/.everytalk/workspaces/transfer-test"
-    private fun workspace() = ComputerWorkspace("transfer-test", "test", "test", ComputerRunMode.DIRECT, root)
+    private val root = "/home/test/transfer-test"
 
     @Test
     fun `SFTPv3默认上传不能携带会被SSHJ拒绝的原子重命名参数`() = runBlocking {
@@ -34,12 +33,12 @@ class ComputerFileTransferTest {
         every { client.isConnected } returns true
         every { client.isAuthenticated } returns true
         every { client.newSFTPClient() } returns sftp
-        every { sftp.canonicalize(root) } returns root
+        every { sftp.canonicalize(any()) } answers { firstArg() }
         every { sftp.canonicalize(".") } returns "/home/test"
-        every { sftp.lstat(any()) } answers {
+        every { sftp.stat(any()) } answers {
             val path = firstArg<String>()
             if (path != root && path !in files) throw SFTPException(Response.StatusCode.NO_SUCH_FILE, "missing")
-            mockk<FileAttributes> { every { type } returns if (path == root) FileMode.Type.DIRECTORY else FileMode.Type.REGULAR }
+            mockk<FileAttributes>(relaxed = true) { every { type } returns if (path == root) FileMode.Type.DIRECTORY else FileMode.Type.REGULAR }
         }
         every { sftp.open(any(), any()) } answers {
             val path = firstArg<String>()
@@ -66,14 +65,14 @@ class ComputerFileTransferTest {
         ComputerSshConnection(client).use { connection ->
             val transfer = ComputerFileTransfer()
             val bytes = ByteArray(150_000) { (it % 251).toByte() }
-            transfer.upload(connection, workspace(), "upload-1", "archive.zip", ByteArrayInputStream(bytes), bytes.size.toLong(), false)
+            transfer.upload(connection, "upload-1", "$root/archive.zip", ByteArrayInputStream(bytes), bytes.size.toLong(), false)
             assertArrayEquals(bytes, files["$root/archive.zip"])
-            val duplicate = runCatching { transfer.upload(connection, workspace(), "upload-2", "archive.zip", ByteArrayInputStream(byteArrayOf(7)), 1, false) }.exceptionOrNull()
+            val duplicate = runCatching { transfer.upload(connection, "upload-2", "$root/archive.zip", ByteArrayInputStream(byteArrayOf(7)), 1, false) }.exceptionOrNull()
             assertEquals(ComputerErrorCodes.WORKSPACE_PATH_INVALID, (duplicate as ComputerException).code)
             assertArrayEquals(bytes, files["$root/archive.zip"])
-            transfer.upload(connection, workspace(), "upload-3", "archive.zip", ByteArrayInputStream(byteArrayOf(7)), 1, true)
+            transfer.upload(connection, "upload-3", "$root/archive.zip", ByteArrayInputStream(byteArrayOf(7)), 1, true)
             assertArrayEquals(byteArrayOf(7), files["$root/archive.zip"])
-            val mismatch = runCatching { transfer.upload(connection, workspace(), "upload-4", "bad.zip", ByteArrayInputStream(bytes), bytes.size + 1L, false) }.exceptionOrNull()
+            val mismatch = runCatching { transfer.upload(connection, "upload-4", "$root/bad.zip", ByteArrayInputStream(bytes), bytes.size + 1L, false) }.exceptionOrNull()
             assertEquals(ComputerErrorCodes.UPLOAD_INTERRUPTED, (mismatch as ComputerException).code)
             assertEquals(setOf("$root/archive.zip"), files.keys)
         }
@@ -111,24 +110,24 @@ class ComputerFileTransferTest {
                 val transfer = ComputerFileTransfer()
                 val name = "diagnostics-${UUID.randomUUID()}.zip"
                 val badName = "bad-${UUID.randomUUID()}.zip"
-                val uploaded = transfer.upload(connection, workspace(), "real-upload", name, ByteArrayInputStream(zipped), zipped.size.toLong(), false)
+                val uploaded = transfer.upload(connection, "real-upload", "$root/$name", ByteArrayInputStream(zipped), zipped.size.toLong(), false)
                 val output = ByteArrayOutputStream()
-                val downloaded = transfer.download(connection, workspace(), name, output)
+                val downloaded = transfer.download(connection, "$root/$name", output)
                 assertEquals(uploaded.sha256, downloaded.sha256)
                 assertArrayEquals(zipped, output.toByteArray())
                 ZipInputStream(ByteArrayInputStream(output.toByteArray())).use { zip ->
                     assertEquals("diagnostics.log", zip.nextEntry.name)
                     assertArrayEquals(payload, zip.readBytes())
                 }
-                assertTrue(runCatching { transfer.upload(connection, workspace(), "real-duplicate", name, ByteArrayInputStream(byteArrayOf(9)), 1, false) }.exceptionOrNull() is ComputerException)
+                assertTrue(runCatching { transfer.upload(connection, "real-duplicate", "$root/$name", ByteArrayInputStream(byteArrayOf(9)), 1, false) }.exceptionOrNull() is ComputerException)
                 val unchanged = ByteArrayOutputStream()
-                transfer.download(connection, workspace(), name, unchanged)
+                transfer.download(connection, "$root/$name", unchanged)
                 assertArrayEquals(zipped, unchanged.toByteArray())
-                transfer.upload(connection, workspace(), "real-overwrite", name, ByteArrayInputStream(byteArrayOf(9)), 1, true)
+                transfer.upload(connection, "real-overwrite", "$root/$name", ByteArrayInputStream(byteArrayOf(9)), 1, true)
                 val changed = ByteArrayOutputStream()
-                transfer.download(connection, workspace(), name, changed)
+                transfer.download(connection, "$root/$name", changed)
                 assertArrayEquals(byteArrayOf(9), changed.toByteArray())
-                assertTrue(runCatching { transfer.upload(connection, workspace(), "real-bad", badName, ByteArrayInputStream(zipped), zipped.size + 1L, false) }.exceptionOrNull() is ComputerException)
+                assertTrue(runCatching { transfer.upload(connection, "real-bad", "$root/$badName", ByteArrayInputStream(zipped), zipped.size + 1L, false) }.exceptionOrNull() is ComputerException)
                 connection.withSftp { sftp ->
                     assertNull(sftp.statExistence("$root/$badName"))
                     assertNull(sftp.statExistence("$root/$badName.everytalk-real-bad.upload"))

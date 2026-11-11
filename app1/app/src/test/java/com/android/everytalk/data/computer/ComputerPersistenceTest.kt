@@ -71,7 +71,7 @@ class ComputerPersistenceTest {
             username = "root",
             authKind = ComputerAuthKind.PRIVATE_KEY,
             credentialState = ComputerCredentialState.ORIGINAL_ENCRYPTED,
-            runMode = ComputerRunMode.CONTAINER,
+            runMode = ComputerRunMode.DIRECT,
             status = ComputerStatus.READY,
             capabilities = ComputerCapabilities(
                 osId = "ubuntu",

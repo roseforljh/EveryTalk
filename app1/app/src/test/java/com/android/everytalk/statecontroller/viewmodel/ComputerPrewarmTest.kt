@@ -21,19 +21,16 @@ class ComputerPrewarmTest {
         val computer = com.android.everytalk.data.computer.Computer(
             id = "server", displayName = "server", host = "example.com", port = 22, username = "user",
             authKind = com.android.everytalk.data.computer.ComputerAuthKind.PASSWORD,
-            runMode = com.android.everytalk.data.computer.ComputerRunMode.CONTAINER,
+            runMode = com.android.everytalk.data.computer.ComputerRunMode.DIRECT,
         )
         val workspace = com.android.everytalk.data.computer.ComputerWorkspace(
             id = "ws_legacy", computerId = computer.id, conversationId = "session",
-            runMode = com.android.everytalk.data.computer.ComputerRunMode.CONTAINER,
+            runMode = com.android.everytalk.data.computer.ComputerRunMode.DIRECT,
             hostPath = "/home/user/.everytalk/workspaces/ws_legacy", containerName = "everytalk-ws_legacy",
         )
         val prompt = buildComputerEnvironmentPrompt(computer, workspace)
-        assertTrue(prompt.contains("exec defaults to target=host"))
-        assertTrue(prompt.contains("later calls still default to host"))
-        assertTrue(prompt.contains("supersede earlier container defaults in conversation history"))
-        assertTrue(prompt.contains(workspace.hostPath))
-        assertFalse(prompt.contains("persistent /workspace Container"))
+        assertTrue(prompt.contains("supersede any container or /workspace rules in earlier conversation history"))
+        assertFalse(prompt.contains(workspace.hostPath))
         assertFalse(prompt.contains(workspace.containerName!!))
         val method = sourceFile("ComputerManager.kt").substringAfter("suspend fun computerSessionState(")
             .substringBefore("suspend fun approvalRequest(")
@@ -123,11 +120,11 @@ class ComputerPrewarmTest {
     }
 
     @Test
-    fun `远端Workspace准备只按ID更新运行字段`() {
+    fun `本地Workspace准备只按ID更新运行字段`() {
         val managerSource = sourceFile("../../data/computer/ComputerWorkspaceManager.kt")
         val daoSource = sourceFile("../../data/database/daos/ComputerDao.kt")
         val prepare = managerSource.substringAfter("suspend fun prepare(workspaceId: String)")
-            .substringBefore("suspend fun prepareContainer")
+            .substringBefore("    suspend fun ")
 
         assertTrue(prepare.contains("getWorkspaceById(workspaceId)"))
         assertTrue(prepare.contains("updateWorkspaceRuntimeState("))
@@ -136,7 +133,7 @@ class ComputerPrewarmTest {
         assertEquals(
             false,
             daoSource.substringAfter("suspend fun updateWorkspaceRuntimeState(")
-                .substringBefore("/** Container")
+                .substringBefore(")")
                 .contains("conversationId"),
         )
     }

@@ -838,7 +838,7 @@ class AgentApprovalPersistenceTest {
             pendingToolCalls = listOf(call),
             request = ComputerToolApprovalRequest.PublicPreview(
                 toolCallId = call.id,
-                request = ComputerPublicPreviewRequest(context, 8080, "http", null, ComputerExecTarget.HOST),
+                request = ComputerPublicPreviewRequest(context, 8080, "http", null),
                 computerName = "VPS",
             ),
         )

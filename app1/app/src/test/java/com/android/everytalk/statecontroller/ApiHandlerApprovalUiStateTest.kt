@@ -87,7 +87,7 @@ class ApiHandlerApprovalUiStateTest {
 
     @Test
     fun `Room恢复状态只让未结束Run占用界面`() {
-        assertTrue(isActiveAgentUiStatus(AgentRunStatus.WAITING_REMOTE_EXECUTION))
+        assertTrue(isActiveAgentUiStatus(AgentRunStatus.EXECUTING_TOOL))
         assertTrue(isActiveAgentUiStatus(AgentRunStatus.MODEL_CONTINUATION_PENDING))
         assertFalse(isActiveAgentUiStatus(AgentRunStatus.INTERRUPTED))
         assertFalse(isActiveAgentUiStatus(AgentRunStatus.COMPLETED))

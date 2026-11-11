@@ -78,7 +78,7 @@ class ComputerSecretEnvWriterTest {
         // Windows 复用 Git 的 POSIX Shell，Linux/macOS 使用系统 sh，无需新增测试依赖。
         val gitShell = File(System.getenv("ProgramFiles") ?: "C:/Program Files", "Git/bin/bash.exe")
         val shell = if (System.getProperty("os.name").orEmpty().startsWith("Windows") && gitShell.isFile) gitShell.path else "sh"
-        val command = prefix + ComputerSecretEnvWriter.buildUpsertCommand(".", path, "API_KEY")
+        val command = "HOME=\"${'$'}PWD\"; " + prefix + ComputerSecretEnvWriter.buildUpsertCommand(path, "API_KEY")
         // Windows 对 bash -c 的引号会再次解析；通过脚本文件执行保留与 SSH 相同的原文。
         val script = File(root, "write-test.sh").apply { writeText(command, Charsets.UTF_8) }
         val process = ProcessBuilder(shell, script.invariantSeparatorsPath).directory(root).start()
@@ -98,17 +98,9 @@ class ComputerSecretEnvWriterTest {
 
     @Test
     fun `脚本不包含 Secret 值且固定写入变量`() {
-        val command = ComputerSecretEnvWriter.buildUpsertCommand("/opt/app", ".env.local", "API_KEY")
+        val command = ComputerSecretEnvWriter.buildUpsertCommand("/opt/app/.env.local", "API_KEY")
         assertTrue(command.contains("awk"))
         assertTrue(command.contains("API_KEY") || command.contains("'API_KEY'"))
-        assertFalse(command.contains("real-secret"))
-    }
-
-    @Test
-    fun `Container 写入使用 docker exec stdin 且不暴露 Secret`() {
-        val command = ComputerSecretEnvWriter.buildContainerUpsertCommand("everytalk-ws_1", ".env", "API_KEY")
-        assertTrue(command.startsWith("docker exec -i 'everytalk-ws_1' sh -c"))
-        assertTrue(command.contains("/workspace") && command.contains(".env"))
         assertFalse(command.contains("real-secret"))
     }
 

@@ -61,8 +61,7 @@ class ComputerToolCatalogTest {
         assertTrue(refreshed.tools!!.contains(externalTool))
         val exec = refreshed.tools!!.first { (it["function"] as? Map<*, *>)?.get("name") == "exec" }
         val parameters = (exec["function"] as Map<*, *>)["parameters"] as Map<*, *>
-        val target = (parameters["properties"] as Map<*, *>)["target"] as Map<*, *>
-        assertEquals("host", target["default"])
+        assertFalse((parameters["properties"] as Map<*, *>).containsKey("target"))
         val sent = com.android.everytalk.data.network.SystemPromptInjector.injectSystemPrompt(refreshed.messages)
         val system = (sent.first() as com.android.everytalk.data.DataClass.SimpleTextApiMessage).content
         assertTrue(system.contains(environment))
@@ -146,33 +145,11 @@ class ComputerToolCatalogTest {
     }
 
     @Test
-    fun `exec默认使用SSH并允许按次选择容器`() {
-        val exec = ComputerToolCatalog.definitions().first { definition ->
-            val function = definition["function"] as Map<*, *>
-            function["name"] == ComputerToolNames.EXEC
+    fun `exec和openPort不再暴露执行目标参数`() {
+        listOf(ComputerToolNames.EXEC, ComputerToolNames.OPEN_PORT).forEach { name ->
+            val definition = ComputerToolCatalog.definitions().first { (it["function"] as Map<*, *>)["name"] == name }
+            val parameters = (definition["function"] as Map<*, *>)["parameters"] as Map<*, *>
+            assertFalse(name, (parameters["properties"] as Map<*, *>).containsKey("target"))
         }
-        val function = exec["function"] as Map<*, *>
-        val parameters = function["parameters"] as Map<*, *>
-        val properties = parameters["properties"] as Map<*, *>
-        val target = properties["target"] as Map<*, *>
-
-        assertEquals(listOf("container", "host"), target["enum"])
-        assertEquals("host", target["default"])
-        assertTrue((function["description"] as String).contains("specific operation needs isolation"))
-    }
-
-    @Test
-    fun `openPort可以预览容器服务和VPS已有服务`() {
-        val openPort = ComputerToolCatalog.definitions().first { definition ->
-            val function = definition["function"] as Map<*, *>
-            function["name"] == ComputerToolNames.OPEN_PORT
-        }
-        val function = openPort["function"] as Map<*, *>
-        val parameters = function["parameters"] as Map<*, *>
-        val properties = parameters["properties"] as Map<*, *>
-        val target = properties["target"] as Map<*, *>
-
-        assertEquals(listOf("container", "host"), target["enum"])
-        assertEquals("host", target["default"])
     }
 }

@@ -13,7 +13,6 @@ class ComputerHostCommandPolicyTest {
             ComputerExecRequest(
                 command = "systemctl status nginx",
                 cwd = "~",
-                target = ComputerExecTarget.HOST,
             ),
         )
 
@@ -26,7 +25,6 @@ class ComputerHostCommandPolicyTest {
             ComputerExecRequest(
                 command = "systemctl restart nginx",
                 cwd = "~",
-                target = ComputerExecTarget.HOST,
             ),
         )
 
@@ -44,38 +42,10 @@ class ComputerHostCommandPolicyTest {
 
         cases.forEach { (command, expectedRisk) ->
             val assessment = ComputerHostCommandPolicy.assess(
-                ComputerExecRequest(command = command, cwd = "~", target = ComputerExecTarget.HOST),
+                ComputerExecRequest(command = command, cwd = "~"),
             )
             assertTrue(command, assessment.requiresConfirmation)
             assertTrue(command, expectedRisk in assessment.risks)
-        }
-    }
-
-    @Test
-    fun `主机环境变量stdin和后台执行在确认前直接拒绝`() {
-        val requests = listOf(
-            ComputerExecRequest(
-                command = "uname -a",
-                cwd = "~",
-                environment = mapOf("LANG" to "C"),
-                target = ComputerExecTarget.HOST,
-            ),
-            ComputerExecRequest(
-                command = "uname -a",
-                cwd = "~",
-                stdin = "input",
-                target = ComputerExecTarget.HOST,
-            ),
-            ComputerExecRequest(
-                command = "uname -a",
-                cwd = "~",
-                background = true,
-                target = ComputerExecTarget.HOST,
-            ),
-        )
-
-        requests.forEach { request ->
-            assertTrue(runCatching { requireValidComputerExecRequest(request) }.exceptionOrNull() is ComputerException)
         }
     }
 
@@ -97,7 +67,7 @@ class ComputerHostCommandPolicyTest {
 
         commands.forEach { command ->
             val assessment = ComputerHostCommandPolicy.assess(
-                ComputerExecRequest(command = command, cwd = "~", target = ComputerExecTarget.HOST),
+                ComputerExecRequest(command = command, cwd = "~"),
             )
             assertFalse(command, assessment.requiresConfirmation)
         }
@@ -113,7 +83,7 @@ class ComputerHostCommandPolicyTest {
 
         commands.forEach { command ->
             val assessment = ComputerHostCommandPolicy.assess(
-                ComputerExecRequest(command = command, cwd = "~", target = ComputerExecTarget.HOST),
+                ComputerExecRequest(command = command, cwd = "~"),
             )
             assertFalse(command, assessment.requiresConfirmation)
         }
@@ -125,7 +95,6 @@ class ComputerHostCommandPolicyTest {
             ComputerExecRequest(
                 command = "df -h; echo \"=== Top 15 largest dirs in / ===\"; du -ahx / 2>/dev/null | sort -rh | head -n 15",
                 cwd = "~",
-                target = ComputerExecTarget.HOST,
             ),
         )
 
@@ -142,7 +111,7 @@ class ComputerHostCommandPolicyTest {
 
         commands.forEach { command ->
             val assessment = ComputerHostCommandPolicy.assess(
-                ComputerExecRequest(command = command, cwd = "~", target = ComputerExecTarget.HOST),
+                ComputerExecRequest(command = command, cwd = "~"),
             )
             assertTrue(command, assessment.requiresConfirmation)
         }
@@ -179,7 +148,7 @@ class ComputerHostCommandPolicyTest {
 
         commands.forEach { command ->
             val assessment = ComputerHostCommandPolicy.assess(
-                ComputerExecRequest(command = command, cwd = "~", target = ComputerExecTarget.HOST),
+                ComputerExecRequest(command = command, cwd = "~"),
             )
             assertTrue(command, assessment.requiresConfirmation)
         }
@@ -196,26 +165,10 @@ class ComputerHostCommandPolicyTest {
 
         cases.forEach { (command, expectedRisk) ->
             val assessment = ComputerHostCommandPolicy.assess(
-                ComputerExecRequest(command = command, cwd = "~", target = ComputerExecTarget.HOST),
+                ComputerExecRequest(command = command, cwd = "~"),
             )
             assertTrue(command, expectedRisk in assessment.risks)
         }
-    }
-
-    @Test
-    fun `主机后台参数被拒绝避免留下无法管理的进程`() {
-        val error = runCatching {
-            requireValidExecTargetOptions(
-                ComputerExecRequest(
-                    command = "sleep 30",
-                    cwd = "~",
-                    background = true,
-                    target = ComputerExecTarget.HOST,
-                ),
-            )
-        }.exceptionOrNull()
-
-        assertTrue(error is ComputerException)
     }
 
     @Test
@@ -230,7 +183,7 @@ class ComputerHostCommandPolicyTest {
 
         cases.forEach { (command, expectedRisk) ->
             val assessment = ComputerHostCommandPolicy.assess(
-                ComputerExecRequest(command = command, cwd = "~", target = ComputerExecTarget.HOST),
+                ComputerExecRequest(command = command, cwd = "~"),
             )
             assertTrue(command, assessment.requiresConfirmation)
             assertTrue(command, expectedRisk in assessment.risks)
@@ -252,7 +205,7 @@ class ComputerHostCommandPolicyTest {
 
         cases.forEach { (command, expectedRisk) ->
             val assessment = ComputerHostCommandPolicy.assess(
-                ComputerExecRequest(command = command, cwd = "~", target = ComputerExecTarget.HOST),
+                ComputerExecRequest(command = command, cwd = "~"),
             )
             assertTrue(command, assessment.requiresConfirmation)
             assertTrue(command, expectedRisk in assessment.risks)
@@ -262,10 +215,9 @@ class ComputerHostCommandPolicyTest {
     @Test
     fun `无效主机参数不会进入确认流程`() {
         val cases = listOf(
-            ComputerExecRequest(command = "uname -a", cwd = "relative", target = ComputerExecTarget.HOST),
-            ComputerExecRequest(command = "uname -a", cwd = "~", timeoutMillis = 0, target = ComputerExecTarget.HOST),
-            ComputerExecRequest(command = "x".repeat(64 * 1024 + 1), cwd = "~", target = ComputerExecTarget.HOST),
-            ComputerExecRequest(command = "uname -a", cwd = "~", asRoot = true, target = ComputerExecTarget.HOST),
+            ComputerExecRequest(command = "uname -a", cwd = "relative"),
+            ComputerExecRequest(command = "uname -a", cwd = "~", timeoutMillis = 0),
+            ComputerExecRequest(command = "x".repeat(64 * 1024 + 1), cwd = "~"),
         )
 
         cases.forEach { request ->

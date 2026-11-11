@@ -14,55 +14,12 @@ class AgentBackgroundPlanStopAndDeletionContractTest {
     private val computerManagerCode = AgentBackgroundPlanTestFiles.code("statecontroller/viewmodel/ComputerManager.kt")
 
     @Test
-    fun `停止必须按当前AgentRun查询而不是按整个会话`() {
-        assertTrue("ComputerToolExecutor.cancelActiveExecutions 必须接收 runId", executor.contains("runId"))
+    fun `用户点击停止必须持久化USER_STOP`() {
+        val stopBlock = apiHandler.substringAfter("private fun launchStopConfirmation", "")
+            .substringBefore("private fun completeConfirmedAgentStop", "")
         assertTrue(
-            "DAO 必须按持久 Run 关联查询",
-            dao.contains("agentRunId = :agentRunId") || dao.contains("runId = :runId"),
-        )
-        assertFalse(
-            "停止入口不能继续只把 conversationId 传给取消器",
-            executor.contains("cancelActiveExecutions(conversationId: String)"),
-        )
-        val stopBlock = apiHandler.substringAfter("private fun launchStopConfirmation", "")
-            .substringBefore("fun retryRemoteStopConfirmation", "")
-        assertTrue("停止入口必须把原 Run 的 ID 和固定会话传给远端取消器",
-            stopBlock.contains("cancelComputerExecutions(operation.conversationId, run.id)"))
-        assertTrue("重试必须保留点击时的消息身份", stopBlock.contains("operation.messageId"))
-    }
-
-    @Test
-    fun `停止必须包含前台和RETURN_HANDLE后台任务`() {
-        val cancelQuery = dao.substringAfter("停止按钮", "")
-            .substringBefore("先记录取消意图", "")
-        assertFalse(
-            "取消查询不得排除 RETURN_HANDLE",
-            cancelQuery.contains("completionMode != 'RETURN_HANDLE'") || cancelQuery.contains("completionMode != \"RETURN_HANDLE\""),
-        )
-        assertTrue("取消查询必须覆盖 STARTING", cancelQuery.contains("STARTING"))
-        assertTrue("取消查询必须覆盖 RUNNING", cancelQuery.contains("RUNNING"))
-    }
-
-    @Test
-    fun `用户点击停止必须先写USER_STOP再写取消意图再发SSH`() {
-        // 首次停止和重试共用确认函数；检查真实持久化调用，不能只检查注释或外层取消登记。
-        val stopBlock = apiHandler.substringAfter("private fun launchStopConfirmation", "")
-            .substringBefore("fun retryRemoteStopConfirmation", "")
-        val userStop = stopBlock.indexOf("agentRunStore.cancelActiveRunByVisibleMessage(operation.messageId, AgentTerminalReasons.USER_STOP)")
-        val cancelCall = stopBlock.indexOf("cancelComputerExecutions")
-        assertTrue("输入框停止没有保存 USER_STOP", userStop >= 0)
-        assertTrue("必须先保存 USER_STOP，再发远端取消", cancelCall > userStop)
-        assertTrue("ComputerToolExecutor 必须先标记取消意图", executor.indexOf("markRemoteExecutionCancellationRequested") < executor.indexOf("cancelRemoteExecution"))
-    }
-
-    @Test
-    fun `取消和完成竞争必须以VPS返回终态为准`() {
-        val cancelBlock = executor.substringAfter("markRemoteExecutionCancellationRequested", "")
-            .substringBefore("在模型首轮思考期间", "")
-        assertTrue("取消结果必须读取远端 snapshot/status", cancelBlock.contains("snapshot") && cancelBlock.contains("status"))
-        assertFalse(
-            "发出取消请求后不能无条件把本地状态覆盖成 CANCELLED",
-            cancelBlock.contains("ComputerExecutionStatus.CANCELLED") && !cancelBlock.contains("snapshot.status"),
+            "输入框停止没有保存 USER_STOP",
+            stopBlock.contains("agentRunStore.cancelActiveRunByVisibleMessage(operation.messageId, AgentTerminalReasons.USER_STOP)"),
         )
     }
 
@@ -86,33 +43,24 @@ class AgentBackgroundPlanStopAndDeletionContractTest {
     }
 
     @Test
-    fun `确认删除会话必须先取消任务成功后再删除Workspace和聊天`() {
+    fun `确认删除会话先清本地Workspace再删除聊天`() {
         val commandEntry = historyManager.substringAfter("executeDeleteConversationInternal", "")
             .substringBefore("private suspend fun deleteConversationInternal", "")
         assertTrue("删除命令入口必须调用真实删除流程", commandEntry.contains("deleteConversationInternal("))
         val deleteBlock = computerManagerCode.substringAfter("suspend fun deleteWorkspacesForConversation", "")
             .substringBefore("suspend fun disconnect", "")
-        val cancelIndex = deleteBlock.indexOf("toolExecutor.cancelActiveExecutions")
-        val workspaceIndex = deleteBlock.indexOf("workspaceManager.deleteRemote")
         val historyDeleteBlock = historyManager.substringAfter("deleteConversationWorkspaces(sessionId)", "")
             .substringBefore("historicalConversations.value", "")
-        val sessionIndex = historyDeleteBlock.indexOf("deleteHistorySession")
-        assertTrue("删除会话必须先取消活动任务", cancelIndex >= 0)
-        assertTrue("取消成功后必须删除对应 Workspace", workspaceIndex > cancelIndex)
-        assertTrue(
-            "Workspace 的 SSH 清理必须放后台，不能让会话列表等网络",
-            deleteBlock.indexOf("scope.launch") in (cancelIndex + 1) until workspaceIndex,
-        )
-        assertTrue("Workspace 清理成功后才能删除聊天 Session", sessionIndex >= 0)
-        assertTrue("取消失败必须中止删除", deleteBlock.contains("return false"))
+        assertTrue("删除会话必须清掉对应 Workspace", deleteBlock.contains("removeLocalWorkspace"))
+        assertTrue("Workspace 清理成功后才能删除聊天 Session", historyDeleteBlock.contains("deleteHistorySession"))
     }
 
     @Test
-    fun `删除服务器配置默认不得取消任务或删除VPS文件`() {
+    fun `删除服务器配置不得取消任务或删除VPS文件`() {
         val deleteBlock = computerManager.substringAfter("suspend fun deleteComputer", "")
             .substringBefore("fun respondToPublicPreview", "")
         assertFalse("删除服务器配置默认不得调用 cancelActiveExecutions", deleteBlock.contains("cancelActiveExecutions"))
-        assertTrue("远端文件删除必须受用户显式参数控制", deleteBlock.contains("deleteRemoteFiles"))
+        assertFalse("删除服务器配置不得删除 VPS 文件", deleteBlock.contains("deleteRemote"))
     }
 
     @Test

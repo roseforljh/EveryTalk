@@ -37,14 +37,6 @@ class AgentBackgroundPlanAgentRunContractTest {
     fun `所有生命周期和连接事件必须有真实生产方`() {
         val required = listOf(
             "AgentTerminalReasons.USER_STOP",
-            "AgentTerminalReasons.APP_INTERRUPTED",
-            "AgentTerminalReasons.SYSTEM_RECOVERED",
-            "AgentTerminalReasons.CONNECTION_LOST",
-            "AgentTerminalReasons.RECONNECTED",
-            "AgentTerminalReasons.VPS_RESTARTED",
-            "AgentTerminalReasons.REMOTE_TASK_MISSING",
-            "AgentTerminalReasons.REMOTE_PROCESS_TERMINATED",
-            "AgentTerminalReasons.CONFIG_ERROR",
         )
         val source = allSources
             .filterNot { (file, _) -> file.invariantSeparatorsPath.endsWith("AgentModels.kt") }

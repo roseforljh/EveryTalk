@@ -18,7 +18,7 @@ class ComputerPreviewUrlTest {
         port = 22,
         username = "user",
         authKind = ComputerAuthKind.PRIVATE_KEY,
-        runMode = ComputerRunMode.CONTAINER,
+        runMode = ComputerRunMode.DIRECT,
     )
 
     @Test

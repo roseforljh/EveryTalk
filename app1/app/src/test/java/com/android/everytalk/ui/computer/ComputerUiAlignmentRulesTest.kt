@@ -179,7 +179,7 @@ class ComputerUiAlignmentRulesTest {
         assertTrue(actionSource.contains("internal fun AppViewModel.refreshComputerFromList"))
         assertTrue(actionSource.substringAfter("internal fun AppViewModel.refreshComputerFromList").contains("viewModelScope.launch(Dispatchers.IO)"))
         assertTrue(repositorySource.contains("withContext(NonCancellable)"))
-        assertTrue(repositorySource.contains("recoverInterruptedComputerOperations(COMPUTER_BOOTSTRAP_VERSION)"))
+        assertTrue(repositorySource.contains("recoverInterruptedComputerOperations()"))
     }
 
     @Test
@@ -209,25 +209,6 @@ class ComputerUiAlignmentRulesTest {
     }
 
     @Test
-    fun `修复Container显示真实阶段且只保留一个加载圈`() {
-        val dialogSource = sourceFile("ui/screens/computer/ComputerDetailScreen.kt")
-            .readText(Charsets.UTF_8)
-            .substringAfter("private fun ComputerContainerRepairDialog(")
-            .substringBefore("private fun ComputerReplacementHostKeyDialog(")
-        val actionContentSource = sourceFile("ui/components/dialog/AppDialogStyle.kt")
-            .readText(Charsets.UTF_8)
-
-        assertTrue("修复过程必须显示真实阶段", dialogSource.contains("setupStage.labelRes()"))
-        assertTrue("修复过程必须显示阶段说明", dialogSource.contains("setupStage.detailRes()"))
-        assertTrue("修复过程必须显示加载时间", dialogSource.contains("EveryTalkTimedLoadingStatus("))
-        assertTrue("修复过程上方不显示加载圈", dialogSource.contains("showIndicator = false"))
-        assertTrue("修复按钮必须复用统一加载内容", dialogSource.contains("AppDialogActionContent("))
-        assertTrue("按钮文字必须保留布局宽度", actionContentSource.contains(".alpha(if (isLoading) 0f else 1f)"))
-        assertTrue("异步按钮忙碌时显示统一加载圈", actionContentSource.contains("EveryTalkLoadingIndicator("))
-        assertFalse("修复按钮不得显示弹跳文案", dialogSource.contains("ComputerWorkingLabel"))
-    }
-
-    @Test
     fun `服务器异步确认按钮统一使用固定尺寸加载内容`() {
         val detailSource = sourceFile("ui/screens/computer/ComputerDetailScreen.kt")
             .readText(Charsets.UTF_8)
@@ -254,17 +235,6 @@ class ComputerUiAlignmentRulesTest {
     }
 
     @Test
-    fun `修复弹窗运行时背景操作卡不重复显示加载圈`() {
-        val source = sourceFile("ui/screens/computer/ComputerDetailScreen.kt")
-            .readText(Charsets.UTF_8)
-            .substringAfter("private fun ComputerMoreSettingsCard(")
-            .substringBefore("private fun ComputerSettingsGroup(")
-
-        assertTrue(source.contains("busyAction != null && busyAction != \"repair\""))
-        assertTrue(source.contains("CircularProgressIndicator("))
-    }
-
-    @Test
     fun `服务器详情默认只展示主要信息且低频操作折叠`() {
         val detailSource = sourceFile("ui/screens/computer/ComputerDetailScreen.kt")
             .readText(Charsets.UTF_8)
@@ -278,9 +248,6 @@ class ComputerUiAlignmentRulesTest {
         assertTrue(detailSource.contains("computer_more_settings"))
         assertTrue(detailSource.contains("ComputerPermissionSettingsCard("))
         assertTrue(detailSource.contains("ComputerMaintenanceCard("))
-        assertTrue(detailSource.contains("computer_workspace_container_count"))
-        assertTrue(detailSource.contains("val containerCount = remember(workspaces)"))
-        assertTrue(detailSource.contains("workspace.runMode == ComputerRunMode.CONTAINER"))
         val moreSettingsSource = detailSource.substringAfter("private fun ComputerMoreSettingsCard(")
             .substringBefore("private fun ComputerSettingsGroup(")
         assertTrue(moreSettingsSource.contains("computer_settings_security"))
@@ -303,58 +270,6 @@ class ComputerUiAlignmentRulesTest {
         assertTrue(source.contains("if (keepCredentialHint)"))
         assertFalse("服务器添加页不得出现沙箱开关", source.contains("sandboxEnabled"))
         assertFalse("服务器添加页不得渲染沙箱 Switch", source.contains("Switch("))
-    }
-
-    @Test
-    fun `服务器详情复用添加表单编辑且修复不再重复输入密码`() {
-        val source = sourceFile("ui/screens/computer/ComputerDetailScreen.kt")
-            .readText(Charsets.UTF_8)
-        val repairDialog = source.substringAfter("private fun ComputerContainerRepairDialog(")
-            .substringBefore("private fun ComputerReplacementHostKeyDialog(")
-
-        assertTrue(source.contains("ComputerAddCard("))
-        assertTrue(source.contains("computer_action_edit"))
-        assertTrue(source.contains("probeUpdatedComputerHostKey"))
-        assertTrue(source.contains("allowBusyDismiss = true"))
-        assertFalse(repairDialog.contains("OutlinedTextField("))
-        assertFalse(repairDialog.contains("sudoPassword"))
-    }
-
-    @Test
-    fun `修复任务允许停止并在返回时断开SSH`() {
-        val detailSource = sourceFile("ui/screens/computer/ComputerDetailScreen.kt")
-            .readText(Charsets.UTF_8)
-        val repositorySource = sourceFile("data/computer/ComputerRepository.kt")
-            .readText(Charsets.UTF_8)
-
-        assertTrue(detailSource.contains("BackHandler(onBack = ::navigateBack)"))
-        assertTrue(detailSource.contains("viewModel.cancelComputerOperation(computerId)"))
-        assertTrue(detailSource.contains("R.string.action_stop"))
-        assertTrue(detailSource.contains("onProgress = { stage ->"))
-        assertTrue(repositorySource.contains("catch (error: CancellationException)"))
-        assertTrue(repositorySource.contains("ComputerStatus.CONFIGURATION_REQUIRED.name"))
-    }
-
-    @Test
-    fun `首次添加只展示SSH检查，不触发Container配置`() {
-        val screenSource = sourceFile("ui/screens/computer/ComputerScreen.kt")
-            .readText(Charsets.UTF_8)
-        val dialogSource = sourceFile("ui/screens/computer/ComputerAddCard.kt")
-            .readText(Charsets.UTF_8)
-        val provisionerSource = sourceFile("data/computer/ComputerProvisioner.kt")
-            .readText(Charsets.UTF_8)
-
-        assertTrue(screenSource.contains("ComputerSetupStage.READING_HOST_KEY"))
-        assertTrue(screenSource.contains("ComputerSetupStage.INSPECTING_VPS"))
-        assertFalse("首次添加不得触发 Container 配置", screenSource.contains("provisionComputerContainer"))
-        assertTrue(screenSource.contains("progressDetailText"))
-        assertTrue(provisionerSource.contains("onProgress(ComputerSetupStage.PREPARING_DOCKER)"))
-        assertTrue(provisionerSource.contains("onProgress(ComputerSetupStage.BUILDING_IMAGE)"))
-        assertTrue(provisionerSource.contains("onProgress(ComputerSetupStage.CONFIGURING_NETWORK)"))
-        assertTrue(dialogSource.contains("EveryTalkTimedLoadingStatus("))
-        assertTrue(dialogSource.contains("showIndicator = false"))
-        assertTrue("添加按钮必须保留加载圈", dialogSource.contains("CircularProgressIndicator("))
-        assertFalse("添加按钮不得显示弹跳文案", dialogSource.contains("ComputerWorkingLabel"))
     }
 
     @Test

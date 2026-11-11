@@ -17,7 +17,6 @@ class ComputerHostCommandApprovalTest {
         val request = ComputerExecRequest(
             command = "systemctl restart nginx",
             cwd = "~",
-            target = ComputerExecTarget.HOST,
         )
         var executedRequest: ComputerExecRequest? = null
 
@@ -43,7 +42,6 @@ class ComputerHostCommandApprovalTest {
         val request = ComputerExecRequest(
             command = "systemctl restart nginx",
             cwd = "~",
-            target = ComputerExecTarget.HOST,
         )
         var executed = false
 
@@ -70,7 +68,6 @@ class ComputerHostCommandApprovalTest {
                 request = ComputerExecRequest(
                     command = "systemctl restart nginx",
                     cwd = "relative",
-                    target = ComputerExecTarget.HOST,
                 ),
                 confirmationRequest = { assessment ->
                     confirmationRequested = true
@@ -91,7 +88,6 @@ class ComputerHostCommandApprovalTest {
         val request = ComputerExecRequest(
             command = "systemctl restart nginx",
             cwd = "~",
-            target = ComputerExecTarget.HOST,
         )
         var requested = false
         var executed = false
@@ -114,7 +110,6 @@ class ComputerHostCommandApprovalTest {
         val request = ComputerExecRequest(
             command = "rm -rf /tmp/everytalk-test",
             cwd = "~",
-            target = ComputerExecTarget.HOST,
         )
         var requested = false
         var executed = false
@@ -140,7 +135,7 @@ class ComputerHostCommandApprovalTest {
         computerName = "VPS",
         command = request.command,
         cwd = request.cwd,
-        requestsPrivilege = request.asRoot || ComputerHostCommandRisk.PRIVILEGE_ESCALATION in assessment.risks,
+        requestsPrivilege = ComputerHostCommandRisk.PRIVILEGE_ESCALATION in assessment.risks,
         reason = assessment.reason.orEmpty(),
         risks = assessment.risks,
     )

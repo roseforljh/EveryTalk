@@ -67,7 +67,7 @@ class AgentRunCoordinatorTest {
         visibleAssistantMessageId = "assistant-1",
         configIdSnapshot = null,
         requestSnapshotJson = null,
-        status = AgentRunStatus.WAITING_REMOTE_EXECUTION.name,
+        status = AgentRunStatus.EXECUTING_TOOL.name,
         currentRequestOrdinal = 1,
         terminalReason = null,
         createdAt = 1L,

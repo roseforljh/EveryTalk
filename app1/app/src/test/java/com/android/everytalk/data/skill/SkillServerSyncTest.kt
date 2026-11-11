@@ -8,7 +8,7 @@ class SkillServerSyncTest {
     @Test
     fun `服务器路径不包含 Skill 原始 ID`() {
         val path = skillServerDirectory("remote:https://github.com/a/b#../../escape", "a".repeat(64))
-        assertTrue(path.startsWith(".everytalk/skills/"))
+        assertTrue(path.startsWith("skills/"))
         assertFalse(path.contains("escape"))
         assertFalse(path.contains(".."))
     }
