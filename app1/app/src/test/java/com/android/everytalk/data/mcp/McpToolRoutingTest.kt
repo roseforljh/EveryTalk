@@ -80,11 +80,13 @@ class McpToolRoutingTest {
         val updateState = McpClientManager::class.java.getDeclaredMethod(
             "updateServerState",
             String::class.java,
+            Boolean::class.javaPrimitiveType,
             Function1::class.java,
         ).apply { isAccessible = true }
         updateState.invoke(
             manager,
             "server-a",
+            false,
             { _: McpServerState? -> McpServerState(config("server-a", "Server"), McpStatus.Connected) },
         )
 
@@ -102,6 +104,7 @@ class McpToolRoutingTest {
         val updateState = McpClientManager::class.java.getDeclaredMethod(
             "updateServerState",
             String::class.java,
+            Boolean::class.javaPrimitiveType,
             Function1::class.java,
         ).apply { isAccessible = true }
         val workerCount = 16
@@ -112,17 +115,13 @@ class McpToolRoutingTest {
             val futures = (0 until workerCount).map { index ->
                 executor.submit {
                     val serverId = "server-$index"
-                    var firstAttempt = true
+                    // 更新在锁内串行执行，屏障放在调用前，让所有线程同时争用。
+                    barrier.await(5, TimeUnit.SECONDS)
                     updateState.invoke(
                         manager,
                         serverId,
-                        { _: McpServerState? ->
-                            if (firstAttempt) {
-                                firstAttempt = false
-                                barrier.await(5, TimeUnit.SECONDS)
-                            }
-                            McpServerState(config(serverId, "Server $index"), McpStatus.Connected)
-                        },
+                        false,
+                        { _: McpServerState? -> McpServerState(config(serverId, "Server $index"), McpStatus.Connected) },
                     )
                 }
             }

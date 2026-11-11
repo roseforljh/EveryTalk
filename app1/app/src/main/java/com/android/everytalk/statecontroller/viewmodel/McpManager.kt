@@ -31,12 +31,12 @@ class McpManager(private val context: Context) {
     private val _oauthMessage = MutableStateFlow<String?>(null)
     val oauthMessage = _oauthMessage.asStateFlow()
     private val _oauthBusy = MutableStateFlow(false)
-    val oauthBusy = _oauthBusy.asStateFlow()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     val serverStates: StateFlow<Map<String, McpServerState>> = clientManager.serverStates
 
     init {
+        scope.launch { removeDuplicateServers() }
         scope.launch {
             McpOAuthCallbackBus.flow.filterNotNull().collect { uri ->
                 McpOAuthCallbackBus.consume(uri)
@@ -131,7 +131,11 @@ class McpManager(private val context: Context) {
         }
     }
 
-    suspend fun addServer(config: McpServerConfig) {
+    /** 同一地址只保留一条：重复添加时更新原记录，不再生成第二张卡片。 */
+    suspend fun addServer(newConfig: McpServerConfig) {
+        val config = if (isAuthorizedServer(newConfig.id)) newConfig
+        else mcpDao.getAllSnapshot().firstOrNull { it.id != newConfig.id && it.url == newConfig.url }
+            ?.let { newConfig.clone(id = it.id) } ?: newConfig
         database.withTransaction {
             mcpDao.insertConfig(McpServerConfigEntity.fromModel(config))
             com.android.everytalk.data.sync.captureSyncSettings(context, database)
@@ -149,6 +153,19 @@ class McpManager(private val context: Context) {
         } else {
             clientManager.disconnectServer(config.id)
         }
+    }
+
+    private fun isAuthorizedServer(id: String) =
+        McpOAuthProvider.entries.any { it.serverId == id } || McpMailProvider.entries.any { it.serverId == id }
+
+    /** 清理旧版本留下的空地址记录和同地址重复记录，优先保留带授权的内置连接。 */
+    private suspend fun removeDuplicateServers() {
+        val rows = mcpDao.getAllSnapshot()
+        val keep = rows.filter { it.url.isNotBlank() }
+            .sortedByDescending { isAuthorizedServer(it.id) }
+            .distinctBy { it.url }
+            .mapTo(HashSet()) { it.id }
+        rows.filter { it.id !in keep }.forEach { removeServer(it.id) }
     }
 
     suspend fun removeServer(serverId: String) {
@@ -215,6 +232,9 @@ class McpManager(private val context: Context) {
         Log.i(TAG, "Calling MCP tool: $toolName with argument keys: ${arguments.keys}")
         return clientManager.callTool(toolName, arguments)
     }
+
+    suspend fun callToolResult(toolName: String, arguments: JsonObject): com.android.everytalk.data.network.AppToolExecutionResult =
+        clientManager.callToolResult(toolName, arguments)
 
     fun close() {
         scope.cancel()

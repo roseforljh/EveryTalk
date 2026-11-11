@@ -24,6 +24,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -115,6 +116,7 @@ class McpClientManager(
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
     private val accessToken: suspend (McpServerConfig) -> String? = { null },
     private val connectTimeoutMillis: Long = MCP_CONNECT_TIMEOUT_MS,
+    private val toolTimeoutMillis: Long = 60_000L,
     private val connectClient: suspend (Client, AbstractTransport) -> Unit = { client, transport ->
         client.connect(transport)
     },
@@ -145,6 +147,8 @@ class McpClientManager(
         }
     }
 
+    private data class ToolTarget(val config: McpServerConfig, val tool: McpTool, val client: Client)
+    private val stoppingServers = ConcurrentHashMap.newKeySet<String>()
     private val clients = ConcurrentHashMap<String, Client>()
     private val configs = ConcurrentHashMap<String, McpServerConfig>()
     // ponytail: 服务器数量很小，按 ID 保留轻量锁比引用计数锁池更稳；关闭时统一释放。
@@ -156,71 +160,67 @@ class McpClientManager(
     private val _serverStates = MutableStateFlow<Map<String, McpServerState>>(emptyMap())
     val serverStates: StateFlow<Map<String, McpServerState>> = _serverStates.asStateFlow()
 
-    suspend fun callTool(toolName: String, args: JsonObject): JsonElement {
+    suspend fun callTool(toolName: String, args: JsonObject): JsonElement = callToolResult(toolName, args).content
+
+    /** 保留协议错误和结构化数据，避免正文中的同名字段影响 App 控制状态。 */
+    suspend fun callToolResult(toolName: String, args: JsonObject): com.android.everytalk.data.network.AppToolExecutionResult {
         val initialRoute = resolveMcpToolWithServer(_serverStates.value.values, toolName)
             ?: return mcpToolFailure("Failed to execute tool: no such tool '$toolName'")
 
         return try {
-            withServerLock(initialRoute.first.id) {
-                // 等待服务器锁期间可能已关闭开关或删除配置，必须重新解析，不能拿旧配置重连。
+            // 连接身份在锁内捕获，网络等待在锁外；同服务器工具不再互相阻塞。
+            val target = withServerLock(initialRoute.first.id) {
+                check(initialRoute.first.id !in stoppingServers) { "MCP server is stopping" }
                 val config = resolveMcpToolWithServer(_serverStates.value.values, toolName)?.first
-                    ?: return@withServerLock mcpToolFailure("Failed to execute tool: no such tool '$toolName'")
-                val currentState = _serverStates.value[config.id]
-
-                // 如果当前不是 Connected 状态，或者 clients 中无活跃客户端，先重新连接
-                if (currentState?.status !is McpStatus.Connected || !clients.containsKey(config.id)) {
-                    Log.d(TAG, "callTool: server '${config.name}' disconnected or in error, reconnecting before call...")
-                    addServerLocked(config)
-                    if (_serverStates.value[config.id]?.status !is McpStatus.Connected) {
-                        return@withServerLock mcpToolFailure("Failed to execute tool: server '${config.name}' is not connected")
-                    }
+                    ?: error("no such tool '$toolName'")
+                if (_serverStates.value[config.id]?.status !is McpStatus.Connected || clients[config.id] == null) {
+                    val active = ActiveConnection(operationGenerations[config.id]?.get() ?: 0L, currentCoroutineContext().job)
+                    activeConnections[config.id] = active
+                    try { addServerLocked(config) } finally { activeConnections.remove(config.id, active) }
                 }
-
-                // 重连（含 syncToolsLocked）完成后，必须重新解析最新 tool；若远端已删除或禁用则不得执行
                 val (latestConfig, latestTool) = resolveMcpToolWithServer(_serverStates.value.values, toolName)
-                    ?: return@withServerLock mcpToolFailure("Failed to execute tool: tool '$toolName' is no longer available on server '${config.name}'")
-                val client = clients[latestConfig.id]
-                    ?: return@withServerLock mcpToolFailure("Failed to execute tool: no client for server '${latestConfig.name}'")
-
-                Log.i(TAG, "callTool: $toolName -> ${latestConfig.name}/${latestTool.name} / argumentKeys=${args.keys}")
-
-                try {
-                    Log.d(TAG, "callTool: sending request...")
-                    val result = client.callTool(
-                        request = CallToolRequest(
-                            params = CallToolRequestParams(
-                                name = latestTool.name,
-                                arguments = args,
-                            ),
-                        ),
+                    ?: error("tool '$toolName' is no longer available")
+                check(_serverStates.value[config.id]?.status is McpStatus.Connected && config.id !in stoppingServers) { "MCP server is not connected" }
+                ToolTarget(latestConfig, latestTool, checkNotNull(clients[config.id]))
+            }
+            check(!closed.get() && target.config.id !in stoppingServers && clients[target.config.id] === target.client &&
+                resolveMcpToolWithServer(_serverStates.value.values, toolName) != null) { "MCP tool is no longer available" }
+            try {
+                // SDK 0.14 的超时只包 send，这里覆盖发送和完整响应等待。
+                val result = withTimeoutOrNull(toolTimeoutMillis) {
+                    target.client.callTool(
+                        request = CallToolRequest(params = CallToolRequestParams(name = target.tool.name, arguments = args)),
                         options = RequestOptions(timeout = 60.seconds),
                     )
-                    Log.d(TAG, "callTool: got result with ${result.content.size} content items")
-                    val content = McpJson.encodeToJsonElement(result.content)
-                    if (result.isError == true) mcpToolFailure(content.toString()) else content
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    Log.e(TAG, "callTool error: ${e.javaClass.simpleName}: ${e.message}", e)
-                    // 异常发生时移除坏 client 并异步限时关闭
-                    val badClient = clients.remove(latestConfig.id)
-                    if (badClient != null) {
-                        scope.launch {
-                            closeClient(badClient)
+                } ?: error("MCP tool timeout after ${toolTimeoutMillis}ms")
+                val content = McpJson.encodeToJsonElement(result.content)
+                val modelContent = result.structuredContent?.let { structured ->
+                    buildJsonObject { put("content", content); put("structuredContent", structured) }
+                } ?: content
+                com.android.everytalk.data.network.AppToolExecutionResult(
+                    content = if (result.isError == true) buildJsonObject {
+                        put("ok", false); put("error", content); put("data", modelContent)
+                    } else modelContent,
+                    scriptContent = result.structuredContent ?: content,
+                    isError = result.isError == true,
+                )
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                withServerLock(target.config.id) {
+                    // 旧请求迟到失败不能移除新连接，或把已关闭服务器改回 Error。
+                    if (target.config.id !in stoppingServers && clients[target.config.id] === target.client &&
+                        clients.remove(target.config.id, target.client)) {
+                        updateServerState(target.config.id) { current ->
+                            McpServerState(config = current?.config ?: target.config,
+                                status = McpStatus.Error(error.message ?: "Tool call failed", classifyFailureType(error).name),
+                                tools = current?.tools.orEmpty(), errorMessage = error.message)
                         }
+                        scope.launch { closeClient(target.client) }
                     }
-                    val failureType = classifyFailureType(e)
-                    updateServerState(latestConfig.id) { current ->
-                        McpServerState(
-                            config = latestConfig,
-                            status = McpStatus.Error(e.message ?: "Tool call failed", failureType.name),
-                            tools = current?.tools.orEmpty(),
-                            errorMessage = e.message,
-                        )
-                    }
-                    // 严禁自动重放可能有副作用的 tool call，直接返回错误，留待下次调用时自愈重连
-                    mcpToolFailure("Error executing tool '$toolName': ${e.message}")
                 }
+                // 原调用绝不自动重放，下一次新调用才允许自愈。
+                mcpToolFailure("Error executing tool '$toolName': ${error.message}")
             }
         } catch (e: CancellationException) {
             throw e
@@ -230,10 +230,10 @@ class McpClientManager(
     }
 
     /** MCP 协议失败必须保留 isError 语义，不能仅靠正文里的英文单词让模型猜。 */
-    private fun mcpToolFailure(message: String): JsonObject = buildJsonObject {
-        put("ok", false)
-        put("error", message)
-    }
+    private fun mcpToolFailure(message: String) = com.android.everytalk.data.network.AppToolExecutionResult(
+        content = buildJsonObject { put("ok", false); put("error", message) },
+        isError = true,
+    )
 
     private fun getTransport(config: McpServerConfig): AbstractTransport = when (config) {
         is McpServerConfig.SseTransportServer -> {
@@ -285,6 +285,8 @@ class McpClientManager(
     }
 
     private suspend fun addServerLocked(config: McpServerConfig) {
+        // 先登记 activeConnections 再复核停止标志：关闭要么取消已登记握手，要么在这里阻止它启动。
+        check(config.id !in stoppingServers) { "MCP server is stopping" }
         val currentState = _serverStates.value[config.id]
         if (
             currentState?.status is McpStatus.Connected &&
@@ -390,6 +392,8 @@ class McpClientManager(
         } while (cursor != null)
         Log.i(TAG, "syncTools: ${serverTools.size} tools from ${config.name}")
 
+        currentCoroutineContext().ensureActive()
+        check(config.id !in stoppingServers) { "MCP server is stopping" }
         val tools = serverTools.map { serverTool ->
             McpTool(
                 name = serverTool.name,
@@ -415,7 +419,7 @@ class McpClientManager(
     }
 
     suspend fun removeServer(serverId: String) {
-        val generation = nextServerOperation(serverId)
+        val generation = nextServerOperation(serverId, stopping = true)
         cancelActiveConnection(serverId)
         withContext(Dispatchers.IO) {
             withServerLock(serverId) {
@@ -446,7 +450,7 @@ class McpClientManager(
     }
 
     suspend fun disconnectServer(serverId: String) {
-        val generation = nextServerOperation(serverId)
+        val generation = nextServerOperation(serverId, stopping = true)
         val fallbackConfig = configs[serverId] ?: _serverStates.value[serverId]?.config
         cancelActiveConnection(serverId)
         withContext(Dispatchers.IO) {
@@ -479,7 +483,7 @@ class McpClientManager(
                 commonOptions = config.commonOptions.copy(enable = false)
             )
             configs[serverId] = disabledConfig
-            updateServerState(serverId) { currentState ->
+            updateServerState(serverId, allowStopping = true) { currentState ->
                 McpServerState(
                     config = disabledConfig,
                     status = McpStatus.Idle,
@@ -494,15 +498,22 @@ class McpClientManager(
 
     private fun updateServerState(
         serverId: String,
+        allowStopping: Boolean = false,
         update: (McpServerState?) -> McpServerState,
     ) {
-        _serverStates.update { states ->
-            if (closed.get()) states else states + (serverId to update(states[serverId]))
+        // 与停止标志共用短临界区，禁止关闭生效后握手又发布 Connected/Error。
+        synchronized(operationGenerations) {
+            _serverStates.update { states ->
+                if (closed.get() || (!allowStopping && serverId in stoppingServers)) states
+                else states + (serverId to update(states[serverId]))
+            }
         }
     }
 
-    private fun nextServerOperation(serverId: String): Long {
-        return operationGenerations.computeIfAbsent(serverId) { AtomicLong() }.incrementAndGet()
+    /** 操作代次和停止标志一起发布，防止较旧 addServer 清掉刚生效的关闭请求。 */
+    private fun nextServerOperation(serverId: String, stopping: Boolean = false): Long = synchronized(operationGenerations) {
+        if (stopping) stoppingServers.add(serverId) else stoppingServers.remove(serverId)
+        operationGenerations.computeIfAbsent(serverId) { AtomicLong() }.incrementAndGet()
     }
 
     private fun isCurrentServerOperation(serverId: String, generation: Long): Boolean {
@@ -560,9 +571,10 @@ internal val McpJson: Json by lazy {
     }
 }
 
-private fun ToolSchema.toMcpInputSchema(): McpInputSchema {
+internal fun ToolSchema.toMcpInputSchema(): McpInputSchema {
     return McpInputSchema.Obj(
         properties = this.properties ?: JsonObject(emptyMap()),
-        required = this.required
+        required = this.required,
+        defs = this.defs,
     )
 }

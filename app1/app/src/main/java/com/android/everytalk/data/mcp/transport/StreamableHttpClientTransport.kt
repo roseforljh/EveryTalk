@@ -156,7 +156,8 @@ class StreamableHttpClientTransport(
                 ContentType.Text.EventStream -> handleInlineSse(
                     response,
                     onResumptionToken = onResumptionToken,
-                    replayMessageId = if (message is JSONRPCRequest) message.id else null,
+                    // 普通响应保留服务端 requestId，不能把另一并发请求的响应改绑到当前调用。
+                    replayMessageId = null,
                 )
 
                 else -> {

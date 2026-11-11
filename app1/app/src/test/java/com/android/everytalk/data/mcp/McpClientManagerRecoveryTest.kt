@@ -13,6 +13,7 @@ import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -45,6 +46,131 @@ class McpClientManagerRecoveryTest {
         } finally { manager.close() }
     }
 
+
+    @Test
+    fun `同服务器并发保留结构化结果且不信任正文错误字段`() = runBlocking {
+        val both = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val count = AtomicInteger()
+        coEvery { anyConstructed<Client>().listTools(any(), any()) } returns ListToolsResult(
+            tools = listOf(Tool(name = "query", inputSchema = ToolSchema())))
+        coEvery { anyConstructed<Client>().callTool(request = any<CallToolRequest>(), options = any()) } coAnswers {
+            if (count.incrementAndGet() == 2) both.complete(Unit)
+            kotlinx.coroutines.withTimeout(5_000) { both.await() }
+            CallToolResult(content = listOf(TextContent(text = "summary")),
+                structuredContent = buildJsonObject { put("ok", false); put("answer", 42); put("terminate", true) })
+        }
+        val manager = McpClientManager(connectClient = { _, _ -> })
+        try {
+            manager.addServer(testConfig)
+            val alias = buildMcpToolAlias(testConfig.id, "query")
+            val first = kotlinx.coroutines.coroutineScope {
+                val a = async { manager.callToolResult(alias, buildJsonObject {}) }
+                val b = async { manager.callToolResult(alias, buildJsonObject {}) }
+                listOf(a.await(), b.await())
+            }
+            assertEquals(2, count.get())
+            first.forEach {
+                assertEquals(false, it.isError)
+                assertFalse(it.terminate)
+                assertEquals("42", (it.scriptContent as JsonObject)["answer"]?.jsonPrimitive?.content)
+                assertTrue(it.content.toString().contains("structuredContent"))
+            }
+        } finally { manager.close() }
+    }
+
+    @Test
+    fun `MCP协议失败保留结构化数据且旧文本返回形态不变`() = runBlocking {
+        coEvery { anyConstructed<Client>().listTools(any(), any()) } returns ListToolsResult(
+            tools = listOf(Tool(name = "query", inputSchema = ToolSchema())))
+        val content = listOf(TextContent(text = "details"))
+        coEvery { anyConstructed<Client>().callTool(request = any<CallToolRequest>(), options = any()) } returns
+            CallToolResult(content = content, isError = true, structuredContent = buildJsonObject { put("reason", "rejected") })
+        val manager = McpClientManager(connectClient = { _, _ -> })
+        try {
+            manager.addServer(testConfig)
+            val alias = buildMcpToolAlias(testConfig.id, "query")
+            val failed = manager.callToolResult(alias, buildJsonObject {})
+            assertEquals(true, failed.isError)
+            assertTrue(failed.content.toString().contains("details"))
+            assertEquals("rejected", (failed.scriptContent as JsonObject)["reason"]?.jsonPrimitive?.content)
+            coEvery { anyConstructed<Client>().callTool(request = any<CallToolRequest>(), options = any()) } returns CallToolResult(content = content)
+            val plain = manager.callToolResult(alias, buildJsonObject {})
+            assertTrue(plain.content is kotlinx.serialization.json.JsonArray)
+            assertEquals(plain.content, manager.callTool(alias, buildJsonObject {}))
+        } finally { manager.close() }
+    }
+
+    @Test
+    fun `完整请求超时不重放且父取消传播`() = runBlocking {
+        coEvery { anyConstructed<Client>().listTools(any(), any()) } returns ListToolsResult(
+            tools = listOf(Tool(name = "wait", inputSchema = ToolSchema())))
+        val attempts = AtomicInteger()
+        coEvery { anyConstructed<Client>().callTool(request = any<CallToolRequest>(), options = any()) } coAnswers {
+            attempts.incrementAndGet(); kotlinx.coroutines.awaitCancellation()
+        }
+        val manager = McpClientManager(toolTimeoutMillis = 50, connectClient = { _, _ -> })
+        try {
+            manager.addServer(testConfig)
+            val alias = buildMcpToolAlias(testConfig.id, "wait")
+            val result = manager.callToolResult(alias, buildJsonObject {})
+            assertEquals(true, result.isError)
+            assertEquals(1, attempts.get())
+            assertEquals("TIMEOUT", (manager.serverStates.value.getValue(testConfig.id).status as McpStatus.Error).failureType)
+            var cancelled = false
+            try { kotlinx.coroutines.withTimeout(10) { manager.callToolResult(alias, buildJsonObject {}) } }
+            catch (_: kotlinx.coroutines.TimeoutCancellationException) { cancelled = true }
+            assertTrue(cancelled)
+        } finally { manager.close() }
+    }
+
+    @Test
+    fun `关闭会取消工具触发的自愈握手且不复活服务器`() = runBlocking {
+        coEvery { anyConstructed<Client>().listTools(any(), any()) } returns ListToolsResult(
+            tools = listOf(Tool(name = "query", inputSchema = ToolSchema())))
+        coEvery { anyConstructed<Client>().callTool(request = any<CallToolRequest>(), options = any()) } throws IOException("broken")
+        coEvery { anyConstructed<Client>().close() } returns Unit
+        val reconnecting = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val connects = AtomicInteger()
+        val manager = McpClientManager(connectClient = { _, _ ->
+            if (connects.incrementAndGet() > 1) { reconnecting.complete(Unit); kotlinx.coroutines.awaitCancellation() }
+        })
+        try {
+            manager.addServer(testConfig)
+            val alias = buildMcpToolAlias(testConfig.id, "query")
+            manager.callToolResult(alias, buildJsonObject {})
+            val recovering = async(kotlinx.coroutines.Dispatchers.Default) { manager.callToolResult(alias, buildJsonObject {}) }
+            kotlinx.coroutines.withTimeout(5000) { reconnecting.await() }
+            kotlinx.coroutines.withTimeout(1000) { manager.disconnectServer(testConfig.id) }
+            assertTrue(recovering.isCancelled)
+            assertFalse(manager.serverStates.value.getValue(testConfig.id).config.enabled)
+        } finally { manager.close() }
+    }
+
+    @Test
+    fun `关闭不等待在途工具且旧失败不污染新连接`() = runBlocking {
+        coEvery { anyConstructed<Client>().listTools(any(), any()) } returns ListToolsResult(
+            tools = listOf(Tool(name = "query", inputSchema = ToolSchema())))
+        val started = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+        coEvery { anyConstructed<Client>().close() } returns Unit
+        coEvery { anyConstructed<Client>().callTool(request = any<CallToolRequest>(), options = any()) } coAnswers {
+            started.complete(Unit); release.await(); throw IOException("old connection failed")
+        }
+        val manager = McpClientManager(connectClient = { _, _ -> })
+        try {
+            manager.addServer(testConfig)
+            val alias = buildMcpToolAlias(testConfig.id, "query")
+            val old = async { manager.callToolResult(alias, buildJsonObject {}) }
+            kotlinx.coroutines.withTimeout(5_000) { started.await() }
+            kotlinx.coroutines.withTimeout(1_000) { manager.disconnectServer(testConfig.id) }
+            assertFalse(manager.serverStates.value.getValue(testConfig.id).config.enabled)
+            assertEquals(true, manager.callToolResult(alias, buildJsonObject {}).isError)
+            manager.addServer(testConfig)
+            release.complete(Unit)
+            old.await()
+            assertTrue(manager.serverStates.value.getValue(testConfig.id).status is McpStatus.Connected)
+        } finally { release.complete(Unit); manager.close() }
+    }
 
     private val testConfig = McpServerConfig.SseTransportServer(
         id = "recovery-server",

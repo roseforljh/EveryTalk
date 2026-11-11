@@ -10,7 +10,7 @@ class McpUiRegressionTest {
     fun `关闭状态开关在浅色和深色主题下保持可见`() {
         val source = sourceFile("ui/screens/mcp/McpDialogs.kt").readText(Charsets.UTF_8)
             .substringAfter("Switch(")
-            .substringBefore("if (!config.enabled")
+            .substringBefore("@Composable")
 
         assertTrue(source.contains("uncheckedThumbColor = MaterialTheme.colorScheme.onSurfaceVariant"))
         assertTrue(source.contains("uncheckedTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest"))
@@ -34,8 +34,8 @@ class McpUiRegressionTest {
     @Test
     fun `持久化关闭状态不会被旧连接状态覆盖`() {
         val source = sourceFile("ui/screens/settings/SettingsScreen.kt").readText(Charsets.UTF_8)
-            .substringAfter("serverStates = allMcpConfigs.mapValues")
-            .substringBefore("onAddServer =")
+            .substringAfter("displayedMcpServerStates = remember")
+            .substringBefore("val topContentPadding")
 
         assertTrue(source.contains("if (persistedState.config.enabled)"))
         assertTrue(source.contains("persistedState.copy(tools = runtimeState?.tools.orEmpty())"))

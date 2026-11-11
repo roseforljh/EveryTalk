@@ -56,6 +56,7 @@ internal fun McpToolCandidate.toToolDefinition(): Map<String, Any> {
                     "properties" to schemaValue.properties.toMap(),
                 )
                 schemaValue.required?.let { parameters["required"] = it }
+                schemaValue.defs?.let { parameters["\$defs"] = it }
                 functionDef["parameters"] = parameters
             }
         }
