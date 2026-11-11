@@ -976,7 +976,7 @@ private fun executionStepsSummary(types: Set<ExecutionStepType>, count: Int): St
 }
 
 @Composable
-private fun localizedExecutionDuration(durationMillis: Long): String {
+internal fun localizedExecutionDuration(durationMillis: Long): String {
     val totalSeconds = (durationMillis / 1_000L).coerceAtLeast(0L)
     val hours = totalSeconds / 3_600L
     val minutes = (totalSeconds % 3_600L) / 60L

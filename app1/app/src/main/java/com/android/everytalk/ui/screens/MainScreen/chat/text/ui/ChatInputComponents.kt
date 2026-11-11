@@ -65,7 +65,6 @@ internal enum class ComposerPrimaryAction {
     // 已登记消息但没有暂停控制器（准备请求、审批等待）时，通过完整取消流程退出。
     STOP,
     // 远端未确认的取消屏障仍存在，只重试确认，不允许发送新任务。
-    RETRY_STOP,
     // 外观仍是加载圈，但只在等待安全暂停时允许再次点击强停。
     FORCE_STOP,
     LOADING,
@@ -81,11 +80,9 @@ internal fun resolveComposerPrimaryAction(
     isRunControllable: Boolean = true,
     canRestoreMessage: Boolean = false,
     hasActiveMessage: Boolean = false,
-    canRetryRemoteStop: Boolean = false,
 ): ComposerPrimaryAction = when {
     isConvertingLongText -> ComposerPrimaryAction.LOADING
-    isRemoteCancellationPending ->
-        if (canRetryRemoteStop) ComposerPrimaryAction.RETRY_STOP else ComposerPrimaryAction.LOADING
+    isRemoteCancellationPending -> ComposerPrimaryAction.LOADING
     composerMode is ComposerMode.EditingPending -> ComposerPrimaryAction.SEND
     canRestoreMessage && runState == ChatRunState.Idle -> ComposerPrimaryAction.RESTORE
     hasDraft -> ComposerPrimaryAction.SEND

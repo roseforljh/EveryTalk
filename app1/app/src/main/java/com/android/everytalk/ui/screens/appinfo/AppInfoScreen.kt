@@ -433,7 +433,7 @@ private fun AppInfoEntry(
 
 /** 1.2026.279：qgr0 使用 pcm.a，普通暗色为 #303030；qwl0 使用 1dp qcm.a 描边。 */
 @Composable
-private fun SettingsGroupCard(content: @Composable ColumnScope.() -> Unit) {
+internal fun SettingsGroupCard(content: @Composable ColumnScope.() -> Unit) {
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -450,7 +450,7 @@ private fun SettingsGroupCard(content: @Composable ColumnScope.() -> Unit) {
 
 /** 行间分隔线：从左边距 16dp 开始（对齐 lgr0.d），右端留白同卡片内边距。 */
 @Composable
-private fun SettingsRowDivider() {
+internal fun SettingsRowDivider() {
     HorizontalDivider(
         modifier = Modifier.padding(start = 16.dp, end = 16.dp),
         thickness = 0.5.dp,

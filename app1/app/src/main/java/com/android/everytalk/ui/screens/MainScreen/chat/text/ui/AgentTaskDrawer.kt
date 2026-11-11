@@ -367,6 +367,12 @@ private fun TaskToolCard(step: ExecutionStep) {
                         verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text(step.detail ?: step.labels.joinToString("\n"), fontFamily = FontFamily.Monospace,
                             style = MaterialTheme.typography.bodySmall)
+                        step.durationMs?.let { duration ->
+                            Text(stringResource(R.string.thinking_elapsed_duration,
+                                com.android.everytalk.ui.screens.BubbleMain.Main.localizedExecutionDuration(duration)),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                         step.resultPreview?.let { Text(it, style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     }

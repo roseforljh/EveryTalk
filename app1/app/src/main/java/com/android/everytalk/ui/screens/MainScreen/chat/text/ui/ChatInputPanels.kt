@@ -101,12 +101,10 @@ import com.android.everytalk.data.mcp.McpServerConfig
 import com.android.everytalk.data.computer.Computer
 import com.android.everytalk.data.computer.ComputerStatus
 import com.android.everytalk.data.computer.ComputerHostCommandConfirmationRequest
-import com.android.everytalk.data.computer.needsContainerRuntimeUpgrade
 import com.android.everytalk.ui.screens.computer.ComputerCardAccentPalette
 import com.android.everytalk.ui.screens.computer.computerCardAccentColorIndexes
 import com.android.everytalk.ui.components.popup.AppFloatingCardScaffoldPopup
 import com.android.everytalk.ui.components.popup.appFloatingCardContainerColor
-import com.android.everytalk.ui.screens.mcp.McpServerListDialog
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -542,12 +540,7 @@ internal fun ComputerHostCommandConfirmationCard(
     )
 }
 
-internal fun computerStatusLabelRes(computer: Computer): Int =
-    if (computer.needsContainerRuntimeUpgrade()) {
-        R.string.agent_server_upgrade_required
-    } else {
-        computerStatusLabelRes(computer.status)
-    }
+internal fun computerStatusLabelRes(computer: Computer): Int = computerStatusLabelRes(computer.status)
 
 internal fun computerStatusLabelRes(status: ComputerStatus): Int = when (status) {
     ComputerStatus.READY -> R.string.agent_server_ready

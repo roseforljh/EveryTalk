@@ -98,7 +98,6 @@ import com.android.everytalk.ui.components.dialog.AppDialogShape
 import com.android.everytalk.ui.components.dialog.appDialogBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogContainerColor
 import com.android.everytalk.ui.components.dialog.appDialogContentColor
-import com.android.everytalk.ui.screens.mcp.McpServerListDialog
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -108,29 +107,11 @@ import java.util.UUID
 
 @Composable
 internal fun ChatInputDialogs(
-    showMcpServerListDialog: Boolean,
-    onShowMcpServerListDialogChange: (Boolean) -> Unit,
     viewModel: com.android.everytalk.statecontroller.AppViewModel,
-    mcpServerStates: Map<String, McpServerState>,
-    onAddMcpServer: (McpServerConfig) -> Unit,
-    onRemoveMcpServer: (String) -> Unit,
-    onToggleMcpServer: (String, Boolean) -> Unit,
     mcpEnableApprovalRequest: PendingMcpEnableApproval? = null,
     tempCameraImageUri: Uri?,
     context: Context,
 ) {
-    // MCP Server List Dialog
-    if (showMcpServerListDialog) {
-        McpServerListDialog(
-            serverStates = mcpServerStates,
-            onAddServer = onAddMcpServer,
-            onUpdateServer = onAddMcpServer,
-            onRemoveServer = onRemoveMcpServer,
-            onToggleServer = onToggleMcpServer,
-            onDismiss = { onShowMcpServerListDialogChange(false) }
-        )
-    }
-
     mcpEnableApprovalRequest?.let { request ->
         val dialogBg = appDialogContainerColor()
         val dialogContent = appDialogContentColor()

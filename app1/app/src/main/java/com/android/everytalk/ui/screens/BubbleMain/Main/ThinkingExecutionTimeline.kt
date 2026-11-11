@@ -801,6 +801,13 @@ private fun ExecutionStepDetails(step: ExecutionStep) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
+        step.durationMs?.let { duration ->
+            Text(
+                text = stringResource(R.string.thinking_elapsed_duration, localizedExecutionDuration(duration)),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
         step.resultPreview?.takeIf(String::isNotBlank)?.let { result ->
             androidx.compose.foundation.text.selection.SelectionContainer {
                 Text(

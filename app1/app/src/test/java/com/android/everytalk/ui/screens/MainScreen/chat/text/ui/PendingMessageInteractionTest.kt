@@ -94,15 +94,11 @@ class PendingMessageInteractionTest {
     }
 
     @Test
-    fun `远端取消超时后可重试但带草稿也不能绕过取消屏障发送`() {
+    fun `停止处理中带草稿也不能绕过取消屏障发送`() {
         listOf(ChatRunState.Idle, ChatRunState.Streaming).forEach { state ->
             listOf(false, true).forEach { hasDraft ->
-                assertEquals(ComposerPrimaryAction.RETRY_STOP,
-                    resolveComposerPrimaryAction(state, ComposerMode.Normal, hasDraft, true,
-                        canRetryRemoteStop = true))
                 assertEquals(ComposerPrimaryAction.LOADING,
-                    resolveComposerPrimaryAction(state, ComposerMode.Normal, hasDraft, true,
-                        canRetryRemoteStop = false))
+                    resolveComposerPrimaryAction(state, ComposerMode.Normal, hasDraft, true))
             }
         }
     }

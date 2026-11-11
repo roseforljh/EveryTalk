@@ -132,7 +132,6 @@ import kotlinx.coroutines.withContext
 import com.android.everytalk.config.PerformanceConfig
 import com.android.everytalk.data.mcp.McpServerState
 import com.android.everytalk.data.mcp.McpServerConfig
-import com.android.everytalk.ui.screens.mcp.McpServerListDialog
 import java.io.File
 import java.util.UUID
 import io.ktor.client.HttpClient
@@ -204,11 +203,6 @@ fun ChatInputArea(
     mcpEnableApprovalRequest: PendingMcpEnableApproval? = null,
     onOpenComputerSettings: () -> Unit = {},
     onHostCommandCardVisibilityChange: (Boolean) -> Unit = {},
-    // MCP 相关参数
-    mcpServerStates: Map<String, McpServerState> = emptyMap(),
-    onAddMcpServer: (McpServerConfig) -> Unit = {},
-    onRemoveMcpServer: (String) -> Unit = {},
-    onToggleMcpServer: (String, Boolean) -> Unit = { _, _ -> }
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -243,7 +237,6 @@ fun ChatInputArea(
     // 记录由外点关闭触发的时间戳，用于忽略紧随其后的按钮抬起点击，避免"先关后开"
     var lastImagePanelDismissAt by remember { mutableLongStateOf(0L) }
     var lastMorePanelDismissAt by remember { mutableLongStateOf(0L) }
-    var showMcpServerListDialog by remember { mutableStateOf(false) }
     var showComputerSelectionPopup by remember { mutableStateOf(false) }
     var enableAgentAfterComputerSelection by remember { mutableStateOf(false) }
     var tempCameraImageUri by remember { mutableStateOf<Uri?>(null) }
@@ -295,7 +288,6 @@ fun ChatInputArea(
     val chatRunState by viewModel.chatRunState.collectAsState()
     val runControlState by viewModel.currentAgentRunControlState.collectAsState()
     val controlledMessageId by viewModel.stateHolder._currentTextStreamingAiMessageId.collectAsState()
-    val retryableRemoteStopMessageId by viewModel.apiHandler.retryableRemoteStopMessageId.collectAsState()
     val conversationFunctionStates by viewModel.stateHolder.conversationFunctionToggleStates.collectAsState()
     val currentAgentResourceState = conversationFunctionStates[currentConversationId]?.agentResourceState
     val detachedComputerName = conversationFunctionStates[currentConversationId]?.detachedComputerName
@@ -804,7 +796,6 @@ fun ChatInputArea(
         isRunControllable = runControlState != null,
         canRestoreMessage = canRestoreMessage,
         hasActiveMessage = controlledMessageId != null,
-        canRetryRemoteStop = retryableRemoteStopMessageId != null,
     )
     // 不缓存捕获 Skill 引用和回调的闭包，使用本次重组的最新草稿。
     val onSendClick: () -> Unit = send@{
@@ -817,8 +808,6 @@ fun ChatInputArea(
                 // 转换、消息登记或强停处理中不可重复操作。
             } else if (primaryAction == ComposerPrimaryAction.RESTORE) {
                 viewModel.restoreOriginalMessages(displayText, selectedMediaItems.toList(), contentParts)
-            } else if (primaryAction == ComposerPrimaryAction.RETRY_STOP) {
-                viewModel.apiHandler.retryRemoteStopConfirmation(retryableRemoteStopMessageId)
             } else if (primaryAction == ComposerPrimaryAction.STOP) {
                 viewModel.stopUncontrolledRun(controlledMessageId)
             } else if (primaryAction == ComposerPrimaryAction.FORCE_STOP) {
@@ -1671,13 +1660,7 @@ fun ChatInputArea(
     )
 
     ChatInputDialogs(
-        showMcpServerListDialog = showMcpServerListDialog,
-        onShowMcpServerListDialogChange = { showMcpServerListDialog = it },
         viewModel = viewModel,
-        mcpServerStates = mcpServerStates,
-        onAddMcpServer = onAddMcpServer,
-        onRemoveMcpServer = onRemoveMcpServer,
-        onToggleMcpServer = onToggleMcpServer,
         mcpEnableApprovalRequest = mcpEnableApprovalRequest,
         tempCameraImageUri = tempCameraImageUri,
         context = context,
@@ -2039,7 +2022,6 @@ private fun SendButton(
             } else {
                 Icon(
                     painter = when (state) {
-                        ComposerPrimaryAction.RETRY_STOP,
                         ComposerPrimaryAction.STOP -> painterResource(R.drawable.ic_stop)
                         ComposerPrimaryAction.PAUSE -> painterResource(R.drawable.ic_pause)
                         ComposerPrimaryAction.RESUME -> painterResource(R.drawable.ic_gpt_play)
@@ -2048,7 +2030,6 @@ private fun SendButton(
                         else -> painterResource(R.drawable.ic_voice_bold)
                     },
                     contentDescription = when (state) {
-                        ComposerPrimaryAction.RETRY_STOP -> stringResource(R.string.chat_input_stop) + " · " + stringResource(R.string.action_retry)
                         ComposerPrimaryAction.STOP -> stringResource(R.string.chat_input_stop)
                         ComposerPrimaryAction.PAUSE -> stringResource(R.string.chat_input_pause)
                         ComposerPrimaryAction.RESUME -> stringResource(R.string.chat_input_resume)

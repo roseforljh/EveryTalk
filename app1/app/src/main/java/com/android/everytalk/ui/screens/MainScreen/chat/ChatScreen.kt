@@ -106,7 +106,6 @@ fun ChatScreen(
     val selectedMediaItems = viewModel.selectedMediaItems
     val isLoadingHistory by viewModel.isLoadingHistory.collectAsState()
     val historyLoadGeneration by viewModel.historyLoadGeneration.collectAsState()
-    val mcpServerStates by viewModel.mcpServerStates.collectAsState()
     val isMcpEnabled by viewModel.stateHolder._isMcpEnabledForNextRequest.collectAsState()
     val isLoadingHistoryData by viewModel.isLoadingHistoryData.collectAsState()
     val conversationId by viewModel.currentConversationId.collectAsState()
@@ -751,11 +750,6 @@ fun ChatScreen(
                 onHostCommandCardVisibilityChange = { isVisible ->
                     isHostCommandCardRendered = isVisible
                 },
-                // MCP 相关参数
-                mcpServerStates = mcpServerStates,
-                onAddMcpServer = { viewModel.addMcpServer(it) },
-                onRemoveMcpServer = { viewModel.removeMcpServer(it) },
-                onToggleMcpServer = { id, enabled -> viewModel.toggleMcpServer(id, enabled) }
             )
             }
 
