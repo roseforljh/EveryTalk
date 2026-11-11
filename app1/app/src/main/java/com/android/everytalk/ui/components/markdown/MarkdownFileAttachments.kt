@@ -24,6 +24,8 @@ import com.mikepenz.markdown.model.parseMarkdown
 import org.intellij.markdown.MarkdownElementTypes
 import org.intellij.markdown.MarkdownTokenTypes
 import org.intellij.markdown.ast.ASTNode
+import androidx.compose.ui.res.stringResource
+import com.android.everytalk.R
 
 internal const val MESSAGE_FILE_SCHEME = "everytalk-file:"
 internal val LocalMessageFileAttachments = compositionLocalOf<List<SelectedMediaItem.GenericFile>> { emptyList() }
@@ -57,7 +59,9 @@ internal fun messageFileInlineKey(file: SelectedMediaItem.GenericFile): String =
 internal fun messageFileInlineContent(files: List<SelectedMediaItem.GenericFile>): Map<String, InlineTextContent> = files.associate { file ->
     messageFileInlineKey(file) to InlineTextContent(Placeholder(1.15.em, 1.15.em, PlaceholderVerticalAlign.TextCenter)) {
         var menu by remember(file.id) { mutableStateOf(false) }
-        AttachmentTypeIcon(file, Modifier.fillMaxSize().semantics { contentDescription = "AI 文件操作：${file.displayName}" }
+        // semantics 块不是 @Composable，文案必须先在外面取好。
+        val actionsLabel = stringResource(R.string.ui_file_actions_content_description, file.displayName)
+        AttachmentTypeIcon(file, Modifier.fillMaxSize().semantics { contentDescription = actionsLabel }
             .clickable(role = Role.Button, onClickLabel = "选择文件操作") { menu = true })
         if (menu) MessageFileActions(file) { menu = false }
     }

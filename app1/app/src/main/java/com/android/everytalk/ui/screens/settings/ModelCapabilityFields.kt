@@ -53,8 +53,8 @@ internal fun ModelCapabilityFields(config: ApiConfig, onChange: (ApiConfig) -> U
     val parameters = config.modelParameters
     Column(Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("输入与输出", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-            TextButton(onClick = { onChange(config.copy(modelParameters = parameters.copy(inputModalities = null, outputModalities = null, supportsReasoning = null))) }) { Text("使用目录能力") }
+            Text(stringResource(R.string.ui_model_capability_io_title), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            TextButton(onClick = { onChange(config.copy(modelParameters = parameters.copy(inputModalities = null, outputModalities = null, supportsReasoning = null))) }) { Text(stringResource(R.string.ui_model_capability_use_catalog)) }
         }
         Text(if (parameters.resolvedCapability?.modalitiesSource == ModelCapabilitySource.COMMUNITY_CATALOG) "models.dev 标准 · 可手动调整" else "自定义模型能力 · 点击刷新从 models.dev 匹配", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         listOf(true, false).forEach { input ->
@@ -74,7 +74,7 @@ internal fun ModelCapabilityFields(config: ApiConfig, onChange: (ApiConfig) -> U
                 }
             }
         }
-        if (config.outputModalities().any { it in setOf("audio", "video") }) Text("音频／视频输出能力会保存；当前聊天尚未接入这些生成接口。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (config.outputModalities().any { it in setOf("audio", "video") }) Text(stringResource(R.string.ui_model_capability_av_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -86,10 +86,10 @@ internal fun ImageModelParameterFields(config: ApiConfig, onChange: (ApiConfig) 
     val fields = imageParameterKeys(format)
     var guidanceText by remember(config.id, format) { mutableStateOf(config.guidanceScale?.toString().orEmpty()) }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(vertical = 12.dp)) {
-        Text("图片生成", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-        if (format == "unsupported") Text("当前 API 协议未接入图片生成，请在 API 配置中选择支持图片生成的接口。")
+        Text(stringResource(R.string.ui_model_capability_image_title), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+        if (format == "unsupported") Text(stringResource(R.string.ui_model_capability_image_unsupported))
         if ("imageSize" in fields) {
-            if (format == "openai") OutlinedTextField(value = config.imageSize.orEmpty(), onValueChange = { onChange(config.copy(imageSize = it.ifBlank { null })) }, label = { Text("图片尺寸") }, placeholder = { Text("1024x1024") }, singleLine = true, modifier = Modifier.fillMaxWidth(), shape = AppDialogTextFieldShape)
+            if (format == "openai") OutlinedTextField(value = config.imageSize.orEmpty(), onValueChange = { onChange(config.copy(imageSize = it.ifBlank { null })) }, label = { Text(stringResource(R.string.ui_model_capability_image_size)) }, placeholder = { Text("1024x1024") }, singleLine = true, modifier = Modifier.fillMaxWidth(), shape = AppDialogTextFieldShape)
             else ImageParameterChoices("图片尺寸", config.imageSize.orEmpty(), if (format == "gemini") listOf("1K", "2K", "4K") else listOf("HD", "2K")) {
                 onChange(config.copy(imageSize = it.ifBlank { null }))
             }
@@ -100,16 +100,16 @@ internal fun ImageModelParameterFields(config: ApiConfig, onChange: (ApiConfig) 
         if ("aspectRatio" in fields) ImageParameterChoices("宽高比", parameters.imageAspectRatio.orEmpty(), ratios) {
             onChange(config.copy(modelParameters = parameters.copy(imageAspectRatio = it.ifBlank { null })))
         }
-        if ("inferenceSteps" in fields) OutlinedTextField(value = config.numInferenceSteps?.toString().orEmpty(), onValueChange = { text -> if (text.isEmpty() || text.toIntOrNull() in 1..1000) onChange(config.copy(numInferenceSteps = text.toIntOrNull())) }, label = { Text("推理步数") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        if ("inferenceSteps" in fields) OutlinedTextField(value = config.numInferenceSteps?.toString().orEmpty(), onValueChange = { text -> if (text.isEmpty() || text.toIntOrNull() in 1..1000) onChange(config.copy(numInferenceSteps = text.toIntOrNull())) }, label = { Text(stringResource(R.string.ui_model_capability_inference_steps)) }, singleLine = true, modifier = Modifier.fillMaxWidth())
         if ("guidanceScale" in fields) OutlinedTextField(value = guidanceText, onValueChange = { text ->
             if (text.isEmpty() || text.toFloatOrNull()?.let { it.isFinite() && it in 0f..100f } == true) {
                 guidanceText = text
                 onChange(config.copy(guidanceScale = text.toFloatOrNull()))
             }
-        }, label = { Text("引导系数") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        if ("quality" in fields) OutlinedTextField(value = parameters.imageQuality.orEmpty(), onValueChange = { onChange(config.copy(modelParameters = parameters.copy(imageQuality = it.ifBlank { null }))) }, label = { Text("图片质量") }, placeholder = { Text("auto / low / medium / high") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        if ("batchSize" in fields) OutlinedTextField(value = parameters.imageBatchSize?.toString().orEmpty(), onValueChange = { text -> if (text.isEmpty() || text.toIntOrNull() in 1..10) onChange(config.copy(modelParameters = parameters.copy(imageBatchSize = text.toIntOrNull()))) }, label = { Text("生成数量") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        if (format == "qwen") Text("Qwen Image Edit 需要上传参考图片。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }, label = { Text(stringResource(R.string.ui_model_capability_guidance_scale)) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        if ("quality" in fields) OutlinedTextField(value = parameters.imageQuality.orEmpty(), onValueChange = { onChange(config.copy(modelParameters = parameters.copy(imageQuality = it.ifBlank { null }))) }, label = { Text(stringResource(R.string.ui_model_capability_image_quality)) }, placeholder = { Text("auto / low / medium / high") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        if ("batchSize" in fields) OutlinedTextField(value = parameters.imageBatchSize?.toString().orEmpty(), onValueChange = { text -> if (text.isEmpty() || text.toIntOrNull() in 1..10) onChange(config.copy(modelParameters = parameters.copy(imageBatchSize = text.toIntOrNull()))) }, label = { Text(stringResource(R.string.ui_model_capability_batch_size)) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        if (format == "qwen") Text(stringResource(R.string.ui_model_capability_qwen_reference), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

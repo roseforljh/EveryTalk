@@ -27,6 +27,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.compose.ui.res.stringResource
+import com.android.everytalk.R
 
 internal enum class AttachmentPreviewKind { TEXT, IMAGE, PDF, AUDIO, VIDEO }
 
@@ -134,22 +136,22 @@ internal fun MessageFilePreview(file: SelectedMediaItem.GenericFile, onDismiss: 
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     AttachmentTypeIcon(file)
                     Text(file.displayName, Modifier.weight(1f).padding(horizontal = 8.dp), maxLines = 2)
-                    TextButton(onClick = onDismiss) { Text("关闭预览") }
+                    TextButton(onClick = onDismiss) { Text(stringResource(R.string.ui_file_preview_close)) }
                 }
-                Text("本地预览", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(stringResource(R.string.ui_file_preview_local), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     when {
                         error != null -> Text(error!!, Modifier.align(Alignment.Center))
                         kind == AttachmentPreviewKind.TEXT && text != null -> Column(Modifier.verticalScroll(rememberScrollState())) {
-                            if (text!!.truncated) Text("文件较大，仅预览前 512 KiB；完整内容请用其他应用打开。")
+                            if (text!!.truncated) Text(stringResource(R.string.ui_file_preview_truncated))
                             SelectionContainer { Text(text!!.text, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) }
                         }
                         kind == AttachmentPreviewKind.PDF && pdfPage != null -> Column {
                             Image(pdfPage!!.first.asImageBitmap(), "PDF 第 ${pageIndex + 1} 页", Modifier.weight(1f).fillMaxWidth())
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                TextButton(onClick = { pageIndex-- }, enabled = pageIndex > 0) { Text("上一页") }
+                                TextButton(onClick = { pageIndex-- }, enabled = pageIndex > 0) { Text(stringResource(R.string.ui_file_preview_previous_page)) }
                                 Text("${pageIndex + 1} / ${pdfPage!!.second}")
-                                TextButton(onClick = { pageIndex++ }, enabled = pageIndex + 1 < pdfPage!!.second) { Text("下一页") }
+                                TextButton(onClick = { pageIndex++ }, enabled = pageIndex + 1 < pdfPage!!.second) { Text(stringResource(R.string.ui_file_preview_next_page)) }
                             }
                         }
                         uri != null && kind in setOf(AttachmentPreviewKind.AUDIO, AttachmentPreviewKind.VIDEO) -> {
@@ -166,7 +168,7 @@ internal fun MessageFilePreview(file: SelectedMediaItem.GenericFile, onDismiss: 
                         else -> CircularProgressIndicator(Modifier.align(Alignment.Center))
                     }
                 }
-                TextButton(onClick = { scope.launch { openMessageAttachment(context, file, true) } }) { Text("用其他应用打开") }
+                TextButton(onClick = { scope.launch { openMessageAttachment(context, file, true) } }) { Text(stringResource(R.string.ui_file_action_open_with)) }
             }
         }
     }

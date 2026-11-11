@@ -618,7 +618,7 @@ internal fun ModelParametersDialog(
                 }
                 if (protocol == ModelParameterProtocol.ANTHROPIC || protocol == ModelParameterProtocol.GEMINI) {
                     ModelParameterRow(label = "思考预算", supportingText = "tokens · 仅预算模式使用") {
-                        TokenValueField(value = workingConfig.modelParameters.thinkingBudget.toString(), contentDescription = "思考预算 tokens", onValueChange = { value ->
+                        TokenValueField(value = workingConfig.modelParameters.thinkingBudget.toString(), contentDescription = stringResource(R.string.ui_model_capability_thinking_budget_description), onValueChange = { value ->
                             value.toIntOrNull()?.takeIf { it >= 1024 }?.let { budget ->
                                 workingConfig = workingConfig.copy(modelParameters = workingConfig.modelParameters.copy(thinkingBudget = budget, reasoningMode = ReasoningMode.BUDGET))
                             }

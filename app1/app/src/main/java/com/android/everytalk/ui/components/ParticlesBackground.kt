@@ -13,6 +13,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.MotionDurationScale
+import kotlin.coroutines.coroutineContext
 import androidx.compose.ui.platform.LocalContext
 import kotlin.math.PI
 import kotlin.math.cbrt
@@ -37,15 +39,19 @@ fun ParticlesBackground(
 ) {
     val particles = remember(count) { createParticles(count) }
     val context = LocalContext.current
-    val motion = remember {
-        if (Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f) 0f else 1f
-    }
     val clock = remember { mutableFloatStateOf(0f) }
-    val reveal = remember { mutableFloatStateOf(if (motion == 0f) 1f else 0f) }
-    LaunchedEffect(motion) {
-        if (motion == 0f) return@LaunchedEffect
+    val reveal = remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(Unit) {
+        // 系统关闭动画或测试环境把动画倍率设为 0 时保持静止，避免无限帧循环让界面永不进入 idle。
+        val animated = (coroutineContext[MotionDurationScale]?.scaleFactor ?: 1f) > 0f &&
+            Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) != 0f
+        if (!animated) {
+            reveal.floatValue = 1f
+            return@LaunchedEffect
+        }
+        // 只驱动开场显现；显现结束后停止请求新帧，静止画面不会让界面一直处于"动画中"。
         var last = 0L
-        while (true) {
+        while (reveal.floatValue < 1f) {
             withFrameNanos { now ->
                 val dt = if (last == 0L) 1f / 60f else ((now - last) / 1e9f).coerceIn(0.0005f, 0.05f)
                 last = now

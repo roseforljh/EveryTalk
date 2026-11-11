@@ -86,6 +86,57 @@ class CodeBlockCardScrollTest {
         assertFalse(source.contains(".padding(bottom = if (isAtMaxHeight) 0.dp else 24.dp)"))
     }
 
+    @Test
+    fun `代码块吸顶与内部滚动时计算顶部透明渐隐强度`() {
+        assertEquals(
+            0f,
+            resolveCodeBlockStickyOffsetPx(
+                stickyTopPx = Float.NaN,
+                cardTopPx = 100f,
+                cardHeightPx = 400,
+                headerHeightPx = 56,
+            ),
+            0.001f,
+        )
+        assertEquals(
+            80f,
+            resolveCodeBlockStickyOffsetPx(
+                stickyTopPx = 180f,
+                cardTopPx = 100f,
+                cardHeightPx = 400,
+                headerHeightPx = 56,
+            ),
+            0.001f,
+        )
+        assertEquals(
+            0f,
+            resolveCodeBlockTopFadeStrength(
+                stickyOffsetPx = 0f,
+                scrollOffsetPx = 0,
+                rampPx = 48f,
+            ),
+            0.001f,
+        )
+        assertEquals(
+            0.5f,
+            resolveCodeBlockTopFadeStrength(
+                stickyOffsetPx = 24f,
+                scrollOffsetPx = 0,
+                rampPx = 48f,
+            ),
+            0.001f,
+        )
+        assertEquals(
+            1f,
+            resolveCodeBlockTopFadeStrength(
+                stickyOffsetPx = 0f,
+                scrollOffsetPx = 96,
+                rampPx = 48f,
+            ),
+            0.001f,
+        )
+    }
+
     private fun codeBlockCardSource(): String {
         val sourceFile = listOf(
             File("src/main/java/com/android/everytalk/ui/components/content/CodeBlockCard.kt"),

@@ -32,6 +32,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import androidx.compose.ui.res.stringResource
 
 /** 所有附件入口复用同一规则；服务端只给 octet-stream 时按扩展名识别，不再退成回形针。 */
 @DrawableRes
@@ -132,20 +133,20 @@ fun MessageFileActions(file: SelectedMediaItem.GenericFile, onDismiss: () -> Uni
         title = { Text(file.displayName) },
         text = {
             Column {
-                Text(file.savedDownloadPath ?: "此文件保存在当前聊天附件中", style = MaterialTheme.typography.bodySmall)
-                if (attachmentPreviewKind(file) != null) TextButton(onClick = { open(file) }) { Text("预览文件") }
-                TextButton(onClick = { scope.launch { openMessageAttachment(context, file); onDismiss() } }) { Text("打开文件") }
-                TextButton(onClick = { scope.launch { openMessageAttachment(context, file, true); onDismiss() } }) { Text("用其他应用打开") }
+                Text(file.savedDownloadPath ?: stringResource(R.string.ui_file_attachment_hint), style = MaterialTheme.typography.bodySmall)
+                if (attachmentPreviewKind(file) != null) TextButton(onClick = { open(file) }) { Text(stringResource(R.string.ui_file_action_preview)) }
+                TextButton(onClick = { scope.launch { openMessageAttachment(context, file); onDismiss() } }) { Text(stringResource(R.string.ui_file_action_open)) }
+                TextButton(onClick = { scope.launch { openMessageAttachment(context, file, true); onDismiss() } }) { Text(stringResource(R.string.ui_file_action_open_with)) }
                 val folderIntent = attachmentFolderIntent(file)
                 if (folderIntent != null) TextButton(onClick = {
                     try { context.startActivity(folderIntent) }
                     catch (_: ActivityNotFoundException) { AppToast.show(context, "系统未提供文件浏览器，文件位于 ${file.savedDownloadPath}") }
                     catch (_: SecurityException) { AppToast.show(context, "系统不允许定位此目录，文件位于 ${file.savedDownloadPath}") }
                     onDismiss()
-                }) { Text("查看所在文件夹") }
+                }) { Text(stringResource(R.string.ui_file_action_show_folder)) }
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.ui_file_action_close)) } },
     )
 }
 

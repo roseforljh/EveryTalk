@@ -263,8 +263,8 @@ internal fun promoteNestedFenceMarkers(content: String): String {
             }
             cursor++
         }
-        // 流式中外壳还没闭合时，只要内部已配平也先加长开栏，避免渲染中途漏出。
-        if (longest > 0 && (close >= 0 || depth == 0)) {
+        // 只有内部栏线不短于外层时才可能被 CommonMark 当成外层闭栏；内层更短时原文可直接解析。
+        if (longest >= marker.length && (close >= 0 || depth == 0)) {
             val promoted = marker.first().toString().repeat(maxOf(longest, marker.length) + 1)
             lines[index] = lines[index].replaceFirst(marker, promoted)
             if (close >= 0) lines[close] = lines[close].replaceFirst(marker, promoted)

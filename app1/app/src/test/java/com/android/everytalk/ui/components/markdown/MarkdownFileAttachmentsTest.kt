@@ -75,6 +75,9 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.File
 
+private fun text(id: Int, vararg args: Any): String =
+    ApplicationProvider.getApplicationContext<Application>().getString(id, *args)
+
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = Application::class)
 class MarkdownFileAttachmentsTest {
@@ -188,10 +191,10 @@ class MarkdownFileAttachmentsTest {
                 }
             }
         }
-        composeRule.onNodeWithContentDescription("AI 文件操作：报告.pdf", useUnmergedTree = true).performClick()
-        composeRule.onNodeWithText("打开文件").assertIsDisplayed()
-        composeRule.onNodeWithText("用其他应用打开").assertIsDisplayed()
-        composeRule.onNodeWithText("查看所在文件夹").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription(text(R.string.ui_file_actions_content_description, "报告.pdf"), useUnmergedTree = true).performClick()
+        composeRule.onNodeWithText(text(R.string.ui_file_action_open)).assertIsDisplayed()
+        composeRule.onNodeWithText(text(R.string.ui_file_action_open_with)).assertIsDisplayed()
+        composeRule.onNodeWithText(text(R.string.ui_file_action_show_folder)).assertIsDisplayed()
         composeRule.onNodeWithText("Download/App/AppTalk/报告 (1).pdf").assertIsDisplayed()
     }
 
@@ -224,12 +227,12 @@ class MarkdownFileAttachmentsTest {
             }
         }
         composeRule.waitUntil(5_000) { composeRule.onAllNodesWithText("这是第三个", substring = true).fetchSemanticsNodes().isNotEmpty() }
-        composeRule.onAllNodesWithContentDescription("AI 文件操作：${file.displayName}", useUnmergedTree = true).assertCountEquals(0)
+        composeRule.onAllNodesWithContentDescription(text(R.string.ui_file_actions_content_description, file.displayName), useUnmergedTree = true).assertCountEquals(0)
         // 正文、执行记录均不变，只补下载回执；生产消息缓存必须让附件更新到正文和页脚。
         composeRule.runOnIdle { controller.stateHolder.messages[0] = message.copy(attachments = listOf(file)) }
         Snapshot.sendApplyNotifications()
         composeRule.waitUntil(5_000) {
-            composeRule.onAllNodesWithContentDescription("AI 文件操作：${file.displayName}", useUnmergedTree = true)
+            composeRule.onAllNodesWithContentDescription(text(R.string.ui_file_actions_content_description, file.displayName), useUnmergedTree = true)
                 .fetchSemanticsNodes().isNotEmpty()
         }
         val segment = controller.chatListItems.value.filterIsInstance<ChatListItem.AiMessageContentSegment>().first()
@@ -251,11 +254,11 @@ class MarkdownFileAttachmentsTest {
         paragraph.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
         paragraph.performTouchInput { click(layouts.single().getBoundingBox(body.text.indexOf(file.displayName) + file.displayName.length / 2).center) }
         composeRule.waitUntil(5_000) { composeRule.onAllNodesWithText("序号,主机\n1,服务器").fetchSemanticsNodes().isNotEmpty() }
-        composeRule.onNodeWithText("本地预览").assertIsDisplayed()
+        composeRule.onNodeWithText(text(R.string.ui_file_preview_local)).assertIsDisplayed()
         assertNull(shadowOf(context).peekNextStartedActivity())
-        composeRule.onNodeWithText("关闭预览").performClick()
-        composeRule.onAllNodesWithContentDescription("AI 文件操作：${file.displayName}", useUnmergedTree = true)[0].performClick()
-        composeRule.onNodeWithText("查看所在文件夹").assertIsDisplayed()
+        composeRule.onNodeWithText(text(R.string.ui_file_preview_close)).performClick()
+        composeRule.onAllNodesWithContentDescription(text(R.string.ui_file_actions_content_description, file.displayName), useUnmergedTree = true)[0].performClick()
+        composeRule.onNodeWithText(text(R.string.ui_file_action_show_folder)).assertIsDisplayed()
     }
 
     @Test
@@ -297,14 +300,14 @@ class MarkdownFileAttachmentsTest {
             composeRule.waitUntil(5_000) { composeRule.onAllNodesWithText("# 测试文件").fetchSemanticsNodes().isNotEmpty() }
             assertNull(shadowOf(context).peekNextStartedActivity())
             assertEquals(1, provider.rows.size)
-            composeRule.onNodeWithText("关闭预览").performClick()
+            composeRule.onNodeWithText(text(R.string.ui_file_preview_close)).performClick()
         }
 
-        composeRule.onAllNodesWithContentDescription("AI 文件操作：${file.displayName}", useUnmergedTree = true)[0].performClick()
-        composeRule.onNodeWithText("打开文件").assertIsDisplayed()
-        composeRule.onNodeWithText("用其他应用打开").assertIsDisplayed()
-        composeRule.onNodeWithText("查看所在文件夹").assertIsDisplayed()
-        composeRule.onNodeWithText("用其他应用打开").performClick()
+        composeRule.onAllNodesWithContentDescription(text(R.string.ui_file_actions_content_description, file.displayName), useUnmergedTree = true)[0].performClick()
+        composeRule.onNodeWithText(text(R.string.ui_file_action_open)).assertIsDisplayed()
+        composeRule.onNodeWithText(text(R.string.ui_file_action_open_with)).assertIsDisplayed()
+        composeRule.onNodeWithText(text(R.string.ui_file_action_show_folder)).assertIsDisplayed()
+        composeRule.onNodeWithText(text(R.string.ui_file_action_open_with)).performClick()
         composeRule.waitForIdle()
         composeRule.waitUntil(5_000) { shadowOf(context).peekNextStartedActivity() != null }
         val chooser = shadowOf(context).nextStartedActivity
@@ -313,8 +316,8 @@ class MarkdownFileAttachmentsTest {
         val target = chooser.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
         assertEquals(file.uri, target?.data)
 
-        composeRule.onAllNodesWithContentDescription("AI 文件操作：${file.displayName}", useUnmergedTree = true)[0].performClick()
-        composeRule.onNodeWithText("查看所在文件夹").performClick()
+        composeRule.onAllNodesWithContentDescription(text(R.string.ui_file_actions_content_description, file.displayName), useUnmergedTree = true)[0].performClick()
+        composeRule.onNodeWithText(text(R.string.ui_file_action_show_folder)).performClick()
         val folder = shadowOf(context).nextStartedActivity
         @Suppress("DEPRECATION")
         val initial = folder.getParcelableExtra<Uri>(DocumentsContract.EXTRA_INITIAL_URI)
@@ -346,7 +349,7 @@ class MarkdownFileAttachmentsTest {
         composeRule.waitUntil(5_000) {
             composeRule.onAllNodesWithText("无法预览此本地文件，可尝试用其他应用打开。").fetchSemanticsNodes().isNotEmpty()
         }
-        composeRule.onNodeWithText("用其他应用打开").assertIsDisplayed()
-        composeRule.onNodeWithText("关闭预览").assertIsDisplayed()
+        composeRule.onNodeWithText(text(R.string.ui_file_action_open_with)).assertIsDisplayed()
+        composeRule.onNodeWithText(text(R.string.ui_file_preview_close)).assertIsDisplayed()
     }
 }

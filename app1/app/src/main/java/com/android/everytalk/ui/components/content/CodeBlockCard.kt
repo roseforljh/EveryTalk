@@ -26,9 +26,10 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
@@ -70,9 +71,114 @@ import kotlinx.coroutines.withContext
 val LocalStickyHeaderTop = compositionLocalOf { Float.NaN }
 
 internal const val GPT_CODE_BLOCK_CONTENT_PADDING_DP = 16f
+internal const val CODE_BLOCK_FADE_HEIGHT_DP = 64f
+internal const val CODE_BLOCK_TOP_FADE_HEADER_OVERLAP_DP = 10f
+internal const val CODE_BLOCK_TOP_FADE_RAMP_DP = 24f
 internal const val INLINE_WEB_PREVIEW_LOADING_HEIGHT_DP = 160f
 internal const val INLINE_WEB_PREVIEW_ERROR_HEIGHT_DP = 220f
 internal const val INLINE_WEB_PREVIEW_READY_HEIGHT_DP = 450f
+
+/**
+ * 计算代码块吸顶头部相对卡片顶部的下移距离（px）。
+ */
+internal fun resolveCodeBlockStickyOffsetPx(
+    stickyTopPx: Float,
+    cardTopPx: Float,
+    cardHeightPx: Int,
+    headerHeightPx: Int,
+): Float {
+    if (stickyTopPx.isNaN()) return 0f
+    val diff = max(0f, stickyTopPx - cardTopPx)
+    val maxOffset = max(0f, (cardHeightPx - headerHeightPx).toFloat())
+    return min(diff, maxOffset)
+}
+
+/**
+ * 计算代码块顶部渐隐强度（0f..1f）。
+ * 当吸顶头部在代码块内下移或代码区内部发生纵向滚动时，平滑增强顶部透明渐变。
+ */
+internal fun resolveCodeBlockTopFadeStrength(
+    stickyOffsetPx: Float,
+    scrollOffsetPx: Int,
+    rampPx: Float,
+): Float {
+    val effectiveScrollPx = max(
+        stickyOffsetPx.coerceAtLeast(0f),
+        scrollOffsetPx.coerceAtLeast(0).toFloat(),
+    )
+    if (effectiveScrollPx <= 0f) return 0f
+    if (!rampPx.isFinite() || rampPx <= 0f) return 1f
+    return (effectiveScrollPx / rampPx).coerceIn(0f, 1f)
+}
+
+/**
+ * 代码块顶部/底部渐隐遮罩：通过离屏合成与 DstIn 混合模式直接降低代码内容自身透明度，
+ * 露出代码块底色，过渡曲线与用户气泡收起时的底部渐隐保持一致。
+ */
+internal fun Modifier.codeBlockScrollFade(
+    topStrength: () -> Float,
+    bottomStrength: () -> Float = { 0f },
+    fadeHeightDp: Float = CODE_BLOCK_FADE_HEIGHT_DP,
+    clearAbovePx: () -> Float = { 0f },
+): Modifier = this
+    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+    .drawWithContent {
+        drawContent()
+        val topK = topStrength().coerceIn(0f, 1f)
+        if (topK > 0f) {
+            val startY = clearAbovePx().coerceIn(0f, size.height)
+            fun a(v: Float) = Color.Black.copy(alpha = 1f - topK * (1f - v))
+            if (startY > 0f) {
+                drawRect(
+                    color = a(0f),
+                    topLeft = Offset.Zero,
+                    size = Size(size.width, startY),
+                    blendMode = BlendMode.DstIn,
+                )
+            }
+            val remainingHeight = (size.height - startY).coerceAtLeast(0f)
+            val h = fadeHeightDp.dp.toPx().coerceAtMost(remainingHeight)
+            if (h > 0f) {
+                drawRect(
+                    brush = Brush.verticalGradient(
+                        0f to a(0f),
+                        0.15f to a(0.1f),
+                        0.4f to a(0.45f),
+                        0.7f to a(0.86f),
+                        1f to a(1f),
+                        startY = startY,
+                        endY = startY + h,
+                    ),
+                    topLeft = Offset(0f, startY),
+                    size = Size(size.width, h),
+                    blendMode = BlendMode.DstIn,
+                )
+            }
+        }
+
+        val bottomK = bottomStrength().coerceIn(0f, 1f)
+        if (bottomK > 0f) {
+            val h = fadeHeightDp.dp.toPx().coerceAtMost(size.height)
+            if (h > 0f) {
+                val top = size.height - h
+                fun b(v: Float) = Color.Black.copy(alpha = 1f - bottomK * (1f - v))
+                drawRect(
+                    brush = Brush.verticalGradient(
+                        0f to b(1f),
+                        0.3f to b(0.86f),
+                        0.6f to b(0.45f),
+                        0.85f to b(0.1f),
+                        1f to b(0f),
+                        startY = top,
+                        endY = size.height,
+                    ),
+                    topLeft = Offset(0f, top),
+                    size = Size(size.width, h),
+                    blendMode = BlendMode.DstIn,
+                )
+            }
+        }
+    }
 
 /** 实测高度优先；超长网页保留原来的内联上限，完整交互仍在全屏预览中进行。 */
 internal fun resolveInlineWebPreviewHeightDp(
@@ -297,17 +403,15 @@ fun CodeBlockCard(
                     // 动态吸顶偏移：使用 graphicsLayer 在绘制阶段计算偏移
                     .graphicsLayer {
                         // 直接在绘制阶段读取状态并计算偏移
-                        translationY = if (stickyTop.isNaN()) {
-                            0f
-                        } else {
-                            val diff = stickyTop - cardTopPx
-                            val offset = max(0f, diff)
-                            val maxOffset = max(0f, (cardHeightPx - headerHeightPx).toFloat())
-                            min(offset, maxOffset)
-                        }
+                        translationY = resolveCodeBlockStickyOffsetPx(
+                            stickyTopPx = stickyTop,
+                            cardTopPx = cardTopPx,
+                            cardHeightPx = cardHeightPx,
+                            headerHeightPx = headerHeightPx,
+                        )
                     }
-                    // 吸顶时要盖住下面滚过的代码，背景必须放在 graphicsLayer 之后才会跟着平移
-                    .background(previewBgColor.copy(alpha = previewRevealAlpha).compositeOver(bg))
+                    // 代码模式下由下方内容层的离屏透明渐隐露出卡片底色，不再用实心色块硬切代码
+                    .background(previewBgColor.copy(alpha = previewRevealAlpha))
                     .onSizeChanged { headerHeightPx = it.height },
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically // 垂直居中对齐，与右侧按钮对齐
@@ -447,6 +551,8 @@ fun CodeBlockCard(
             var contentBoxHeightPx by remember { mutableIntStateOf(0) }
             val density = LocalDensity.current
             val isAtMaxHeight = with(density) { contentBoxHeightPx >= 400.dp.toPx() - 1f }
+            val topFadeRampPx = with(density) { CODE_BLOCK_TOP_FADE_RAMP_DP.dp.toPx() }
+            val topHeaderOverlapPx = with(density) { CODE_BLOCK_TOP_FADE_HEADER_OVERLAP_DP.dp.toPx() }
             val codeScrollState = rememberScrollState()
 
             LaunchedEffect(code, isStreaming, codeScrollState.maxValue) {
@@ -471,21 +577,37 @@ fun CodeBlockCard(
                         }
                     )
                     .background(Color.Transparent)
-                    .drawWithContent {
-                        drawContent()
-                        if (!isPreviewMode && isAtMaxHeight) {
-                            val totalH = 24.dp.toPx()
-                            drawRect(
-                                brush = Brush.verticalGradient(
-                                    colors = listOf(Color.Transparent, bg),
-                                    startY = size.height - totalH,
-                                    endY = size.height
-                                ),
-                                topLeft = Offset(0f, size.height - totalH),
-                                size = Size(size.width, totalH)
+                    .codeBlockScrollFade(
+                        topStrength = {
+                            if (isPreviewMode) {
+                                0f
+                            } else {
+                                val stickyOffsetPx = resolveCodeBlockStickyOffsetPx(
+                                    stickyTopPx = stickyTop,
+                                    cardTopPx = cardTopPx,
+                                    cardHeightPx = cardHeightPx,
+                                    headerHeightPx = headerHeightPx,
+                                )
+                                resolveCodeBlockTopFadeStrength(
+                                    stickyOffsetPx = stickyOffsetPx,
+                                    scrollOffsetPx = codeScrollState.value,
+                                    rampPx = topFadeRampPx,
+                                )
+                            }
+                        },
+                        bottomStrength = {
+                            if (!isPreviewMode && isAtMaxHeight) 1f else 0f
+                        },
+                        clearAbovePx = {
+                            val stickyOffsetPx = resolveCodeBlockStickyOffsetPx(
+                                stickyTopPx = stickyTop,
+                                cardTopPx = cardTopPx,
+                                cardHeightPx = cardHeightPx,
+                                headerHeightPx = headerHeightPx,
                             )
-                        }
-                    }
+                            (stickyOffsetPx - topHeaderOverlapPx).coerceAtLeast(0f)
+                        },
+                    )
             ) {
                 if (isPreviewMode) {
                     // 内联渲染网页

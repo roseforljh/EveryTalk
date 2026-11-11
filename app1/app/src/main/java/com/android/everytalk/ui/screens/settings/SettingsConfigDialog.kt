@@ -215,8 +215,8 @@ internal fun AddNewFullConfigDialog(
                 ) {
                     onImageModeChange?.let { changeMode ->
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            FilterChip(selected = !isImageMode, onClick = { changeMode(false) }, label = { Text("文本模型") })
-                            FilterChip(selected = isImageMode, onClick = { changeMode(true) }, label = { Text("图片模型") })
+                            FilterChip(selected = !isImageMode, onClick = { changeMode(false) }, label = { Text(stringResource(R.string.ui_settings_config_text_model)) })
+                            FilterChip(selected = isImageMode, onClick = { changeMode(true) }, label = { Text(stringResource(R.string.ui_settings_config_image_model)) })
                         }
                     }
                     SettingsFieldLabel(stringResource(R.string.settings_model_platform_label))

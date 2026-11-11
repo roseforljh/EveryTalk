@@ -1,4 +1,7 @@
 package com.android.everytalk.ui.screens.settings
+import com.android.everytalk.ui.screens.mcp.McpSectionLabel
+import com.android.everytalk.ui.screens.appinfo.SettingsGroupCard
+import com.android.everytalk.ui.screens.appinfo.SettingsRowDivider
 import com.android.everytalk.statecontroller.*
 
 import android.annotation.SuppressLint
@@ -220,12 +223,7 @@ internal fun SettingsScreenContent(
     }
 }
 
-/**
- * 设置页的统一工具页。
- *
- * 联网搜索服务直接作为 MCP 能力的一部分展示和管理。
- * 搜索服务仍沿用原有配置状态，避免改变已有搜索逻辑。
- */
+/** 设置页 MCP 标签：联网搜索与 MCP 服务器各一个分组卡片，共用一个滚动区域。 */
 @Composable
 internal fun McpSettingsContent(
     selectedProviderId: String?,
@@ -233,7 +231,8 @@ internal fun McpSettingsContent(
     onSelectWebSearchProvider: (ExternalWebSearchProvider) -> Unit,
     onEditWebSearchProvider: (ExternalWebSearchProvider) -> Unit,
     mcpServerStates: Map<String, McpServerState>,
-    onAddMcpServer: (McpServerConfig) -> Unit,
+    onAddMcpClick: () -> Unit,
+    onConnectMcpKeyProvider: (com.android.everytalk.data.mcp.McpKeyProvider, String) -> Unit,
     onUpdateMcpServer: (McpServerConfig) -> Unit,
     onRemoveMcpServer: (String) -> Unit,
     onToggleMcpServer: (String, Boolean) -> Unit,
@@ -241,130 +240,106 @@ internal fun McpSettingsContent(
     bottomContentPadding: Dp,
     onLoginMcp: (com.android.everytalk.data.mcp.McpOAuthProvider) -> Unit,
     onConfigureMail: (com.android.everytalk.data.mcp.McpMailProvider, String?) -> Unit,
-    oauthBusy: Boolean,
 ) {
     McpServerListContent(
         serverStates = mcpServerStates,
-        onLogin = onLoginMcp,
-        onConfigureMail = onConfigureMail,
-        showOAuthPlaceholders = true,
-        oauthBusy = oauthBusy,
-        onAddServer = onAddMcpServer,
+        onAddClick = onAddMcpClick,
+        onConnectKeyProvider = onConnectMcpKeyProvider,
+        sharedKeys = com.android.everytalk.data.mcp.McpKeyProvider.entries.mapNotNull { p ->
+            webSearchConfigs[p.webSearchProviderId]?.apiKey?.takeIf { it.isNotBlank() }?.let { p to it }
+        }.toMap(),
         onUpdateServer = onUpdateMcpServer,
         onRemoveServer = onRemoveMcpServer,
         onToggleServer = onToggleMcpServer,
+        onLogin = onLoginMcp,
+        onConfigureMail = onConfigureMail,
         contentPadding = PaddingValues(
             start = 20.dp, end = 20.dp,
             top = topContentPadding, bottom = bottomContentPadding,
         ),
         header = {
-            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                Text(
-                    text = stringResource(R.string.settings_tab_mcp),
-                    style = MaterialTheme.typography.titleLarge,
-                )
-                ExternalWebSearchProviderCards(
-                    selectedProviderId = selectedProviderId,
-                    configs = webSearchConfigs,
-                    onSelectProvider = onSelectWebSearchProvider,
-                    onEditProvider = onEditWebSearchProvider,
-                )
+            Column {
+                McpSectionLabel(stringResource(R.string.mcp_section_web_search))
+                SettingsGroupCard {
+                    ExternalWebSearchProvider.entries.forEachIndexed { index, provider ->
+                        if (index > 0) SettingsRowDivider()
+                        ExternalWebSearchProviderRow(
+                            provider = provider,
+                            isSelected = selectedProviderId == provider.providerId,
+                            isConfigured = !webSearchConfigs[provider.providerId]?.apiKey.isNullOrBlank(),
+                            onSelect = { onSelectWebSearchProvider(provider) },
+                            onEdit = { onEditWebSearchProvider(provider) },
+                        )
+                    }
+                }
             }
         },
     )
 }
 
 @Composable
-private fun ExternalWebSearchProviderCards(
-    selectedProviderId: String?,
-    configs: Map<String, ExternalWebSearchProviderConfig>,
-    onSelectProvider: (ExternalWebSearchProvider) -> Unit,
-    onEditProvider: (ExternalWebSearchProvider) -> Unit,
+private fun ExternalWebSearchProviderRow(
+    provider: ExternalWebSearchProvider,
+    isSelected: Boolean,
+    isConfigured: Boolean,
+    onSelect: () -> Unit,
+    onEdit: () -> Unit,
 ) {
-    val isDark = isSystemInDarkTheme()
-    ExternalWebSearchProvider.entries.forEach { provider ->
-        val config = configs[provider.providerId]
-        val isSelected = selectedProviderId == provider.providerId
-        val isConfigured = !config?.apiKey.isNullOrBlank()
-        val containerColor = if (isDark) Color(0xFF141414) else Color.White
-        val borderColor = if (isSelected) {
-            provider.accentColor.copy(alpha = 0.6f)
-        } else {
-            if (isDark) Color(0xFF2E2E2E) else Color(0xFFEDEDED)
-        }
-        val contentAlpha = if (isConfigured) 1f else 0.5f
-
-        OutlinedCard(
-            onClick = { onEditProvider(provider) },
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.outlinedCardColors(
-                containerColor = containerColor
-            ),
-            elevation = CardDefaults.outlinedCardElevation(defaultElevation = 0.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
+    val contentAlpha = if (isConfigured) 1f else 0.5f
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onEdit)
+            .heightIn(min = 64.dp)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(provider.accentColor.copy(alpha = 0.12f * contentAlpha)),
+            contentAlignment = Alignment.Center,
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Surface(
-                    modifier = Modifier.size(44.dp),
-                    shape = RoundedCornerShape(14.dp),
-                    color = provider.accentColor.copy(alpha = 0.1f * contentAlpha),
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            painter = painterResource(provider.iconRes),
-                            contentDescription = null,
-                            modifier = Modifier.size(22.dp),
-                            tint = provider.accentColor.copy(alpha = contentAlpha)
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.width(14.dp))
-
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = provider.displayName,
-                        style = MaterialTheme.typography.titleLarge,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = contentAlpha),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = stringResource(provider.descriptionRes),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = contentAlpha),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-
-                Spacer(modifier = Modifier.width(8.dp))
-
-                Switch(
-                    checked = isSelected && isConfigured,
-                    onCheckedChange = { enabled ->
-                        if (enabled) onSelectProvider(provider)
-                    },
-                    enabled = isConfigured,
-                    modifier = Modifier.scale(0.8f),
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
-                        checkedTrackColor = provider.accentColor,
-                        checkedBorderColor = Color.Transparent,
-                        uncheckedThumbColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        uncheckedTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                        uncheckedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.7f)
-                    )
-                )
-            }
+            Icon(
+                painter = painterResource(provider.iconRes),
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = provider.accentColor.copy(alpha = contentAlpha),
+            )
         }
+        Spacer(modifier = Modifier.width(14.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = provider.displayName,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = contentAlpha),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = stringResource(provider.descriptionRes),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = contentAlpha),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        Switch(
+            checked = isSelected && isConfigured,
+            onCheckedChange = { enabled -> if (enabled) onSelect() },
+            enabled = isConfigured,
+            modifier = Modifier.scale(0.8f),
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = Color.White,
+                checkedTrackColor = provider.accentColor,
+                checkedBorderColor = Color.Transparent,
+                uncheckedThumbColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                uncheckedTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                uncheckedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.7f),
+            ),
+        )
     }
 }
 

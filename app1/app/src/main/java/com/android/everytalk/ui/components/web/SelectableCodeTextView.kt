@@ -10,13 +10,20 @@ import android.widget.ScrollView
 import android.widget.TextView
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.doOnLayout
+import com.android.everytalk.ui.components.content.CODE_BLOCK_TOP_FADE_RAMP_DP
+import com.android.everytalk.ui.components.content.codeBlockScrollFade
+import com.android.everytalk.ui.components.content.resolveCodeBlockTopFadeStrength
 import com.android.everytalk.ui.components.syntax.HighlightCache
 import com.android.everytalk.ui.components.syntax.SyntaxHighlightTheme
 import kotlinx.coroutines.Dispatchers
@@ -32,6 +39,9 @@ internal fun SelectableCodeTextView(
     isStreaming: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    var scrollYPx by remember { mutableIntStateOf(0) }
+    val density = LocalDensity.current
+    val topFadeRampPx = with(density) { CODE_BLOCK_TOP_FADE_RAMP_DP.dp.toPx() }
     val syntaxTheme = if (isDarkTheme) SyntaxHighlightTheme.Dark else SyntaxHighlightTheme.Light
     val highlightedCode by produceState<CharSequence>(
         code,
@@ -61,7 +71,15 @@ internal fun SelectableCodeTextView(
     val codeArgb = codeTextColor.toArgb()
 
     AndroidView(
-        modifier = modifier,
+        modifier = modifier.codeBlockScrollFade(
+            topStrength = {
+                resolveCodeBlockTopFadeStrength(
+                    stickyOffsetPx = 0f,
+                    scrollOffsetPx = scrollYPx,
+                    rampPx = topFadeRampPx,
+                )
+            },
+        ),
         factory = { context ->
             ScrollView(context).apply {
                 isFillViewport = true
@@ -70,6 +88,9 @@ internal fun SelectableCodeTextView(
                 isHorizontalScrollBarEnabled = false
                 overScrollMode = android.view.View.OVER_SCROLL_IF_CONTENT_SCROLLS
                 setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                setOnScrollChangeListener { _, _, scrollY, _, _ ->
+                    scrollYPx = scrollY
+                }
 
                 val density = resources.displayMetrics.density
                 val topPadding = (8f * density).toInt()
@@ -140,10 +161,14 @@ internal fun SelectableCodeTextView(
                 bottomGap <= 24f * scrollView.resources.displayMetrics.density &&
                 codeView.selectionStart == codeView.selectionEnd
             updateCodeText(codeView, visibleCode)
+            if (scrollYPx != scrollView.scrollY) {
+                scrollYPx = scrollView.scrollY
+            }
             if (followTail) {
                 // 等本批追加文本完成布局后再滚动，避免使用上一帧高度漏掉最新一行。
                 scrollView.doOnLayout {
                     scrollView.scrollTo(0, content.height - scrollView.height)
+                    scrollYPx = scrollView.scrollY
                 }
             }
         }

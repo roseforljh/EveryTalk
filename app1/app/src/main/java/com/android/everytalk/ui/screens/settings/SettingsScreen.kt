@@ -97,7 +97,6 @@ fun SettingsScreen(
     val showModelSelection by viewModel.showModelSelectionDialog.collectAsState()
     
     val mcpServerStates by viewModel.mcpServerStates.collectAsState()
-    val mcpOAuthBusy by viewModel.mcpManager.oauthBusy.collectAsState()
     val mcpOAuthMessage by viewModel.mcpManager.oauthMessage.collectAsState()
     var mailProviderToConfigure by remember { mutableStateOf<com.android.everytalk.data.mcp.McpMailProvider?>(null) }
     var mailEndpointToConfigure by remember { mutableStateOf<String?>(null) }
@@ -345,8 +344,8 @@ fun SettingsScreen(
                                         mailProviderToConfigure = provider
                                         mailEndpointToConfigure = endpoint
                                     },
-                                    oauthBusy = mcpOAuthBusy,
-                                    onAddMcpServer = { viewModel.addMcpServer(it) },
+                                    onAddMcpClick = { showMcpAddDialog = true },
+                                    onConnectMcpKeyProvider = { provider, key -> viewModel.connectMcpKeyProvider(provider, key) },
                                     onUpdateMcpServer = { viewModel.updateMcpServer(it) },
                                     onRemoveMcpServer = { viewModel.removeMcpServer(it) },
                                     onToggleMcpServer = { id, enabled -> viewModel.toggleMcpServer(id, enabled) },
@@ -774,7 +773,7 @@ fun SettingsScreen(
                 viewModel.addMcpServer(config)
                 showMcpAddDialog = false
             },
-            onDismiss = { showMcpAddDialog = false }
+            onDismiss = { showMcpAddDialog = false },
         )
     }
 }
