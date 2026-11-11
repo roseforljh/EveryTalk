@@ -192,6 +192,7 @@ sealed class AppStreamEvent {
         val computerId: String? = null,
         val isError: Boolean? = null,
         val resultPreview: String? = null,
+        val durationMs: Long? = null,
     ) : AppStreamEvent()
 
     @Serializable
@@ -206,6 +207,8 @@ sealed class AppStreamEvent {
         val thoughtSignature: String? = null,
         /** OpenAI Responses custom/deferred tool 的命名空间。 */
         val namespace: String? = null,
+        /** 最终参数解析失败时的原始文本。 */
+        val argumentsError: String? = null,
     ) : AppStreamEvent()
 
     @Serializable

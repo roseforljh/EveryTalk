@@ -63,9 +63,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.isActive
-import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
@@ -126,21 +124,8 @@ internal fun finalizeResumedAgentStreamingState(
     }
 }
 
-/** 单次等待远端停止确认的上限；超时后仍保留任务和取消意图，允许用户核对/重试。 */
-internal const val REMOTE_STOP_CONFIRMATION_TIMEOUT_MS = 15_000L
-
-/** 只限制 UI 等待，不取消远端停止 Job；后台仍可完成停止，重试时复用尚未结束的同一个 Job。 */
-internal suspend fun awaitRemoteStopConfirmation(job: Job, succeeded: () -> Boolean): Boolean =
-    withTimeoutOrNull(REMOTE_STOP_CONFIRMATION_TIMEOUT_MS) {
-        job.join()
-        succeeded()
-    } == true
-
-/** 固定停止点击时的消息和会话，不允许异步返回影响新会话；成功值由不同线程回调，必须原子读写。 */
-private class PendingAgentStop(val messageId: String, val conversationId: String, val showFeedback: Boolean) {
-    var remoteJob: Job? = null
-    val remoteSucceeded = AtomicBoolean(false)
-}
+/** 固定停止点击时的消息和会话，不允许异步返回影响新会话。 */
+private class PendingAgentStop(val messageId: String, val conversationId: String, val showFeedback: Boolean)
 
 /**
  * 应用级 Agent 续写没有 ViewModel Job 负责 UI 收尾，这里统一判断事件是否仍属运行过程。
@@ -157,7 +142,6 @@ internal fun shouldKeepResumedAgentUiActive(event: AppStreamEvent): Boolean = wh
 /** Room 中的 Run 状态投影成用户能看懂的页面状态。 */
 internal fun restoredAgentExecutionStatus(status: AgentRunStatus, terminalReason: String? = null): String? = when (status) {
     AgentRunStatus.WAITING_APPROVAL -> "等待确认"
-    AgentRunStatus.WAITING_REMOTE_EXECUTION -> "正在恢复远端任务"
     AgentRunStatus.MODEL_CONTINUATION_PENDING -> "正在恢复回复..."
     AgentRunStatus.INTERRUPTED -> "等待恢复确认"
     AgentRunStatus.COMPLETED -> null
@@ -382,11 +366,6 @@ class ApiHandler(
     private val historyManager: HistoryManager,
     private val onAiMessageFullTextChanged: (messageId: String, currentFullText: String) -> Unit,
     private val triggerScrollToBottom: () -> Unit,
-    private val cancelComputerExecutions: (String, String?, (Boolean) -> Unit) -> Job = { _, _, onComplete ->
-        onComplete(true)
-        // 无 Computer 执行器时返回已完成 Job，不能让停止流程永久挂在 join()。
-        Job().apply { complete() }
-    },
     private val computerSessionStateProvider: suspend (ComputerRequestContext?) -> String? = { null },
     private val prepareAgentResumeRequest: suspend (String, ChatRequest, List<String>) -> ChatRequest = { _, request, _ -> request },
     private val prepareMcpResumeRequest: suspend (String, ChatRequest) -> ChatRequest = { _, _ -> error("MCP 开启入口不可用") },
@@ -447,7 +426,6 @@ class ApiHandler(
         stateHolder._currentTextStreamingAiMessageId.value = null
         stateHolder._isTextApiCalling.value = false
         stateHolder._isRemoteCancellationPending.value = false
-        _retryableRemoteStopMessageId.value = null
     }
 
     /** 新请求只替换它自己会话的页面收集，不影响其他会话。 */
@@ -461,11 +439,7 @@ class ApiHandler(
             listOfNotNull(stateHolder.textApiJobs[sessionId])
         }
         agentRunStore.getRunsForSession(sessionId).filter { it.status !in setOf("COMPLETED", "FAILED", "CANCELLED") }
-            .forEach { run ->
-                agentRunCoordinator.cancelVisibleRun(run.visibleAssistantMessageId)
-                val remote = cancelComputerExecutions(sessionId, run.id) { }
-                remote.join()
-            }
+            .forEach { run -> agentRunCoordinator.cancelVisibleRun(run.visibleAssistantMessageId) }
         jobs.forEach { it.cancel() }
         jobs.forEach { it.join() }
         withContext(Dispatchers.Main.immediate) {
@@ -522,9 +496,6 @@ class ApiHandler(
             lastMessagePersistedAt[messageId] = now
         }
     }
-    private val _retryableRemoteStopMessageId = MutableStateFlow<String?>(null)
-    /** 远端未确认且本轮等待已结束时才提供重试；取消屏障仍保持，Pending 不能偷偷派发。 */
-    val retryableRemoteStopMessageId: StateFlow<String?> = _retryableRemoteStopMessageId.asStateFlow()
 
     val pendingInterventions: StateFlow<List<com.android.everytalk.data.agent.PendingIntervention>>
         get() = agentRunCoordinator.pendingInterventions
@@ -723,7 +694,6 @@ class ApiHandler(
         val baselines = withContext(Dispatchers.Main.immediate) {
             if (stateHolder._currentConversationId.value != sessionId) return@withContext emptyMap<String, Message>()
             stateHolder._isRemoteCancellationPending.value = pendingStop != null
-            _retryableRemoteStopMessageId.value = pendingStop?.messageId
             stateHolder.restoreTextConversationUi()
             stateHolder.textMessagesForConversation(sessionId).associateBy { it.id }
         }
@@ -769,35 +739,6 @@ class ApiHandler(
 
     suspend fun resumePendingContinuationRuns() {
         dispatchPendingContinuationRuns()
-    }
-
-    /** 将远端恢复阶段投影到原 Assistant 消息，避免恢复时看起来像卡住。 */
-    suspend fun updateRemoteRecoveryStatus(
-        status: String?,
-        conversationIds: Set<String> = emptySet(),
-    ) {
-        val candidates = (
-            agentRunStore.getWaitingRemoteExecutionRuns() +
-                agentRunStore.getInterruptedRuns()
-            ).distinctBy { it.id }
-            .filter { run -> conversationIds.isEmpty() || run.sessionId in conversationIds }
-        val runs = if (status == null) {
-            candidates
-        } else {
-            val computerDao = AppDatabase.getDatabase(context).computerDao()
-            candidates.filter { run ->
-                computerDao.getActiveForegroundRemoteExecutionsForConversation(run.sessionId).isNotEmpty()
-            }
-        }
-        withContext(Dispatchers.Main.immediate) {
-            runs.forEach { run ->
-                updatePreparedMessageStatus(
-                    stateHolder.textMessagesForMessage(run.visibleAssistantMessageId),
-                    run.visibleAssistantMessageId,
-                    status,
-                )
-            }
-        }
     }
 
     private suspend fun refreshPendingAgentApprovals() {
@@ -1546,7 +1487,6 @@ class ApiHandler(
             agentRunCoordinator.cancelVisibleRun(messageIdBeingCancelled, AgentTerminalReasons.USER_STOP)
             val operation = PendingAgentStop(messageIdBeingCancelled, conversationIdBeingCancelled, showFeedback)
             pendingAgentStops[conversationIdBeingCancelled] = operation
-            _retryableRemoteStopMessageId.value = null
             launchStopConfirmation(operation)
         }
         if (showFeedback && !isNewMessageSend && messageIdBeingCancelled == null && !isImageGeneration) {
@@ -1642,51 +1582,19 @@ class ApiHandler(
     }
 
     /**
-     * 单次停止确认结束后，只有确认成功才解除取消屏障。
-     * 超时/失败保留 USER_STOP 与远端取消记录，按钮提供重试而不是永久灰圈或自动派发新任务。
+     * 先持久化 USER_STOP，再解除取消屏障。服务器命令随 Agent 协程取消时已收到 TERM，没有需要确认的远端任务。
      */
     private fun launchStopConfirmation(operation: PendingAgentStop) {
         viewModelScope.launch(Dispatchers.IO) {
-            var confirmed = false
-            var resultMessage = "停止尚未确认，请重新核对任务状态"
             try {
-                // 先持久化 USER_STOP，再发远端取消；重试也只针对原消息所属 Run。
-                val run = agentRunStore.cancelActiveRunByVisibleMessage(operation.messageId, AgentTerminalReasons.USER_STOP)
-                confirmed = if (run == null) {
-                    true
-                } else {
-                    val job = operation.remoteJob?.takeIf { !it.isCompleted || operation.remoteSucceeded.get() } ?: run {
-                        operation.remoteSucceeded.set(false)
-                        cancelComputerExecutions(operation.conversationId, run.id) { operation.remoteSucceeded.set(it) }
-                            .also { operation.remoteJob = it }
-                    }
-                    // 等待超时后 Job 仍在后台。迟到的成功也必须主动解锁，不能要求用户再点一次。
-                    job.invokeOnCompletion { cause ->
-                        if (cause == null && operation.remoteSucceeded.get()) {
-                            viewModelScope.launch(Dispatchers.Main.immediate) { completeConfirmedAgentStop(operation) }
-                        }
-                    }
-                    awaitRemoteStopConfirmation(job) { operation.remoteSucceeded.get() }
-                }
-                resultMessage = if (confirmed) "任务已停止" else "本地任务已停止，远端停止尚未确认"
+                agentRunStore.cancelActiveRunByVisibleMessage(operation.messageId, AgentTerminalReasons.USER_STOP)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
                 android.util.Log.e("AgentRuntime", "stop_failed type=${error.javaClass.simpleName}")
             } finally {
                 withContext(kotlinx.coroutines.NonCancellable + Dispatchers.Main.immediate) {
-                    // 用操作对象身份核对，即使同一消息被重新恢复也不让旧等待覆盖新的取消操作。
-                    if (pendingAgentStops[operation.conversationId] === operation) {
-                        if (confirmed) {
-                            completeConfirmedAgentStop(operation)
-                        } else {
-                            updateMessageExecutionStatus(operation.messageId, resultMessage)
-                            if (stateHolder._currentConversationId.value == operation.conversationId) {
-                                _retryableRemoteStopMessageId.value = operation.messageId
-                                if (operation.showFeedback) stateHolder.showSnackbar(resultMessage)
-                            }
-                        }
-                    }
+                    if (pendingAgentStops[operation.conversationId] === operation) completeConfirmedAgentStop(operation)
                 }
             }
         }
@@ -1697,22 +1605,10 @@ class ApiHandler(
         if (!pendingAgentStops.remove(operation.conversationId, operation)) return
         // 全局停止状态只是当前会话的投影：按当前会话是否仍有停止操作重算，不清另一会话的屏障。
         if (cancellingMessageId == operation.messageId) cancellingMessageId = null
-        if (_retryableRemoteStopMessageId.value == operation.messageId) _retryableRemoteStopMessageId.value = null
         stateHolder._isRemoteCancellationPending.value =
             pendingAgentStops.containsKey(stateHolder._currentConversationId.value)
         updateMessageExecutionStatus(operation.messageId, "任务已停止")
         if (operation.showFeedback) stateHolder.showSnackbar("任务已停止")
-    }
-
-    /** 重试前同步隐藏入口防止连点；尚未结束的停止 Job 会被复用，不重复创建 SSH 取消请求。 */
-    fun retryRemoteStopConfirmation(expectedMessageId: String?) {
-        // 按点击的消息找原停止操作，沿用其所属会话，不能读取当前已切换的会话。
-        val operation = pendingAgentStops.values.firstOrNull { it.messageId == expectedMessageId } ?: return
-        if (expectedMessageId == null || _retryableRemoteStopMessageId.value != expectedMessageId ||
-            operation.messageId != expectedMessageId || !stateHolder._isRemoteCancellationPending.value
-        ) return
-        _retryableRemoteStopMessageId.value = null
-        launchStopConfirmation(operation)
     }
 
     fun streamChatResponse(

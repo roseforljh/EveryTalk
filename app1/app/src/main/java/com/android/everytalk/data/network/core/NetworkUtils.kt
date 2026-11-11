@@ -81,7 +81,9 @@ object NetworkUtils {
                 // 临时 HTTP 错误必须进入 AgentRun 恢复链路，不能永久标记为执行失败。
                 type = if (retryable) "retryable_network" else upstream.type,
                 parameter = upstream.parameter,
-                rawMessage = upstream.message,
+                // 兼容网关可能直接返回纯文本。保留有限、脱敏正文供错误分类，不在日志输出内容。
+                rawMessage = (upstream.message ?: errorBody?.takeIf(String::isNotBlank))
+                    ?.let { sanitizeMessage(it).take(8_192) },
                 maxContextTokens = upstream.maxContextTokens,
                 maxOutputTokens = upstream.maxOutputTokens,
             ),

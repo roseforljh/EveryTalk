@@ -35,8 +35,8 @@ import kotlinx.serialization.json.putJsonObject
  * 版本、工具 ID、签名、原生 continuation 和 FunctionResponse 规则全部封装在这里。
  */
 internal object PiGeminiMessageAdapter {
-    /** 当前实现逐项对齐的 Pi 上游提交。升级时必须先更新金标测试。 */
-    const val UPSTREAM_COMMIT = "b8b873b9872db04a938fb4357b5e8e824ddc051c"
+    /** 当前实现逐项对齐的 Pi 上游提交（v1.5.2）。升级时必须先更新金标测试。 */
+    const val UPSTREAM_COMMIT = "b4afdddf44e059c67ccf5097e5317d913521b470"
 
     private const val LOCAL_TOOL_CALL_ID_PREFIX = "fc_local_"
     private val GEMINI_MODEL_VERSION = Regex("^gemini(?:-live)?-(\\d+)", RegexOption.IGNORE_CASE)
@@ -335,7 +335,7 @@ internal object PiGeminiMessageAdapter {
             .joinToString("\n", transform = AgentToolResultContentApiPart.Text::text)
         val images = toolResultImages()
         val responseValue = when {
-            text.isNotEmpty() -> text
+            text.isNotBlank() -> text
             images.isNotEmpty() -> "(see attached image)"
             else -> ""
         }

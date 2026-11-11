@@ -556,7 +556,8 @@ class ModelAndConfigControllerTest {
 
         val saved = slot<ApiConfig>()
         verify(exactly = 1) { configManager.addConfig(capture(saved), false) }
-        assertEquals(256_000, saved.captured.modelParameters.maxContextTokens)
+        // 社区目录（models.dev）优先级高于端点自报，上下文长度取目录值。
+        assertEquals(128_000, saved.captured.modelParameters.maxContextTokens)
         assertEquals(16_000, saved.captured.maxTokens)
         assertEquals(ModelCapabilitySource.COMMUNITY_CATALOG, saved.captured.modelParameters.resolvedCapability?.maxOutputSource)
         assertEquals(setOf("high"), saved.captured.modelParameters.resolvedCapability?.reasoningEfforts)

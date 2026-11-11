@@ -21,4 +21,5 @@ data class AgentLifecycleEvent(
     val toolCallId: String? = null,
     val toolName: String? = null,
     val isError: Boolean? = null,
+    val durationMs: Long? = null,
 )

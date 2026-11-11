@@ -217,8 +217,8 @@ internal object PiMessageTransformer {
             sourceModel != null || sourceProtocol != null
         if (!hasSourceMetadata) {
             // 旧版 Agent 记录没有 Provider 来源。OpenAI 兼容端点仍要保留 reasoning 类型，
-            // 否则 DeepSeek 下一轮会丢失 reasoning_content；其余协议无法原生回放无签名思考，
-            // 按 Pi 的跨协议规则降级成普通文本。所有不可证明来源的私有元数据都必须清除。
+            // 否则 DeepSeek 下一轮会丢失 reasoning_content；其余协议无法证明是否同一模型，
+            // 降级成普通文本以免丢上下文。所有不可证明来源的私有元数据都必须清除。
             val preserveCompatibleReasoning =
                 modelParameterProtocol(request.channel) == com.android.everytalk.data.DataClass.ModelParameterProtocol.OPENAI_COMPATIBLE
             return copy(
@@ -243,11 +243,9 @@ internal object PiMessageTransformer {
         val transformedParts = contentParts.mapNotNull { part ->
             when (part) {
                 is AgentAssistantContentApiPart.Text -> part.copy(thoughtSignature = null)
-                is AgentAssistantContentApiPart.Reasoning -> when {
-                    part.redacted -> null
-                    part.text.isBlank() -> null
-                    else -> AgentAssistantContentApiPart.Text(part.text)
-                }
+                // Pi 1.3.0（#10995）：其他模型的思考一律丢弃。转成正文会让新模型把它当成自己的可见回答，
+                // 之后开始在回答里写推理。
+                is AgentAssistantContentApiPart.Reasoning -> null
                 is AgentAssistantContentApiPart.ToolCall -> part.copy(
                     call = part.call.copy(thoughtSignature = null),
                 )

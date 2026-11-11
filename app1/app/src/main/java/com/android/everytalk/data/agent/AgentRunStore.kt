@@ -218,7 +218,6 @@ class AgentRunStore(
     suspend fun getPendingModelContinuationRuns(): List<AgentRunEntity> = dao.getPendingModelContinuationRuns()
 
     /** 远端执行期间不能被 App 重启流程改成 INTERRUPTED，恢复时再按 Execution 对账。 */
-    suspend fun getWaitingRemoteExecutionRuns(): List<AgentRunEntity> = dao.getWaitingRemoteExecutionRuns()
 
     /** App 重启后仍可能关联远端 Execution 的中断 Run。 */
     suspend fun getInterruptedRuns(): List<AgentRunEntity> = dao.getInterruptedRuns()
@@ -311,6 +310,38 @@ class AgentRunStore(
     }
 
     /** ToolResult 必须同时绑定模型回合，防止 Provider 在后续回合复用 Tool Call ID。 */
+    /** 只重放本 Run 已提交成功回执的状态；结果和 delta 共用一条 FINAL 事实，重建不执行脚本。 */
+    suspend fun codemodeStore(runId: String): Map<String, kotlinx.serialization.json.JsonElement> {
+        var state: Map<String, kotlinx.serialization.json.JsonElement> = emptyMap()
+        dao.getEntries(runId).sortedBy { it.sequence }.forEach { entry ->
+            if (entry.kind != AgentEntryKind.TOOL_RESULT.name || entry.status != AgentEntryStatus.FINAL.name) return@forEach
+            val result = json.decodeFromString(AgentContentBlock.ToolResult.serializer(), entry.payloadJson)
+            if (result.toolName == CodemodeTool.NAME && !result.isError) {
+                state = CodemodeTool.applyStoreDelta(state, result.codemodeStoreDelta.orEmpty())
+            }
+        }
+        return state
+    }
+
+    /** 只读成功发现回执，按首次加载顺序去重；恢复后仍以当前授权目录复核。 */
+    suspend fun loadedMcpToolIds(runId: String, beforeRequestId: String? = null): List<String> = dao.getEntries(runId)
+        .sortedBy { it.sequence }
+        .takeWhile { beforeRequestId == null || it.kind != AgentEntryKind.ASSISTANT.name || it.requestId != beforeRequestId }
+        .filter { it.kind == AgentEntryKind.TOOL_RESULT.name && it.status == AgentEntryStatus.FINAL.name }
+        .flatMap { entry ->
+            val result = json.decodeFromString(AgentContentBlock.ToolResult.serializer(), entry.payloadJson)
+            if (result.toolName == McpToolDiscovery.NAME && !result.isError) result.loadedMcpToolIds else emptyList()
+        }.distinct()
+
+    /** 仅以本 Run 已提交回执定位归档；跨请求复用 ID 时拒绝歧义。 */
+    suspend fun archivedToolResult(runId: String, toolCallId: String): AgentContentBlock.ToolResult {
+        val matches = dao.getEntries(runId).filter {
+            it.kind == AgentEntryKind.TOOL_RESULT.name && it.status == AgentEntryStatus.FINAL.name && it.toolCallId == toolCallId
+        }
+        require(matches.size == 1) { "当前 Run 未找到唯一工具回执：$toolCallId" }
+        return json.decodeFromString(AgentContentBlock.ToolResult.serializer(), matches.single().payloadJson)
+    }
+
     suspend fun finalToolResult(
         runId: String,
         requestId: String,
@@ -1119,7 +1150,7 @@ class AgentRunStore(
 
     /** WAITING_APPROVAL 和 INTERRUPTED 都可能包含尚未消费的决定。 */
     suspend fun resumableApprovalRuns(computerDao: ComputerDao): List<Pair<AgentRunEntity, AgentApprovalRecord>> =
-        (dao.getWaitingApprovalRuns() + dao.getInterruptedRuns() + dao.getWaitingRemoteExecutionRuns())
+        (dao.getWaitingApprovalRuns() + dao.getInterruptedRuns())
             .distinctBy(AgentRunEntity::id)
             .mapNotNull { run ->
                 (decidedApprovalAwaitingResult(run.id) ?: recoverInterruptedToolBatch(run.id, computerDao))?.let { run to it }
@@ -1130,7 +1161,7 @@ class AgentRunStore(
      * 只处理尚未有 ToolResult/审批的调用，重复启动不会生成第二张卡片。
      */
     suspend fun recoverUnknownComputerExecutions(computerDao: ComputerDao) {
-        val interruptedRuns = dao.getInterruptedRuns() + dao.getWaitingRemoteExecutionRuns()
+        val interruptedRuns = dao.getInterruptedRuns()
         for (execution in computerDao.getUnknownExecutions()) {
             val candidate = interruptedRuns.firstNotNullOfOrNull { run ->
                 val snapshot = decodeRequestSnapshot(run) ?: return@firstNotNullOfOrNull null
@@ -1535,6 +1566,9 @@ class AgentRunStore(
                                 started = true,
                                 isError = decodeToolResultEntry(entry)?.isError == true,
                                 resultPreview = decodeToolResultEntry(entry)?.content?.toString()?.take(4_000),
+                                durationMs = runCatching {
+                                    json.decodeFromString(AgentContentBlock.ToolResult.serializer(), entry.payloadJson).durationMs
+                                }.getOrNull(),
                                 fileChange = tool.step.fileChange.takeUnless { failed },
                             ),
                             finishedAtMillis = entry.finalizedAt ?: entry.createdAt,
@@ -2066,7 +2100,9 @@ private fun interruptedToolResult(call: AgentContentBlock.ToolCall): AgentConten
     AgentContentBlock.ToolResult(
         toolCallId = call.id,
         toolName = call.name,
-        content = JsonPrimitive("App 在工具执行期间退出，结果未能确认；为避免重复产生外部操作，本次调用未自动重放"),
+        content = JsonPrimitive(if (call.name == CodemodeTool.NAME) {
+            "Codemode 在成功回执保存前中断，子工具可能已产生外部副作用，执行结果未知；store 写入未提交。禁止自动重跑整段脚本或重复其中的写操作，必须先核对外部状态并取得用户明确批准。"
+        } else "App 在工具执行期间退出，结果未能确认；为避免重复产生外部操作，本次调用未自动重放"),
         isError = true,
     )
 

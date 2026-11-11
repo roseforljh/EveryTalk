@@ -802,15 +802,13 @@ object OpenAIResponsesClient {
                     if (name.isNotBlank()) {
                         val toolInfo = ResponsesToolCallInfo(callId, name, argsBuilder.toString())
                         onToolCall(toolInfo)
+                        val parsed = runCatching { Json.parseToJsonElement(argsBuilder.toString()).jsonObject }.getOrNull()
                         emitEvent(AppStreamEvent.ToolCall(
                             id = callId,
                             name = name,
-                            argumentsObj = try {
-                                Json.parseToJsonElement(argsBuilder.toString()).jsonObject
-                            } catch (_: Exception) {
-                                JsonObject(emptyMap())
-                            },
+                            argumentsObj = parsed ?: JsonObject(emptyMap()),
                             namespace = namespace,
+                            argumentsError = if (parsed == null) argsBuilder.toString() else null,
                         ))
                     }
                 }

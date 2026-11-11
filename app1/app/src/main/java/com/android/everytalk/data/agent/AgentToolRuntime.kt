@@ -53,6 +53,7 @@ class AgentToolRuntime(
         computerContext: ComputerRequestContext?,
         maxModelResultTokens: Long = MAX_AGENT_TOOL_RESULT_TOKENS,
         runId: String? = null,
+        forScript: Boolean = false,
         emit: suspend (AppStreamEvent) -> Unit,
     ): AgentContentBlock.ToolResult {
         val preparedCall = preparePiToolCallArguments(call)
@@ -61,7 +62,7 @@ class AgentToolRuntime(
                 val name = skillRuntimeTools.displayName(preparedCall, runId) ?: preparedCall.name
                 emit(AppStreamEvent.ExecutionStatusUpdate("正在读取技能：$name", toolCallId = preparedCall.id))
                 val raw = skillRuntimeTools.execute(preparedCall, runId)
-                val bounded = boundModelToolResult(
+                val bounded = if (forScript) scriptResult(raw) else boundModelToolResult(
                     result = raw,
                     maxTokens = maxModelResultTokens.coerceIn(64L, MAX_AGENT_TOOL_RESULT_TOKENS),
                 )
@@ -110,15 +111,23 @@ class AgentToolRuntime(
             val images = extractToolResultImages(raw)
             val modelRaw = stripUiOnlyFields(raw)
             val archive = runId?.let { resultStore?.archive(it, preparedCall.id, modelRaw) }
-            val bounded = boundModelToolResult(
+            val bounded = if (forScript) scriptResult(execution.scriptContent ?: modelRaw) else boundModelToolResult(
                 result = modelRaw,
                 maxTokens = maxModelResultTokens.coerceIn(64L, MAX_AGENT_TOOL_RESULT_TOKENS),
             )
-            val isError = modelRaw.isToolFailureEnvelope()
+            val isError = execution.isError ?: modelRaw.isToolFailureEnvelope()
+            val budget = maxModelResultTokens.coerceIn(64L, MAX_AGENT_TOOL_RESULT_TOKENS)
+            val hint = "\n[Full result: tool_result_read({\"tool_call_id\":" + JsonPrimitive(preparedCall.id).toString() + "})]"
+            val readHint = hint.takeIf { !forScript && bounded.truncated && archive != null &&
+                estimateToolLoopJsonTokens(JsonPrimitive(it)) + 16 < budget }.orEmpty()
+            val modelContent = if (readHint.isNotEmpty()) {
+                JsonPrimitive(truncateToolOutput(bounded.content.toToolResultText(),
+                    (budget - estimateToolLoopJsonTokens(JsonPrimitive(readHint)) - 8).coerceAtLeast(1)) + readHint)
+            } else bounded.content
             AgentContentBlock.ToolResult(
                 toolCallId = preparedCall.id,
                 toolName = preparedCall.name,
-                content = bounded.content,
+                content = modelContent,
                 // Computer、附件、Web 工具都用 ok=false 表示业务失败；不能继续伪装成成功结果。
                 isError = isError,
                 truncated = bounded.truncated,
@@ -127,7 +136,7 @@ class AgentToolRuntime(
                 fullResultSha256 = archive?.sha256,
                 terminate = execution.terminate,
                 contentBlocks = buildList {
-                    add(AgentToolResultContentApiPart.Text(bounded.content.toToolResultText()))
+                    add(AgentToolResultContentApiPart.Text(modelContent.toToolResultText()))
                     addAll(images)
                 },
             )
@@ -141,6 +150,17 @@ class AgentToolRuntime(
                 isError = true,
             )
         }
+    }
+
+    suspend fun readArchivedResult(runId: String, result: AgentContentBlock.ToolResult): String =
+        requireNotNull(resultStore) { "工具归档未初始化" }.read(runId, result)
+
+    /** 脚本可筛选完整 JSON；超出硬限时明确失败，不把损坏的 JSON 交给脚本。 */
+    private fun scriptResult(result: JsonElement): BoundedToolResult {
+        require(result.toString().toByteArray(Charsets.UTF_8).size <= 1_048_576) {
+            "脚本工具结果超过 1 MiB，请缩小查询范围或使用原工具分页读取"
+        }
+        return BoundedToolResult(result, truncated = false)
     }
 
     private fun stripUiOnlyFields(result: JsonElement): JsonElement = (result as? JsonObject)

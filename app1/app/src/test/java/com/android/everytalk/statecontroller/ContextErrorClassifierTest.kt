@@ -10,6 +10,38 @@ import java.io.IOException
 
 class ContextErrorClassifierTest {
     @Test
+    fun `Pi供应商超窗与请求大小超限可恢复但不误判限流和正文数字`() {
+        listOf(
+            "litellm.ContextWindowExceededError: Context Window exceeded for given call",
+            "Input length exceeds model's maximum context length (262144)",
+            "The input token count (123) exceeds the maximum number of tokens allowed (100)",
+            "Range of input length should be [1, 100]",
+            "custom-provider API error (413): Payload Too Large",
+            "413",
+        ).forEach { message ->
+            assertEquals(message, RequestErrorCategory.INPUT_CONTEXT_TOO_LONG,
+                ContextErrorClassifier.classify(ProviderErrorInfo(message = message)))
+        }
+        assertEquals(RequestErrorCategory.INPUT_CONTEXT_TOO_LONG,
+            ContextErrorClassifier.classify(ProviderErrorInfo(status = 413, message = "failed to parse request")))
+        listOf(
+            "400: invalid value 413",
+            "custom-provider API error (4130): invalid input",
+            "400: upstream mentioned OpenAI API error (413): invalid input",
+            "Throttling error: Too many tokens, please wait",
+        ).forEach { message ->
+            assertEquals(message, RequestErrorCategory.OTHER,
+                ContextErrorClassifier.classify(ProviderErrorInfo(message = message)))
+        }
+        assertEquals(RequestErrorCategory.RATE_LIMITED,
+            ContextErrorClassifier.classify(ProviderErrorInfo(status = 429, message = "context length exceeded")))
+        assertEquals(RequestErrorCategory.AUTHENTICATION,
+            ContextErrorClassifier.classify(ProviderErrorInfo(status = 403, message = "context length exceeded")))
+        assertEquals(RequestErrorCategory.OUTPUT_LIMIT_TOO_HIGH,
+            ContextErrorClassifier.classify(ProviderErrorInfo(message = "max_output_tokens exceeds maximum context length")))
+    }
+
+    @Test
     fun `结构化状态和错误码优先完成分类`() {
         assertEquals(
             RequestErrorCategory.INPUT_CONTEXT_TOO_LONG,

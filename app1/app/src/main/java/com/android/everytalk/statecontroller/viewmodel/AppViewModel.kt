@@ -307,10 +307,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                          pendingMessageController.migrateConversationId(oldId, newId)
                      },
                      deleteConversationWorkspaces = { conversationId ->
-                         computerManager.deleteWorkspacesForConversation(
-                             conversationId = conversationId,
-                             deleteRemoteFiles = true,
-                         )
+                         computerManager.deleteWorkspacesForConversation(conversationId)
                      },
              )
 
@@ -357,13 +354,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 historyManager,
                 onAiMessageFullTextChanged = ::onAiMessageFullTextChanged,
                 triggerScrollToBottom = ::triggerScrollToBottom,
-                 cancelComputerExecutions = { conversationId, runId, onComplete ->
-                     computerManager.cancelActiveExecutions(
-                         conversationId = conversationId,
-                         runId = runId,
-                         onComplete = onComplete,
-                     )
-                  },
                 computerSessionStateProvider = computerManager::computerSessionState,
                 prepareAgentResumeRequest = ::prepareAgentRequestedChatRequest,
                 prepareMcpResumeRequest = ::prepareMcpRequestedChatRequest,
@@ -1190,13 +1180,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
          ->
             // 可信对象只由本地保存分支填充；MCP/云端 JSON 无法创建可打开的本机附件。
             var savedAttachment: SelectedMediaItem.GenericFile? = null
+            var mcpResult: AppToolExecutionResult? = null
             val rawResult = executeSharedToolCall(
                     toolName = toolName,
                     arguments = arguments,
                     toolCallId = toolCallId,
                     computerRequestContext = computerRequestContext,
                     updateStatus = updateStatus,
-                    mcpWebFetchFallback = buildMcpWebFetchFallback(),
+                    mcpWebFetchFallback = buildMcpWebFetchFallback { mcpResult = it },
                     localWebSearchExecutor = buildLocalWebSearchExecutor(),
                     localAttachmentExecutor = buildLocalAttachmentExecutor(),
                     localBashExecutor = localBashToolExecutor::execute,
@@ -1235,12 +1226,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         )
                     },
                     fallbackExecutor = { fallbackToolName, fallbackArguments ->
-                        mcpManager.callTool(fallbackToolName, fallbackArguments)
+                        mcpManager.callToolResult(fallbackToolName, fallbackArguments).also { mcpResult = it }.content
                     },
                 )
             AppToolExecutionResult(
                 content = rawResult,
                 attachments = listOfNotNull(savedAttachment),
+                scriptContent = mcpResult?.scriptContent,
+                isError = mcpResult?.isError,
             )
          }
          AgentToolExecutorRegistry.register(
@@ -1259,29 +1252,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                   agentDao.cancelStaleVisibleMessageRuns(
                       AgentTerminalReasons.VISIBLE_MESSAGE_TERMINAL,
                       System.currentTimeMillis(),
-                  )
-              }
-              val recoverableConversationIds = mutableSetOf<String>().apply {
-                  stateHolder._currentConversationId.value.takeIf(String::isNotBlank)?.let(::add)
-                  agentDao.getWaitingRemoteExecutionRuns().forEach { run -> add(run.sessionId) }
-                  // App 可能在写入 ComputerExecution 前退出，AgentRun 会被启动恢复标为
-                  // INTERRUPTED。把这类 Run 也纳入按会话过滤的对账范围，避免远端任务永远
-                  // 停留在 RUNNING 而无法续接；没有活动 Execution 的旧中断 Run 不会建立 SSH。
-                  agentDao.getInterruptedRuns().forEach { run -> add(run.sessionId) }
-              }
-              if (recoverableConversationIds.isNotEmpty()) {
-                  apiHandler.updateRemoteRecoveryStatus(
-                      status = "正在恢复远端任务",
-                      conversationIds = recoverableConversationIds,
-                  )
-                  val initialReconciliations = computerManager.reconcileRemoteExecutions(recoverableConversationIds)
-                  apiHandler.updateRemoteRecoveryStatus(
-                      status = if (initialReconciliations.any { it.outcome == com.android.everytalk.data.computer.ComputerExecutionReconciliationOutcome.STILL_UNAVAILABLE }) {
-                           "等待服务器重连"
-                      } else {
-                           null
-                      },
-                      conversationIds = recoverableConversationIds,
                   )
               }
               apiHandler.restorePendingAgentApproval()

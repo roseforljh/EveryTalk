@@ -500,7 +500,7 @@ object OpenAIDirectClient {
         var hasToolCalls = false
         var safetyBlocked = false
         var latestUsage: TokenUsage? = null
-        val reasoningDetails = mutableListOf<JsonObject>()
+        val reasoningDetails = mutableListOf<ReasoningDetailBuilder>()
         var rawFinishReason: String? = null
         var sawFinishReason = false
         var sawDone = false
@@ -698,7 +698,7 @@ object OpenAIDirectClient {
                 emitEvent(
                     AppStreamEvent.Reasoning(
                         text = "",
-                        thoughtSignature = JsonArray(reasoningDetails).toString(),
+                        thoughtSignature = JsonArray(reasoningDetails.map(ReasoningDetailBuilder::build)).toString(),
                         signatureOnlyUpdate = true,
                     ),
                 )
@@ -709,14 +709,12 @@ object OpenAIDirectClient {
                     if (name.isNotBlank()) {
                         val toolInfo = OpenAiToolCallInfo(id, name, argsBuilder.toString())
                         onToolCall(toolInfo)
+                        val parsed = runCatching { Json.parseToJsonElement(argsBuilder.toString()).jsonObject }.getOrNull()
                         emitEvent(AppStreamEvent.ToolCall(
                             id = id,
                             name = name,
-                            argumentsObj = try {
-                                Json.parseToJsonElement(argsBuilder.toString()).jsonObject
-                            } catch (e: Exception) {
-                                JsonObject(emptyMap())
-                            }
+                            argumentsObj = parsed ?: JsonObject(emptyMap()),
+                            argumentsError = if (parsed == null) argsBuilder.toString() else null,
                         ))
                     }
                 }
@@ -797,27 +795,32 @@ object OpenAIDirectClient {
     }
 
     /** OpenRouter 等端点会把 reasoning_details 分片发送，按 Pi 规则合并相邻文本和摘要。 */
-    private fun appendReasoningDetail(target: MutableList<JsonObject>, detail: JsonObject) {
+    /** 连续同类增量追加到同一个 StringBuilder，每段只读一次（Pi #9265），避免长推理按平方复制。 */
+    private class ReasoningDetailBuilder(detail: JsonObject, val type: String, val field: String?) {
+        val fields = detail.toMutableMap()
+        val text = StringBuilder(field?.let { detail[it]?.jsonPrimitive?.contentOrNull }.orEmpty())
+
+        fun build(): JsonObject = JsonObject(
+            if (field == null) fields else fields.apply { put(field, JsonPrimitive(text.toString())) },
+        )
+    }
+
+    private fun appendReasoningDetail(target: MutableList<ReasoningDetailBuilder>, detail: JsonObject) {
         val type = detail["type"]?.jsonPrimitive?.contentOrNull ?: return
         if (type !in setOf("reasoning.text", "reasoning.summary", "reasoning.encrypted")) return
-        val last = target.lastOrNull()
         val field = when (type) {
             "reasoning.text" -> "text"
             "reasoning.summary" -> "summary"
             else -> null
         }
-        if (field != null && last?.get("type")?.jsonPrimitive?.contentOrNull == type) {
-            target[target.lastIndex] = JsonObject(last.toMutableMap().apply {
-                val previous = last[field]?.jsonPrimitive?.contentOrNull.orEmpty()
-                val next = detail[field]?.jsonPrimitive?.contentOrNull.orEmpty()
-                put(field, JsonPrimitive(previous + next))
-                if (get("id") == null) detail["id"]?.let { put("id", it) }
-                if (get("format") == null) detail["format"]?.let { put("format", it) }
-                if (get("index") == null) detail["index"]?.let { put("index", it) }
-                if (get("signature") == null) detail["signature"]?.let { put("signature", it) }
-            })
+        val last = target.lastOrNull()
+        if (field != null && last?.type == type) {
+            last.text.append(detail[field]?.jsonPrimitive?.contentOrNull.orEmpty())
+            for (key in listOf("id", "format", "index", "signature")) {
+                if (last.fields[key] == null) detail[key]?.let { last.fields[key] = it }
+            }
         } else {
-            target += detail
+            target += ReasoningDetailBuilder(detail, type, field)
         }
     }
 
@@ -905,7 +908,7 @@ object OpenAIDirectClient {
             put(
                 "content",
                 when {
-                    text.isNotEmpty() -> text
+                    text.isNotBlank() -> text
                     images.isNotEmpty() -> "(see attached image)"
                     else -> "(no tool output)"
                 },

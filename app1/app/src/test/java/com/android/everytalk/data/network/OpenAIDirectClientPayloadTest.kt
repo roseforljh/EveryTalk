@@ -301,7 +301,7 @@ class OpenAIDirectClientPayloadTest {
     }
 
     @Test
-    fun `跨协议reasoning按Pi规则降级为普通assistant文本`() {
+    fun `跨模型reasoning按Pi丢弃只保留正文`() {
         val payload = Json.parseToJsonElement(
             buildPayload(
                 request(
@@ -327,7 +327,7 @@ class OpenAIDirectClientPayloadTest {
         val assistant = payload.getValue("messages").jsonArray
             .single { it.jsonObject["role"]?.jsonPrimitive?.content == "assistant" }
             .jsonObject
-        assertEquals("内部分析答复", assistant.getValue("content").jsonPrimitive.content)
+        assertEquals("答复", assistant.getValue("content").jsonPrimitive.content)
         assertFalse(assistant.containsKey("reasoning_content"))
         assertFalse(assistant.containsKey("reasoning_details"))
     }

@@ -925,9 +925,6 @@ interface AgentDao {
         updatedAt: Long,
     )
 
-    @Query("SELECT * FROM agent_runs WHERE status = 'WAITING_REMOTE_EXECUTION' ORDER BY updatedAt ASC")
-    suspend fun getWaitingRemoteExecutionRuns(): List<AgentRunEntity>
-
     @Query("SELECT * FROM agent_runs WHERE status = 'MODEL_CONTINUATION_PENDING' ORDER BY updatedAt ASC")
     suspend fun getPendingModelContinuationRuns(): List<AgentRunEntity>
 
@@ -944,12 +941,12 @@ interface AgentDao {
     )
     suspend fun markModelRunsPendingContinuation(updatedAt: Long)
 
-    /** 工具可能已经产生副作用，进程重启后先标成未知中断，交给工具恢复逻辑对账。 */
+    /** 工具可能已经产生副作用，进程重启后先标成未知中断，交给工具恢复逻辑对账；旧版本遗留的 WAITING_REMOTE_EXECUTION 同样处理。 */
     @Query(
         """
         UPDATE agent_runs
         SET status = 'INTERRUPTED', terminalReason = :reason, updatedAt = :updatedAt
-        WHERE status IN ('CHECKING_PERMISSION', 'EXECUTING_TOOL', 'PERSISTING_RESULT')
+        WHERE status IN ('CHECKING_PERMISSION', 'EXECUTING_TOOL', 'PERSISTING_RESULT', 'WAITING_REMOTE_EXECUTION')
         """
     )
     suspend fun markToolRunsInterrupted(reason: String, updatedAt: Long)

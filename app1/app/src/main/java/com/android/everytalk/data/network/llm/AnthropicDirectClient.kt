@@ -112,7 +112,7 @@ object AnthropicDirectClient {
 
             val completed = parsed ?: error("Anthropic 流未返回解析结果")
             completed.toolCalls.forEach { call ->
-                send(AppStreamEvent.ToolCall(call.id, call.name, call.input))
+                send(AppStreamEvent.ToolCall(call.id, call.name, call.input, argumentsError = call.argumentsError))
             }
             completed.errorMessage?.let { message ->
                 terminalSent = true
@@ -719,13 +719,15 @@ object AnthropicDirectClient {
             if (block.type != "tool_use") return@mapNotNull null
             val id = block.id ?: return@mapNotNull null
             val name = block.name ?: return@mapNotNull null
-            val input = if (block.partialInput.isNotEmpty()) {
-                runCatching { Json.parseToJsonElement(block.partialInput.toString()).jsonObject }
-                    .getOrElse { JsonObject(emptyMap()) }
+            val parsed = if (block.partialInput.isNotEmpty()) {
+                runCatching { Json.parseToJsonElement(block.partialInput.toString()).jsonObject }.getOrNull()
             } else {
                 block.initialInput ?: JsonObject(emptyMap())
             }
-            AnthropicToolCall(id, name, input)
+            AnthropicToolCall(
+                id, name, parsed ?: JsonObject(emptyMap()),
+                argumentsError = if (parsed == null) block.partialInput.toString() else null,
+            )
         }
         val assistantContent = buildJsonArray {
             sortedBlocks.forEach { block ->
@@ -964,6 +966,7 @@ internal data class AnthropicToolCall(
     val id: String,
     val name: String,
     val input: JsonObject,
+    val argumentsError: String? = null,
 )
 
 internal data class AnthropicParseResult(

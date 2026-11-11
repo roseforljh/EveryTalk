@@ -1,5 +1,7 @@
 package com.android.everytalk.data.agent
 
+import com.android.everytalk.data.mcp.toMcpInputSchema
+import com.android.everytalk.statecontroller.mcp.dispatch.toToolDefinition
 import com.android.everytalk.data.computer.ComputerToolCatalog
 import com.android.everytalk.data.computer.ComputerToolNames
 import kotlinx.serialization.json.JsonNull
@@ -16,6 +18,75 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PiToolArgumentValidatorTest {
+    private fun validateSchema(schema: String, args: String) = PiToolArgumentValidator.prepareAndValidate(
+        AgentContentBlock.ToolCall("call-ref", "schema", kotlinx.serialization.json.Json.parseToJsonElement(args) as kotlinx.serialization.json.JsonObject),
+        listOf(mapOf("name" to "schema", "parameters" to kotlinx.serialization.json.Json.parseToJsonElement(schema))),
+    )
+
+    @Test
+    fun `悬空外部与循环引用拒绝而未提供的可选引用不影响调用`() {
+        listOf("#/missing", "https://example.test/schema").forEach { ref ->
+            val schema = """{"type":"object","properties":{"v":{"${'$'}ref":"$ref"}}}"""
+            assertEquals("{}", validateSchema(schema, "{}").arguments.toString())
+            assertThrows(IllegalArgumentException::class.java) { validateSchema(schema, """{"v":1}""") }
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            validateSchema("""{"${'$'}ref":"#"}""", "{}")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            validateSchema("""{"allOf":[{"${'$'}ref":"#"}]}""", "{}")
+        }
+    }
+
+    @Test
+    fun `根引用与有限递归对象正常转换并支持转义路径`() {
+        val schema = """{"type":"object","properties":{"node":{"${'$'}ref":"#/${'$'}defs/a~1b"}},"${'$'}defs":{"a/b":{"type":"object","properties":{"value":{"type":"integer"},"child":{"${'$'}ref":"#/${'$'}defs/a~1b"}}}}}"""
+        val prepared = validateSchema(schema, """{"node":{"value":"2","child":{"value":"3"}}}""")
+        assertEquals("""{"node":{"value":2,"child":{"value":3}}}""", prepared.arguments.toString())
+        val root = """{"type":"object","properties":{"child":{"${'$'}ref":"#"}}}"""
+        assertEquals("""{"child":{}}""", validateSchema(root, """{"child":{}}""").arguments.toString())
+    }
+
+    @Test
+    fun `整数转换不丢精度不截断也不饱和越界`() {
+        val schema = """{"type":"object","properties":{"v":{"type":"integer"}}}"""
+        assertEquals(Long.MAX_VALUE, validateSchema(schema, """{"v":"9223372036854775807"}""").arguments.getValue("v").jsonPrimitive.longOrNull)
+        assertEquals(42L, validateSchema(schema, """{"v":"42.0"}""").arguments.getValue("v").jsonPrimitive.longOrNull)
+        listOf("1.9", "-1.9", "9223372036854775808").forEach { value ->
+            assertThrows(IllegalArgumentException::class.java) { validateSchema(schema, """{"v":"$value"}""") }
+        }
+    }
+
+    @Test
+    fun `真实MCP根定义经过转换后仍可校验引用`() {
+        val source = io.modelcontextprotocol.kotlin.sdk.types.ToolSchema(
+            properties = kotlinx.serialization.json.Json.parseToJsonElement("""{"v":{"${'$'}ref":"#/${'$'}defs/T"}}""") as kotlinx.serialization.json.JsonObject,
+            defs = kotlinx.serialization.json.Json.parseToJsonElement("""{"T":{"type":"integer"}}""") as kotlinx.serialization.json.JsonObject,
+        )
+        val saved = source.toMcpInputSchema()
+        val candidate = com.android.everytalk.statecontroller.mcp.dispatch.McpToolCandidate("schema", "schema", com.android.everytalk.statecontroller.mcp.dispatch.McpToolCategory.OTHER, true, saved)
+        val definition = candidate.toToolDefinition()
+        val call = AgentContentBlock.ToolCall("mcp-ref", "schema", buildJsonObject { put("v", "42") })
+        assertEquals(42L, PiToolArgumentValidator.prepareAndValidate(call, listOf(definition)).arguments.getValue("v").jsonPrimitive.longOrNull)
+    }
+
+    @Test
+    fun `参数不是合法JSON时带原文失败而不是用空参数执行`() {
+        val call = AgentContentBlock.ToolCall(
+            id = "call-1",
+            name = ComputerToolNames.READ_FILE,
+            arguments = buildJsonObject {},
+            argumentsError = """{"path":"README.md""",
+        )
+
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            PiToolArgumentValidator.prepareAndValidate(call, ComputerToolCatalog.definitions())
+        }
+
+        assertTrue(error.message!!.contains("not valid JSON"))
+        assertTrue(error.message!!.contains("""{"path":"README.md"""))
+    }
+
     @Test
     fun `基础类型按Pi规则转换后再校验`() {
         val call = AgentContentBlock.ToolCall(

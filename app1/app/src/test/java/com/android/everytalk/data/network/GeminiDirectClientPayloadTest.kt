@@ -29,6 +29,22 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34], application = Application::class)
 class GeminiDirectClientPayloadTest {
     @Test
+    fun `工具schema的const按Pi改写为单值enum且不改属性名`() {
+        val schema = Json.parseToJsonElement(
+            """{"type":"object","properties":{"mode":{"const":"fast"},"const":{"type":"string"},
+               "n":{"anyOf":[{"const":1},{"const":true}]}},"${'$'}defs":{"const":{"const":"x"}}}""",
+        )
+
+        val rewritten = rewriteConstAsEnum(schema).jsonObject
+        val properties = rewritten.getValue("properties").jsonObject
+
+        assertEquals("""{"enum":["fast"]}""", properties.getValue("mode").toString())
+        assertEquals("""{"type":"string"}""", properties.getValue("const").toString())
+        assertEquals("""[{"enum":[1]},{"const":true}]""", properties.getValue("n").jsonObject.getValue("anyOf").toString())
+        assertEquals("""{"enum":["x"]}""", rewritten.getValue("${'$'}defs").jsonObject.getValue("const").toString())
+    }
+
+    @Test
     fun `开启代码执行只增加工具声明并保留相同系统指令`() {
         val request = ChatRequest(
             messages = listOf(

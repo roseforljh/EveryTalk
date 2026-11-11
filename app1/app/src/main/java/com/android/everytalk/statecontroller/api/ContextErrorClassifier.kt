@@ -47,6 +47,8 @@ internal object ContextErrorClassifier {
     fun classify(info: ProviderErrorInfo): RequestErrorCategory {
         if (info.status == 401 || info.status == 403) return RequestErrorCategory.AUTHENTICATION
         if (info.status == 429) return RequestErrorCategory.RATE_LIMITED
+        // 413 是请求体大小超限，可能来自图片而不是 token；仍只使用已有的一次有界恢复。
+        if (info.status == 413) return RequestErrorCategory.INPUT_CONTEXT_TOO_LONG
 
         val code = info.code.normalized()
         val type = info.type.normalized()
@@ -68,19 +70,41 @@ internal object ContextErrorClassifier {
     private fun classifyMessageFallback(message: String): RequestErrorCategory {
         val normalized = message.lowercase()
         return when {
-            inputMessageMarkers.any(normalized::contains) -> RequestErrorCategory.INPUT_CONTEXT_TOO_LONG
+            normalized.contains("rate limit") || normalized.contains("too many requests") -> RequestErrorCategory.RATE_LIMITED
+            normalized.startsWith("throttling error:") || normalized.startsWith("service unavailable:") -> RequestErrorCategory.OTHER
             outputMessageMarkers.any(normalized::contains) -> RequestErrorCategory.OUTPUT_LIMIT_TOO_HIGH
+            inputMessagePatterns.any { it.containsMatchIn(message) } -> RequestErrorCategory.INPUT_CONTEXT_TOO_LONG
             else -> RequestErrorCategory.OTHER
         }
     }
 
-    private val inputMessageMarkers = listOf(
-        "context length exceeded",
+    /** 对齐 Pi 的明确超窗表达；HTTP 状态只匹配开头，避免把请求 ID 或正文中的 413 当状态码。 */
+    private val inputMessagePatterns = listOf(
+        "prompt (?:is )?too long",
+        "prompt exceeds max length",
+        "request_too_large",
+        "input is too long for requested model",
+        "exceeds (?:the )?(?:model'?s )?(?:maximum context length|context window)",
+        "context.?window.?exceeded",
+        "input token count.*exceeds the maximum",
+        "maximum prompt length is \\d+",
+        "reduce the length of the messages",
         "maximum context length",
-        "prompt is too long",
-        "input token count",
+        "exceeds (?:the )?maximum allowed input length",
+        "input \\(.*tokens\\) is longer than the model'?s context length",
+        "exceeds the available context size",
+        "greater than the context length",
+        "prompt token count.*exceeds the limit",
+        "context window exceeds limit",
+        "request exceeded model token limit",
+        "prompt has.*tokens.*configured context size",
+        "range of input length should be",
+        "context[_ ]length[_ ]exceeded",
+        "token limit exceeded",
         "输入上下文过长",
-    )
+        "^(?:[\\w -]+ API error \\(413\\):|413(?:\\s|:|$))",
+    ).map { Regex(it, RegexOption.IGNORE_CASE) }
+
     private val outputMessageMarkers = listOf(
         "max_tokens is too large",
         "maximum allowed number of output tokens",

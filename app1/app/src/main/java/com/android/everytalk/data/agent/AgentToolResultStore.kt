@@ -31,7 +31,7 @@ class AgentToolResultStore(context: Context) {
             if (bytes.size.toLong() > MAX_TOOL_RESULT_FILE_BYTES) return@withContext null
             runCatching {
                 val sessionDirectory = File(root, sha256(runId)).apply { mkdirs() }
-                val file = File(sessionDirectory, "${sha256(toolCallId)}.json")
+                val file = File(sessionDirectory, "${sha256(toolCallId)}-${sha256(bytes)}.json")
                 val temporary = File(sessionDirectory, "${file.name}.tmp")
                 temporary.outputStream().buffered().use { output ->
                     output.write(bytes)
@@ -49,6 +49,29 @@ class AgentToolResultStore(context: Context) {
                 )
             }.getOrNull()
         }
+
+    /** 仅读取当前 Run 的已提交归档；校验同一份字节后分页，不接受外部路径。 */
+    suspend fun read(runId: String, result: AgentContentBlock.ToolResult): String = withContext(Dispatchers.IO) {
+        val expectedDirectory = File(root, sha256(runId))
+        val directory = expectedDirectory.canonicalFile
+        require(directory.parentFile == root.canonicalFile && directory.name == expectedDirectory.name) { "归档目录无效" }
+        val file = File(filesDirectory, requireNotNull(result.fullResultPath) { "该工具结果没有完整归档" })
+        require(file.canonicalFile.parentFile == directory && file.canonicalFile.name == file.name) { "归档不属于当前 Run" }
+        require(file.isFile && file.length() in 0..MAX_TOOL_RESULT_FILE_BYTES) { "归档已清理或大小无效" }
+        val bytes = file.inputStream().use { input ->
+            val output = java.io.ByteArrayOutputStream()
+            val buffer = ByteArray(16_384)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                require(output.size().toLong() + count <= MAX_TOOL_RESULT_FILE_BYTES) { "归档超过大小限制" }
+                output.write(buffer, 0, count)
+            }
+            output.toByteArray()
+        }
+        require(bytes.size.toLong() == result.fullResultBytes && sha256(bytes) == result.fullResultSha256) { "归档完整性校验失败" }
+        bytes.toString(Charsets.UTF_8)
+    }
 
     suspend fun deleteRun(runId: String) {
         withContext(Dispatchers.IO) {

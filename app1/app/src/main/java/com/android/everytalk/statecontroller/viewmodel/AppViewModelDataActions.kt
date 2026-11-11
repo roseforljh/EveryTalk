@@ -326,6 +326,15 @@ import java.util.TimeZone
         }
     }
 
+    /** 内置 Key 服务接入；与联网搜索共用的 Key 同步写回搜索配置。 */
+    internal fun AppViewModel.connectMcpKeyProvider(provider: com.android.everytalk.data.mcp.McpKeyProvider, apiKey: String) {
+        addMcpServer(provider.config(apiKey))
+        val search = com.android.everytalk.data.network.ExternalWebSearchProvider.entries.firstOrNull { it.providerId == provider.webSearchProviderId }
+        if (search != null && apiKey.isNotBlank() && externalWebSearchConfigs.value[search.providerId]?.apiKey != apiKey.trim()) {
+            updateExternalWebSearchProviderApiKey(search, apiKey)
+        }
+    }
+
     internal fun AppViewModel.removeMcpServer(serverId: String) {
         viewModelScope.launch {
             try {

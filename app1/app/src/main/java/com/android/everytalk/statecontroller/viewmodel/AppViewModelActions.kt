@@ -176,7 +176,9 @@ import java.util.UUID
         return null
     }
 
-    internal fun AppViewModel.buildMcpWebFetchFallback(): (suspend (JsonObject) -> JsonElement)? {
+    internal fun AppViewModel.buildMcpWebFetchFallback(
+        onResult: (com.android.everytalk.data.network.AppToolExecutionResult) -> Unit = {},
+    ): (suspend (JsonObject) -> JsonElement)? {
         val webFetchTool = mcpManager.getDispatchCandidates()
             .firstOrNull { it.category == McpToolCategory.BROWSER }
             ?: return null
@@ -185,7 +187,7 @@ import java.util.UUID
             val mcpArgs = buildJsonObject {
                 put("url", JsonPrimitive(url))
             }
-            mcpManager.callTool(webFetchTool.toolName, mcpArgs)
+            mcpManager.callToolResult(webFetchTool.toolName, mcpArgs).also(onResult).content
         }
     }
 
@@ -335,9 +337,16 @@ import java.util.UUID
 
         val updatedConfigs = _externalWebSearchConfigs.value
         val selectedProviderId = _selectedExternalWebSearchProviderId.value
+        // 已接入的同源 MCP 跟着换 Key，两边始终用同一个 Key。
+        val mcpProvider = com.android.everytalk.data.mcp.McpKeyProvider.entries.firstOrNull { it.webSearchProviderId == provider.providerId }
+        val mcpServer = mcpProvider?.let { p -> allMcpConfigs.value.values.map { it.config }.firstOrNull(p::matches) }
         viewModelScope.launch(Dispatchers.IO) {
             persistenceManager.saveExternalWebSearchConfigs(updatedConfigs.values.toList())
             persistenceManager.saveSelectedExternalWebSearchProviderId(selectedProviderId)
+            if (mcpProvider != null && mcpServer != null && normalizedApiKey.isNotBlank()) {
+                val next = mcpProvider.withKey(mcpServer, normalizedApiKey)
+                if (next != mcpServer) mcpManager.updateServer(next)
+            }
         }
     }
 
@@ -762,11 +771,6 @@ import java.util.UUID
         replaceSudoPassword,
     )
 
-    internal suspend fun AppViewModel.provisionComputerContainer(
-        computerId: String,
-        onProgress: suspend (com.android.everytalk.data.computer.ComputerSetupStage) -> Unit = {},
-    ): Computer = computerManager.provisionContainer(computerId, onProgress)
-
     internal fun AppViewModel.cancelComputerOperation(computerId: String) {
         viewModelScope.launch(Dispatchers.IO) {
             runCatching { computerManager.cancelComputerOperation(computerId) }
@@ -853,22 +857,14 @@ import java.util.UUID
         replacement: HostKeyProbeResult,
     ): Computer = computerManager.confirmReplacementHostKey(computerId, replacement)
 
-    internal suspend fun AppViewModel.setComputerPrivateNetworkAllowed(
-        computerId: String,
-        allowed: Boolean,
-    ): Computer = computerManager.setPrivateNetworkAllowed(computerId, allowed)
-
     /** 权限模式只更新本地审批策略，不连接 VPS。 */
     internal suspend fun AppViewModel.setComputerPermissionMode(
         computerId: String,
         permissionMode: ComputerPermissionMode,
     ): Computer = computerManager.setPermissionMode(computerId, permissionMode)
 
-    internal suspend fun AppViewModel.deleteComputerWorkspace(
-        workspaceId: String,
-        deleteRemoteFiles: Boolean,
-    ) {
-        val deleted = computerManager.deleteWorkspace(workspaceId, deleteRemoteFiles)
+    internal suspend fun AppViewModel.deleteComputerWorkspace(workspaceId: String) {
+        val deleted = computerManager.deleteWorkspace(workspaceId)
         // 一个会话可能在多台服务器上各有 Workspace。删除非当前服务器的旧 Workspace 不影响当前 Agent。
         val affectsCurrentBinding = computerManager.selections.value[deleted.conversationId] == deleted.computerId ||
             deleted.computerId in stateHolder.conversationFunctionToggleStates.value[deleted.conversationId]?.additionalComputerIds.orEmpty()
@@ -882,7 +878,7 @@ import java.util.UUID
                     agentEnabled = false,
                     agentResourceState = AgentResourceState.WORKSPACE_DELETED,
                     detachedComputerName = computerName,
-                    detachedWorkspacePath = deleted.hostPath.takeUnless { deleteRemoteFiles },
+                    detachedWorkspacePath = null,
                 ))
             }
             if (stateHolder._currentConversationId.value == deleted.conversationId) {
@@ -896,22 +892,16 @@ import java.util.UUID
         }
     }
 
-    internal suspend fun AppViewModel.deleteComputer(
-        computerId: String,
-        cleanupContainers: Boolean,
-        deleteRemoteFiles: Boolean,
-    ): ComputerDeleteResult {
+    internal suspend fun AppViewModel.deleteComputer(computerId: String): ComputerDeleteResult {
         val computerName = computerManager.computers.value
             .firstOrNull { it.id == computerId }
             ?.displayName
-        val detachedPaths = computerManager.getWorkspaces(computerId)
-            .associate { workspace -> workspace.conversationId to workspace.hostPath }
         val affectedConversationIds = computerManager.selections.value
             .filterValues { selectedComputerId -> selectedComputerId == computerId }
             .keys + stateHolder.conversationFunctionToggleStates.value.filterValues {
                 computerId in it.additionalComputerIds
             }.keys
-        val result = computerManager.deleteComputer(computerId, cleanupContainers, deleteRemoteFiles)
+        val result = computerManager.deleteComputer(computerId)
         // 分组默认值只保存 Computer ID。服务器删除后清掉失效引用，避免之后新建会话反复尝试已不存在的服务器。
         val updatedGroupComputerIds = stateHolder.conversationGroupComputerIds.value
             .filterValues { selectedComputerId -> selectedComputerId != computerId }
@@ -929,7 +919,7 @@ import java.util.UUID
                             agentEnabled = false,
                             agentResourceState = AgentResourceState.SERVER_DELETED,
                             detachedComputerName = computerName,
-                            detachedWorkspacePath = detachedPaths[conversationId].takeUnless { deleteRemoteFiles },
+                            detachedWorkspacePath = null,
                         )
                     }
                 }

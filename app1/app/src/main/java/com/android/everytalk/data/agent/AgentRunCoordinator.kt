@@ -294,6 +294,7 @@ class AgentRunCoordinator(
             lifecycleSink = { event -> _lifecycleEvents.emit(event) },
             memoryCoordinator = memoryCoordinator,
             modelTransport = modelTransport,
+            codemodeEngine = SandboxCodemodeEngine(context),
         )
     }
 
@@ -469,7 +470,7 @@ class AgentRunCoordinator(
         )
         if (!enqueued) return false
 
-        // 只打断模型请求；EXECUTING_TOOL/WAITING_REMOTE_EXECUTION 等状态绝不取消，
+        // 只打断模型请求；EXECUTING_TOOL 等状态绝不取消，
         // 防止 edit/write/bash 被截断。恢复调用沿用原 Run，不创建新的用户任务。
         val latest = agentDao.getRun(run.id) ?: return true
         val modelIsActive = latest.status in setOf(

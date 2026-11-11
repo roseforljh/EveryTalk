@@ -225,7 +225,7 @@ internal object PiOpenAIResponsesMessageAdapter {
         if (images.isEmpty() || "image" !in request.localInputModalities) {
             return JsonPrimitive(
                 when {
-                    text.isNotEmpty() -> text
+                    text.isNotBlank() -> text
                     images.isNotEmpty() -> "(see attached image)"
                     else -> "(no tool output)"
                 },

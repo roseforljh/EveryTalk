@@ -23,6 +23,11 @@ internal object PiToolArgumentValidator {
         call: AgentContentBlock.ToolCall,
         definitions: List<Map<String, Any>>?,
     ): AgentContentBlock.ToolCall {
+        call.argumentsError?.let { raw ->
+            throw IllegalArgumentException(
+                "Tool \"${call.name}\" arguments are not valid JSON. Raw arguments:\n${raw.take(2_000)}",
+            )
+        }
         val prepared = preparePiToolCallArguments(call)
         // 旧 AgentRun 快照可能没有保存 tools。迁移期继续交给原 Executor 校验；
         // 新请求只要带了工具表，就严格执行 Pi 的存在性和 schema 校验。
@@ -30,10 +35,11 @@ internal object PiToolArgumentValidator {
         val definition = definitions.firstOrNull { toolName(it) == prepared.name }
             ?: throw IllegalArgumentException("Tool \"${prepared.name}\" not found")
         val schema = toolParameters(definition) ?: JsonObject(emptyMap())
-        val normalized = normalizeOptionalNulls(prepared.arguments, schema, schema)
-        val converted = coerce(normalized, schema, schema)
+        val validation = Validation()
+        val normalized = validation.normalizeOptionalNulls(prepared.arguments, schema, schema)
+        val converted = validation.coerce(normalized, schema, schema)
         val errors = mutableListOf<String>()
-        validate(converted, schema, schema, "root", errors)
+        validation.validate(converted, schema, schema, "root", errors)
         if (errors.isNotEmpty()) {
             throw IllegalArgumentException(
                 "Validation failed for tool \"${prepared.name}\":\n" +
@@ -56,8 +62,28 @@ internal object PiToolArgumentValidator {
         return anyToJsonElement(raw) as? JsonObject
     }
 
+    /** 每次调用独立计数，限制递归深度和分支工作量，不用跨线程共享状态。 */
+    private class Validation {
+        private var depth = 0
+        private var steps = 0
+
+        private inline fun <T> bounded(block: () -> T): T {
+            require(++steps <= 100_000 && depth < 64) { "Tool schema validation is too complex or recursively cyclic" }
+            depth++
+            return try { block() } finally { depth-- }
+        }
+
+        fun normalizeOptionalNulls(value: JsonElement, schema: JsonObject, root: JsonObject): JsonElement =
+            bounded { normalizeValue(value, schema, root) }
+
+        fun coerce(value: JsonElement, schema: JsonObject, root: JsonObject): JsonElement =
+            bounded { coerceValue(value, schema, root) }
+
+        fun validate(value: JsonElement, schema: JsonObject, root: JsonObject, path: String, errors: MutableList<String>) =
+            bounded { validateValue(value, schema, root, path, errors) }
+
     /** 可选且不允许 null 的字段收到 null 时按 Pi 规则视为省略。 */
-    private fun normalizeOptionalNulls(value: JsonElement, rawSchema: JsonObject, root: JsonObject): JsonElement {
+    private fun normalizeValue(value: JsonElement, rawSchema: JsonObject, root: JsonObject): JsonElement {
         val schema = resolve(rawSchema, root)
         if (value is JsonArray) {
             val itemSchemas = schema["items"]
@@ -84,7 +110,7 @@ internal object PiToolArgumentValidator {
         })
     }
 
-    private fun coerce(value: JsonElement, rawSchema: JsonObject, root: JsonObject): JsonElement {
+    private fun coerceValue(value: JsonElement, rawSchema: JsonObject, root: JsonObject): JsonElement {
         val schema = resolve(rawSchema, root)
         var nextValue = value
         (schema["allOf"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }.forEach { arm ->
@@ -93,7 +119,7 @@ internal object PiToolArgumentValidator {
         coercionUnionSchemas(schema).takeIf(List<JsonObject>::isNotEmpty)?.let { arms ->
             arms.firstOrNull { matches(nextValue, it, root) }?.let { return nextValue }
             arms.forEach { arm ->
-                val candidate = coerce(nextValue, arm, root)
+                val candidate = try { coerce(nextValue, arm, root) } catch (_: IllegalArgumentException) { return@forEach }
                 if (matches(candidate, arm, root)) return candidate
             }
             return nextValue
@@ -152,8 +178,8 @@ internal object PiToolArgumentValidator {
                 value.longOrNull != null && !value.isString -> value
                 !value.isString && value.booleanOrNull != null -> JsonPrimitive(if (value.booleanOrNull == true) 1 else 0)
                 value.isString -> value.contentOrNull?.trim()?.takeIf(String::isNotEmpty)
-                    ?.toDoubleOrNull()?.takeIf { it.isFinite() && it % 1.0 == 0.0 }
-                    ?.toLong()?.let(::JsonPrimitive) ?: value
+                    ?.toBigDecimalOrNull()?.let { number -> runCatching { number.longValueExact() }.getOrNull() }
+                    ?.let(::JsonPrimitive) ?: value
                 else -> value
             }
             else -> value
@@ -185,7 +211,7 @@ internal object PiToolArgumentValidator {
         else -> value
     }
 
-    private fun validate(
+    private fun validateValue(
         value: JsonElement,
         rawSchema: JsonObject,
         root: JsonObject,
@@ -295,13 +321,17 @@ internal object PiToolArgumentValidator {
 
     private fun matches(value: JsonElement, schema: JsonObject, root: JsonObject): Boolean {
         val errors = mutableListOf<String>()
-        validate(value, schema, root, "root", errors)
-        return errors.isEmpty()
+        return try {
+            validate(value, schema, root, "root", errors)
+            errors.isEmpty()
+        } catch (_: IllegalArgumentException) {
+            false
+        }
     }
 
-    private fun acceptsNull(schema: JsonObject, root: JsonObject): Boolean {
+    private fun acceptsNull(schema: JsonObject, root: JsonObject): Boolean = bounded {
         val resolved = resolve(schema, root)
-        return "null" in schemaTypes(resolved) ||
+        "null" in schemaTypes(resolved) ||
             (resolved["anyOf"] as? JsonArray).orEmpty()
                 .mapNotNull { it as? JsonObject }
                 .any { acceptsNull(it, root) } ||
@@ -310,15 +340,23 @@ internal object PiToolArgumentValidator {
                 .any { acceptsNull(it, root) }
     }
 
+    /** 只解析当前引用链。合法递归会随输入子节点重新进入，纯引用环在当前链上拒绝。 */
     private fun resolve(schema: JsonObject, root: JsonObject): JsonObject {
-        val ref = (schema["\$ref"] as? JsonPrimitive)?.contentOrNull ?: return schema
-        if (!ref.startsWith("#/")) return schema
-        var current: JsonElement = root
-        ref.removePrefix("#/").split('/').forEach { raw ->
-            val key = raw.replace("~1", "/").replace("~0", "~")
-            current = (current as? JsonObject)?.get(key) ?: return schema
+        var resolved = schema
+        val seen = mutableSetOf<String>()
+        while (true) {
+            val ref = (resolved["\$ref"] as? JsonPrimitive)?.contentOrNull ?: return resolved
+            require(seen.add(ref) && seen.size <= 64) { "Cyclic tool schema reference: $ref" }
+            require(ref == "#" || ref.startsWith("#/")) { "Unresolved tool schema reference: $ref" }
+            var current: JsonElement = root
+            if (ref != "#") ref.removePrefix("#/").split('/').forEach { raw ->
+                val key = raw.replace("~1", "/").replace("~0", "~")
+                current = (current as? JsonObject)?.get(key)
+                    ?: throw IllegalArgumentException("Unresolved tool schema reference: $ref")
+            }
+            resolved = current as? JsonObject
+                ?: throw IllegalArgumentException("Unresolved tool schema reference: $ref")
         }
-        return current as? JsonObject ?: schema
     }
 
     /** Pi 的转换阶段会依次尝试 anyOf 或 oneOf；最终校验仍保留两者不同的语义。 */
@@ -349,4 +387,5 @@ internal object PiToolArgumentValidator {
 
     private fun JsonObject.numberKeyword(name: String): Double? =
         (this[name] as? JsonPrimitive)?.doubleOrNull
+    }
 }

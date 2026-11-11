@@ -551,6 +551,7 @@ private fun updateExecutionStepStatus(step: ExecutionStep, event: AppStreamEvent
         computerId = event.computerId ?: step.computerId,
         isError = event.isError ?: step.isError,
         resultPreview = event.resultPreview ?: step.resultPreview,
+        durationMs = event.durationMs ?: step.durationMs,
     )
 
 /** 新一轮思考开始时移除上一轮工具等待文案，完整 reasoning 继续由流式状态累积。 */

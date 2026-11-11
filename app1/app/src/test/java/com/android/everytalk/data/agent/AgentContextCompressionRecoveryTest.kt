@@ -114,30 +114,67 @@ class AgentContextCompressionRecoveryTest {
     }
 
     @Test
-    fun `已经收到部分正文的网络失败禁止自动重试`() = runBlocking {
-        val sessionId = "provider-partial-no-retry"
+    fun `流内网关断流按Pi文字规则重试而额度耗尽不重试`() = runBlocking {
+        suspend fun statusAfter(sessionId: String, error: AppStreamEvent.Error): String {
+            seedSession(sessionId)
+            val loop = AgentLoop(runStore = store, modelTransport = ModelTurnTransport { flowOf(error) })
+            loop.run(loopRequest(sessionId, compactThresholdTokens = 8_000)).toList()
+            return database.agentDao().getRunsForSession(sessionId).single().status
+        }
+
+        assertEquals(
+            AgentRunStatus.MODEL_CONTINUATION_PENDING.name,
+            statusAfter(
+                "gateway-stream-drop",
+                AppStreamEvent.Error(message = "stream disconnected before completion: stream closed before response.completed"),
+            ),
+        )
+        assertEquals(
+            AgentRunStatus.FAILED.name,
+            statusAfter(
+                "quota-exhausted",
+                AppStreamEvent.Error(message = "请求过于频繁", upstreamStatus = 429, code = "insufficient_quota", type = "retryable_network"),
+            ),
+        )
+    }
+
+    @Test
+    fun `部分输出后网络中断按Pi丢弃该次尝试并重试`() = runBlocking {
+        val sessionId = "provider-partial-retry"
         seedSession(sessionId)
+        var attempt = 0
         val loop = AgentLoop(
             runStore = store,
             modelTransport = ModelTurnTransport {
-                flowOf(
-                    AppStreamEvent.Content("已经收到一部分正文"),
-                    AppStreamEvent.Error(
-                        message = "connection reset",
-                        code = "connection_aborted",
-                        type = "retryable_network",
-                    ),
-                )
+                attempt++
+                if (attempt == 1) {
+                    flowOf(
+                        AppStreamEvent.Content("半截正文"),
+                        AppStreamEvent.ExecutionStatusUpdate(com.android.everytalk.data.network.TOOL_CALL_WRITING_STATUS),
+                        AppStreamEvent.Error(
+                            message = "云端任务已失败或过期",
+                            code = null,
+                            type = null,
+                        ),
+                        AppStreamEvent.Finish("connection_failed"),
+                    )
+                } else {
+                    flowOf(AppStreamEvent.Content("完整回复"), AppStreamEvent.Finish("stop"))
+                }
             },
         )
+        val baseRequest = loopRequest(sessionId, compactThresholdTokens = 8_000)
 
-        val events = loop.run(loopRequest(sessionId, compactThresholdTokens = 8_000)).toList()
+        loop.run(baseRequest).toList()
+        val pending = database.agentDao().getRunsForSession(sessionId).single()
+        assertTrue(store.getPendingModelContinuationRuns().any { it.id == pending.id })
+
+        loop.run(baseRequest.copy(existingRun = pending)).toList()
         val run = database.agentDao().getRunsForSession(sessionId).single()
-
-        assertEquals(AgentRunStatus.FAILED.name, run.status)
-        assertTrue(store.getPendingModelContinuationRuns().none { it.id == run.id })
-        assertTrue(events.filterIsInstance<AppStreamEvent.Error>().any { it.code == "connection_aborted" })
-        assertTrue(events.filterIsInstance<AppStreamEvent.Error>().none { it.code == "provider_retry_exhausted" })
+        val payloads = database.agentDao().getEntries(run.id).joinToString { it.payloadJson }
+        assertEquals(AgentRunStatus.COMPLETED.name, run.status)
+        assertTrue(payloads.contains("完整回复"))
+        assertTrue(!payloads.contains("半截正文"))
     }
 
     @Test
@@ -549,6 +586,22 @@ class AgentContextCompressionRecoveryTest {
 
         assertEquals(3, requestCount)
         assertTrue(events.any { it is AppStreamEvent.Content && it.text == "恢复成功" })
+    }
+
+    @Test
+    fun `HTTP413重复超限最多压缩一次后失败`() = runBlocking {
+        val sessionId = "http413-bounded"
+        seedSession(sessionId)
+        var requests = 0
+        val loop = AgentLoop(runStore = store, modelTransport = ModelTurnTransport {
+            requests++
+            if (requests == 2) flowOf(AppStreamEvent.Content("压缩摘要"), AppStreamEvent.Finish("stop"))
+            else flowOf(AppStreamEvent.Error("request too large", upstreamStatus = 413), AppStreamEvent.Finish("error"))
+        })
+        val events = loop.run(loopRequest(sessionId)).toList()
+        assertEquals(3, requests)
+        assertEquals(1, events.filterIsInstance<AppStreamEvent.ExecutionStatusUpdate>().count { it.status == "上下文超限，正在紧急压缩后重试" })
+        assertTrue(events.any { it is AppStreamEvent.Error })
     }
 
     @Test

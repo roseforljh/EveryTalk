@@ -118,6 +118,7 @@ class ExecutionStepTest {
             AppStreamEvent.ExecutionStatusUpdate(
                 status = null,
                 toolCallId = "timed-tool",
+                durationMs = 321L,
             ),
             nowMillis = 650L,
         )
@@ -126,6 +127,7 @@ class ExecutionStepTest {
         val tool = trace[1] as ExecutionTraceEvent.Tool
         assertEquals(200L, tool.startedAtMillis)
         assertEquals(650L, tool.finishedAtMillis)
+        assertEquals(321L, tool.step.durationMs)
     }
 
     @Test

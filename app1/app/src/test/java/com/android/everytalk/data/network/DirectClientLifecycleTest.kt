@@ -169,6 +169,20 @@ class DirectClientLifecycleTest {
     }
 
     @Test
+    fun `纯文本HTTP错误保留有限脱敏正文用于超窗恢复`() = runBlocking {
+        val body = "litellm.ContextWindowExceededError: Context Window exceeded https://example.test?key=secret-value&token=private-value " + "x".repeat(9_000)
+        withHttpClient(status = 400, body = body) { client ->
+            val error = OpenAIDirectClient.streamChatDirect(client, request("OpenAI", "OpenAI"))
+                .toList().filterIsInstance<AppStreamEvent.Error>().single()
+            assertEquals(400, error.upstreamStatus)
+            assertTrue(error.rawMessage.orEmpty().startsWith("litellm.ContextWindowExceededError"))
+            assertFalse(error.rawMessage.orEmpty().contains("secret-value"))
+            assertFalse(error.rawMessage.orEmpty().contains("private-value"))
+            assertEquals(8_192, error.rawMessage.orEmpty().length)
+        }
+    }
+
+    @Test
     fun `parse errors emit one error terminal without stop`() = runBlocking {
         withHttpClient(body = "data: {broken}\n\n") { client ->
             assertSingleErrorTerminal(

@@ -27,7 +27,7 @@ class PiGeminiMessageAdapterTest {
     @Test
     fun `固定当前Pi上游提交`() {
         assertEquals(
-            "b8b873b9872db04a938fb4357b5e8e824ddc051c",
+            "b4afdddf44e059c67ccf5097e5317d913521b470",
             PiGeminiMessageAdapter.UPSTREAM_COMMIT,
         )
     }

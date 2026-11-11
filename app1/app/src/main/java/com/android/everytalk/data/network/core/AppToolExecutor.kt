@@ -13,6 +13,10 @@ data class AppToolExecutionResult(
     val terminate: Boolean = false,
     /** 只由 App 内置执行器生成，不从工具 JSON 或 MCP 响应反序列化。 */
     val attachments: List<com.android.everytalk.models.SelectedMediaItem.GenericFile> = emptyList(),
+    /** 脚本专用结构化数据，不自动持久化或回填模型。 */
+    val scriptContent: JsonElement? = null,
+    /** MCP 协议的错误标志由本地适配器设置，不能从结构化正文推断。 */
+    val isError: Boolean? = null,
 )
 
 /**

@@ -29,8 +29,6 @@ enum class AgentRunStatus {
     CHECKING_PERMISSION,
     WAITING_APPROVAL,
     EXECUTING_TOOL,
-    /** Tool 已经交给 VPS，Android 只等待远端状态和结果。 */
-    WAITING_REMOTE_EXECUTION,
     /** VPS 命令已完成，等待模型调用以续写最终 AI 回复。 */
     MODEL_CONTINUATION_PENDING,
     PERSISTING_RESULT,
@@ -47,17 +45,9 @@ enum class AgentRunStatus {
 object AgentTerminalReasons {
     const val USER_STOP = "USER_STOP"
     const val SUPERSEDED_BY_NEW_RUN = "SUPERSEDED_BY_NEW_RUN"
-    const val APP_INTERRUPTED = "APP_INTERRUPTED"
     const val FORCE_STOP_RECOVERED = "FORCE_STOP_RECOVERED"
-    const val SYSTEM_RECOVERED = "SYSTEM_RECOVERED"
-    const val CONNECTION_LOST = "CONNECTION_LOST"
-    const val RECONNECTED = "RECONNECTED"
     const val PERMISSION_WAITING = "PERMISSION_WAITING"
     const val MODEL_CONTINUATION_PENDING = "MODEL_CONTINUATION_PENDING"
-    const val VPS_RESTARTED = "VPS_RESTARTED"
-    const val REMOTE_TASK_MISSING = "REMOTE_TASK_MISSING"
-    const val REMOTE_PROCESS_TERMINATED = "REMOTE_PROCESS_TERMINATED"
-    const val CONFIG_ERROR = "CONFIG_ERROR"
     const val VISIBLE_MESSAGE_TERMINAL = "VISIBLE_MESSAGE_TERMINAL"
 
     /** 用户手动触发的压缩用的隐藏 Run，不是一次真实对话。 */
@@ -331,6 +321,8 @@ sealed class AgentContentBlock {
         val thoughtSignature: String? = null,
         val namespace: String? = null,
         val sourceProtocol: String? = null,
+        /** Pi #10897：最终参数不是合法 JSON 时保存原文，校验阶段原样回给模型，不能用空参数执行。 */
+        val argumentsError: String? = null,
     ) : AgentContentBlock()
 
     @Serializable
@@ -347,6 +339,12 @@ sealed class AgentContentBlock {
         val contentBlocks: List<AgentToolResultContentApiPart> = emptyList(),
         /** Pi 控制元数据，只由受信 Executor 设置，不进入 Provider ToolResult。 */
         val terminate: Boolean = false,
+        /** 客户端观察的 execute 耗时，含执行器网络等待，不含入口审批；旧记录无此值。 */
+        val durationMs: Long? = null,
+        /** Codemode 成功写入，内部持久事实，不进入模型消息。null 值表示删除 key。 */
+        val codemodeStoreDelta: Map<String, JsonElement>? = null,
+        /** 发现工具成功加载的授权 ID；只影响后续请求声明，不进入 Provider 消息。 */
+        val loadedMcpToolIds: List<String> = emptyList(),
     ) : AgentContentBlock()
 }
 

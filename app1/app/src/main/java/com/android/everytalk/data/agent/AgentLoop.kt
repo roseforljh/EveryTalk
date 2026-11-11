@@ -54,11 +54,13 @@ import kotlinx.coroutines.flow.produceIn
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 
 internal const val MAX_AGENT_CONSECUTIVE_TOOL_CALLS = 100
@@ -128,11 +130,15 @@ class AgentLoop(
     private val modelTransport: ModelTurnTransport = ModelTurnTransport { turn ->
         ApiClient.streamModelTurn(turn.request)
     },
+    /** Pi codemode 的 JS 引擎；为空时不向模型提供 codemode。 */
+    private val codemodeEngine: CodemodeEngine? = null,
 ) {
     fun run(originalInput: AgentLoopRequest): Flow<AppStreamEvent> = flow {
         // 统一入口冻结记忆并预留预算，持久化的 messages 仍是原始聊天内容。
+        val calibrated = runStore.calibrateRequest(originalInput.sessionId, originalInput.request, originalInput.tokenLimits)
+        val readable = calibrated.copy(tools = AgentToolResultReadTool.withTool(calibrated.tools))
         val calibratedInput = originalInput.copy(
-            request = runStore.calibrateRequest(originalInput.sessionId, originalInput.request, originalInput.tokenLimits),
+            request = if (codemodeEngine == null) readable else readable.copy(tools = CodemodeTool.withCodemode(readable.tools)),
         )
         val input = memoryCoordinator?.prepare(calibratedInput) ?: calibratedInput
         runPrepared(input).collect { emit(it) }
@@ -240,94 +246,9 @@ class AgentLoop(
                 return true
             }
 
-            val resumedApproval = input.approvalDecision
-            if (resumedApproval != null) {
-                run = runStore.updateRunStatus(checkNotNull(run), AgentRunStatus.EXECUTING_TOOL)
-                if (resumedApproval.resumeWholeBatchWithApprovedGate) {
-                    val replay = executeToolCallsUntilApproval(
-                        run = checkNotNull(run),
-                        requestId = resumedApproval.requestId,
-                        calls = resumedApproval.pendingToolCalls,
-                        transcript = transcript,
-                        computerContext = input.request.localComputerRequestContext,
-                        maxModelResultTokens = (input.tokenLimits.maxContextTokens.toLong() / 4L).coerceAtLeast(64L),
-                    emit = { event -> emit(event) },
-                    toolLoopGuard = toolLoopGuard,
-                    toolExecutionModes = input.request.tools.piToolExecutionModes(),
-                    toolDefinitions = input.request.tools,
-                    approvedGate = resumedApproval,
-                    )
-                    transcript = replay.transcript
-                    if (replay.paused) return@flow
-                    emit(AppStreamEvent.ExecutionStatusUpdate("正在分析工具结果"))
-                } else {
-                val currentResultAlreadyPersisted = runStore.finalToolResult(
-                    runId = checkNotNull(run).id,
-                    requestId = resumedApproval.requestId,
-                    toolCallId = resumedApproval.toolCall.id,
-                ) != null
-                val resumedPendingCalls = if (resumedApproval.resumePendingToolCallsOnly) {
-                    resumedApproval.pendingToolCalls
-                } else if (resumedApproval.toolResultAlreadyPersisted) {
-                    emptyList()
-                } else if (currentResultAlreadyPersisted) {
-                    resumedApproval.pendingToolCalls
-                        .dropWhile { call -> call.id != resumedApproval.toolCall.id }
-                        .drop(1)
-                } else {
-                    if (resumedApproval.decision in setOf(AgentApprovalDecision.APPROVED, AgentApprovalDecision.RETRY)) {
-                        toolLoopGuard.record(resumedApproval.toolCall)?.let { reason -> throw AgentToolLoopException(reason) }
-                    }
-                    val handled = executeApprovedOrRejectedTool(
-                        run = checkNotNull(run),
-                        record = resumedApproval,
-                        baseContext = input.request.localComputerRequestContext,
-                        maxModelResultTokens = (input.tokenLimits.maxContextTokens.toLong() / 4L).coerceAtLeast(64L),
-                        emit = { event -> emit(event) },
-                    )
-                    if (handled.result.isUnknownExecution()) {
-                        val unknownApproval = toolRuntime.approvalRequest(
-                            resumedApproval.toolCall,
-                            input.request.localComputerRequestContext,
-                            ComputerToolApprovalPhase.RETRY_UNKNOWN,
-                        )
-                        if (unknownApproval != null) {
-                            val record = AgentApprovalRecord(
-                                approvalRequestId = UUID.randomUUID().toString(),
-                                requestId = resumedApproval.requestId,
-                                toolCall = resumedApproval.toolCall,
-                                pendingToolCalls = resumedApproval.pendingToolCalls,
-                                request = unknownApproval,
-                            )
-                            runStore.pauseForApproval(checkNotNull(run), record)
-                            emit(AppStreamEvent.ExecutionStatusUpdate("执行结果未知，等待你的决定"))
-                            emit(AppStreamEvent.AgentApprovalRequired(checkNotNull(run).id, record.approvalRequestId))
-                            return@flow
-                        }
-                    }
-                    runStore.appendToolResult(checkNotNull(run).id, resumedApproval.requestId, handled.result)
-                    transcript = transcript + handled.result.toApiMessage()
-                    resumedApproval.pendingToolCalls
-                        .dropWhile { call -> call.id != resumedApproval.toolCall.id }
-                        .drop(1)
-                }
-                val pause = executeToolCallsUntilApproval(
-                    run = checkNotNull(run),
-                    requestId = resumedApproval.requestId,
-                    calls = resumedPendingCalls,
-                    transcript = transcript,
-                    computerContext = input.request.localComputerRequestContext,
-                    maxModelResultTokens = (input.tokenLimits.maxContextTokens.toLong() / 4L).coerceAtLeast(64L),
-                    emit = { event -> emit(event) },
-                    toolLoopGuard = toolLoopGuard,
-                    toolExecutionModes = input.request.tools.piToolExecutionModes(),
-                    toolDefinitions = input.request.tools,
-                )
-                transcript = pause.transcript
-                if (pause.paused) return@flow
-                emit(AppStreamEvent.ExecutionStatusUpdate("正在分析工具结果"))
-                }
-            }
+            val resumedBatch = resumeApprovedBatch(checkNotNull(run), input, transcript, toolLoopGuard) { emit(it) }
+            transcript = resumedBatch.transcript
+            if (resumedBatch.paused) return@flow
 
             if (input.existingRun != null && runStore.latestCompletedToolBatchTerminates(checkNotNull(run).id)) {
                 // App 可能在整批 terminate ToolResult 已落库、Run 完成状态尚未落库时退出。
@@ -348,6 +269,7 @@ class AgentLoop(
             }
 
             var overflowRecoveryUsed = false
+            var previousToolSchemaFingerprint: String? = null
             for (modelTurnOrdinal in agentModelTurnOrdinals(firstModelTurnOrdinal)) {
                 // 每轮开始前统一经过安全暂停门，Resume 后从当前循环位置继续。
                 pauseController.awaitIfPaused(checkNotNull(run).id)
@@ -367,6 +289,7 @@ class AgentLoop(
                     currentStep = "准备第 ${modelTurnOrdinal} 轮模型请求",
                 )
                 var toolSchemaFingerprint = agentToolSchemaFingerprint(input.request)
+                var modelRequest = input.request
                 var requestId = ""
                 lateinit var contextTranscript: List<com.android.everytalk.data.DataClass.AbstractApiMessage>
                 lateinit var prepared: PreparedAgentContext
@@ -383,6 +306,14 @@ class AgentLoop(
                         ).messages
                         toolSchemaFingerprint = agentToolSchemaFingerprint(refreshedRequest)
                     }
+                    modelRequest = input.request.copy(tools = McpToolDiscovery.project(
+                        input.request.tools, runStore.loadedMcpToolIds(checkNotNull(run).id),
+                    ))
+                    toolSchemaFingerprint = agentToolSchemaFingerprint(modelRequest)
+                    if (previousToolSchemaFingerprint != null && previousToolSchemaFingerprint != toolSchemaFingerprint) {
+                        providerContinuation = null
+                    }
+                    previousToolSchemaFingerprint = toolSchemaFingerprint
                     contextTranscript = transcript + listOfNotNull(
                         sessionStatePrompt?.takeIf(String::isNotBlank)?.let { prompt ->
                             SimpleTextApiMessage(
@@ -394,7 +325,7 @@ class AgentLoop(
                     )
                     prepared = contextManager.prepare(
                         requestId = requestId,
-                        request = input.request.copy(
+                        request = modelRequest.copy(
                             messages = contextTranscript,
                             localProviderContinuation = providerContinuation,
                         ),
@@ -410,7 +341,7 @@ class AgentLoop(
                         val restoredContinuation = runStore.loadContinuation(
                             sessionId = input.sessionId,
                             configId = checkNotNull(run).configIdSnapshot,
-                            request = input.request,
+                            request = modelRequest,
                             systemPromptFingerprint = agentSystemPromptFingerprint(prepared.messages),
                             toolSchemaFingerprint = toolSchemaFingerprint,
                             compactionId = activeCompaction?.id,
@@ -419,7 +350,7 @@ class AgentLoop(
                             providerContinuation = restoredContinuation
                             prepared = contextManager.prepare(
                                 requestId = requestId,
-                                request = input.request.copy(
+                                request = modelRequest.copy(
                                     messages = contextTranscript,
                                     localProviderContinuation = restoredContinuation,
                                 ),
@@ -470,7 +401,7 @@ class AgentLoop(
                             requestId = UUID.randomUUID().toString()
                             prepared = contextManager.prepare(
                                 requestId = requestId,
-                                request = input.request.copy(
+                                request = modelRequest.copy(
                                     messages = contextTranscript,
                                     contextManagement = input.request.contextManagement?.copy(
                                         autoCompressionEnabled = false,
@@ -512,7 +443,7 @@ class AgentLoop(
                         )
                         prepared = contextManager.prepare(
                             requestId = requestId,
-                            request = input.request.copy(
+                            request = modelRequest.copy(
                                 messages = contextTranscript,
                                 localProviderContinuation = providerContinuation,
                             ),
@@ -543,7 +474,7 @@ class AgentLoop(
                 requestOrdinal++
                 val ordinal = requestOrdinal
                 val systemPromptFingerprint = agentSystemPromptFingerprint(prepared.messages)
-                val turnRequest = input.request.copy(
+                val turnRequest = modelRequest.copy(
                     apiKey = apiKeyProvider(checkNotNull(run), input.request),
                     messages = prepared.messages,
                     localProviderContinuation = providerContinuation,
@@ -639,7 +570,7 @@ class AgentLoop(
                             message = "provider context overflow，执行一次紧急压缩后重试",
                         )
                         emit(AppStreamEvent.ExecutionStatusUpdate("上下文超限，正在紧急压缩后重试"))
-                        val emergencyRequest = input.request.copy(
+                        val emergencyRequest = modelRequest.copy(
                             messages = contextTranscript,
                             localProviderContinuation = null,
                         )
@@ -676,7 +607,8 @@ class AgentLoop(
                         }
                     }
 
-                    val isRetryable = turnFailure.isRetryableNetworkError(finishReason) && assistant.canRetryProviderFailure()
+                    // 对齐 Pi：失败 attempt 无论已输出多少都从上下文丢弃后重试，未完成的 Tool Call 不执行。
+                    val isRetryable = turnFailure.isRetryableNetworkError(finishReason)
 
                     if (isRetryable && canRetryProviderAttempt(requestFact.attempt)) {
                         runStore.updateRequest(
@@ -766,7 +698,7 @@ class AgentLoop(
                 nextProviderContinuation?.let { continuation ->
                     runStore.saveContinuation(
                         run = checkNotNull(run),
-                        request = input.request,
+                        request = turnRequest,
                         continuation = continuation,
                         systemPromptFingerprint = systemPromptFingerprint,
                         toolSchemaFingerprint = toolSchemaFingerprint,
@@ -879,7 +811,7 @@ class AgentLoop(
                     emit = { event -> emit(event) },
                     toolLoopGuard = toolLoopGuard,
                     toolExecutionModes = turnRequest.tools.piToolExecutionModes(),
-                    toolDefinitions = turnRequest.tools,
+                    toolDefinitions = input.request.tools,
                 )
                 transcript = toolOutcome.transcript
                 if (toolOutcome.paused) return@flow
@@ -1024,6 +956,7 @@ class AgentLoop(
         emit: suspend (AppStreamEvent) -> Unit,
     ): ModelTurnStreamOutcome {
         val blocks = mutableListOf<AgentContentBlock>()
+        val tail = StreamingTextTail(blocks)
         val turnSourceProtocol = modelParameterProtocol(turnRequest.channel).name
         val toolCalls = linkedMapOf<String, AgentContentBlock.ToolCall>()
         var usage: TokenUsage? = null
@@ -1047,6 +980,7 @@ class AgentLoop(
                 now - lastPartialCheckpointAt < PARTIAL_ASSISTANT_CHECKPOINT_INTERVAL_MILLIS &&
                 partialCharactersSinceCheckpoint < PARTIAL_ASSISTANT_CHECKPOINT_CHARACTERS
             ) return
+            tail.flush()
             runStore.appendAssistant(
                 runId = runId,
                 requestId = requestId,
@@ -1088,7 +1022,10 @@ class AgentLoop(
                     when (event) {
                         is AppStreamEvent.Text -> {
                             if (firstTextAt == null && event.text.isNotBlank()) firstTextAt = System.currentTimeMillis()
-                            blocks.appendText(event.text, sourceProtocol = turnSourceProtocol)
+                            if (!tail.tryAppend(event.text, null, reasoning = false, sourceProtocol = turnSourceProtocol)) {
+                                tail.flush()
+                                blocks.appendText(event.text, sourceProtocol = turnSourceProtocol)
+                            }
                             partialCheckpointDirty = true
                             partialCharactersSinceCheckpoint += event.text.length
                             roundContentBuffer.accept(event)
@@ -1096,8 +1033,10 @@ class AgentLoop(
                         is AppStreamEvent.Content -> {
                             if (firstTextAt == null && event.text.isNotBlank()) firstTextAt = System.currentTimeMillis()
                             if (event.signatureOnlyUpdate) {
+                                tail.flush()
                                 blocks.updateLastTextSignature(event.thoughtSignature, turnSourceProtocol)
-                            } else {
+                            } else if (!tail.tryAppend(event.text, event.thoughtSignature, reasoning = false, sourceProtocol = turnSourceProtocol)) {
+                                tail.flush()
                                 blocks.appendText(event.text, event.thoughtSignature, turnSourceProtocol)
                             }
                             partialCheckpointDirty = true
@@ -1110,12 +1049,14 @@ class AgentLoop(
                         }
                         is AppStreamEvent.Reasoning -> {
                             if (event.signatureOnlyUpdate) {
+                                tail.flush()
                                 blocks.updateLastReasoningSignature(
                                     event.thoughtSignature,
                                     event.redacted,
                                     turnSourceProtocol,
                                 )
-                            } else {
+                            } else if (!tail.tryAppend(event.text, event.thoughtSignature, reasoning = true, event.redacted, turnSourceProtocol)) {
+                                tail.flush()
                                 blocks.appendReasoning(
                                     event.text,
                                     event.thoughtSignature,
@@ -1128,6 +1069,7 @@ class AgentLoop(
                             roundContentBuffer.accept(event)
                         }
                         is AppStreamEvent.ToolCall -> {
+                            tail.flush()
                             val previous = toolCalls[event.id]
                             val call = AgentContentBlock.ToolCall(
                                 id = event.id,
@@ -1137,6 +1079,7 @@ class AgentLoop(
                                 thoughtSignature = event.thoughtSignature ?: previous?.thoughtSignature,
                                 namespace = event.namespace ?: previous?.namespace,
                                 sourceProtocol = turnSourceProtocol,
+                                argumentsError = event.argumentsError,
                             )
                             toolCalls[event.id] = call
                             val existingIndex = blocks.indexOfFirst {
@@ -1197,6 +1140,7 @@ class AgentLoop(
             throw error
         }
 
+        tail.flush()
         blocks.reconcileFinalText(finalText)
         roundContentBuffer.finish(hasToolCalls = toolCalls.isNotEmpty())
         val assistant = AgentAssistantTurn(blocks = blocks, finishReason = finishReason)
@@ -1311,8 +1255,10 @@ class AgentLoop(
             parallelComputerTargets.none { it == null } &&
             parallelComputerTargets.distinct().size == computerCalls.size &&
             computerCalls.all { it.name in ComputerToolNames.all && ComputerToolCallSafety.isReadOnly(it.name, it.arguments) }
+        val declaredTools = McpToolDiscovery.project(toolDefinitions, runStore.loadedMcpToolIds(run.id, requestId))
+        val effectiveModes = toolExecutionModes + declaredTools.piToolExecutionModes()
         val executeWholeBatchSequentially = calls.any { call ->
-            toolExecutionModes[call.name] == "sequential" ||
+            effectiveModes[call.name] == "sequential" ||
                 (call.name in ComputerToolNames.allProviders && !independentComputers) ||
                 call.name in AgentControlToolNames.all
         }
@@ -1334,7 +1280,7 @@ class AgentLoop(
             batch.forEach { call -> runStore.appendToolExecutionStarted(run.id, requestId, call) }
             val containsComputerCall = batch.any { it.name in ComputerToolNames.allProviders }
             if (containsComputerCall) {
-                runStore.updateRunStatus(run, AgentRunStatus.WAITING_REMOTE_EXECUTION)
+                runStore.updateRunStatus(run, AgentRunStatus.EXECUTING_TOOL)
             }
             val results = if (batch.isEmpty()) emptyList() else executeToolCallBatch(
                     calls = batch,
@@ -1369,7 +1315,7 @@ class AgentLoop(
                 continue
             }
             val call = try {
-                PiToolArgumentValidator.prepareAndValidate(rawCall, toolDefinitions)
+                PiToolArgumentValidator.prepareAndValidate(rawCall, declaredTools)
             } catch (error: IllegalArgumentException) {
                 val result = AgentContentBlock.ToolResult(
                     toolCallId = rawCall.id,
@@ -1568,10 +1514,10 @@ class AgentLoop(
             flushParallelCalls()
             runStore.appendToolExecutionStarted(run.id, requestId, call)
             if (call.name in ComputerToolNames.allProviders) {
-                // 先写等待状态，再让 Executor 连接 VPS。进程在此窗口退出时仍可恢复。
-                runStore.updateRunStatus(run, AgentRunStatus.WAITING_REMOTE_EXECUTION)
+                // 先写执行状态，再让 Executor 连接 VPS；进程在此窗口退出时按工具中断收尾。
+                runStore.updateRunStatus(run, AgentRunStatus.EXECUTING_TOOL)
             }
-            val result = executeToolObserved(call, contextualComputerContext, perCallModelResultTokens, run.id, emit)
+            val result = executeToolObserved(call, contextualComputerContext, perCallModelResultTokens, run.id, emit, toolDefinitions)
             val resourceTarget = com.android.everytalk.data.computer.cloudflareResourceTarget(call.name)
                 ?.takeIf { result.requiresCloudflareResourceSelection() }
             if (result.requiresCloudflareReauthorization() || resourceTarget != null) {
@@ -1692,16 +1638,17 @@ class AgentLoop(
                                 computerContext = computerContext,
                                 maxModelResultTokens = maxModelResultTokens,
                                 runId = runId,
-                            ) { event ->
-                                // 多条命令共用稳定的批次状态，单条状态只会造成顶部文字来回闪动。
-                                // 带 Execution ID 的完成事件必须保留，否则 UI 无法把远端结果绑定回工具卡片。
-                                if (event !is AppStreamEvent.ExecutionStatusUpdate ||
-                                    event.toolCallId != null ||
-                                    event.executionId != null
-                                ) {
-                                    eventChannel.send(event)
-                                }
-                            }
+                                emit = { event ->
+                                    // 多条命令共用稳定的批次状态，单条状态只会造成顶部文字来回闪动。
+                                    // 带 Execution ID 的完成事件必须保留，否则 UI 无法把远端结果绑定回工具卡片。
+                                    if (event !is AppStreamEvent.ExecutionStatusUpdate ||
+                                        event.toolCallId != null ||
+                                        event.executionId != null
+                                    ) {
+                                        eventChannel.send(event)
+                                    }
+                                },
+                            )
                         }
                     }
                 }
@@ -1795,8 +1742,8 @@ class AgentLoop(
         )
         runStore.appendToolExecutionStarted(run.id, record.requestId, record.toolCall)
         if (record.toolCall.name in ComputerToolNames.allProviders) {
-            // 审批卡片恢复后的远端调用也必须留下等待状态，进程退出时才能沿同一 Run 对账。
-            runStore.updateRunStatus(run, AgentRunStatus.WAITING_REMOTE_EXECUTION)
+            // 审批卡片恢复后的远端调用同样先写执行状态，进程退出时按工具中断收尾。
+            runStore.updateRunStatus(run, AgentRunStatus.EXECUTING_TOOL)
         }
         val result = executeToolObserved(record.toolCall, approvedContext, maxModelResultTokens, run.id, emit)
         if (record.toolCall.name in ComputerToolNames.allProviders) {
@@ -1807,12 +1754,113 @@ class AgentLoop(
         )
     }
 
+    /** 审批恢复独立成协程，避免主循环生成字节码超过 JVM 单方法上限。 */
+    private suspend fun resumeApprovedBatch(
+        run: AgentRunEntity,
+        input: AgentLoopRequest,
+        initialTranscript: List<com.android.everytalk.data.DataClass.AbstractApiMessage>,
+        toolLoopGuard: ToolLoopGuard,
+        emit: suspend (AppStreamEvent) -> Unit,
+    ): ToolBatchOutcome {
+        var transcript = initialTranscript
+        val resumedApproval = input.approvalDecision
+        if (resumedApproval != null) {
+            runStore.updateRunStatus(run, AgentRunStatus.EXECUTING_TOOL)
+            if (resumedApproval.resumeWholeBatchWithApprovedGate) {
+                val replay = executeToolCallsUntilApproval(
+                    run = run,
+                    requestId = resumedApproval.requestId,
+                    calls = resumedApproval.pendingToolCalls,
+                    transcript = transcript,
+                    computerContext = input.request.localComputerRequestContext,
+                    maxModelResultTokens = (input.tokenLimits.maxContextTokens.toLong() / 4L).coerceAtLeast(64L),
+                    emit = { event -> emit(event) },
+                    toolLoopGuard = toolLoopGuard,
+                    toolExecutionModes = input.request.tools.piToolExecutionModes(),
+                    toolDefinitions = input.request.tools,
+                    approvedGate = resumedApproval,
+                )
+                transcript = replay.transcript
+                if (replay.paused) return ToolBatchOutcome(transcript, paused = true)
+                emit(AppStreamEvent.ExecutionStatusUpdate("正在分析工具结果"))
+            } else {
+                val currentResultAlreadyPersisted = runStore.finalToolResult(
+                    runId = run.id,
+                    requestId = resumedApproval.requestId,
+                    toolCallId = resumedApproval.toolCall.id,
+                ) != null
+                val resumedPendingCalls = if (resumedApproval.resumePendingToolCallsOnly) {
+                    resumedApproval.pendingToolCalls
+                } else if (resumedApproval.toolResultAlreadyPersisted) {
+                    emptyList()
+                } else if (currentResultAlreadyPersisted) {
+                    resumedApproval.pendingToolCalls
+                        .dropWhile { call -> call.id != resumedApproval.toolCall.id }
+                        .drop(1)
+                } else {
+                    if (resumedApproval.decision in setOf(AgentApprovalDecision.APPROVED, AgentApprovalDecision.RETRY)) {
+                        toolLoopGuard.record(resumedApproval.toolCall)?.let { reason -> throw AgentToolLoopException(reason) }
+                    }
+                    val handled = executeApprovedOrRejectedTool(
+                        run = run,
+                        record = resumedApproval,
+                        baseContext = input.request.localComputerRequestContext,
+                        maxModelResultTokens = (input.tokenLimits.maxContextTokens.toLong() / 4L).coerceAtLeast(64L),
+                        emit = { event -> emit(event) },
+                    )
+                    if (handled.result.isUnknownExecution()) {
+                        val unknownApproval = toolRuntime.approvalRequest(
+                            resumedApproval.toolCall,
+                            input.request.localComputerRequestContext,
+                            ComputerToolApprovalPhase.RETRY_UNKNOWN,
+                        )
+                        if (unknownApproval != null) {
+                            val record = AgentApprovalRecord(
+                                approvalRequestId = UUID.randomUUID().toString(),
+                                requestId = resumedApproval.requestId,
+                                toolCall = resumedApproval.toolCall,
+                                pendingToolCalls = resumedApproval.pendingToolCalls,
+                                request = unknownApproval,
+                            )
+                            runStore.pauseForApproval(run, record)
+                            emit(AppStreamEvent.ExecutionStatusUpdate("执行结果未知，等待你的决定"))
+                            emit(AppStreamEvent.AgentApprovalRequired(run.id, record.approvalRequestId))
+                            return ToolBatchOutcome(transcript, paused = true)
+                        }
+                    }
+                    runStore.appendToolResult(run.id, resumedApproval.requestId, handled.result)
+                    transcript = transcript + handled.result.toApiMessage()
+                    resumedApproval.pendingToolCalls
+                        .dropWhile { call -> call.id != resumedApproval.toolCall.id }
+                        .drop(1)
+                }
+                val pause = executeToolCallsUntilApproval(
+                    run = run,
+                    requestId = resumedApproval.requestId,
+                    calls = resumedPendingCalls,
+                    transcript = transcript,
+                    computerContext = input.request.localComputerRequestContext,
+                    maxModelResultTokens = (input.tokenLimits.maxContextTokens.toLong() / 4L).coerceAtLeast(64L),
+                    emit = { event -> emit(event) },
+                    toolLoopGuard = toolLoopGuard,
+                    toolExecutionModes = input.request.tools.piToolExecutionModes(),
+                    toolDefinitions = input.request.tools,
+                )
+                transcript = pause.transcript
+                if (pause.paused) return ToolBatchOutcome(transcript, paused = true)
+                emit(AppStreamEvent.ExecutionStatusUpdate("正在分析工具结果"))
+            }
+        }
+        return ToolBatchOutcome(transcript, paused = false)
+    }
+
     private suspend fun executeToolObserved(
         call: AgentContentBlock.ToolCall,
         computerContext: ComputerRequestContext?,
         maxModelResultTokens: Long,
         runId: String,
         emit: suspend (AppStreamEvent) -> Unit,
+        toolDefinitions: List<Map<String, Any>>? = null,
     ): AgentContentBlock.ToolResult {
         val target = runCatching { resolveComputerToolContext(call.name, call.arguments, computerContext) }.getOrNull()
         emit(AppStreamEvent.ExecutionStatusUpdate(
@@ -1827,8 +1875,22 @@ class AgentLoop(
                 toolName = call.name,
             ),
         )
+        val executionStartedAt = System.nanoTime()
+        fun executionDurationMs() = ((System.nanoTime() - executionStartedAt) / 1_000_000L).coerceAtLeast(0L)
         return try {
-            val result = if (call.name == com.android.everytalk.data.memory.MemoryTool.NAME) {
+            val executed = if (call.name == AgentToolResultReadTool.NAME) {
+                val content = try {
+                    val id = (call.arguments["tool_call_id"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull.orEmpty()
+                    require(id.isNotBlank()) { "tool_call_id 无效" }
+                    val saved = runStore.archivedToolResult(runId, id)
+                    AgentToolResultReadTool.page(toolRuntime.readArchivedResult(runId, saved), call.arguments, maxModelResultTokens)
+                } catch (error: CancellationException) { throw error } catch (error: Exception) {
+                    kotlinx.serialization.json.buildJsonObject { put("ok", false); put("error", error.message ?: "归档读取失败") }
+                }
+                AgentContentBlock.ToolResult(call.id, call.name, content, isError = content["ok"] == kotlinx.serialization.json.JsonPrimitive(false))
+            } else if (call.name == McpToolDiscovery.NAME) {
+                McpToolDiscovery.search(call, toolDefinitions)
+            } else if (call.name == com.android.everytalk.data.memory.MemoryTool.NAME) {
                 val content = memoryCoordinator?.execute(runId, call.arguments)
                     ?: kotlinx.serialization.json.buildJsonObject { put("ok", false); put("error", "记忆运行时未初始化") }
                 AgentContentBlock.ToolResult(
@@ -1836,6 +1898,8 @@ class AgentLoop(
                     content = content,
                     isError = (content as? JsonObject)?.get("ok") == kotlinx.serialization.json.JsonPrimitive(false),
                 )
+            } else if (call.name == CodemodeTool.NAME && codemodeEngine != null) {
+                executeCodemode(call, computerContext, maxModelResultTokens, runId, toolDefinitions, emit)
             } else toolRuntime.execute(call, computerContext, maxModelResultTokens, runId) { event ->
                 if (event is AppStreamEvent.ExecutionStatusUpdate && event.status != null) {
                     lifecycleSink(
@@ -1849,6 +1913,7 @@ class AgentLoop(
                 }
                 emit(event)
             }
+            val result = executed.copy(durationMs = executionDurationMs())
             lifecycleSink(
                 AgentLifecycleEvent(
                     phase = AgentLifecyclePhase.TOOL_EXECUTION_END,
@@ -1856,6 +1921,7 @@ class AgentLoop(
                     toolCallId = call.id,
                     toolName = call.name,
                     isError = result.isError,
+                    durationMs = result.durationMs,
                 ),
             )
             emit(AppStreamEvent.ExecutionStatusUpdate(
@@ -1863,6 +1929,7 @@ class AgentLoop(
                 computerId = target?.computerId.takeIf { call.name in ComputerToolNames.allProviders },
                 isError = result.isError,
                 resultPreview = result.content.toString().take(4_000),
+                durationMs = result.durationMs,
             ))
             result
         } catch (error: CancellationException) {
@@ -1874,11 +1941,102 @@ class AgentLoop(
                         toolCallId = call.id,
                         toolName = call.name,
                         isError = true,
+                        durationMs = executionDurationMs(),
                     ),
                 )
             }
             throw error
         }
+    }
+
+    /**
+     * 运行 codemode 脚本。嵌套调用与直接调用走同一套参数校验和审批预检：
+     * 需要审批的工具不能在脚本里运行，让模型改为直接调用，审批不会被绕过；
+     * 修改服务器的调用串行执行，只读调用最多 4 个并发。
+     */
+    private suspend fun executeCodemode(
+        call: AgentContentBlock.ToolCall,
+        computerContext: ComputerRequestContext?,
+        maxModelResultTokens: Long,
+        runId: String,
+        toolDefinitions: List<Map<String, Any>>?,
+        emit: suspend (AppStreamEvent) -> Unit,
+    ): AgentContentBlock.ToolResult {
+        val code = (call.arguments["code"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull.orEmpty()
+        val callable = CodemodeTool.callableTools(toolDefinitions)
+        val callableNames = callable.map(CodemodeToolInfo::name).toSet()
+        val serialLock = kotlinx.coroutines.sync.Mutex()
+        val nestedIds = java.util.concurrent.atomic.AtomicInteger()
+
+        suspend fun runNested(name: String, args: JsonObject): Pair<Boolean, kotlinx.serialization.json.JsonElement> {
+            if (name !in callableNames) {
+                return false to kotlinx.serialization.json.JsonPrimitive("Tool \"$name\" is not callable from codemode")
+            }
+            val nested = AgentContentBlock.ToolCall(
+                id = "${call.id}__cm${nestedIds.incrementAndGet()}",
+                name = name,
+                arguments = args,
+            )
+            val prepared = try {
+                PiToolArgumentValidator.prepareAndValidate(nested, toolDefinitions)
+            } catch (error: IllegalArgumentException) {
+                return false to kotlinx.serialization.json.JsonPrimitive(error.message ?: "工具参数校验失败")
+            }
+            val approval = try {
+                toolRuntime.approvalRequest(prepared, computerContext)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                return false to kotlinx.serialization.json.JsonPrimitive(error.message ?: "工具参数无效")
+            }
+            if (approval != null) {
+                return false to kotlinx.serialization.json.JsonPrimitive(
+                    "Tool \"$name\" needs the user's approval and cannot run inside codemode; call it directly instead.",
+                )
+            }
+            suspend fun execute(): AgentContentBlock.ToolResult =
+                if (prepared.name == com.android.everytalk.data.memory.MemoryTool.NAME) {
+                    val content = memoryCoordinator?.execute(runId, prepared.arguments)
+                        ?: kotlinx.serialization.json.buildJsonObject { put("ok", false); put("error", "记忆运行时未初始化") }
+                    AgentContentBlock.ToolResult(
+                        toolCallId = prepared.id, toolName = prepared.name, content = content,
+                        isError = (content as? JsonObject)?.get("ok") == kotlinx.serialization.json.JsonPrimitive(false),
+                    )
+                } else {
+                    toolRuntime.execute(prepared, computerContext, runId = runId, forScript = true) { event ->
+                        // 嵌套调用没有对应的工具卡片，只转发全局状态文字。
+                        if (event is AppStreamEvent.ExecutionStatusUpdate && event.toolCallId == null && event.executionId == null) {
+                            emit(event)
+                        }
+                    }
+                }
+            val result = if (canRunToolCallInParallel(prepared)) execute() else serialLock.withLock { execute() }
+            return !result.isError to result.content
+        }
+
+        val outcome = try {
+            requireNotNull(codemodeEngine).open().use { isolate ->
+                CodemodeTool.run(
+                    code = code,
+                    isolate = isolate,
+                    callable = callable,
+                    store = runStore.codemodeStore(runId),
+                    maxModelResultTokens = maxModelResultTokens,
+                    callTool = ::runNested,
+                )
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            CodemodeOutcome("Script failed\nScript error: codemode is unavailable: ${error.message ?: error.javaClass.simpleName}", isError = true)
+        }
+        return AgentContentBlock.ToolResult(
+            toolCallId = call.id,
+            toolName = call.name,
+            content = kotlinx.serialization.json.JsonPrimitive(outcome.text),
+            isError = outcome.isError,
+            codemodeStoreDelta = outcome.storeDelta,
+        )
     }
 
     private fun AgentAssistantTurn.toApiMessage(
@@ -2336,6 +2494,44 @@ private fun MutableList<AgentContentBlock>.appendReasoning(
     }
 }
 
+/**
+ * Pi #9265：连续正文/思考增量先进 StringBuilder，读取 blocks 前再并回尾块，避免每段增量复制整段文字。
+ * 只接管无签名、同类型、同协议的增量；其余情况由调用方 flush 后走原有合并规则。
+ */
+private class StreamingTextTail(private val blocks: MutableList<AgentContentBlock>) {
+    private val pending = StringBuilder()
+
+    fun tryAppend(
+        text: String,
+        signature: String?,
+        reasoning: Boolean,
+        redacted: Boolean = false,
+        sourceProtocol: String?,
+    ): Boolean {
+        if (!signature.isNullOrEmpty()) return false
+        val last = blocks.lastOrNull()
+        val mergeable = if (reasoning) {
+            last is AgentContentBlock.Reasoning && !last.redacted && !redacted &&
+                (sourceProtocol == null || sourceProtocol == last.sourceProtocol)
+        } else {
+            last is AgentContentBlock.Text && (sourceProtocol == null || sourceProtocol == last.sourceProtocol)
+        }
+        if (mergeable) pending.append(text)
+        return mergeable
+    }
+
+    fun flush() {
+        if (pending.isEmpty()) return
+        val index = blocks.lastIndex
+        blocks[index] = when (val last = blocks[index]) {
+            is AgentContentBlock.Text -> last.copy(text = last.text + pending)
+            is AgentContentBlock.Reasoning -> last.copy(text = last.text + pending)
+            else -> error("StreamingTextTail 尾块不是正文或思考")
+        }
+        pending.clear()
+    }
+}
+
 /** 两个不同的非空签名代表不同 Provider 块；其余情况允许把晚到签名并回当前块。 */
 private fun signaturesBelongToSameStreamBlock(previous: String?, incoming: String?): Boolean =
     previous.isNullOrEmpty() || incoming.isNullOrEmpty() || previous == incoming
@@ -2374,21 +2570,46 @@ private fun AppStreamEvent.isMeaningfulModelEvent(): Boolean = when (this) {
 }
 
 /** 压缩请求和普通模型请求共用同一套临时网络错误判定。 */
-private fun AppStreamEvent.Error.isRetryableNetworkError(finishReason: String?): Boolean =
-    type == "retryable_network" || code == "connection_aborted" || finishReason == "connection_failed"
-
-/**
- * 对齐 Pi 的 Provider retry 边界。收到任何真实正文、推理或 Tool Call 后再次请求会重复生成，
- * 因此只能保留 PARTIAL 并明确失败，不能自动重放同一模型轮。
- */
-private fun AgentAssistantTurn.canRetryProviderFailure(): Boolean = blocks.none { block ->
-    when (block) {
-        is AgentContentBlock.Text -> block.text.isNotEmpty()
-        is AgentContentBlock.Reasoning -> block.text.isNotEmpty()
-        is AgentContentBlock.ToolCall -> true
-        is AgentContentBlock.ToolResult -> false
-    }
+private fun AppStreamEvent.Error.isRetryableNetworkError(finishReason: String?): Boolean {
+    val text = listOfNotNull(message, rawMessage, code).joinToString(" ")
+    if (PI_NON_RETRYABLE_LIMIT_ERROR.containsMatchIn(text)) return false
+    return type == "retryable_network" || code == "connection_aborted" || finishReason == "connection_failed" ||
+        PI_RETRYABLE_PROVIDER_ERROR.containsMatchIn(text)
 }
+
+/** 同步自 Pi packages/ai/src/utils/retry.ts（v1.5.2）：额度/账单耗尽要几小时才恢复，不重试。 */
+private val PI_NON_RETRYABLE_LIMIT_ERROR = Regex(
+    listOf(
+        "GoUsageLimitError", "FreeUsageLimitError", "Monthly usage limit reached", "available balance",
+        "insufficient_quota", "out of budget", "quota exceeded", "billing",
+        "subscription_sharing_usage_limit_exceeded", "subscription_sharing_workplace_individual_usage_limit_exceeded",
+        "\"code\"\\s*:\\s*\"?1308(?![0-9])",
+    ).joinToString("|"),
+    RegexOption.IGNORE_CASE,
+)
+
+/** 同步自 Pi packages/ai/src/utils/retry.ts（v1.5.2）：流内错误事件只有文字，按文字识别网关与传输层的临时故障。 */
+private val PI_RETRYABLE_PROVIDER_ERROR = Regex(
+    listOf(
+        "overloaded", "server_busy", "servers are currently busy", "currently experiencing high demand",
+        "model is at capacity", "rate.?limit", "too many requests",
+        "(?<![a-z0-9])(?:429|500|502|503|504|520|524)(?![a-z0-9])",
+        "service.?(?:is.?)?(?:temporarily.?)?unavailable", "server.?error", "internal.?error",
+        "provider.?returned.?(?:an.?)?error", "exceeded request buffer limit while retrying upstream",
+        "unable to forward upstream", "upstream.?request.?failed", "upstream_stream_read_error",
+        "stream was interrupted", "http/?2 stream failed",
+        "network.?error", "connection.?error", "connection.?refused", "connection.?lost", "other side closed",
+        "fetch failed", "request to \\S+ failed, reason:", "getaddrinfo", "ENOTFOUND", "EAI_AGAIN",
+        "upstream.?connect", "reset before headers", "socket hang up", "socket connection was closed",
+        "timed? out", "timeout", "terminated", "websocket.?closed", "websocket.?error",
+        "ended without", "stream ended before message_stop", "stream ended before a terminal response event",
+        "http2 request did not get a response", "stream disconnected before completion",
+        "cut short after the reply had begun", "pending stream has been canceled", "retry delay",
+        "you can retry your request", "try your request again", "please retry your request",
+        "ResourceExhausted", "subscription_sharing_usage_unavailable", "subscription_sharing_user_unavailable",
+    ).joinToString("|"),
+    RegexOption.IGNORE_CASE,
+)
 
 /** 兼容 Pi 的 executionMode，同时接受 Kotlin 工具定义常用的 snake_case 写法。 */
 private fun List<Map<String, Any>>?.piToolExecutionModes(): Map<String, String> =

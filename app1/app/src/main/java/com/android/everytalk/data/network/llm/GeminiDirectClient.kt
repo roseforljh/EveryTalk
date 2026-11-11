@@ -220,7 +220,7 @@ object GeminiDirectClient {
                                         put("description", description)
                                         // parametersJsonSchema 接受完整 JSON Schema，保留可选字段、
                                         // anyOf 和 additionalProperties，避免有损转换后改变工具含义。
-                                        if (parameters != null) put("parametersJsonSchema", convertToJsonElement(parameters))
+                                        if (parameters != null) put("parametersJsonSchema", rewriteConstAsEnum(convertToJsonElement(parameters)))
                                     }
                                     Log.d(TAG, "🔧 添加 MCP 工具: $name")
                                 }
@@ -624,3 +624,36 @@ private data class GeminiToolCall(
     val name: String,
     val arguments: JsonObject,
 )
+
+private val JSON_SCHEMA_NAME_MAPS = setOf(
+    "properties", "patternProperties", "\$defs", "definitions", "dependentSchemas", "dependencies",
+)
+private val JSON_SCHEMA_SUBSCHEMAS = setOf(
+    "additionalProperties", "unevaluatedProperties", "propertyNames", "items", "prefixItems", "additionalItems",
+    "unevaluatedItems", "contains", "allOf", "anyOf", "oneOf", "not", "if", "then", "else", "contentSchema",
+)
+
+/**
+ * 同步自 Pi google-shared.ts（v1.5.2）：Gemini 的 parametersJsonSchema 不接受 const，
+ * 字符串和数字 const 改写成单值 enum；属性名映射里的同名字段不是关键字，不能改。
+ */
+internal fun rewriteConstAsEnum(schema: JsonElement, isNameMap: Boolean = false): JsonElement = when (schema) {
+    is JsonArray -> JsonArray(schema.map { rewriteConstAsEnum(it) })
+    is JsonObject -> {
+        val result = schema.mapValuesTo(LinkedHashMap()) { (key, value) ->
+            when {
+                isNameMap || key in JSON_SCHEMA_SUBSCHEMAS -> rewriteConstAsEnum(value)
+                key in JSON_SCHEMA_NAME_MAPS -> rewriteConstAsEnum(value, isNameMap = true)
+                else -> value
+            }
+        }
+        val constValue = result["const"] as? JsonPrimitive
+        val stringOrNumber = constValue != null && (constValue.isString || constValue.doubleOrNull != null)
+        if (!isNameMap && stringOrNumber && result["enum"] == null) {
+            result.remove("const")
+            result["enum"] = JsonArray(listOf(checkNotNull(constValue)))
+        }
+        JsonObject(result)
+    }
+    else -> schema
+}
