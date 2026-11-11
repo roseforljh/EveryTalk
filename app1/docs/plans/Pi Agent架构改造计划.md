@@ -4,8 +4,14 @@
 > 记录日期：2026-09-03
 > 适用工程：app1/
 > 参考项目：earendil-works/pi
-> 参考提交：b8b873b9872db04a938fb4357b5e8e824ddc051c
-> 参考包：@earendil-works/pi-agent-core 0.84.1
+> 当前参考：pi v1.5.2（b4afdddf44e059c67ccf5097e5317d913521b470，2026-11-10 同步 packages/agent 与 packages/ai）；选择性移植，不代表完整功能对齐
+>
+> 2026-11-10 补充：结构化 HTTP 413 与供应商超窗分类、纯文本错误保留；MCP 根 `$defs` 保真、引用有界校验与整数精度；客户端工具执行耗时的实时/恢复显示；超过 24 个 MCP 工具时按需发现并在下一轮声明；Codemode 成功状态随 ToolResult 同条提交、Run 级重建和 JSON 大小限制。
+>
+> 2026-11-10 工具底层补充：模型工具回填仍受 8192 token 总预算限制，Codemode 嵌套结果改为独立 1 MiB UTF-8 JSON 硬限，MCP 结构化数据与协议错误标志沿受信结果传递。新增当前 Run 内 `tool_result_read` 字符分页，读取前校验归档大小和 SHA-256；归档文件名包含内容摘要，重复调用 ID 的歧义拒绝读取。MCP 网络等待移出连接锁，保留重连/撤权复核、失败不重放、完整请求超时；普通 HTTP SSE 响应保留原请求 ID。
+>
+> 验证分开记录：可控模型的 AgentLoop/Room 端到端与真机 JavaScriptSandbox 集成不等于真实上游模型/服务器验收。Codemode 不支持运行中 JS 透明断点恢复，未提交成功回执的外部副作用必须先核对，不能自动重跑。
+> 初始移植基线：pi-agent-core 0.84.1（b8b873b9872db04a938fb4357b5e8e824ddc051c），下文链接仍指向该基线
 > 许可证：MIT
 > 改造性质：Android 本地架构重构，不新增 EveryTalk 后端
 
