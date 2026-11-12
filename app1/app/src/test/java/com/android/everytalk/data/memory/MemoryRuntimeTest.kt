@@ -41,7 +41,7 @@ class MemoryRuntimeTest {
         repository.save("用户喜欢中文回答", MemoryCategory.USER_PREFERENCE)
         repository.setSettings(true)
         var extractionCalls = 0
-        val coordinator = MemoryCoordinator(database, scope) { extractionCalls++; """{"memories":[]}""" }
+        val coordinator = MemoryCoordinator(database, scope) { extractionCalls++; MemoryModelReply("""{"memories":[]}""") }
         for (channel in listOf("OpenAI兼容", "Gemini", "Anthropic")) {
             var sent: ChatRequest? = null
             val input = input(channel, "普通问题")
@@ -94,7 +94,7 @@ class MemoryRuntimeTest {
 
     @Test fun `real agent tool cycle writes memory before final answer and next conversation sees it`() = runBlocking {
         repository.setSettings(true)
-        val coordinator = MemoryCoordinator(database, scope) { """{"memories":[]}""" }
+        val coordinator = MemoryCoordinator(database, scope) { MemoryModelReply("""{"memories":[]}""") }
         val input = input("OpenAI兼容", "请记住：我喜欢中文回答")
         var turns = 0
         val loop = AgentLoop(AgentRunStore(database.agentDao()), memoryCoordinator = coordinator,
@@ -124,7 +124,7 @@ class MemoryRuntimeTest {
         val state = repository.state()
         val prompt = MemoryPromptRenderer.render(state.entries, "中文", 900)
         assertTrue(prompt.memoryCharacters() <= 900)
-        assertTrue(prompt.contains("未展示"))
+        assertTrue(prompt.contains("partly hidden"))
         assertEquals(prompt, MemoryPromptRenderer.render(state.entries.reversed(), "中文", 900))
         val original = listOf(SimpleTextApiMessage(role = "system", content = "稳定规则"), SimpleTextApiMessage(role = "user", content = "问题"))
         val injected = MemoryPromptRenderer.inject(original, prompt)
@@ -135,85 +135,6 @@ class MemoryRuntimeTest {
         assertEquals("call", sanitized.toolCallId)
         assertFalse(sanitized.content.toString().contains("长期秘密"))
         assertFalse(compactAgentToolResultForCompaction(oldResult).contains("长期秘密"))
-    }
-
-    @Test fun `only completed persisted turns trigger one tool-free extraction`() = runBlocking {
-        repository.setSettings(true)
-        var calls = 0
-        val coordinator = MemoryCoordinator(database, scope) { request ->
-            calls++
-            assertNull(request.tools)
-            assertNull(request.localMemorySnapshot)
-            assertNull(request.localComputerRequestContext)
-            """{"memories":[{"content":"用户喜欢中文回答","category":"USER_PREFERENCE","evidence":"我喜欢中文回答"}]}"""
-        }
-        val input = input("OpenAI兼容", "我喜欢中文回答")
-        val loop = AgentLoop(AgentRunStore(database.agentDao()), memoryCoordinator = coordinator,
-            modelTransport = ModelTurnTransport { flowOf(AppStreamEvent.Content("知道了"), AppStreamEvent.Finish("stop")) })
-        loop.run(input).toList()
-        withTimeout(5_000) { while (repository.state().entries.isEmpty()) delay(20) }
-        assertEquals(1, calls)
-        assertEquals(MemoryOrigin.AUTO.name, repository.state().entries.single().origin)
-        val run = checkNotNull(database.agentDao().getRunByVisibleMessage(input.visibleAssistantMessageId))
-        val second = coordinator.prepare(input)
-        coordinator.bind(run.id, second.request.localMemorySnapshot)
-        coordinator.finished(run, input.request)
-        joinBackground()
-        assertEquals(1, calls)
-        database.chatDao().deleteSession(input.sessionId)
-        assertEquals(1, repository.state().entries.size)
-        assertNull(repository.sourceTitle(input.sessionId))
-    }
-
-    @Test fun `clear cancels late extraction write and failed or cancelled runs do not extract`() = runBlocking {
-        repository.setSettings(true)
-        val started = CompletableDeferred<Unit>()
-        val release = CompletableDeferred<Unit>()
-        var calls = 0
-        val coordinator = MemoryCoordinator(database, scope) {
-            calls++; started.complete(Unit); release.await()
-            """{"memories":[{"content":"用户喜欢中文回答","category":"USER_PREFERENCE","evidence":"我喜欢中文回答"}]}"""
-        }
-        val loop = AgentLoop(AgentRunStore(database.agentDao()), memoryCoordinator = coordinator,
-            modelTransport = ModelTurnTransport { flowOf(AppStreamEvent.Content("知道了"), AppStreamEvent.Finish("stop")) })
-        loop.run(input("OpenAI兼容", "我喜欢中文回答")).toList()
-        withTimeout(5_000) { started.await() }
-        repository.clear(); release.complete(Unit); joinBackground()
-        assertTrue(repository.state().entries.isEmpty())
-        val failedLoop = AgentLoop(AgentRunStore(database.agentDao()), memoryCoordinator = coordinator,
-            modelTransport = ModelTurnTransport { flowOf(AppStreamEvent.Error("测试失败", type = "provider_error"), AppStreamEvent.Finish("error")) })
-        failedLoop.run(input("OpenAI兼容", "我喜欢中文回答")).toList()
-        val cancelledLoop = AgentLoop(AgentRunStore(database.agentDao()), memoryCoordinator = coordinator,
-            modelTransport = ModelTurnTransport { flow { emit(AppStreamEvent.Content("半段")); throw CancellationException("测试取消") } })
-        try { cancelledLoop.run(input("OpenAI兼容", "我喜欢中文回答")).toList() } catch (_: CancellationException) { }
-        joinBackground()
-        assertEquals(1, calls)
-    }
-
-    @Test fun `conflicting automatic memory preserves old fact and waits disabled for review`() = runBlocking {
-        val old = repository.save("用户喜欢中文回答", MemoryCategory.USER_PREFERENCE)
-        repository.setSettings(true)
-        val coordinator = MemoryCoordinator(database, scope) { request ->
-            assertTrue(request.messages.toString().contains(old.id))
-            """{"memories":[{"content":"用户喜欢英文回答","category":"USER_PREFERENCE","evidence":"我喜欢英文回答","conflictsWithId":"${old.id}"}]}"""
-        }
-        val loop = AgentLoop(AgentRunStore(database.agentDao()), memoryCoordinator = coordinator,
-            modelTransport = ModelTurnTransport { flowOf(AppStreamEvent.Content("知道了"), AppStreamEvent.Finish("stop")) })
-        loop.run(input("OpenAI兼容", "我喜欢英文回答")).toList()
-        withTimeout(5_000) { while (repository.state().entries.size < 2) delay(20) }
-        val entries = repository.state().entries
-        assertEquals(old.content, entries.single { it.id == old.id }.content)
-        assertTrue(entries.single { it.id == old.id }.enabled)
-        assertFalse(entries.single { it.id != old.id }.enabled)
-        assertTrue(repository.search("英文", forModel = true).isEmpty())
-    }
-
-    @Test fun `extraction rejects hallucinated evidence malformed output and secrets`() {
-        listOf("not json", """{"memories":[{"content":"无来源","category":"OTHER","evidence":"不存在"}]}""",
-            """{"memories":[{"content":"密码：12345","category":"OTHER","evidence":"中文"}]}""").forEach {
-            try { MemoryCoordinator.parseCandidates(it, "中文"); fail("应拒绝无效候选") } catch (_: Exception) { }
-        }
-        assertTrue(MemoryCoordinator.parseCandidates("""{"memories":[]}""", "中文").isEmpty())
     }
 
     @Test fun `long memories remain readable in other chats and tool pagination covers full content`() = runBlocking {
@@ -283,8 +204,9 @@ class MemoryRuntimeTest {
         val result = tool.execute(historyArguments("唯一_%关键词", "2026-10-24", "2026-10-24"), snapshot("昨天的方案是什么？")).jsonObject
         assertEquals(JsonPrimitive(true), result["ok"])
         assertEquals(listOf("end", "begin"), result.getValue("messages").jsonArray.map { it.jsonObject.getValue("message_id").jsonPrimitive.content })
+        // 标题命中单独列出，模型再用 conversation_id 读取整段上下文。
         val byTitle = tool.execute(historyArguments("项目决策", "2026-10-24", "2026-10-24"), snapshot("项目决策")).jsonObject
-        assertEquals(2, byTitle.getValue("messages").jsonArray.size)
+        assertEquals(listOf("old"), byTitle.getValue("matching_conversations").jsonArray.map { it.jsonObject.getValue("conversation_id").jsonPrimitive.content })
         val noMatches = tool.execute(historyArguments("唯一_Z关键词"), snapshot("没有这个关键词")).jsonObject
         assertTrue(noMatches.getValue("messages").jsonArray.isEmpty())
         val byDate = tool.execute(historyArguments(start = "2026-10-24", end = "2026-10-24"), snapshot("昨天说过什么")).jsonObject
@@ -359,7 +281,7 @@ class MemoryRuntimeTest {
     @Test fun `agent proactively receives history search guidance without saved memories and can use results`() = runBlocking {
         repository.setSettings(true)
         history("earlier", "迁移方案", listOf(Message(id = "decision", sender = Sender.User, text = "迁移方案最终选择分批执行")))
-        val coordinator = MemoryCoordinator(database, scope) { """{"memories":[]}""" }
+        val coordinator = MemoryCoordinator(database, scope) { MemoryModelReply("""{"memories":[]}""") }
         val input = input("OpenAI兼容", "之前说的迁移方案最后选了什么？")
         var turns = 0
         val loop = AgentLoop(AgentRunStore(database.agentDao()), memoryCoordinator = coordinator,
@@ -368,7 +290,7 @@ class MemoryRuntimeTest {
                 val prompt = turn.request.messages.filterIsInstance<SimpleTextApiMessage>().first { it.role == "system" }.content
                 assertTrue(prompt.contains(input.sessionId))
                 assertTrue(prompt.contains("timezone"))
-                assertTrue(prompt.contains("先自行调用"))
+                assertTrue(prompt.contains("search_conversations"))
                 if (turns == 1) flowOf(AppStreamEvent.ToolCall("history-call", MemoryTool.NAME,
                     historyArguments("迁移方案")), AppStreamEvent.Finish("tool_calls"))
                 else {

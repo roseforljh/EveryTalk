@@ -67,10 +67,10 @@ internal class FakeSyncApi : SyncApi {
                 change.entity == "user_settings" && change.payload["kind"]?.jsonPrimitive?.content !in setOf(
                     "api_configs", "selected_models", "web_search_configs", "voice_configs", "voice_llm_platforms",
                     "voice_custom_models", "mcp_servers", "skills", "skill_variables", "computers", "computer_workspaces",
-                    "conversation_settings", "memory_switches", "group_members", "pinned_items", "crypto_keys",
+                    "conversation_settings", "memory_switches", "group_members", "pinned_items", "crypto_keys", "memory_documents",
                 ) -> "INVALID_USER_SETTING_KIND"
                 change.entity == "user_settings" && change.payload["kind"]?.jsonPrimitive?.content in setOf(
-                    "mcp_servers", "computer_workspaces", "computers", "voice_configs", "conversation_settings", "pinned_items",
+                    "mcp_servers", "computer_workspaces", "computers", "voice_configs", "conversation_settings", "pinned_items", "memory_documents",
                 ) && !Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}").matches(
                     change.payload["key"]?.jsonPrimitive?.content.orEmpty(),
                 ) -> "INVALID_USER_SETTING"

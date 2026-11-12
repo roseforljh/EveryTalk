@@ -11,6 +11,30 @@ import kotlinx.coroutines.flow.Flow
 /** DAO 仅操作记忆表；容量和权限由 Repository 在同一事务内校验。 */
 @Dao
 interface MemoryDao {
+    @Query("SELECT * FROM memory_documents WHERE kind = :kind ORDER BY sourceUpdatedAt DESC, id ASC")
+    suspend fun getDocuments(kind: String): List<com.android.everytalk.data.database.entities.MemoryDocumentEntity>
+
+    @Query("SELECT * FROM memory_documents WHERE id = :id")
+    suspend fun getDocument(id: String): com.android.everytalk.data.database.entities.MemoryDocumentEntity?
+
+    @Query("SELECT * FROM memory_documents WHERE kind = :kind AND length(content) > 0 ORDER BY sourceUpdatedAt DESC, id ASC")
+    fun observeDocuments(kind: String): Flow<List<com.android.everytalk.data.database.entities.MemoryDocumentEntity>>
+
+    @Query("SELECT * FROM memory_documents WHERE id = :id")
+    fun observeDocument(id: String): Flow<com.android.everytalk.data.database.entities.MemoryDocumentEntity?>
+
+    @androidx.room.Upsert
+    suspend fun upsertDocument(document: com.android.everytalk.data.database.entities.MemoryDocumentEntity)
+
+    @Query("SELECT COUNT(CASE WHEN kind = 'conversation' AND length(content) > 0 THEN 1 END) AS conversations, COALESCE(MAX(generatedAt), 0) AS lastGeneratedAt FROM memory_documents")
+    fun observeDocumentStats(): Flow<MemoryDocumentStats>
+
+    @Query("DELETE FROM memory_documents WHERE id = :id")
+    suspend fun deleteDocument(id: String)
+
+    @Query("DELETE FROM memory_documents")
+    suspend fun clearDocuments()
+
     @Query("UPDATE memories SET sync_status = 'LOCAL_ONLY'")
     suspend fun keepAllLocal()
 

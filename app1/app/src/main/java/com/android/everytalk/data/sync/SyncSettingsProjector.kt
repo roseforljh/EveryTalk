@@ -82,7 +82,7 @@ internal class SyncSettingsProjector(
         } ?: userId?.let { secrets?.cachedKeyVersion(it, secretsEpoch) }
         database.apiConfigDao().getConfigs(false).forEach { upsert("api_configs", it.id, configValue(it)) }
         database.apiConfigDao().getConfigs(true).forEach { upsert("api_configs", it.id, configValue(it, image = true)) }
-        selectedModels(); webSearchConfigs(); memorySwitches(); conversationSettings(); groupMembers(); pinnedItems()
+        selectedModels(); webSearchConfigs(); memorySwitches(); memoryDocuments(); conversationSettings(); groupMembers(); pinnedItems()
         database.voiceConfigDao().getAll().forEach { voice ->
             upsert("voice_configs", voice.id, buildJsonObject {
                 put("name", voice.name); put("provider", voice.provider)
@@ -126,6 +126,27 @@ internal class SyncSettingsProjector(
         database.computerDao().getAllWorkspacesSnapshot().forEach { workspace ->
             upsert("computer_workspaces", syncStableSettingKey("computer_workspaces", workspace.id), workspaceValue(workspace, sessions.getStoredSession(workspace.conversationId)?.uuid))
         }
+    }
+
+    /**
+     * 会话记忆（第一阶段摘要）按会话 uuid 同步，其他设备不必重新花 token 整理；清空正文的
+     * “已忘记”记录也同步，防止另一台设备再次生成。总览依赖本机会话 ID，每台设备各自整合。
+     * 摘要被删除（会话已删除）时写墓碑；会话还没同步到本机的摘要沿用 cloud:<uuid> 的键，不当作删除。
+     */
+    private suspend fun memoryDocuments() {
+        val keys = HashSet<String>()
+        database.memoryDao().getDocuments(com.android.everytalk.data.database.entities.MemoryDocumentEntity.KIND_CONVERSATION).forEach { doc ->
+            val uuid = sessions.getStoredSession(doc.id)?.uuid ?: doc.id.removePrefix("cloud:").takeIf { doc.id.startsWith("cloud:") }
+                ?: return@forEach
+            keys += uuid
+            upsert("memory_documents", uuid, buildJsonObject {
+                put("title", doc.title); put("content", doc.content)
+                put("sourceUpdatedAt", doc.sourceUpdatedAt); put("generatedAt", doc.generatedAt)
+            }, doc.generatedAt)
+        }
+        if (repairOnly) return
+        existingValues.keys.filter { (kind, key) -> kind == "memory_documents" && key !in keys }
+            .forEach { (_, key) -> if (settings.getUserSetting("memory_documents", key)?.deleted == false) markDeleted("memory_documents", key) }
     }
 
     private suspend fun selectedModels() {

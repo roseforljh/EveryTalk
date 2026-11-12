@@ -933,7 +933,7 @@ class AgentLoop(
                     val persisted = runStore.getRun(activeRun.id)
                     if (persisted?.status in setOf(AgentRunStatus.COMPLETED.name, AgentRunStatus.FAILED.name, AgentRunStatus.CANCELLED.name)) {
                         lifecycleSink(AgentLifecycleEvent(AgentLifecyclePhase.AGENT_END, activeRun.id))
-                        persisted?.let { memoryCoordinator?.finished(it, input.request) }
+                        persisted?.let { memoryCoordinator?.finished(it) }
                     }
                 }
             }

@@ -83,6 +83,10 @@ interface SettingsDao {
     @Query("SELECT * FROM system_settings WHERE `key` IN ('memory_enabled', 'memory_auto_capture_enabled', 'memory_task_version')")
     fun observeMemorySettings(): kotlinx.coroutines.flow.Flow<List<SystemSettingEntity>>
 
+    /** 记忆整理的模型调用统计，只在本机累计，不进入同步。 */
+    @Query("SELECT * FROM system_settings WHERE `key` IN ('memory_stats_calls', 'memory_stats_tokens')")
+    fun observeMemoryStats(): kotlinx.coroutines.flow.Flow<List<SystemSettingEntity>>
+
     // System Settings (key-value)
     @Query("SELECT value FROM system_settings WHERE `key` = :key")
     suspend fun getValue(key: String): String?

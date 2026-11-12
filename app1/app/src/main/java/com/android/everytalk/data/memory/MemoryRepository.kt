@@ -19,6 +19,15 @@ data class MemorySettings(
     val autoCaptureEnabled: Boolean get() = enabled
 }
 
+data class MemoryStats(
+    val modelCalls: Long = 0,
+    val tokens: Long = 0,
+    /** 有内容的会话摘要数。 */
+    val conversations: Int = 0,
+    /** 摘要或总览最近一次生成的时间，没有时为 0。 */
+    val lastUpdatedAt: Long = 0,
+)
+
 data class MemoryState(val settings: MemorySettings, val entries: List<MemoryEntity>) {
     val characters: Int get() = entries.sumOf { it.content.memoryCharacters() }
     val document: String get() = entries.joinToString("\n\n") { it.content }
@@ -44,6 +53,45 @@ class MemoryRepository(private val database: AppDatabase) {
     fun observeState(): Flow<MemoryState> = combine(
         dao.observeAll(), settingsDao.observeMemorySettings(),
     ) { entries, values -> MemoryState(decodeSettings(values.associate { it.key to it.value }), entries) }.distinctUntilChanged()
+
+    /** 记忆整理消耗的模型调用次数和 token，管理页展示用。 */
+    fun observeStats(): Flow<MemoryStats> = combine(
+        settingsDao.observeMemoryStats(),
+        dao.observeDocumentStats(),
+    ) { values, documents ->
+        val map = values.associate { it.key to it.value }
+        MemoryStats(
+            modelCalls = map[STATS_CALLS_KEY]?.toLongOrNull() ?: 0,
+            tokens = map[STATS_TOKENS_KEY]?.toLongOrNull() ?: 0,
+            conversations = documents.conversations,
+            lastUpdatedAt = documents.lastGeneratedAt,
+        )
+    }.distinctUntilChanged()
+
+    suspend fun recordModelCall(tokens: Long) = database.withTransaction {
+        put(STATS_CALLS_KEY, ((settingsDao.getValue(STATS_CALLS_KEY)?.toLongOrNull() ?: 0) + 1).toString())
+        put(STATS_TOKENS_KEY, ((settingsDao.getValue(STATS_TOKENS_KEY)?.toLongOrNull() ?: 0) + tokens.coerceAtLeast(0)).toString())
+    }
+
+    /** “会话记忆”文件夹：有内容的会话摘要，最近活动在前。 */
+    fun observeConversationSummaries(): Flow<List<com.android.everytalk.data.database.entities.MemoryDocumentEntity>> =
+        dao.observeDocuments(com.android.everytalk.data.database.entities.MemoryDocumentEntity.KIND_CONVERSATION)
+
+    fun observeDocument(id: String): Flow<com.android.everytalk.data.database.entities.MemoryDocumentEntity?> = dao.observeDocument(id)
+
+    /**
+     * 用户删除一份会话摘要：清空正文但保留来源时间，同一会话没有新消息就不会被重新生成；
+     * 总览的输入随之变化，下次整理时把相关内容去掉。
+     */
+    suspend fun forgetConversationSummary(id: String) = database.withTransaction {
+        val old = dao.getDocument(id) ?: return@withTransaction
+        dao.upsertDocument(old.copy(content = "", generatedAt = maxOf(System.currentTimeMillis(), old.generatedAt + 1)))
+        com.android.everytalk.data.sync.SyncSettingsProjector(database).refresh()
+    }
+
+    /** 第二阶段整合出的总览，管理页只读展示。 */
+    fun observeOverview(): Flow<com.android.everytalk.data.database.entities.MemoryDocumentEntity?> =
+        dao.observeDocument(com.android.everytalk.data.database.entities.MemoryDocumentEntity.OVERVIEW_ID)
 
     suspend fun state(): MemoryState = database.withTransaction { MemoryState(settings(), dao.getAll()) }
 
@@ -112,7 +160,8 @@ class MemoryRepository(private val database: AppDatabase) {
         advanceVersion(currentSettings)
     }
 
-    suspend fun clear() = database.withTransaction { dao.clear(); advanceVersion(settings()) }
+    /** 清空记忆同时清掉由它们整合出的会话摘要和总览，不能留下可再次注入的派生内容。 */
+    suspend fun clear() = database.withTransaction { dao.clear(); dao.clearDocuments(); advanceVersion(settings()) }
 
     /**
      * 把编辑区全文原子保存；空白表示删除用户看到的全部记忆。
@@ -138,19 +187,21 @@ class MemoryRepository(private val database: AppDatabase) {
         state()
     }
 
+    /** 第一阶段生成的会话摘要；空内容表示该会话不值得记，不对模型暴露。 */
+    suspend fun conversationSummary(conversationId: String): com.android.everytalk.data.database.entities.MemoryDocumentEntity? =
+        dao.getDocument(conversationId)?.takeIf {
+            it.kind == com.android.everytalk.data.database.entities.MemoryDocumentEntity.KIND_CONVERSATION && it.content.isNotBlank()
+        }
+
+    suspend fun searchConversationSummaries(query: String): List<com.android.everytalk.data.database.entities.MemoryDocumentEntity> =
+        dao.getDocuments(com.android.everytalk.data.database.entities.MemoryDocumentEntity.KIND_CONVERSATION).filter {
+            it.content.isNotBlank() && (query.isBlank() || it.content.contains(query.trim(), true) || it.title.contains(query.trim(), true))
+        }
+
     /** 小集合字面搜索；百分号、下划线按普通字符处理，查询不拼接 SQL。 */
     suspend fun search(query: String, forModel: Boolean = false): List<MemoryEntity> = database.withTransaction {
         if (forModel) check(settings().enabled) { "记忆功能已关闭" }
         dao.getAll().filter { (!forModel || it.enabled) && it.content.contains(query.trim(), ignoreCase = true) }
-    }
-
-    /** 持久化认领，一次成功回合最多提取一次，失败不循环重试。 */
-    suspend fun claimCapture(context: MemoryWriteContext): Boolean = database.withTransaction {
-        checkPermission(context, settings())
-        val key = "memory_capture_${context.userMessageId}"
-        if (settingsDao.getValue(key) != null) return@withTransaction false
-        put(key, context.version.toString())
-        true
     }
 
     private fun checkPermission(context: MemoryWriteContext?, settings: MemorySettings) {
@@ -168,6 +219,8 @@ class MemoryRepository(private val database: AppDatabase) {
         const val ENABLED_KEY = "memory_enabled"
         const val AUTO_CAPTURE_KEY = "memory_auto_capture_enabled"
         const val VERSION_KEY = "memory_task_version"
+        const val STATS_CALLS_KEY = "memory_stats_calls"
+        const val STATS_TOKENS_KEY = "memory_stats_tokens"
         val SETTING_KEYS = listOf(ENABLED_KEY, AUTO_CAPTURE_KEY, VERSION_KEY)
         private fun decodeSettings(values: Map<String, String?>): MemorySettings = MemorySettings(
             enabled = values[ENABLED_KEY] == "true",

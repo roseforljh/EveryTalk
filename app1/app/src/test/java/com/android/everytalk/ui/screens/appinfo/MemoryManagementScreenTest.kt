@@ -65,53 +65,70 @@ class MemoryManagementScreenTest {
         compose.onNodeWithTag("app_info_screen").assertExists()
     }
 
-    @Test fun `shared text can be edited saved and deleted through the same editor`() {
-        runBlocking { repository.save("原来的资料") }
+    @Test fun `notes folder lists each note as a file that can be edited created and deleted`() {
+        val note = runBlocking { repository.save("原来的资料") }
         page()
-        awaitText("原来的资料")
-        compose.onNodeWithTag("memory_editor").performScrollTo().performTextReplacement("先给结论，再解释")
-        save()
+        compose.onNodeWithTag("memory_folder_notes").performScrollTo().performClick()
+        await("memory_note_${note.id}")
+        compose.onNodeWithTag("memory_note_${note.id}").performClick()
+        await("memory_editor")
+        compose.onNodeWithTag("memory_editor").performTextReplacement("先给结论，再解释")
+        compose.onNodeWithTag("memory_save").performClick()
         compose.waitUntil(5_000) { runBlocking { repository.state().document == "先给结论，再解释" } }
-        awaitText("先给结论，再解释")
-        compose.onNodeWithTag("memory_editor").performScrollTo().performTextClearance()
-        save()
-        compose.waitUntil(5_000) { runBlocking { repository.state().entries.isEmpty() } }
-    }
 
-    @Test fun `AI changes update pristine editor without overwriting a manual draft`() {
-        page()
-        runBlocking { MemoryRepository(database).save("AI 新保存的共享记忆") }
-        awaitText("AI 新保存的共享记忆")
-        compose.onNodeWithTag("memory_editor").performScrollTo().performTextReplacement("正在手动修改")
-        runBlocking { MemoryRepository(database).save("编辑期间新增的共享记忆") }
-        compose.waitForIdle()
-        compose.onNodeWithTag("memory_editor").assertTextContains("正在手动修改")
-        save()
-        compose.waitUntil(5_000) {
-            runBlocking { repository.state().entries.map { it.content }.toSet() == setOf("正在手动修改", "编辑期间新增的共享记忆") }
-        }
-        compose.waitForIdle()
-        compose.onNodeWithTag("memory_editor").assertTextContains("编辑期间新增的共享记忆", substring = true)
+        await("memory_new_note")
+        compose.onNodeWithTag("memory_new_note").performClick()
+        await("memory_editor")
+        compose.onNodeWithTag("memory_editor").performTextReplacement("第二条笔记")
+        compose.onNodeWithTag("memory_save").performClick()
+        compose.waitUntil(5_000) { runBlocking { repository.state().entries.size == 2 } }
+
+        await("memory_note_${note.id}")
+        compose.onNodeWithTag("memory_note_${note.id}").performClick()
+        await("memory_note_delete")
+        compose.onNodeWithTag("memory_note_delete").performClick()
+        compose.onNodeWithText("移除").performClick()
+        compose.waitUntil(5_000) { runBlocking { repository.state().entries.map { it.content } == listOf("第二条笔记") } }
     }
 
     @Test fun `failed validation keeps draft and persistent memories intact`() {
-        runBlocking { repository.save("已有的可靠资料") }
+        val note = runBlocking { repository.save("已有的可靠资料") }
         page()
-        awaitText("已有的可靠资料")
-        compose.onNodeWithTag("memory_editor").performScrollTo().performTextReplacement("密码：123456")
-        save()
+        compose.onNodeWithTag("memory_folder_notes").performScrollTo().performClick()
+        await("memory_note_${note.id}")
+        compose.onNodeWithTag("memory_note_${note.id}").performClick()
+        await("memory_editor")
+        compose.onNodeWithTag("memory_editor").performTextReplacement("密码：123456")
+        compose.onNodeWithTag("memory_save").performClick()
         await("memory_error")
         compose.onNodeWithTag("memory_editor").assertTextContains("密码：123456")
         assertEquals("已有的可靠资料", runBlocking { repository.state().document })
     }
 
+    @Test fun `overview links open conversation files which can be forgotten`() {
+        runBlocking {
+            database.memoryDao().upsertDocument(com.android.everytalk.data.database.entities.MemoryDocumentEntity(
+                "chat-1", com.android.everytalk.data.database.entities.MemoryDocumentEntity.KIND_CONVERSATION, "节点迁移", "- 用户要求迁到 sing-box", 10, 20))
+            database.memoryDao().upsertDocument(com.android.everytalk.data.database.entities.MemoryDocumentEntity(
+                com.android.everytalk.data.database.entities.MemoryDocumentEntity.OVERVIEW_ID, com.android.everytalk.data.database.entities.MemoryDocumentEntity.KIND_OVERVIEW,
+                "", "## What's in memory\n### 代理\n- [conv:chat-1] 2026-11-11 — 节点迁移", 10, 30))
+        }
+        page()
+        compose.onNodeWithTag("memory_file_overview").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("节点迁移").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("记忆内容").assertExists()
+        compose.onNodeWithText("节点迁移").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("用户要求迁到 sing-box").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("memory_conversation_forget").performScrollTo().performClick()
+        compose.onNodeWithText("移除").performClick()
+        compose.waitUntil(5_000) { runBlocking { repository.conversationSummary("chat-1") == null } }
+        // 保留来源时间，没有新消息就不会被重新生成。
+        assertEquals(10L, runBlocking { database.memoryDao().getDocument("chat-1")!!.sourceUpdatedAt })
+    }
+
     private fun page() {
         compose.setContent { MaterialTheme { MemoryManagementScreen(onBack = {}, repository = repository) } }
-        await("memory_editor")
+        await("memory_folder_notes")
     }
-    private fun save() { compose.onNodeWithTag("memory_save").performScrollTo().performClick() }
     private fun await(tag: String) { compose.waitUntil(5_000) { compose.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty() } }
-    private fun awaitText(text: String) {
-        compose.waitUntil(5_000) { compose.onAllNodes(hasTestTag("memory_editor") and hasText(text, substring = true)).fetchSemanticsNodes().isNotEmpty() }
-    }
 }

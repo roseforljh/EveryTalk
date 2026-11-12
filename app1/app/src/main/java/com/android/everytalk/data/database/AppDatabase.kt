@@ -111,8 +111,11 @@ import com.android.everytalk.data.database.entities.SyncAttachmentEntity
         AgentStoredAuthorizationEntity::class,
         AgentOAuthStateEntity::class,
         SyncAttachmentEntity::class,
+        com.android.everytalk.data.database.entities.MemoryDocumentEntity::class,
+        com.android.everytalk.data.database.entities.MessageSearchEntity::class,
+        com.android.everytalk.data.database.entities.MessageSearchMapEntity::class,
     ],
-    version = 44,
+    version = 46,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -127,6 +130,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun agentDao(): AgentDao
     abstract fun skillDao(): SkillDao
     abstract fun syncAttachmentDao(): SyncAttachmentDao
+    abstract fun messageSearchDao(): com.android.everytalk.data.database.daos.MessageSearchDao
 
     companion object {
         /** 42 的结构快照保持不变，所有同步字段仅在此次无损迁移中补齐。 */
@@ -152,6 +156,20 @@ abstract class AppDatabase : RoomDatabase() {
                 """.trimIndent())
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_sync_attachments_sessionId ON sync_attachments(sessionId)")
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_sync_attachments_messageId ON sync_attachments(messageId)")
+            }
+        }
+        /** 记忆派生文档表（会话摘要与总览），只新增表，不改动已有记忆。 */
+        val MIGRATION_44_45: Migration = object : Migration(44, 45) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS memory_documents (id TEXT NOT NULL PRIMARY KEY, kind TEXT NOT NULL, title TEXT NOT NULL, content TEXT NOT NULL, sourceUpdatedAt INTEGER NOT NULL, generatedAt INTEGER NOT NULL, inputFingerprint TEXT NOT NULL)")
+            }
+        }
+        /** 历史会话全文索引：只新增表，首次搜索或发送时由应用补建，不改动已有消息。 */
+        val MIGRATION_45_46: Migration = object : Migration(45, 46) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE VIRTUAL TABLE IF NOT EXISTS `message_search` USING FTS4(`body` TEXT NOT NULL)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `message_search_map` (`messageId` TEXT NOT NULL, `docid` INTEGER NOT NULL, `fingerprint` TEXT NOT NULL, PRIMARY KEY(`messageId`))")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_message_search_map_docid` ON `message_search_map` (`docid`)")
             }
         }
         /** 仅新增表，不重建或清空已有会话、设置和凭据。 */
@@ -217,6 +235,8 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_41_42,
                     MIGRATION_42_43,
                     MIGRATION_43_44,
+                    MIGRATION_44_45,
+                    MIGRATION_45_46,
                 )
                 .addCallback(DATABASE_MAINTENANCE_CALLBACK)
                 .build()

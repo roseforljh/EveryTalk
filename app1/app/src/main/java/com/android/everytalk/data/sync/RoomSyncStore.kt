@@ -161,6 +161,7 @@ internal class RoomSyncStore(
             "api_configs" -> restoreApiConfig(setting, value)
             "voice_configs" -> restoreVoiceConfig(setting, value)
             "mcp_servers" -> restoreMcp(setting, value)
+            "memory_documents" -> restoreMemoryDocument(setting.key, value)
             "skills" -> restoreSkill(setting, value)
             "conversation_settings" -> restoreConversationSettings(setting, value)
             "voice_custom_models" -> {
@@ -782,6 +783,26 @@ internal class RoomSyncStore(
         settings.insertSetting(SystemSettingEntity(remoteMessageFieldsKey(record.id), remoteFields.joinToString(",")))
     }
 
+    /**
+     * 其他设备生成的会话记忆。键是会话 uuid，落到本机对应的会话 ID；会话还没拉到时用
+     * 与 applySession 相同的 "cloud:<uuid>" ID，会话到达后自然对上。
+     */
+    private suspend fun restoreMemoryDocument(key: String, value: JsonObject) {
+        validateUuid(key)
+        val id = chat.getSessionByUuid(key)?.id ?: "cloud:$key"
+        val generatedAt = value["generatedAt"]?.jsonPrimitive?.longOrNull ?: return
+        val old = memory.getDocument(id)
+        // 本机刚生成的更新版本不被较旧的云端快照覆盖。
+        if (old != null && old.generatedAt > generatedAt) return
+        memory.upsertDocument(com.android.everytalk.data.database.entities.MemoryDocumentEntity(
+            id = id, kind = com.android.everytalk.data.database.entities.MemoryDocumentEntity.KIND_CONVERSATION,
+            title = value["title"]?.jsonPrimitive?.contentOrNull.orEmpty().take(120),
+            content = com.android.everytalk.data.memory.MemoryPolicy.redact(value["content"]?.jsonPrimitive?.contentOrNull.orEmpty()),
+            sourceUpdatedAt = value["sourceUpdatedAt"]?.jsonPrimitive?.longOrNull ?: 0L,
+            generatedAt = generatedAt,
+        ))
+    }
+
     private suspend fun applyMemory(record: SyncRecord) {
         val old = memory.getByUuid(record.id)
         val version = modified(record)
@@ -863,6 +884,9 @@ internal class RoomSyncStore(
                 "mcp_servers" -> database.mcpConfigDao().deleteConfigById(
                     old?.value?.let { runCatching { syncJson.parseToJsonElement(it).jsonObject["localId"]?.jsonPrimitive?.contentOrNull }.getOrNull() } ?: key)
                 "skills" -> database.skillDao().delete(key)
+                // 会话记忆按会话 uuid 同步；本机 ID 不同，删除时同样换算。
+                "memory_documents" -> if (runCatching { validateUuid(key) }.isSuccess)
+                    memory.deleteDocument(chat.getSessionByUuid(key)?.id ?: "cloud:$key")
                 // computers 是业务表，不是只读的设置投影。云端墓碑到达后必须删除
                 // 本地实体；其外键会继续清理工作区、会话绑定和连接相关索引。
                 "computers" -> database.computerDao().deleteComputer(
@@ -967,7 +991,7 @@ internal class RoomSyncStore(
             "api_configs", "selected_models", "web_search_configs", "voice_configs",
             "voice_llm_platforms", "voice_custom_models", "mcp_servers", "skills",
             "skill_variables", "computers", "computer_workspaces", "conversation_settings",
-            "memory_switches", "group_members", "pinned_items", "crypto_keys",
+            "memory_switches", "group_members", "pinned_items", "crypto_keys", "memory_documents",
             "conversation_groups", // 仅兼容未发布的旧本地数据，新的记录使用 group_members。
         )
     }

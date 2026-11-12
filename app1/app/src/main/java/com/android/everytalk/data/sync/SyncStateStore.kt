@@ -280,7 +280,7 @@ internal class SyncStateStore(private val database: AppDatabase) {
             "api_configs", "selected_models", "web_search_configs", "voice_configs",
             "voice_llm_platforms", "voice_custom_models", "mcp_servers", "skills",
             "skill_variables", "computers", "computer_workspaces", "conversation_settings",
-            "memory_switches", "group_members", "pinned_items", "crypto_keys",
+            "memory_switches", "group_members", "pinned_items", "crypto_keys", "memory_documents",
         )
     }
 }

@@ -71,8 +71,6 @@ class MemoryRepositoryTest {
     @Test fun `late writes and captures are rejected after disable clear or edit`() = runBlocking {
         repository.setSettings(true)
         val grant = MemoryWriteContext(repository.settings().version, "session", "message", MemoryOrigin.AUTO)
-        assertTrue(repository.claimCapture(grant))
-        assertFalse(repository.claimCapture(grant))
         repository.save("用户喜欢简洁回复", context = grant)
         repository.clear()
         expectFailure { repository.save("晚到结果", context = grant) }
@@ -194,6 +192,8 @@ class MemoryRepositoryTest {
                 AppDatabase.MIGRATION_41_42,
                 AppDatabase.MIGRATION_42_43,
                 AppDatabase.MIGRATION_43_44,
+                AppDatabase.MIGRATION_44_45,
+                AppDatabase.MIGRATION_45_46,
             ).build()
         try {
             assertEquals("preserved", migrated.settingsDao().getValue("existing-test"))

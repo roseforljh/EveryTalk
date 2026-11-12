@@ -337,6 +337,39 @@ class SyncEngineTest {
         assertTrue(RoomSyncStore(b).pendingBatch().isEmpty())
     }
 
+    @Test fun `会话记忆按会话UUID跨设备同步，忘记和删除都传播且拉取不回传`() = runBlocking {
+        val a = device(); val b = device(); val api = FakeSyncApi()
+        val source = seed(a, "chat-a")
+        val kind = com.android.everytalk.data.database.entities.MemoryDocumentEntity.KIND_CONVERSATION
+        a.memoryDao().upsertDocument(com.android.everytalk.data.database.entities.MemoryDocumentEntity("chat-a", kind, "节点迁移", "- 迁到 sing-box", 50, 200))
+        SyncSettingsProjector(a).refresh()
+        run(a, api); run(b, api)
+        // B 上同一会话的本地 ID 不同，摘要落到对应的本地会话上，B 不必再花 token 整理。
+        val remoteId = b.chatDao().getSessionByUuid(source.uuid)!!.id
+        assertTrue(remoteId != "chat-a")
+        assertEquals("- 迁到 sing-box", b.memoryDao().getDocument(remoteId)!!.content)
+        assertEquals(50L, b.memoryDao().getDocument(remoteId)!!.sourceUpdatedAt)
+        SyncSettingsProjector(b).refresh()
+        assertTrue(RoomSyncStore(b).pendingBatch().isEmpty())
+
+        // B 上忘记：A 也清空，且保留来源时间，A 不会再重新生成。
+        com.android.everytalk.data.memory.MemoryRepository(b).forgetConversationSummary(remoteId)
+        run(b, api); run(a, api)
+        assertEquals("", a.memoryDao().getDocument("chat-a")!!.content)
+        assertEquals(50L, a.memoryDao().getDocument("chat-a")!!.sourceUpdatedAt)
+
+        // A 删除会话后摘要随之删除，墓碑传到 B。
+        a.memoryDao().upsertDocument(a.memoryDao().getDocument("chat-a")!!.copy(content = "- 新内容", generatedAt = System.currentTimeMillis() + 1_000))
+        SyncSettingsProjector(a).refresh(); run(a, api); run(b, api)
+        assertEquals("- 新内容", b.memoryDao().getDocument(remoteId)!!.content)
+        a.chatDao().deleteSession("chat-a")
+        a.memoryDao().deleteDocument("chat-a")
+        SyncSettingsProjector(a).refresh(); run(a, api); run(b, api)
+        assertNull(b.memoryDao().getDocument(remoteId))
+        assertTrue(RoomSyncStore(a).pendingBatch().isEmpty())
+        assertTrue(RoomSyncStore(b).pendingBatch().isEmpty())
+    }
+
     @Test fun `MCP两设备改名停用删除后不会保留旧配置或回传`() = runBlocking {
         val a = device(); val b = device(); val api = FakeSyncApi()
         a.mcpConfigDao().insertConfig(McpServerConfigEntity("mcp-demo", "旧名称", "https://mcp.example/mcp", "HTTP"))

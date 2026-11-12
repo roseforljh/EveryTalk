@@ -28,6 +28,30 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ChatDao {
+    /** 记忆第一阶段的候选：闲置足够久、在时间窗内、有正式正文的文字会话，按最近活动排序。 */
+    @Query("""
+        SELECT s.id AS conversationId, COALESCE(s.title, '') AS title, MAX(m.timestamp) AS lastMessageAt, COUNT(*) AS messageCount
+        FROM chat_sessions s INNER JOIN messages m ON m.sessionId = s.id
+        WHERE s.deleted = 0 AND s.isImageGeneration = 0 AND m.deleted = 0 AND m.isError = 0 AND m.isPlaceholderName = 0
+          AND m.sender IN ('User', 'AI') AND length(trim(m.text)) > 0
+          AND s.id NOT IN ('last_open_chat_v1', 'last_open_image_generation_v1') AND s.id != :excludeConversationId
+        GROUP BY s.id
+        HAVING lastMessageAt < :idleBefore AND lastMessageAt >= :since
+        ORDER BY lastMessageAt DESC
+    """)
+    suspend fun memoryConversationCandidates(excludeConversationId: String, idleBefore: Long, since: Long): List<MemoryConversationCandidate>
+
+    @Query("""
+        SELECT sender, text, timestamp FROM messages
+        WHERE sessionId = :conversationId AND deleted = 0 AND isError = 0 AND isPlaceholderName = 0
+          AND sender IN ('User', 'AI') AND length(trim(text)) > 0
+        ORDER BY timestamp ASC, uuid ASC
+    """)
+    suspend fun memoryConversationTranscript(conversationId: String): List<MemoryTranscriptLine>
+
+    @Query("SELECT id FROM chat_sessions WHERE deleted = 1")
+    suspend fun deletedConversationIds(): List<String>
+
     /**
      * 只检索正式保存的用户/AI 正文，过滤墓碑、草稿、占位消息和内部恢复快照。
      * instr 按字面匹配关键词，% 和 _ 不会变成通配符；片段在数据库内截取，避免加载全部历史。
