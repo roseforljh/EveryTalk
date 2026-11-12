@@ -23,6 +23,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.android.everytalk.ui.components.content.CodeBlockCard
+import com.android.everytalk.ui.components.content.codeBlockVisibleWindow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
@@ -62,7 +63,9 @@ class CodeBlockStreamingTest {
         assertAtBottom()
         val latest = code.value + "\n最后一行：必须实时显示"
         composeRule.runOnIdle { code.value = latest }
-        composeRule.onNodeWithText(latest).assertExists()
+        // 卡片只排版末尾可见窗口，最新一行必须在窗口里。
+        composeRule.onNodeWithText(codeBlockVisibleWindow(latest, isStreaming = true)).assertExists()
+        assertTrue(codeBlockVisibleWindow(latest, isStreaming = true).endsWith("最后一行：必须实时显示"))
         assertAtBottom()
     }
 

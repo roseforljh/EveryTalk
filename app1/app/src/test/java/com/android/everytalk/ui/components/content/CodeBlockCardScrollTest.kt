@@ -10,6 +10,18 @@ import org.junit.Test
 class CodeBlockCardScrollTest {
 
     @Test
+    fun `长代码只排版可见窗口`() {
+        val code = (1..500).joinToString("\n") { "line $it" }
+        val head = codeBlockVisibleWindow(code, isStreaming = false)
+        assertEquals((1..CODE_BLOCK_VISIBLE_LINE_LIMIT).joinToString("\n") { "line $it" }, head)
+        val tail = codeBlockVisibleWindow(code, isStreaming = true)
+        assertEquals((441..500).joinToString("\n") { "line $it" }, tail)
+        assertEquals("a\nb", codeBlockVisibleWindow("a\nb", isStreaming = false))
+        assertEquals("a\nb", codeBlockVisibleWindow("a\nb", isStreaming = true))
+        assertEquals(CODE_BLOCK_VISIBLE_CHAR_LIMIT, codeBlockVisibleWindow("x".repeat(50_000), false).length)
+    }
+
+    @Test
     fun `streaming code block scrolls to bottom`() {
         assertEquals(320, resolveCodeBlockScrollTarget(isStreaming = true, maxValue = 320))
     }

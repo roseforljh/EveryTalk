@@ -205,6 +205,29 @@ internal fun shouldAnimateCodeBlockContentSize(
     !suppressInitialAsyncResizeAnimation ||
     initialAsyncResizeSettled
 
+internal const val CODE_BLOCK_VISIBLE_LINE_LIMIT = 60
+internal const val CODE_BLOCK_VISIBLE_CHAR_LIMIT = 4_000
+
+/**
+ * 卡片内代码区限高 400dp 且不能内部滚动：完成态只露出开头，流式只露出末尾。
+ * 只排版、高亮这一段可见窗口；几千行代码整段排版会把列表加载和代码/预览切换卡住数百毫秒。
+ * 60 行在任何字号下都高于 400dp，可见效果与整段排版一致；复制、全屏、预览仍使用完整代码。
+ */
+internal fun codeBlockVisibleWindow(code: String, isStreaming: Boolean): String {
+    if (isStreaming) {
+        var cut = code.length
+        repeat(CODE_BLOCK_VISIBLE_LINE_LIMIT) { if (cut >= 0) cut = code.lastIndexOf('\n', cut - 1) }
+        val tail = if (cut < 0) code else code.substring(cut + 1)
+        return if (tail.length > CODE_BLOCK_VISIBLE_CHAR_LIMIT) tail.takeLast(CODE_BLOCK_VISIBLE_CHAR_LIMIT) else tail
+    }
+    var end = -1
+    repeat(CODE_BLOCK_VISIBLE_LINE_LIMIT) {
+        end = code.indexOf('\n', end + 1)
+        if (end < 0) return code.take(CODE_BLOCK_VISIBLE_CHAR_LIMIT)
+    }
+    return code.substring(0, end).take(CODE_BLOCK_VISIBLE_CHAR_LIMIT)
+}
+
 private data class HighlightedCodeState(
     val text: AnnotatedString,
     val asyncHighlightReady: Boolean,
@@ -261,33 +284,34 @@ fun CodeBlockCard(
         if (isDarkTheme) SyntaxHighlightTheme.Dark else SyntaxHighlightTheme.Light
     }
     
-    val shouldHighlightCode = remember(code, isStreaming) {
-        !isStreaming && HighlightCache.shouldHighlight(code, isStreaming = false)
+    val windowCode = remember(code, isStreaming) { codeBlockVisibleWindow(code, isStreaming) }
+    val shouldHighlightCode = remember(windowCode, isStreaming) {
+        !isStreaming && HighlightCache.shouldHighlight(windowCode, isStreaming = false)
     }
     val highlightedCodeState by produceState(
         HighlightedCodeState(
-            text = AnnotatedString(code),
+            text = AnnotatedString(windowCode),
             asyncHighlightReady = !shouldHighlightCode,
         ),
-        code,
+        windowCode,
         language,
         isDarkTheme,
         isStreaming,
     ) {
         // produceState 会保留上一轮的值；每次输入变化都先更新原文，避免超过高亮上限后停在旧内容。
-        value = HighlightedCodeState(AnnotatedString(code), !shouldHighlightCode)
+        value = HighlightedCodeState(AnnotatedString(windowCode), !shouldHighlightCode)
         if (shouldHighlightCode) {
             value = HighlightedCodeState(
                 text = withContext(Dispatchers.Default) {
-                    HighlightCache.highlight(code, language, isDarkTheme, syntaxTheme)
+                    HighlightCache.highlight(windowCode, language, isDarkTheme, syntaxTheme)
                 },
                 asyncHighlightReady = true,
             )
         }
     }
-    // 流式原文同步显示，不等待异步高亮；完成后才切换到当前全文的高亮结果。
-    val visibleCode = remember(code, isStreaming, highlightedCodeState.text) {
-        if (isStreaming || highlightedCodeState.text.text != code) AnnotatedString(code)
+    // 流式原文同步显示，不等待异步高亮；完成后才切换到当前窗口的高亮结果。
+    val visibleCode = remember(windowCode, isStreaming, highlightedCodeState.text) {
+        if (isStreaming || highlightedCodeState.text.text != windowCode) AnnotatedString(windowCode)
         else highlightedCodeState.text
     }
     var initialAsyncResizeSettled by remember(
