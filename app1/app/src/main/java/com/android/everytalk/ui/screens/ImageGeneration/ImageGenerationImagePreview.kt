@@ -1,4 +1,5 @@
 package com.android.everytalk.ui.screens.ImageGeneration
+import com.android.everytalk.ui.components.setTransparentSystemBars
 import com.android.everytalk.util.image.ImageHandlingLimits
 import com.android.everytalk.statecontroller.*
 
@@ -84,6 +85,9 @@ import android.net.Uri
 import android.graphics.drawable.Drawable
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import coil3.compose.AsyncImage
 import coil3.imageLoader
 import coil3.request.ImageRequest
@@ -744,7 +748,8 @@ internal fun ImageGenerationImagePreview(
                 properties = DialogProperties(
                     dismissOnBackPress = true,
                     dismissOnClickOutside = true,
-                    usePlatformDefaultWidth = false
+                    usePlatformDefaultWidth = false,
+                    decorFitsSystemWindows = false
                 )
             ) {
                 Surface(
@@ -755,10 +760,25 @@ internal fun ImageGenerationImagePreview(
                 ) {
                     Box(modifier = Modifier.fillMaxSize()) {
                         // 顶部工具栏：居中页码 + 右上关闭
+                        val dialogWindowProvider = LocalView.current.parent as? DialogWindowProvider
+                        SideEffect {
+                            dialogWindowProvider?.window?.let { window ->
+                                WindowCompat.setDecorFitsSystemWindows(window, false)
+                                window.setTransparentSystemBars()
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                    window.isNavigationBarContrastEnforced = false
+                                }
+                                WindowInsetsControllerCompat(window, window.decorView).apply {
+                                    isAppearanceLightStatusBars = false
+                                    isAppearanceLightNavigationBars = false
+                                }
+                            }
+                        }
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .align(Alignment.TopCenter)
+                                .statusBarsPadding()
                                 .zIndex(2f)
                         ) {
                             Spacer(modifier = Modifier.height(12.dp))
@@ -939,7 +959,8 @@ internal fun ImageGenerationImagePreview(
                     properties = DialogProperties(
                         dismissOnBackPress = true,
                         dismissOnClickOutside = false,
-                        usePlatformDefaultWidth = false
+                        usePlatformDefaultWidth = false,
+                    decorFitsSystemWindows = false
                     )
                 ) {
                     BrushEditorOverlay(

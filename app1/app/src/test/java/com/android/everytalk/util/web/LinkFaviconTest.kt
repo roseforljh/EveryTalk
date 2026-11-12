@@ -1,6 +1,7 @@
 package com.android.everytalk.util.web
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import com.android.everytalk.R
 import org.junit.Test
 
@@ -117,5 +118,20 @@ class LinkFaviconTest {
         ).forEach { href ->
             assertEquals(href, LinkIcon(R.drawable.ic_globe), linkIcon(href))
         }
+    }
+
+    @Test
+    fun `未内置网站返回在线图标候选地址且内置网站不请求在线图标`() {
+        assertEquals(
+            listOf(
+                "https://firecrawl.dev/favicon.ico",
+                "https://icons.duckduckgo.com/ip3/firecrawl.dev.ico",
+                "https://www.google.com/s2/favicons?domain=firecrawl.dev&sz=64",
+            ),
+            remoteFaviconUrls("https://www.firecrawl.dev/k/ggk346xy1d1j"),
+        )
+        assertTrue(remoteFaviconUrls("https://github.com/user/repo").isEmpty())
+        assertTrue(remoteFaviconUrls("http://localhost:8080/api").isEmpty())
+        assertTrue(remoteFaviconUrls("not-a-url").isEmpty())
     }
 }

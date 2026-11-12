@@ -111,3 +111,21 @@ fun linkIcon(href: String): LinkIcon {
     }
     return globeIcon
 }
+
+/**
+ * 为未内置图标的公开域名按回退顺序生成在线 favicon 地址：
+ * 先请求站点自身的 `/favicon.ico`，失败时再回退到 DuckDuckGo 与 Google 的图标服务。
+ * 已命中内置图标、无效地址、localhost 及无点内网主机名均返回空列表。
+ */
+fun remoteFaviconUrls(href: String): List<String> {
+    if (linkIcon(href) != globeIcon) return emptyList()
+    val host = linkHost(href)
+    if (host.isEmpty() || !host.contains('.') || host == "localhost" || host.endsWith(".localhost")) {
+        return emptyList()
+    }
+    return listOf(
+        "https://$host/favicon.ico",
+        "https://icons.duckduckgo.com/ip3/$host.ico",
+        "https://www.google.com/s2/favicons?domain=$host&sz=64",
+    )
+}

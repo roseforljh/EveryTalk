@@ -81,6 +81,7 @@ import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.ImageRatio
 import com.android.everytalk.ui.components.modifier.diffuseShadow
 import com.android.everytalk.models.SelectedMediaItem
+import com.android.everytalk.ui.components.ImagePreviewDialog
 import com.android.everytalk.ui.components.ImageRatioSelector
 import com.android.everytalk.ui.components.ImageGenCapabilities
 import com.android.everytalk.ui.components.ImageGenCapabilities.ModelFamily
@@ -482,6 +483,16 @@ fun ImageGenerationInputArea(
                     .fillMaxWidth()
                     .padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 4.dp)
             ) {
+                var previewImageIndex by remember { mutableStateOf<Int?>(null) }
+                val previewImageUrls = remember(selectedMediaItems) {
+                    selectedMediaItems.mapNotNull { item ->
+                        when (item) {
+                            is SelectedMediaItem.ImageFromUri -> item.filePath?.takeIf { it.isNotBlank() } ?: item.uri.toString()
+                            is SelectedMediaItem.ImageFromBitmap -> item.model
+                            else -> null
+                        }
+                    }
+                }
                 if (selectedMediaItems.isNotEmpty()) {
                     LazyRow(
                         modifier = Modifier
@@ -492,10 +503,28 @@ fun ImageGenerationInputArea(
                         itemsIndexed(selectedMediaItems, key = { _, item -> item.id }) { index, media ->
                             SelectedItemPreview(
                                 mediaItem = media,
-                                onRemoveClicked = { onRemoveMediaItemAtIndex(index) }
+                                onRemoveClicked = { onRemoveMediaItemAtIndex(index) },
+                                onItemClicked = {
+                                    val clickedUrl = when (media) {
+                                        is SelectedMediaItem.ImageFromUri -> media.filePath?.takeIf { it.isNotBlank() } ?: media.uri.toString()
+                                        is SelectedMediaItem.ImageFromBitmap -> media.model
+                                        else -> null
+                                    }
+                                    if (clickedUrl != null) {
+                                        previewImageIndex = previewImageUrls.indexOf(clickedUrl).coerceAtLeast(0)
+                                    }
+                                },
                             )
                         }
                     }
+                }
+                val activePreviewIndex = previewImageIndex
+                if (activePreviewIndex != null && previewImageUrls.isNotEmpty()) {
+                    ImagePreviewDialog(
+                        urls = previewImageUrls,
+                        initialIndex = activePreviewIndex.coerceIn(0, previewImageUrls.lastIndex),
+                        onDismiss = { previewImageIndex = null },
+                    )
                 }
 
                 val inputBackground = if (isDarkTheme) Color(0xFF1F1F1F) else Color.White

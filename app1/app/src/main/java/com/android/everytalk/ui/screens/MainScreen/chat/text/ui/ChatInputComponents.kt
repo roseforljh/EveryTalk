@@ -44,6 +44,8 @@ import com.android.everytalk.data.database.entities.PendingMessageEntity
 import com.android.everytalk.statecontroller.ChatRunState
 import com.android.everytalk.statecontroller.ComposerMode
 import com.android.everytalk.statecontroller.PENDING_MESSAGE_STATUS_PENDING
+import com.android.everytalk.ui.components.ImagePreviewDialog
+import com.android.everytalk.ui.components.rememberMessageFileOpener
 import com.android.everytalk.ui.theme.SeaBlue
 
 internal val ChatAgentColor = Color(0xFF009688)
@@ -165,12 +167,27 @@ internal fun ActiveFunctionTag(
 }
 
 /**
+ * 提取已选图片附件的预览地址，非图片附件返回 null。
+ */
+internal fun previewableImageUrl(mediaItem: SelectedMediaItem): String? = when (mediaItem) {
+    is SelectedMediaItem.ImageFromUri -> mediaItem.filePath?.takeIf { it.isNotBlank() } ?: mediaItem.uri.toString()
+    is SelectedMediaItem.ImageFromBitmap -> mediaItem.model
+    is SelectedMediaItem.GenericFile -> if (mediaItem.mimeType.startsWith("image/")) {
+        mediaItem.filePath?.takeIf { it.isNotBlank() } ?: mediaItem.uri.toString()
+    } else {
+        null
+    }
+    is SelectedMediaItem.Audio -> null
+}
+
+/**
  * 优化的媒体项预览组件 - 使用记忆化避免重复渲染
  */
 @Composable
 fun OptimizedSelectedItemPreview(
     mediaItem: SelectedMediaItem,
     onRemoveClicked: () -> Unit,
+    onItemClicked: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val audioLabel = stringResource(R.string.attachment_audio)
@@ -192,6 +209,13 @@ fun OptimizedSelectedItemPreview(
             .clip(RoundedCornerShape(8.dp))
             .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
             .background(MaterialTheme.colorScheme.surface)
+            .then(
+                if (onItemClicked != null) {
+                    Modifier.clickable(onClick = onItemClicked)
+                } else {
+                    Modifier
+                }
+            )
     ) {
         when (mediaItem) {
             is SelectedMediaItem.ImageFromUri -> AsyncImage(
@@ -449,6 +473,12 @@ fun OptimizedMediaItemsList(
     onRemoveMediaItemAtIndex: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val openFile = rememberMessageFileOpener()
+    var previewImageIndex by remember { mutableStateOf<Int?>(null) }
+    val imageUrls = remember(selectedMediaItems) {
+        selectedMediaItems.mapNotNull(::previewableImageUrl)
+    }
+
     if (selectedMediaItems.isNotEmpty()) {
         LazyRow(
             modifier = modifier
@@ -462,10 +492,27 @@ fun OptimizedMediaItemsList(
             ) { index, media ->
                 OptimizedSelectedItemPreview(
                     mediaItem = media,
-                    onRemoveClicked = { onRemoveMediaItemAtIndex(index) }
+                    onRemoveClicked = { onRemoveMediaItemAtIndex(index) },
+                    onItemClicked = {
+                        val clickedImageUrl = previewableImageUrl(media)
+                        if (clickedImageUrl != null) {
+                            previewImageIndex = imageUrls.indexOf(clickedImageUrl).coerceAtLeast(0)
+                        } else if (media is SelectedMediaItem.GenericFile) {
+                            openFile(media)
+                        }
+                    },
                 )
             }
         }
+    }
+
+    val activePreviewIndex = previewImageIndex
+    if (activePreviewIndex != null && imageUrls.isNotEmpty()) {
+        ImagePreviewDialog(
+            urls = imageUrls,
+            initialIndex = activePreviewIndex.coerceIn(0, imageUrls.lastIndex),
+            onDismiss = { previewImageIndex = null },
+        )
     }
 }
 

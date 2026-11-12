@@ -93,11 +93,17 @@ internal data class AttachmentThumbnailSize(
     val heightDp: Float,
 )
 
+/**
+ * 按原图比例计算缩略图尺寸，最长不超过 maxWidthDp × maxHeightDp。
+ * 长截图或超宽全景图等比缩放后会变成细条，所以短边至少保留 minSideDp；
+ * 超出比例的部分由调用方用 Crop + 顶部对齐裁掉，缩略图显示长图开头。
+ */
 internal fun fitAttachmentThumbnail(
     sourceWidth: Float,
     sourceHeight: Float,
     maxWidthDp: Float = 160f,
     maxHeightDp: Float = 100f,
+    minSideDp: Float = 56f,
 ): AttachmentThumbnailSize {
     if (
         !sourceWidth.isFinite() ||
@@ -109,8 +115,8 @@ internal fun fitAttachmentThumbnail(
     }
     val scale = minOf(maxWidthDp / sourceWidth, maxHeightDp / sourceHeight)
     return AttachmentThumbnailSize(
-        widthDp = sourceWidth * scale,
-        heightDp = sourceHeight * scale,
+        widthDp = (sourceWidth * scale).coerceIn(minSideDp, maxWidthDp),
+        heightDp = (sourceHeight * scale).coerceIn(minSideDp, maxHeightDp),
     )
 }
 
@@ -680,7 +686,9 @@ fun AttachmentsContent(
                         coil3.compose.AsyncImage(
                             model = imageModel,
                             contentDescription = stringResource(R.string.attachment_image),
-                            contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                            // 尺寸已按原图比例算好，Crop 只会裁掉被最小边长撑出来的部分；顶部对齐让长截图显示开头。
+                            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                            alignment = Alignment.TopCenter,
                             onSuccess = { state ->
                                 val intrinsicSize = state.painter.intrinsicSize
                                 thumbnailSize = fitAttachmentThumbnail(

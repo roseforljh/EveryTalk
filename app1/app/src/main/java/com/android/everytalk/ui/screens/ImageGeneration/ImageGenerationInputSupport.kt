@@ -159,6 +159,7 @@ internal fun resolveImageFunctionPanelPopupY(
 fun SelectedItemPreview(
     mediaItem: SelectedMediaItem,
     onRemoveClicked: () -> Unit,
+    onItemClicked: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -167,6 +168,13 @@ fun SelectedItemPreview(
             .clip(RoundedCornerShape(8.dp))
             .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
             .background(MaterialTheme.colorScheme.surface)
+            .then(
+                if (onItemClicked != null) {
+                    Modifier.clickable(onClick = onItemClicked)
+                } else {
+                    Modifier
+                }
+            )
     ) {
         when (mediaItem) {
             is SelectedMediaItem.ImageFromUri -> AsyncImage(

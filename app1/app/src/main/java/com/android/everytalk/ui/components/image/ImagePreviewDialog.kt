@@ -25,7 +25,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import android.os.Build
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -33,10 +35,17 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
 import androidx.compose.ui.zIndex
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import com.android.everytalk.R
 import androidx.compose.ui.res.stringResource
 import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.request.maxBitmapSize
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -81,9 +90,25 @@ fun ImagePreviewDialog(
         properties = DialogProperties(
             usePlatformDefaultWidth = false,
             dismissOnBackPress = true,
-            dismissOnClickOutside = true
+            dismissOnClickOutside = true,
+            decorFitsSystemWindows = false
         )
     ) {
+        // 让预览弹窗延伸到状态栏与导航栏后方，消除顶部和底部的系统栏黑块。
+        val dialogWindowProvider = LocalView.current.parent as? DialogWindowProvider
+        SideEffect {
+            dialogWindowProvider?.window?.let { window ->
+                WindowCompat.setDecorFitsSystemWindows(window, false)
+                window.setTransparentSystemBars()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    window.isNavigationBarContrastEnforced = false
+                }
+                WindowInsetsControllerCompat(window, window.decorView).apply {
+                    isAppearanceLightStatusBars = false
+                    isAppearanceLightNavigationBars = false
+                }
+            }
+        }
         val controlBackgroundColor = Color.Gray.copy(alpha = 0.42f)
         val controlBorderColor = Color.White.copy(alpha = 0.75f)
         val bottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
@@ -99,6 +124,7 @@ fun ImagePreviewDialog(
                     modifier = Modifier
                         .fillMaxWidth()
                         .align(Alignment.TopCenter)
+                        .statusBarsPadding()
                         .zIndex(2f)
                 ) {
                     Spacer(modifier = Modifier.height(12.dp))
@@ -149,6 +175,29 @@ fun ImagePreviewDialog(
                     var pageOffsetX by remember(page) { mutableFloatStateOf(0f) }
                     var pageOffsetY by remember(page) { mutableFloatStateOf(0f) }
                     val pageCoroutineScope = rememberCoroutineScope()
+                    // 长图在 1 倍时靠纵向滚动查看；放大后由下面的手势平移，平移到边缘的余量转交给滚动。
+                    val pageScrollState = rememberScrollState()
+                    // ponytail: Coil 默认把位图限制在 4096px，长截图会被压糊；这里放宽到纵向 8192px（绝大多数 GPU 纹理上限内）。
+                    // 超长图仍会被等比缩小，需要原图清晰度时再换分块解码的查看器。
+                    val imageRequest = remember(currentUrl) {
+                        ImageRequest.Builder(context)
+                            .data(currentUrl)
+                            .maxBitmapSize(coil3.size.Size(4096, 8192))
+                            .build()
+                    }
+                    /**
+                     * 放大状态下按手指位移平移图片。
+                     * 纵向平移超出当前可见边界时，把超出部分换算回未缩放坐标交给滚动，长图放大后也能继续上下浏览。
+                     */
+                    val panZoomed: (Float, Float, Float, Float, Float) -> Unit = { dx, dy, s, w, h ->
+                        val mx = (s - 1f) * w / 2f
+                        val my = (s - 1f) * h / 2f
+                        pageOffsetX = (pageOffsetX + dx).coerceIn(-mx, mx)
+                        val targetY = pageOffsetY + dy
+                        pageOffsetY = targetY.coerceIn(-my, my)
+                        val overflowY = targetY - pageOffsetY
+                        if (overflowY != 0f) pageScrollState.dispatchRawDelta(-overflowY / s)
+                    }
                     val toggleZoom: () -> Unit = {
                         pageCoroutineScope.launch {
                             if (animatedScale.value > 1f) {
@@ -181,10 +230,7 @@ fun ImagePreviewDialog(
                                                 val newScale = (curScale * zoomChange).coerceIn(1f, 5f)
                                                 pageCoroutineScope.launch { animatedScale.snapTo(newScale) }
                                                 if (newScale > 1f) {
-                                                    val mx = (newScale - 1f) * w / 2f
-                                                    val my = (newScale - 1f) * h / 2f
-                                                    pageOffsetX = (pageOffsetX + panChange.x).coerceIn(-mx, mx)
-                                                    pageOffsetY = (pageOffsetY + panChange.y).coerceIn(-my, my)
+                                                    panZoomed(panChange.x, panChange.y, newScale, w, h)
                                                 } else {
                                                     pageOffsetX = 0f
                                                     pageOffsetY = 0f
@@ -194,11 +240,7 @@ fun ImagePreviewDialog(
                                             }
                                         } else if (pointerCount == 1 && animatedScale.value > 1f) {
                                             val panChange = event.calculatePan()
-                                            val s = animatedScale.value
-                                            val mx = (s - 1f) * w / 2f
-                                            val my = (s - 1f) * h / 2f
-                                            pageOffsetX = (pageOffsetX + panChange.x).coerceIn(-mx, mx)
-                                            pageOffsetY = (pageOffsetY + panChange.y).coerceIn(-my, my)
+                                            panZoomed(panChange.x, panChange.y, animatedScale.value, w, h)
                                             event.changes.forEach { it.consume() }
                                         }
                                     } while (event.changes.any { it.pressed })
@@ -211,24 +253,27 @@ fun ImagePreviewDialog(
                                 onClickLabel = stringResource(R.string.image_toggle_scale),
                                 onClick = toggleZoom,
                                 onDoubleClick = toggleZoom,
-                            ),
+                            )
+                            // 缩放作用在整个可视窗口上，以屏幕中心为轴心，与平移边界的计算一致。
+                            .graphicsLayer {
+                                scaleX = animatedScale.value
+                                scaleY = animatedScale.value
+                                translationX = pageOffsetX
+                                translationY = pageOffsetY
+                            }
+                            // 放大时关闭滚动手势，避免和上面的平移手势同时生效。
+                            .verticalScroll(pageScrollState, enabled = animatedScale.value <= 1f),
+                        // verticalScroll 会保留一屏的最小高度：短图居中，长图从顶部开始完整排列。
                         contentAlignment = Alignment.Center
                     ) {
                         AsyncImage(
-                            model = currentUrl,
+                            model = imageRequest,
                             contentDescription = stringResource(
                                 R.string.image_preview_item,
                                 page + 1,
                                 urls.size,
                             ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .graphicsLayer {
-                                    scaleX = animatedScale.value
-                                    scaleY = animatedScale.value
-                                    translationX = pageOffsetX
-                                    translationY = pageOffsetY
-                                },
+                            modifier = Modifier.fillMaxWidth(),
                             contentScale = ContentScale.FillWidth
                         )
                     }

@@ -64,8 +64,17 @@ class BubbleContentTypesRenderRouteTest {
         val source = bubbleContentTypesSource()
 
         assertEquals(
-            AttachmentThumbnailSize(widthDp = 45f, heightDp = 100f),
+            AttachmentThumbnailSize(widthDp = 56f, heightDp = 100f),
             fitAttachmentThumbnail(sourceWidth = 1080f, sourceHeight = 2400f),
+        )
+        // 长截图和超宽全景图保留最小边长，不再缩成细条。
+        assertEquals(
+            AttachmentThumbnailSize(widthDp = 56f, heightDp = 100f),
+            fitAttachmentThumbnail(sourceWidth = 1080f, sourceHeight = 12000f),
+        )
+        assertEquals(
+            AttachmentThumbnailSize(widthDp = 160f, heightDp = 56f),
+            fitAttachmentThumbnail(sourceWidth = 8000f, sourceHeight = 1000f),
         )
         assertEquals(
             AttachmentThumbnailSize(widthDp = 100f, heightDp = 100f),
