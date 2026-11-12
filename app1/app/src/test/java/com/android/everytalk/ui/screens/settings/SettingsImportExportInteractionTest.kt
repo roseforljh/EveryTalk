@@ -233,7 +233,13 @@ class SettingsImportExportInteractionTest {
             listOf(null, Screen.CHAT_SCREEN, Screen.COMPUTER_DETAIL_SCREEN, Screen.SKILL_DETAIL_SCREEN).forEach { other ->
                 assertFalse(isSettingsMenuTransition(from, other))
                 assertFalse(isSettingsMenuTransition(other, from))
+                assertNotEquals(settingsMenuEnterTransition(), settingsRouteEnterTransition(other, from))
+                assertNotEquals(settingsMenuExitTransition(), settingsRoutePopExitTransition(from, other))
             }
         }
+        assertNotNull(hierarchicalEnterTransition())
+        assertNotNull(hierarchicalExitTransition())
+        assertNotNull(hierarchicalPopEnterTransition())
+        assertNotNull(hierarchicalPopExitTransition())
     }
 }

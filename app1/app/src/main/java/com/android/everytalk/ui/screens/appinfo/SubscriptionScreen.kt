@@ -50,7 +50,7 @@ internal fun SubscriptionScreen(
     var requestedPlan by rememberSaveable { mutableStateOf<String?>(null) }
     // 当前套餐暂时使用 UI 默认值；接入订阅接口后替换为服务端返回的套餐名即可。
     val currentPlan = "Free"
-    BackHandler(onBack = onBack)
+    // 交由 NavHost 统一处理系统侧滑返回，保留预测式返回预览动效。
 
     // 复用管理页面的滚动容器和上下渐变，内容自然延伸到透明系统栏下。
     ImmersiveInfoPage(

@@ -464,11 +464,11 @@ fun SettingsScreen(
                                 onOpenAccount = { navController.navigate(Screen.ACCOUNT_SCREEN) { launchSingleTop = true } },
                                 onOpenComputers = {
                                     showTabMenu = false
-                                    navController.navigate(Screen.COMPUTER_SCREEN) { launchSingleTop = true }
+                                    navController.navigateSettingsMenuRoute(Screen.COMPUTER_SCREEN)
                                 },
                                 onOpenSkills = {
                                     showTabMenu = false
-                                    navController.navigate(Screen.SKILL_SCREEN) { launchSingleTop = true }
+                                    navController.navigateSettingsMenuRoute(Screen.SKILL_SCREEN)
                                 },
                                 onDismiss = { showTabMenu = false }
                             )
@@ -529,11 +529,11 @@ fun SettingsScreen(
                                 onOpenAccount = { navController.navigate(Screen.ACCOUNT_SCREEN) { launchSingleTop = true } },
                                 onOpenComputers = {
                                     showTabMenu = false
-                                    navController.navigate(Screen.COMPUTER_SCREEN) { launchSingleTop = true }
+                                    navController.navigateSettingsMenuRoute(Screen.COMPUTER_SCREEN)
                                 },
                                 onOpenSkills = {
                                     showTabMenu = false
-                                    navController.navigate(Screen.SKILL_SCREEN) { launchSingleTop = true }
+                                    navController.navigateSettingsMenuRoute(Screen.SKILL_SCREEN)
                                 },
                                 onDismiss = { showTabMenu = false }
                             )

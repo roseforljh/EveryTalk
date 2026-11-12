@@ -60,6 +60,7 @@ import com.android.everytalk.data.computer.CloudflareSettingsOAuthStore
 import com.android.everytalk.data.computer.CloudflareOAuthCallbackBus
 import com.android.everytalk.data.computer.CloudflareTokenExchangeResult
 import com.android.everytalk.navigation.Screen
+import com.android.everytalk.ui.screens.settings.navigateSettingsMenuRoute
 import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.statecontroller.addConfirmedComputer
 import com.android.everytalk.statecontroller.probeComputerHostKey
@@ -180,7 +181,7 @@ fun ComputerScreen(
             navController.getBackStackEntry(Screen.SETTINGS_SCREEN)
         }.getOrNull()
         val targetEntry = existingEntry ?: run {
-            navController.navigate(Screen.SETTINGS_SCREEN) { launchSingleTop = true }
+            navController.navigateSettingsMenuRoute(Screen.SETTINGS_SCREEN)
             navController.currentBackStackEntry
         }
         // 从聊天直接进入本页时也要把目标页签交给新建的设置页。
@@ -199,7 +200,9 @@ fun ComputerScreen(
         }
     }
 
-    BackHandler(onBack = ::returnToChatHome)
+    // 栈底已是聊天首页时交给 NavHost 驱动预测式侧滑返回预览，仅在存在中间路由时拦截跳转。
+    val interceptBackToChat = navController.previousBackStackEntry?.destination?.route != Screen.CHAT_SCREEN
+    BackHandler(enabled = interceptBackToChat, onBack = ::returnToChatHome)
 
     fun validationMessage(error: ComputerAddFormError): String = context.getString(
         when (error) {
@@ -444,7 +447,10 @@ fun ComputerScreen(
                         onTabSelected = { index -> returnToSettings(tabIndex = index) },
                         onImportExport = onImportExport,
                         onOpenComputers = { showTabMenu = false },
-                        onOpenSkills = { navController.navigate(Screen.SKILL_SCREEN) { launchSingleTop = true } },
+                        onOpenSkills = {
+                            showTabMenu = false
+                            navController.navigateSettingsMenuRoute(Screen.SKILL_SCREEN)
+                        },
                         onOpenAccount = { navController.navigate(Screen.ACCOUNT_SCREEN) { launchSingleTop = true } },
                         isComputerSelected = true,
                         onDismiss = { showTabMenu = false },

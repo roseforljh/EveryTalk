@@ -75,6 +75,7 @@ import com.android.everytalk.data.skill.RemoteSkillPackageCatalogItem
 import com.android.everytalk.data.skill.SkillCatalogClient
 import com.android.everytalk.data.skill.SkillSourceType
 import com.android.everytalk.navigation.Screen
+import com.android.everytalk.ui.screens.settings.navigateSettingsMenuRoute
 import com.android.everytalk.ui.components.dialog.AppDialogButtonShape
 import com.android.everytalk.ui.components.dialog.AppDialogShape
 import com.android.everytalk.ui.components.dialog.AppDialogTextFieldShape
@@ -169,7 +170,7 @@ fun SkillScreen(
             navController.getBackStackEntry(Screen.SETTINGS_SCREEN)
         }.getOrNull()
         val targetEntry = existingEntry ?: run {
-            navController.navigate(Screen.SETTINGS_SCREEN) { launchSingleTop = true }
+            navController.navigateSettingsMenuRoute(Screen.SETTINGS_SCREEN)
             navController.currentBackStackEntry
         }
         // 从聊天直接进入本页时也要把目标页签交给新建的设置页。
@@ -188,7 +189,9 @@ fun SkillScreen(
         }
     }
 
-    BackHandler(onBack = ::returnToChatHome)
+    // 栈底已是聊天首页时交给 NavHost 驱动预测式侧滑返回预览，仅在存在中间路由时拦截跳转。
+    val interceptBackToChat = navController.previousBackStackEntry?.destination?.route != Screen.CHAT_SCREEN
+    BackHandler(enabled = interceptBackToChat, onBack = ::returnToChatHome)
 
     val topButtonSize = 46.dp
     val buttonBackground = if (isDark) Color(0xFF303030) else Color.White
@@ -297,7 +300,10 @@ fun SkillScreen(
                         currentTabIndex = -1,
                         onTabSelected = { returnToSettings(it) },
                         onImportExport = onImportExport,
-                        onOpenComputers = { navController.navigate(Screen.COMPUTER_SCREEN) },
+                        onOpenComputers = {
+                            showTabMenu = false
+                            navController.navigateSettingsMenuRoute(Screen.COMPUTER_SCREEN)
+                        },
                         onOpenSkills = { showTabMenu = false },
                         onOpenAccount = { navController.navigate(Screen.ACCOUNT_SCREEN) { launchSingleTop = true } },
                         isSkillSelected = true,

@@ -35,9 +35,14 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import com.android.everytalk.ui.screens.settings.SettingsImportExportHost
-import com.android.everytalk.ui.screens.settings.isSettingsMenuTransition
-import com.android.everytalk.ui.screens.settings.settingsMenuEnterTransition
-import com.android.everytalk.ui.screens.settings.settingsMenuExitTransition
+import com.android.everytalk.ui.screens.settings.hierarchicalEnterTransition
+import com.android.everytalk.ui.screens.settings.hierarchicalExitTransition
+import com.android.everytalk.ui.screens.settings.hierarchicalPopEnterTransition
+import com.android.everytalk.ui.screens.settings.hierarchicalPopExitTransition
+import com.android.everytalk.ui.screens.settings.settingsRouteEnterTransition
+import com.android.everytalk.ui.screens.settings.settingsRouteExitTransition
+import com.android.everytalk.ui.screens.settings.settingsRoutePopEnterTransition
+import com.android.everytalk.ui.screens.settings.settingsRoutePopExitTransition
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
@@ -634,44 +639,16 @@ class MainActivity : AppCompatActivity() {
                                 composable(
                                     route = Screen.SETTINGS_SCREEN,
                                     enterTransition = {
-                                        if (isSettingsMenuTransition(initialState.destination.route, targetState.destination.route)) {
-                                            settingsMenuEnterTransition()
-                                        } else {
-                                            androidx.compose.animation.slideInHorizontally(
-                                                initialOffsetX = { fullWidth -> fullWidth },
-                                                animationSpec = tween(300, easing = FastOutSlowInEasing)
-                                            )
-                                        }
+                                        settingsRouteEnterTransition(initialState.destination.route, targetState.destination.route)
                                     },
                                     exitTransition = {
-                                        if (isSettingsMenuTransition(initialState.destination.route, targetState.destination.route)) {
-                                            settingsMenuExitTransition()
-                                        } else {
-                                            androidx.compose.animation.slideOutHorizontally(
-                                                targetOffsetX = { fullWidth -> fullWidth },
-                                                animationSpec = tween(300, easing = FastOutSlowInEasing)
-                                            )
-                                        }
+                                        settingsRouteExitTransition(initialState.destination.route, targetState.destination.route)
                                     },
                                     popEnterTransition = {
-                                        if (isSettingsMenuTransition(initialState.destination.route, targetState.destination.route)) {
-                                            settingsMenuEnterTransition()
-                                        } else {
-                                            androidx.compose.animation.slideInHorizontally(
-                                                initialOffsetX = { fullWidth -> fullWidth },
-                                                animationSpec = tween(300, easing = FastOutSlowInEasing)
-                                            )
-                                        }
+                                        settingsRoutePopEnterTransition(initialState.destination.route, targetState.destination.route)
                                     },
                                     popExitTransition = {
-                                        if (isSettingsMenuTransition(initialState.destination.route, targetState.destination.route)) {
-                                            settingsMenuExitTransition()
-                                        } else {
-                                            androidx.compose.animation.slideOutHorizontally(
-                                                targetOffsetX = { fullWidth -> fullWidth },
-                                                animationSpec = tween(300, easing = FastOutSlowInEasing)
-                                            )
-                                        }
+                                        settingsRoutePopExitTransition(initialState.destination.route, targetState.destination.route)
                                     }
                                  ) {
                                      SettingsScreen(
@@ -682,13 +659,20 @@ class MainActivity : AppCompatActivity() {
                                  }
                                 composable(
                                     route = Screen.ACCOUNT_SCREEN,
-                                    enterTransition = { settingsMenuEnterTransition() },
-                                    exitTransition = { settingsMenuExitTransition() },
-                                    popEnterTransition = { settingsMenuEnterTransition() },
-                                    popExitTransition = { settingsMenuExitTransition() },
+                                    enterTransition = { hierarchicalEnterTransition() },
+                                    exitTransition = { hierarchicalExitTransition() },
+                                    popEnterTransition = { hierarchicalPopEnterTransition() },
+                                    popExitTransition = { hierarchicalPopExitTransition() },
                                 ) {
                                     // 进入登录页时记住来源；认证协调器可能先消费动作，不能再读 hasPendingLogin。
                                     val returnAfterLogin = remember { appViewModel.featureGateCoordinator.hasPendingLogin() }
+                                    DisposableEffect(Unit) {
+                                        onDispose {
+                                            if (appViewModel.accountManager.state.value.user == null) {
+                                                appViewModel.featureGateCoordinator.cancel()
+                                            }
+                                        }
+                                    }
                                     com.android.everytalk.ui.screens.account.AccountScreen(
                                         manager = appViewModel.accountManager,
                                         onBack = {
@@ -713,44 +697,16 @@ class MainActivity : AppCompatActivity() {
                                 composable(
                                     route = Screen.COMPUTER_SCREEN,
                                     enterTransition = {
-                                        if (isSettingsMenuTransition(initialState.destination.route, targetState.destination.route)) {
-                                            settingsMenuEnterTransition()
-                                        } else {
-                                            androidx.compose.animation.slideInHorizontally(
-                                                initialOffsetX = { fullWidth -> fullWidth },
-                                                animationSpec = tween(300, easing = FastOutSlowInEasing),
-                                            )
-                                        }
+                                        settingsRouteEnterTransition(initialState.destination.route, targetState.destination.route)
                                     },
                                     exitTransition = {
-                                        if (isSettingsMenuTransition(initialState.destination.route, targetState.destination.route)) {
-                                            settingsMenuExitTransition()
-                                        } else {
-                                            androidx.compose.animation.slideOutHorizontally(
-                                                targetOffsetX = { fullWidth -> -fullWidth / 4 },
-                                                animationSpec = tween(300, easing = FastOutSlowInEasing),
-                                            )
-                                        }
+                                        settingsRouteExitTransition(initialState.destination.route, targetState.destination.route)
                                     },
                                     popEnterTransition = {
-                                        if (isSettingsMenuTransition(initialState.destination.route, targetState.destination.route)) {
-                                            settingsMenuEnterTransition()
-                                        } else {
-                                            androidx.compose.animation.slideInHorizontally(
-                                                initialOffsetX = { fullWidth -> -fullWidth / 4 },
-                                                animationSpec = tween(300, easing = FastOutSlowInEasing),
-                                            )
-                                        }
+                                        settingsRoutePopEnterTransition(initialState.destination.route, targetState.destination.route)
                                     },
                                     popExitTransition = {
-                                        if (isSettingsMenuTransition(initialState.destination.route, targetState.destination.route)) {
-                                            settingsMenuExitTransition()
-                                        } else {
-                                            androidx.compose.animation.slideOutHorizontally(
-                                                targetOffsetX = { fullWidth -> fullWidth },
-                                                animationSpec = tween(300, easing = FastOutSlowInEasing),
-                                            )
-                                        }
+                                        settingsRoutePopExitTransition(initialState.destination.route, targetState.destination.route)
                                     },
                                 ) {
                                     com.android.everytalk.ui.screens.computer.ComputerNeutralTheme {
@@ -768,30 +724,10 @@ class MainActivity : AppCompatActivity() {
                                             type = androidx.navigation.NavType.StringType
                                         },
                                     ),
-                                    enterTransition = {
-                                        androidx.compose.animation.slideInHorizontally(
-                                            initialOffsetX = { fullWidth -> fullWidth },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
-                                        )
-                                    },
-                                    exitTransition = {
-                                        androidx.compose.animation.slideOutHorizontally(
-                                            targetOffsetX = { fullWidth -> fullWidth },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
-                                        )
-                                    },
-                                    popEnterTransition = {
-                                        androidx.compose.animation.slideInHorizontally(
-                                            initialOffsetX = { fullWidth -> -fullWidth / 4 },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
-                                        )
-                                    },
-                                    popExitTransition = {
-                                        androidx.compose.animation.slideOutHorizontally(
-                                            targetOffsetX = { fullWidth -> fullWidth },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
-                                        )
-                                    },
+                                    enterTransition = { hierarchicalEnterTransition() },
+                                    exitTransition = { hierarchicalExitTransition() },
+                                    popEnterTransition = { hierarchicalPopEnterTransition() },
+                                    popExitTransition = { hierarchicalPopExitTransition() },
                                 ) { entry ->
                                     val computerId = entry.arguments?.getString("computerId").orEmpty()
                                     com.android.everytalk.ui.screens.computer.ComputerNeutralTheme {
@@ -805,24 +741,16 @@ class MainActivity : AppCompatActivity() {
                                 composable(
                                     route = Screen.SKILL_SCREEN,
                                     enterTransition = {
-                                        if (isSettingsMenuTransition(initialState.destination.route, targetState.destination.route)) {
-                                            settingsMenuEnterTransition()
-                                        } else null
+                                        settingsRouteEnterTransition(initialState.destination.route, targetState.destination.route)
                                     },
                                     exitTransition = {
-                                        if (isSettingsMenuTransition(initialState.destination.route, targetState.destination.route)) {
-                                            settingsMenuExitTransition()
-                                        } else null
+                                        settingsRouteExitTransition(initialState.destination.route, targetState.destination.route)
                                     },
                                     popEnterTransition = {
-                                        if (isSettingsMenuTransition(initialState.destination.route, targetState.destination.route)) {
-                                            settingsMenuEnterTransition()
-                                        } else null
+                                        settingsRoutePopEnterTransition(initialState.destination.route, targetState.destination.route)
                                     },
                                     popExitTransition = {
-                                        if (isSettingsMenuTransition(initialState.destination.route, targetState.destination.route)) {
-                                            settingsMenuExitTransition()
-                                        } else null
+                                        settingsRoutePopExitTransition(initialState.destination.route, targetState.destination.route)
                                     },
                                 ) {
                                     com.android.everytalk.ui.screens.skill.SkillScreen(
@@ -830,10 +758,22 @@ class MainActivity : AppCompatActivity() {
                                         onImportExport = openImportExport,
                                     )
                                 }
-                                composable(route = Screen.SKILL_DOWNLOAD_SCREEN) {
+                                composable(
+                                    route = Screen.SKILL_DOWNLOAD_SCREEN,
+                                    enterTransition = { hierarchicalEnterTransition() },
+                                    exitTransition = { hierarchicalExitTransition() },
+                                    popEnterTransition = { hierarchicalPopEnterTransition() },
+                                    popExitTransition = { hierarchicalPopExitTransition() },
+                                ) {
                                     com.android.everytalk.ui.screens.skill.SkillDownloadScreen(navController = navController)
                                 }
-                                composable(route = Screen.SKILL_DETAIL_SCREEN) { entry ->
+                                composable(
+                                    route = Screen.SKILL_DETAIL_SCREEN,
+                                    enterTransition = { hierarchicalEnterTransition() },
+                                    exitTransition = { hierarchicalExitTransition() },
+                                    popEnterTransition = { hierarchicalPopEnterTransition() },
+                                    popExitTransition = { hierarchicalPopExitTransition() },
+                                ) { entry ->
                                     com.android.everytalk.ui.screens.skill.SkillDetailScreen(
                                         navController = navController,
                                         skillId = entry.arguments?.getString("skillId").orEmpty(),
@@ -841,30 +781,10 @@ class MainActivity : AppCompatActivity() {
                                 }
                                 composable(
                                     route = Screen.APP_INFO_SCREEN,
-                                    enterTransition = {
-                                        androidx.compose.animation.slideInHorizontally(
-                                            initialOffsetX = { fullWidth -> fullWidth },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
-                                        )
-                                    },
-                                    exitTransition = {
-                                        androidx.compose.animation.slideOutHorizontally(
-                                            targetOffsetX = { fullWidth -> -fullWidth / 4 },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
-                                        )
-                                    },
-                                    popEnterTransition = {
-                                        androidx.compose.animation.slideInHorizontally(
-                                            initialOffsetX = { fullWidth -> -fullWidth / 4 },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
-                                        )
-                                    },
-                                    popExitTransition = {
-                                        androidx.compose.animation.slideOutHorizontally(
-                                            targetOffsetX = { fullWidth -> fullWidth },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
-                                        )
-                                    },
+                                    enterTransition = { hierarchicalEnterTransition() },
+                                    exitTransition = { hierarchicalExitTransition() },
+                                    popEnterTransition = { hierarchicalPopEnterTransition() },
+                                    popExitTransition = { hierarchicalPopExitTransition() },
                                 ) {
                                     val accentColor by appViewModel.accentColor.collectAsState()
                                     val accountState by appViewModel.accountManager.state.collectAsState()
@@ -930,18 +850,10 @@ class MainActivity : AppCompatActivity() {
                                 }
                                 composable(
                                     route = Screen.SUBSCRIPTION_SCREEN,
-                                    enterTransition = {
-                                        androidx.compose.animation.slideInHorizontally(
-                                            initialOffsetX = { fullWidth -> fullWidth },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
-                                        )
-                                    },
-                                    popExitTransition = {
-                                        androidx.compose.animation.slideOutHorizontally(
-                                            targetOffsetX = { fullWidth -> fullWidth },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
-                                        )
-                                    },
+                                    enterTransition = { hierarchicalEnterTransition() },
+                                    exitTransition = { hierarchicalExitTransition() },
+                                    popEnterTransition = { hierarchicalPopEnterTransition() },
+                                    popExitTransition = { hierarchicalPopExitTransition() },
                                 ) {
                                     SubscriptionScreen(
                                         onBack = { navController.popBackStack() },
@@ -949,35 +861,21 @@ class MainActivity : AppCompatActivity() {
                                         featureGateCoordinator = appViewModel.featureGateCoordinator,
                                     )
                                 }
-                                composable(route = Screen.MEMORY_MANAGEMENT_SCREEN) {
+                                composable(
+                                    route = Screen.MEMORY_MANAGEMENT_SCREEN,
+                                    enterTransition = { hierarchicalEnterTransition() },
+                                    exitTransition = { hierarchicalExitTransition() },
+                                    popEnterTransition = { hierarchicalPopEnterTransition() },
+                                    popExitTransition = { hierarchicalPopExitTransition() },
+                                ) {
                                     com.android.everytalk.ui.screens.appinfo.MemoryManagementScreen(onBack = { navController.popBackStack() })
                                 }
                                 composable(
                                     route = Screen.DATA_MANAGEMENT_SCREEN,
-                                    enterTransition = {
-                                        androidx.compose.animation.slideInHorizontally(
-                                            initialOffsetX = { fullWidth -> fullWidth },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
-                                        )
-                                    },
-                                    exitTransition = {
-                                        androidx.compose.animation.slideOutHorizontally(
-                                            targetOffsetX = { fullWidth -> -fullWidth / 4 },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
-                                        )
-                                    },
-                                    popEnterTransition = {
-                                        androidx.compose.animation.slideInHorizontally(
-                                            initialOffsetX = { fullWidth -> -fullWidth / 4 },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
-                                        )
-                                    },
-                                    popExitTransition = {
-                                        androidx.compose.animation.slideOutHorizontally(
-                                            targetOffsetX = { fullWidth -> fullWidth },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
-                                        )
-                                    },
+                                    enterTransition = { hierarchicalEnterTransition() },
+                                    exitTransition = { hierarchicalExitTransition() },
+                                    popEnterTransition = { hierarchicalPopEnterTransition() },
+                                    popExitTransition = { hierarchicalPopExitTransition() },
                                 ) {
                                     DataManagementScreen(
                                         onBack = { navController.popBackStack() },
@@ -1005,30 +903,10 @@ class MainActivity : AppCompatActivity() {
                                 }
                                 composable(
                                     route = Screen.PRIVACY_POLICY_SCREEN,
-                                    enterTransition = {
-                                        androidx.compose.animation.slideInHorizontally(
-                                            initialOffsetX = { fullWidth -> fullWidth },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
-                                        )
-                                    },
-                                    exitTransition = {
-                                        androidx.compose.animation.slideOutHorizontally(
-                                            targetOffsetX = { fullWidth -> -fullWidth / 4 },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
-                                        )
-                                    },
-                                    popEnterTransition = {
-                                        androidx.compose.animation.slideInHorizontally(
-                                            initialOffsetX = { fullWidth -> -fullWidth / 4 },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
-                                        )
-                                    },
-                                    popExitTransition = {
-                                        androidx.compose.animation.slideOutHorizontally(
-                                            targetOffsetX = { fullWidth -> fullWidth },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
-                                        )
-                                    },
+                                    enterTransition = { hierarchicalEnterTransition() },
+                                    exitTransition = { hierarchicalExitTransition() },
+                                    popEnterTransition = { hierarchicalPopEnterTransition() },
+                                    popExitTransition = { hierarchicalPopExitTransition() },
                                 ) {
                                     PrivacyPolicyScreen(
                                         onBack = { navController.popBackStack() },
@@ -1036,30 +914,10 @@ class MainActivity : AppCompatActivity() {
                                 }
                                  composable(
                                      route = Screen.IMAGE_GENERATION_SETTINGS_SCREEN,
-                                    enterTransition = {
-                                        androidx.compose.animation.slideInHorizontally(
-                                            initialOffsetX = { fullWidth -> fullWidth },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing)
-                                        )
-                                    },
-                                    exitTransition = {
-                                        androidx.compose.animation.slideOutHorizontally(
-                                            targetOffsetX = { fullWidth -> fullWidth },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing)
-                                        )
-                                    },
-                                    popEnterTransition = {
-                                        androidx.compose.animation.slideInHorizontally(
-                                            initialOffsetX = { fullWidth -> fullWidth },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing)
-                                        )
-                                    },
-                                    popExitTransition = {
-                                        androidx.compose.animation.slideOutHorizontally(
-                                            targetOffsetX = { fullWidth -> fullWidth },
-                                            animationSpec = tween(300, easing = FastOutSlowInEasing)
-                                        )
-                                    }
+                                    enterTransition = { hierarchicalEnterTransition() },
+                                    exitTransition = { hierarchicalExitTransition() },
+                                    popEnterTransition = { hierarchicalPopEnterTransition() },
+                                    popExitTransition = { hierarchicalPopExitTransition() },
                                 ) {
                                     com.android.everytalk.ui.screens.ImageGeneration.ImageGenerationSettingsScreen(
                                         viewModel = appViewModel,
@@ -1068,30 +926,10 @@ class MainActivity : AppCompatActivity() {
                                 }
                                composable(
                                    route = Screen.VOICE_INPUT_SCREEN,
-                                   enterTransition = {
-                                       androidx.compose.animation.slideInHorizontally(
-                                           initialOffsetX = { fullWidth -> fullWidth },
-                                           animationSpec = tween(300, easing = FastOutSlowInEasing)
-                                       )
-                                   },
-                                   exitTransition = {
-                                       androidx.compose.animation.slideOutHorizontally(
-                                           targetOffsetX = { fullWidth -> fullWidth },
-                                           animationSpec = tween(300, easing = FastOutSlowInEasing)
-                                       )
-                                   },
-                                   popEnterTransition = {
-                                       androidx.compose.animation.slideInHorizontally(
-                                           initialOffsetX = { fullWidth -> fullWidth },
-                                           animationSpec = tween(300, easing = FastOutSlowInEasing)
-                                       )
-                                   },
-                                   popExitTransition = {
-                                       androidx.compose.animation.slideOutHorizontally(
-                                           targetOffsetX = { fullWidth -> fullWidth },
-                                           animationSpec = tween(300, easing = FastOutSlowInEasing)
-                                       )
-                                   }
+                                   enterTransition = { hierarchicalEnterTransition() },
+                                   exitTransition = { hierarchicalExitTransition() },
+                                   popEnterTransition = { hierarchicalPopEnterTransition() },
+                                   popExitTransition = { hierarchicalPopExitTransition() },
                                ) {
                                    val selectedApiConfig by appViewModel.selectedApiConfig.collectAsState()
                                    com.android.everytalk.ui.screens.MainScreen.chat.voice.ui.VoiceInputScreen(

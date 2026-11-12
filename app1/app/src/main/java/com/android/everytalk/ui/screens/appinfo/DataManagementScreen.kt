@@ -95,7 +95,8 @@ fun DataManagementScreen(
     }
     val safeBack = { if (!isCleaning) leaveCurrentPage() }
 
-    BackHandler(enabled = !isCleaning, onBack = safeBack)
+    // 仅在清理中或处于分类详情子页面时拦截，根页面交给 NavHost 以展示预测式侧滑返回预览。
+    BackHandler(enabled = isCleaning || selectedType != null, onBack = safeBack)
 
     LaunchedEffect(refreshKey) {
         loadFailed = false

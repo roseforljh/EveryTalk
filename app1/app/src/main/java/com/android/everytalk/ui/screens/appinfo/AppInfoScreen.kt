@@ -150,7 +150,7 @@ fun AppInfoScreen(
     val context = LocalContext.current
     val currentLanguage = AppLanguageController.currentLanguage()
     var currentTheme by remember { mutableStateOf(AppThemeController.currentTheme(context)) }
-    BackHandler(onBack = onBack)
+    // 交由 NavHost 统一处理系统侧滑返回，保留预测式返回预览动效。
 
     ImmersiveInfoPage(
         title = "",
@@ -258,7 +258,7 @@ fun PrivacyPolicyScreen(
 ) {
     val uriHandler = LocalUriHandler.current
 
-    BackHandler(onBack = onBack)
+    // 交由 NavHost 统一处理系统侧滑返回，保留预测式返回预览动效。
 
     ImmersiveInfoPage(
         title = stringResource(R.string.privacy_policy_title),
