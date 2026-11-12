@@ -17,6 +17,8 @@ import com.android.everytalk.util.AppLogger
 import com.android.everytalk.util.ScrollController
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -555,6 +557,7 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
         // Requirements: 1.4, 3.4
         streamingMessageStateManager.startStreaming(messageId)
 
+        dropPendingReasoning(messageId)
         streamingReasoningStates[messageId] = MutableStateFlow("")
 
         val buffer = StreamingBuffer(
@@ -665,6 +668,7 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
 
         // 🎯 Clear streaming state in StreamingMessageStateManager
         streamingMessageStateManager.clearStreamingState(messageId)
+        dropPendingReasoning(messageId)
         streamingReasoningStates.remove(messageId)
 
         android.util.Log.d("ViewModelStateHolder", "Cleared StreamingBuffer and streaming state for message: $messageId")
@@ -803,6 +807,56 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
         
         return metrics
     }
+    // 思考增量按批提交：逐 token 改消息列表会让整表投影、思考区 Markdown 解析和全文 StateFlow 每个 token 重算一次，
+    // 长思考时分配量随长度平方增长，是流式期间内存暴涨、卡顿的主要来源。
+    private class PendingReasoning(val isImageGeneration: Boolean) {
+        val text = StringBuilder()
+        var lastCommitAt = 0L
+        var job: Job? = null
+    }
+    private val pendingReasoning = mutableMapOf<String, PendingReasoning>()
+
+    /** 主线程调用。首个分片立即提交，之后最多每 [REASONING_COMMIT_INTERVAL_MS] 提交一次。 */
+    fun queueReasoningChunk(messageId: String, chunk: String, isImageGeneration: Boolean = false) {
+        if (chunk.isEmpty()) return
+        val pending = pendingReasoning.getOrPut(messageId) { PendingReasoning(isImageGeneration) }
+        pending.text.append(chunk)
+        val wait = pending.lastCommitAt + REASONING_COMMIT_INTERVAL_MS - System.currentTimeMillis()
+        val scope = bufferCoroutineScope
+        if (wait <= 0L || scope == null) {
+            flushPendingReasoning(messageId)
+        } else if (pending.job == null) {
+            pending.job = scope.launch {
+                delay(wait)
+                pending.job = null
+                flushPendingReasoning(messageId)
+            }
+        }
+    }
+
+    /** 其它事件处理前必须先调用，保证思考、正文、工具在执行链里的先后顺序不变。 */
+    fun flushPendingReasoning(messageId: String) {
+        val pending = pendingReasoning[messageId] ?: return
+        pending.job?.cancel()
+        pending.job = null
+        if (pending.text.isEmpty()) return
+        val chunk = pending.text.toString()
+        pending.text.setLength(0)
+        pending.lastCommitAt = System.currentTimeMillis()
+        val messageList = if (pending.isImageGeneration) imageGenerationMessages else textMessagesForMessage(messageId)
+        val index = messageList.indexOfFirst { it.id == messageId }
+        if (index >= 0) {
+            val current = messageList[index]
+            val seeded = applyActiveReasoningChunk(current, chunk)
+            if (seeded != current) messageList[index] = seeded
+        }
+        appendReasoningToMessage(messageId, chunk, pending.isImageGeneration)
+    }
+
+    private fun dropPendingReasoning(messageId: String) {
+        pendingReasoning.remove(messageId)?.job?.cancel()
+    }
+
     fun appendReasoningToMessage(messageId: String, text: String, isImageGeneration: Boolean = false) {
         if (text.isEmpty()) return
         val state = streamingReasoningStates.getOrPut(messageId) { MutableStateFlow("") }
@@ -976,6 +1030,7 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
         }
 
         streamingBuffers[messageId]?.flush()
+        flushPendingReasoning(messageId)
         val finalText = streamingMessageStateManager.finishStreaming(messageId)
         val finalReasoning = streamingReasoningStates[messageId]?.value.orEmpty()
 
@@ -1018,6 +1073,7 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
      */
     fun syncStreamingSnapshotToList(messageId: String, isImageGeneration: Boolean = false) {
         streamingBuffers[messageId]?.flush()
+        flushPendingReasoning(messageId)
         val currentText = streamingMessageStateManager.getCurrentContent(messageId)
         val currentReasoning = streamingReasoningStates[messageId]?.value.orEmpty()
         if (currentText.isEmpty() && currentReasoning.isEmpty()) return
@@ -1043,3 +1099,6 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
         return _apiHandler ?: throw IllegalStateException("ApiHandler not initialized")
     }
 }
+
+/** 与正文缓冲同一量级：人眼看不出差别，但思考区每秒最多重算约 8 次。 */
+private const val REASONING_COMMIT_INTERVAL_MS = 120L

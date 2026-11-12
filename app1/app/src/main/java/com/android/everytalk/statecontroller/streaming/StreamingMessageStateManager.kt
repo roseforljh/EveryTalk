@@ -474,9 +474,11 @@ class StreamingMessageStateManager {
     }
 
     private fun hasUnstableTrailingTable(previous: String, current: String): Boolean {
-        val currentLines = current.lines()
-        if (currentLines.size < 2) return false
-        val tail = currentLines.takeLast(3)
+        // 只切末尾三行：每次刷新都 lines() 全文，长回答下每秒产生数 MB 垃圾。
+        var cut = current.length
+        repeat(3) { if (cut >= 0) cut = current.lastIndexOf('\n', cut - 1) }
+        val tail = current.substring(cut + 1).lines()
+        if (cut < 0 && tail.size < 2) return false
         val tableLikeCount = tail.count { it.contains('|') }
         if (tableLikeCount == 0) return false
 

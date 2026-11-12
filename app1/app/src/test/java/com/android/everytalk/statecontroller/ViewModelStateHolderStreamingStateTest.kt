@@ -82,6 +82,26 @@ class ViewModelStateHolderStreamingStateTest {
     }
 
     @Test
+    fun `思考分片按批提交且终态同步不丢尾部`() {
+        val messageId = "reasoning-batched"
+        stateHolder.createStreamingBuffer(messageId)
+        stateHolder.messages.add(Message(id = messageId, text = "", sender = Sender.AI))
+
+        stateHolder.queueReasoningChunk(messageId, "甲")
+        stateHolder.queueReasoningChunk(messageId, "乙")
+        stateHolder.queueReasoningChunk(messageId, "丙")
+
+        // 首片立即可见，后续分片在批次窗口内合并，不逐 token 改消息列表。
+        assertEquals("甲", stateHolder.getStreamingReasoning(messageId).value)
+        stateHolder.syncStreamingMessageToList(messageId)
+        assertEquals("甲乙丙", stateHolder.getStreamingReasoning(messageId).value)
+        assertEquals("甲乙丙", stateHolder.messages.single().reasoning)
+        val reasoningTrace = stateHolder.messages.single().executionTrace
+            .filterIsInstance<ExecutionTraceEvent.Reasoning>()
+        assertEquals(listOf("甲乙丙"), reasoningTrace.map { it.text })
+    }
+
+    @Test
     fun `reasoning chunks update only their dedicated state flow`() {
         val messageId = "reasoning-only-flow"
         stateHolder.createStreamingBuffer(messageId)

@@ -141,6 +141,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.intellij.markdown.IElementType
 import org.intellij.markdown.MarkdownElementTypes
 import org.intellij.markdown.MarkdownTokenTypes
@@ -207,7 +209,10 @@ internal fun PrepareStreamingMarkdownRebase(request: StreamingMarkdownRebaseRequ
         LaunchedEffect(state, request) {
             try {
                 request.beforePrepare()
-                if (request.content.isNotEmpty()) state.append(request.content)
+                // 整篇重新解析放到后台线程；长回答每遇到段落边界都会重建，在主线程做会直接掉帧。
+                if (request.content.isNotEmpty()) {
+                    withContext(Dispatchers.Default) { state.append(request.content) }
+                }
                 request.result.complete(state)
             } catch (error: CancellationException) {
                 request.result.cancel(error)
@@ -287,7 +292,9 @@ internal fun rememberStreamingMarkdownBundle(
             } else {
                 val bundle = requireNotNull(currentBundle)
                 val appendedDelta = requireNotNull(delta)
-                if (appendedDelta.isNotEmpty()) bundle.state.append(appendedDelta)
+                if (appendedDelta.isNotEmpty()) {
+                    withContext(Dispatchers.Default) { bundle.state.append(appendedDelta) }
+                }
                 appendBridge.appendedContent = nextContent
                 activeBundle.value = bundle.copy(preparedMessage = nextPreparedMessage)
             }

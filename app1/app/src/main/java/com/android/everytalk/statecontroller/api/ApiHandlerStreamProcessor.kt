@@ -695,6 +695,9 @@ internal class ApiHandlerStreamProcessor(
             if (appEvent.requiresOrderedContentFlush()) {
                 stateHolder.flushStreamingBuffer(aiMessageId)
             }
+            if (appEvent !is AppStreamEvent.Reasoning) {
+                stateHolder.flushPendingReasoning(aiMessageId)
+            }
     
             val currentMessage = messageList[messageIndex]
             var updatedMessage = currentMessage
@@ -964,11 +967,6 @@ internal class ApiHandlerStreamProcessor(
                     if (processedResult is com.android.everytalk.util.messageprocessor.ProcessedEventResult.ReasoningUpdated) {
                         val reasoningChunk = TextSanitizer.removeUnicodeReplacementCharacters(appEvent.text)
                         if (reasoningChunk.isNotBlank()) {
-                            val latestMessage = latestMessageForUpdate()
-                            val seededMessage = applyActiveReasoningChunk(latestMessage, reasoningChunk)
-                            if (seededMessage != latestMessage) {
-                                messageList[messageIndex] = seededMessage
-                            }
                             val reasoningMap = if (isImageGeneration) {
                                 stateHolder.imageReasoningCompleteMap
                             } else {
@@ -976,7 +974,7 @@ internal class ApiHandlerStreamProcessor(
                             }
                             markReasoningRoundActive(reasoningMap, aiMessageId)
                             PerformanceMonitor.recordEvent(aiMessageId, "Reasoning", reasoningChunk.length)
-                            stateHolder.appendReasoningToMessage(aiMessageId, reasoningChunk, isImageGeneration)
+                            stateHolder.queueReasoningChunk(aiMessageId, reasoningChunk, isImageGeneration)
                         }
                         return@withContext
                     }
