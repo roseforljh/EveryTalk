@@ -1,0 +1,16 @@
+HSPLcom/android/everytalk/ui/**->**(**)**
+HSPLcom/android/everytalk/statecontroller/**->**(**)**
+HSPLcom/android/everytalk/data/**->**(**)**
+HSPLcom/android/everytalk/util/**->**(**)**
+HSPLcom/android/everytalk/provider/**->**(**)**
+HSPLcom/android/everytalk/models/**->**(**)**
+HSPLcom/mikepenz/markdown/**->**(**)**
+HSPLorg/intellij/markdown/**->**(**)**
+HSPLdev/textmate/**->**(**)**
+HSPLcoil3/**->**(**)**
+Lcom/android/everytalk/**;
+Lcom/mikepenz/markdown/**;
+Lorg/intellij/markdown/**;
+HSPLcom/android/everytalk/service/**->**(**)**
+HSPLcom/android/everytalk/navigation/**->**(**)**
+HSPLcom/android/everytalk/application/**->**(**)**
