@@ -114,7 +114,9 @@ class AppModalBottomSheetDragTest {
                     dragHandleModifier = Modifier.testTag("handle"),
                     scrollModifier = Modifier.testTag("body"),
                     stateModifier = { state, _ -> Modifier.testTag("state-$state") },
-                    header = {},
+                    header = {
+                        Box(Modifier.fillMaxWidth().height(36.dp).testTag("header"))
+                    },
                 ) {
                     Box(Modifier.fillMaxWidth().height(if (longContent) 3000.dp else 80.dp))
                 }
@@ -147,37 +149,29 @@ class AppModalBottomSheetDragTest {
     }
 
     @Test
-    fun `左右侧滑从中档依次降到低档和关闭且保留正文位置`() {
+    fun `左右侧滑从中档直接关闭且保留正文位置`() {
         open()
         rule.runOnIdle { scroll.dispatchRawDelta(600f) }
         val previousScroll = scroll.value
-        val middleTop = handleTop()
-        back(repeat = true)
-        val lowTop = handleTop()
-        assertTrue("一次返回只降到低档，连发不能直接关闭", lowTop > middleTop + 100f)
-        assertEquals(previousScroll, scroll.value)
         back(edge = BackEventCompat.EDGE_RIGHT)
         assertTrue(rule.onAllNodesWithTag("sheet").fetchSemanticsNodes().isEmpty())
         assertEquals(previousScroll, scroll.value)
     }
 
     @Test
-    fun `全屏返回先到中档再到低档且重新全屏后恢复顺序`() {
+    fun `全屏返回先到中档再关闭且重新全屏后恢复顺序`() {
         open()
         val middleTop = handleTop()
         expandFromHandle()
         assertTrue(handleTop() < middleTop - 10f)
         rule.runOnIdle { scroll.dispatchRawDelta(600f) }
         val previousScroll = scroll.value
-        back()
-        assertEquals(middleTop, handleTop(), 2f)
+        back(repeat = true)
+        assertEquals("全屏一次返回只退回中档，连发不能直接关闭", middleTop, handleTop(), 2f)
         assertEquals(previousScroll, scroll.value)
-        back()
-        assertTrue(handleTop() > middleTop + 100f)
         expandFromHandle()
         back()
-        assertEquals("低档重新展开后也应先回到中档", middleTop, handleTop(), 2f)
-        back()
+        assertEquals("重新展开后返回仍先回到中档", middleTop, handleTop(), 2f)
         back()
         assertTrue(rule.onAllNodesWithTag("sheet").fetchSemanticsNodes().isEmpty())
     }

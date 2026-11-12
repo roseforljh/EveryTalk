@@ -57,12 +57,8 @@ import kotlinx.coroutines.launch
 /** 全屏档位，允许抽屉顶边贴近窗口顶部。 */
 internal const val AppModalBottomSheetMaximumHeightFraction = 1.0f
 
-/** 当前档位，保留顶部约 10% 的空间作为可继续上拉的视觉提示。 */
-internal const val AppModalBottomSheetDefaultHeightFraction = 0.9f
-
-/** 返回操作的最低可见档位；再返回一次才隐藏。 */
-private const val AppModalBottomSheetLowHeightFraction = 0.5f
-private const val AppModalBottomSheetBackAnimationMillis = 280
+/** 默认半展开档位，保留上方空间展示聊天上下文并便于点击遮罩关闭。 */
+internal const val AppModalBottomSheetDefaultHeightFraction = 0.78f
 
 // Material 3 默认拖动条高 4dp，并带上下各 22dp 内边距。
 private val AppModalBottomSheetDragHandleSpace = 48.dp
@@ -170,8 +166,6 @@ internal fun AppModalBottomSheet(
 ) {
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
-    // Material 只提供一个半展开锚点，复用现有位移映射，在 90% 中档和 50% 低档间平滑切换。
-    val partialHeightFraction = remember { Animatable(AppModalBottomSheetDefaultHeightFraction) }
     var backTransitionRunning by remember { mutableStateOf(false) }
     val windowSize = LocalWindowInfo.current.containerSize
     val windowHeightPx = windowSize.height
@@ -188,7 +182,7 @@ internal fun AppModalBottomSheet(
     val partiallyExpandedHiddenHeightPx = (
         windowHeightPx *
             (AppModalBottomSheetMaximumHeightFraction -
-                partialHeightFraction.value)
+                AppModalBottomSheetDefaultHeightFraction)
         ).toInt()
     // 内容盒包含标题/内边距在不同 Compose 测量阶段的舍入差异；保留一小段缓冲，
     // 避免刚好贴近默认高度的短内容被误判为需要全屏展开。
@@ -230,16 +224,8 @@ internal fun AppModalBottomSheet(
         },
     )
     val interactionLocked = !presentationReady || sheetState.isAnimationRunning || backTransitionRunning
-    val canDismissSheet = !interactionLocked && scrollState.value == 0
     val visibleContentViewportHeightPx =
         (contentViewportHeightPx - partiallyExpandedHiddenHeightPx).coerceAtLeast(0)
-
-    LaunchedEffect(sheetState.currentValue) {
-        // 从低档拖回全屏后，下一次返回仍先落到中档，不能沿用上一次的低档高度。
-        if (sheetState.currentValue == SheetValue.Expanded) {
-            partialHeightFraction.snapTo(AppModalBottomSheetDefaultHeightFraction)
-        }
-    }
 
     LaunchedEffect(
         sheetState.currentValue,
@@ -280,7 +266,11 @@ internal fun AppModalBottomSheet(
             // ponytail: Material 3 未开放自定义半展开锚点，用连续位移映射保留原生手势和关闭逻辑。
             val rawOffset = runCatching { sheetState.requireOffset() }.getOrNull()
             translationY = rawOffset?.let {
-                appModalBottomSheetMappedTop(it, windowHeightPx.toFloat(), partialHeightFraction.value) - it
+                appModalBottomSheetMappedTop(
+                    rawOffset = it,
+                    windowHeightPx = windowHeightPx.toFloat(),
+                    partialHeightFraction = AppModalBottomSheetDefaultHeightFraction,
+                ) - it
             } ?: 0f
         },
         sheetState = sheetState,
@@ -292,9 +282,10 @@ internal fun AppModalBottomSheet(
         containerColor = MaterialTheme.colorScheme.surface,
         contentWindowInsets = { WindowInsets(0, 0, 0, 0) },
         properties = ModalBottomSheetProperties(
-            // 返回由抽屉窗口内的 BackHandler 逐档处理，不受正文滚动位置限制。
+            // 返回由抽屉窗口内的 BackHandler 处理，不受正文滚动位置限制。
             shouldDismissOnBackPress = false,
-            shouldDismissOnClickOutside = canDismissSheet,
+            // 点击抽屉外部遮罩随时可直接关闭抽屉，不受内部正文滚动位置限制。
+            shouldDismissOnClickOutside = !interactionLocked,
         ),
         dragHandle = {
             // 整行留白都是把手区域，而不只是中间细小的灰条。
@@ -319,7 +310,7 @@ internal fun AppModalBottomSheet(
         },
     ) {
         BackHandler {
-            // 动画期间消费额外返回，避免一次连滑跨过多档或退出下面的聊天页面。
+            // 符合直觉的两段式返回：全屏态先退回默认半屏态，默认半屏态直接关闭抽屉。
             if (!interactionLocked && !backTransitionRunning) {
                 backTransitionRunning = true
                 scope.launch {
@@ -327,15 +318,8 @@ internal fun AppModalBottomSheet(
                         when (sheetState.currentValue) {
                             SheetValue.Expanded -> sheetState.partialExpand()
                             SheetValue.PartiallyExpanded -> {
-                                if (partialHeightFraction.value > AppModalBottomSheetLowHeightFraction) {
-                                    partialHeightFraction.animateTo(
-                                        AppModalBottomSheetLowHeightFraction,
-                                        animationSpec = tween(AppModalBottomSheetBackAnimationMillis),
-                                    )
-                                } else {
-                                    sheetState.hide()
-                                    if (!sheetState.isVisible) onDismissRequest()
-                                }
+                                sheetState.hide()
+                                if (!sheetState.isVisible) onDismissRequest()
                             }
                             SheetValue.Hidden -> Unit
                         }
@@ -351,20 +335,31 @@ internal fun AppModalBottomSheet(
                 .height(maximumContentHeight)
                 // 标题和把手保持实体底色，渐变只叠加在标题下方的正文边缘。
                 .background(MaterialTheme.colorScheme.surface)
-                .pointerInput(Unit) {
-                    awaitEachGesture {
-                        // 正文的下一次手势重新恢复滚动限制，不沿用把手的关闭权限。
-                        awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-                        gestureFromHandle = false
-                    }
-                }
                 .then(sheetContentModifier),
         ) {
-            header()
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .pointerInput(Unit) {
+                        awaitEachGesture {
+                            // 标题栏与把手同属抽屉顶栏，随时可拖动展开或收起抽屉。
+                            awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                            gestureFromHandle = true
+                        }
+                    },
+                content = header,
+            )
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
+                    .pointerInput(Unit) {
+                        awaitEachGesture {
+                            // 正文的下一次手势重新恢复滚动限制，不沿用把手的关闭权限。
+                            awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                            gestureFromHandle = false
+                        }
+                    }
                     .then(stateModifier(sheetState.currentValue, contentOverflows)),
             ) {
                 Box(
@@ -424,7 +419,7 @@ internal fun AppModalBottomSheet(
                                 -(appModalBottomSheetMappedTop(
                                     rawOffset = it,
                                     windowHeightPx = windowHeightPx.toFloat(),
-                                    partialHeightFraction = partialHeightFraction.value,
+                                    partialHeightFraction = AppModalBottomSheetDefaultHeightFraction,
                                 ) - expandedTop).coerceAtLeast(0f)
                             } ?: 0f
                         }

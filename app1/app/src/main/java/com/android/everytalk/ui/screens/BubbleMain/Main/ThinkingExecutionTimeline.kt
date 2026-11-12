@@ -3,25 +3,35 @@ package com.android.everytalk.ui.screens.BubbleMain.Main
 import androidx.compose.ui.res.painterResource
 import androidx.annotation.DrawableRes
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
@@ -37,9 +47,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalUriHandler
@@ -48,6 +58,7 @@ import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -420,6 +431,7 @@ internal fun ThinkingExecutionTimeline(
     var toolNodeIndex = 0
     var reasoningNodeIndex = 0
     var expandedStepIds by remember { mutableStateOf(emptySet<String>()) }
+    var collapsedReasoningIndices by remember { mutableStateOf(emptySet<Int>()) }
 
     Column(
         modifier = modifier
@@ -437,6 +449,7 @@ internal fun ThinkingExecutionTimeline(
             when (item) {
                 is OrderedExecutionItem.Reasoning -> {
                     val currentReasoningIndex = reasoningNodeIndex++
+                    val isExpanded = currentReasoningIndex !in collapsedReasoningIndices
                     TimelineNode(
                         icon = R.drawable.ic_gpt_sparkle,
                         iconTint = TimelineReasoningPurple,
@@ -445,15 +458,36 @@ internal fun ThinkingExecutionTimeline(
                         completed = itemIndex != activeReasoningItemIndex,
                         first = nodeIndex == 0,
                         last = nodeIndex == nodeCount - 1,
+                        expanded = isExpanded,
+                        onToggleExpand = {
+                            collapsedReasoningIndices = if (isExpanded) {
+                                collapsedReasoningIndices + currentReasoningIndex
+                            } else {
+                                collapsedReasoningIndices - currentReasoningIndex
+                            }
+                        },
                         modifier = focusModifier.testTag(
                             "reasoning-execution-reasoning-step-$currentReasoningIndex"
                         ),
                     ) {
-                        reasoningContent(item.text, currentReasoningIndex)
+                        AnimatedVisibility(
+                            visible = isExpanded,
+                            enter = expandVertically(
+                                animationSpec = tween(220, easing = FastOutSlowInEasing),
+                            ) + fadeIn(animationSpec = tween(160)),
+                            exit = shrinkVertically(
+                                animationSpec = tween(200, easing = FastOutSlowInEasing),
+                            ) + fadeOut(animationSpec = tween(120)),
+                        ) {
+                            ReasoningNodeCard {
+                                reasoningContent(item.text, currentReasoningIndex)
+                            }
+                        }
                     }
                 }
                 is OrderedExecutionItem.Commentary -> {
                     val currentReasoningIndex = reasoningNodeIndex++
+                    val isExpanded = currentReasoningIndex !in collapsedReasoningIndices
                     TimelineNode(
                         icon = R.drawable.ic_gpt_sparkle,
                         iconTint = MaterialTheme.colorScheme.onSurface,
@@ -462,38 +496,64 @@ internal fun ThinkingExecutionTimeline(
                         completed = true,
                         first = nodeIndex == 0,
                         last = nodeIndex == nodeCount - 1,
+                        expanded = isExpanded,
+                        onToggleExpand = {
+                            collapsedReasoningIndices = if (isExpanded) {
+                                collapsedReasoningIndices + currentReasoningIndex
+                            } else {
+                                collapsedReasoningIndices - currentReasoningIndex
+                            }
+                        },
                         modifier = focusModifier.testTag(
                             "reasoning-execution-commentary-step-$currentReasoningIndex"
                         ),
                     ) {
-                        reasoningContent(item.text, currentReasoningIndex)
+                        AnimatedVisibility(
+                            visible = isExpanded,
+                            enter = expandVertically(
+                                animationSpec = tween(220, easing = FastOutSlowInEasing),
+                            ) + fadeIn(animationSpec = tween(160)),
+                            exit = shrinkVertically(
+                                animationSpec = tween(200, easing = FastOutSlowInEasing),
+                            ) + fadeOut(animationSpec = tween(120)),
+                        ) {
+                            ReasoningNodeCard {
+                                reasoningContent(item.text, currentReasoningIndex)
+                            }
+                        }
                     }
                 }
                 is OrderedExecutionItem.Step -> {
                     val entry = item.entry
                     val step = entry.step
                     val currentToolIndex = toolNodeIndex++
+                    val canExpand = step.type in setOf(ExecutionStepType.Tool, ExecutionStepType.Agent) &&
+                        (step.labels.isNotEmpty() || !step.detail.isNullOrBlank() || !step.resultPreview.isNullOrBlank())
+                    val isStepExpanded = step.id in expandedStepIds || (step.labels.isEmpty() && step.isError)
+                    val toggleStepExpanded: () -> Unit = {
+                        expandedStepIds = if (step.id in expandedStepIds) {
+                            expandedStepIds - step.id
+                        } else {
+                            expandedStepIds + step.id
+                        }
+                    }
                     TimelineNode(
                         icon = stepIcon(step.type),
-                        iconTint = stepIconTint(step.type),
+                        iconTint = if (step.isError) TimelineErrorRed else stepIconTint(step.type),
                         title = localizedExecutionStatusText(step.title) ?: step.title,
                         active = isReasoningActive && itemIndex == pendingItemIndex,
                         completed = step.completed,
                         first = nodeIndex == 0,
                         last = nodeIndex == nodeCount - 1,
+                        expanded = if (canExpand) isStepExpanded else null,
+                        onToggleExpand = if (canExpand) toggleStepExpanded else null,
                         modifier = focusModifier.testTag("reasoning-execution-step-$currentToolIndex"),
                     ) {
                         ExecutionLabels(
                             step = step,
                             invocationCount = entry.invocationCount,
-                            expanded = step.id in expandedStepIds,
-                            onToggleExpanded = {
-                                expandedStepIds = if (step.id in expandedStepIds) {
-                                    expandedStepIds - step.id
-                                } else {
-                                    expandedStepIds + step.id
-                                }
-                            },
+                            expanded = isStepExpanded,
+                            onToggleExpanded = toggleStepExpanded,
                         )
                         if (itemIndex == sourceItemIndex && webSearchResults.isNotEmpty()) {
                             WebsiteLabels(webSearchResults)
@@ -556,16 +616,54 @@ internal fun ThinkingExecutionTimeline(
             ) {
                 // 复用终态节点正文，长错误允许换行和复制，不再仅对压缩错误显示原因。
                 if (messageIsError && !localizedActivityStatusText.isNullOrBlank()) {
-                    androidx.compose.foundation.text.selection.SelectionContainer {
-                        Text(
-                            text = localizedActivityStatusText,
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.testTag("reasoning-execution-failure-reason"),
-                        )
+                    val flatDarkStyle = MaterialTheme.colorScheme.background.luminance() < 0.5f
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.error.copy(alpha = if (flatDarkStyle) 0.12f else 0.08f),
+                        border = BorderStroke(
+                            width = 0.75.dp,
+                            color = MaterialTheme.colorScheme.error.copy(alpha = 0.28f),
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        androidx.compose.foundation.text.selection.SelectionContainer {
+                            Text(
+                                text = localizedActivityStatusText,
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier
+                                    .padding(horizontal = 10.dp, vertical = 8.dp)
+                                    .testTag("reasoning-execution-failure-reason"),
+                            )
+                        }
                     }
                 }
             }
+        }
+    }
+}
+
+/** 思考段卡片容器，提供柔和圆角底色与边线，保持顶部紧凑间距以对齐时间线标题。 */
+@Composable
+private fun ReasoningNodeCard(
+    content: @Composable () -> Unit,
+) {
+    val flatDarkStyle = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (flatDarkStyle) 0.045f else 0.03f),
+        border = BorderStroke(
+            width = 0.75.dp,
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (flatDarkStyle) 0.35f else 0.45f),
+        ),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+        ) {
+            content()
         }
     }
 }
@@ -580,36 +678,59 @@ private fun TimelineNode(
     first: Boolean,
     last: Boolean,
     modifier: Modifier = Modifier,
+    expanded: Boolean? = null,
+    onToggleExpand: (() -> Unit)? = null,
     content: @Composable () -> Unit = {},
 ) {
-    val lineColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.75f)
+    val lineColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)
     val flatDarkStyle = MaterialTheme.colorScheme.background.luminance() < 0.5f
     val density = androidx.compose.ui.platform.LocalDensity.current
+    val chevronRotation by animateFloatAsState(
+        targetValue = if (expanded == true) 180f else 0f,
+        animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+        label = "timelineNodeChevronRotation",
+    )
     Row(
         modifier = modifier
             .fillMaxWidth()
             .drawBehind {
-                val x = with(density) { 11.dp.toPx() }
-                val markerCenter = with(density) { 11.dp.toPx() }
-                drawLine(
-                    color = lineColor,
-                    start = androidx.compose.ui.geometry.Offset(x, if (first) markerCenter else 0f),
-                    end = androidx.compose.ui.geometry.Offset(x, if (last) markerCenter else size.height),
-                    strokeWidth = with(density) { 1.dp.toPx() },
-                )
+                val x = with(density) { 12.dp.toPx() }
+                val markerTop = with(density) { 2.dp.toPx() }
+                val markerBottom = with(density) { 26.dp.toPx() }
+                if (!first) {
+                    drawLine(
+                        color = lineColor,
+                        start = androidx.compose.ui.geometry.Offset(x, 0f),
+                        end = androidx.compose.ui.geometry.Offset(x, markerTop),
+                        strokeWidth = with(density) { 1.25.dp.toPx() },
+                    )
+                }
+                if (!last) {
+                    drawLine(
+                        color = lineColor,
+                        start = androidx.compose.ui.geometry.Offset(x, markerBottom),
+                        end = androidx.compose.ui.geometry.Offset(x, size.height),
+                        strokeWidth = with(density) { 1.25.dp.toPx() },
+                    )
+                }
             },
     ) {
         Box(
             modifier = Modifier
-                .width(22.dp)
-                .padding(top = 1.dp),
+                .width(24.dp)
+                .padding(top = 2.dp),
             contentAlignment = Alignment.TopCenter,
         ) {
+            val badgeBg = if (active || completed) {
+                iconTint.copy(alpha = if (flatDarkStyle) 0.16f else 0.11f)
+            } else {
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            }
             Box(
                 modifier = Modifier
-                    .size(22.dp)
+                    .size(24.dp)
                     .clip(CircleShape)
-                    .background(if (flatDarkStyle) Color.Transparent else MaterialTheme.colorScheme.surface),
+                    .background(badgeBg),
                 contentAlignment = Alignment.Center,
             ) {
                 TimelineNodeIcon(
@@ -623,23 +744,54 @@ private fun TimelineNode(
         Column(
             modifier = Modifier
                 .weight(1f)
-                .padding(start = 12.dp, bottom = if (last) 4.dp else 12.dp),
-            verticalArrangement = Arrangement.spacedBy(7.dp),
+                .padding(start = 12.dp, bottom = if (last) 4.dp else 14.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            if (active) {
-                ScanningHighlightText(
-                    text = title,
-                    textColor = MaterialTheme.colorScheme.onSurface,
-                    useSmallStyle = false,
-                    modifier = Modifier.testTag("reasoning-active-step-title"),
-                )
+            val titleRowModifier = if (onToggleExpand != null) {
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .pointerInput(onToggleExpand) {
+                        detectTapGestures { onToggleExpand() }
+                    }
+                    .padding(vertical = 2.dp)
             } else {
-                Text(
-                    text = title,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                )
+                Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 2.dp)
+            }
+            Row(
+                modifier = titleRowModifier,
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Box(modifier = Modifier.weight(1f, fill = false)) {
+                    if (active) {
+                        ScanningHighlightText(
+                            text = title,
+                            textColor = MaterialTheme.colorScheme.onSurface,
+                            useSmallStyle = false,
+                            modifier = Modifier.testTag("reasoning-active-step-title"),
+                        )
+                    } else {
+                        Text(
+                            text = title,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+                if (expanded != null && onToggleExpand != null) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_gpt_chevron_down_md),
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                        modifier = Modifier
+                            .size(15.dp)
+                            .graphicsLayer { rotationZ = chevronRotation },
+                    )
+                }
             }
             content()
         }
@@ -666,7 +818,7 @@ private fun TimelineNodeIcon(
             contentDescription = null,
             tint = resolvedTint,
             modifier = Modifier
-                .size(20.dp)
+                .size(15.dp)
                 .testTag("reasoning-timeline-icon-static"),
         )
     }
@@ -679,8 +831,8 @@ private fun ActiveTimelineNodeIcon(
 ) {
     val transition = rememberInfiniteTransition(label = "执行步骤图标动画")
     val pulseScale by transition.animateFloat(
-        initialValue = 0.96f,
-        targetValue = 1.04f,
+        initialValue = 0.94f,
+        targetValue = 1.06f,
         animationSpec = infiniteRepeatable(
             animation = tween(
                 durationMillis = 1_200,
@@ -695,7 +847,7 @@ private fun ActiveTimelineNodeIcon(
         contentDescription = null,
         tint = tint,
         modifier = Modifier
-            .size(20.dp)
+            .size(15.dp)
             .graphicsLayer {
                 scaleX = pulseScale
                 scaleY = pulseScale
@@ -727,7 +879,7 @@ private fun ExecutionLabels(
 ) {
     if (step.labels.isEmpty()) {
         // 缺少工具标签的失败记录仍需显示服务端返回的原因。
-        if (step.isError) ExecutionStepDetails(step)
+        if (step.isError || expanded) ExecutionStepDetails(step)
         return
     }
     val uriHandler = LocalUriHandler.current
@@ -764,7 +916,15 @@ private fun ExecutionLabels(
             )
         }
     }
-    if (expanded && step.type in setOf(ExecutionStepType.Tool, ExecutionStepType.Agent)) {
+    AnimatedVisibility(
+        visible = expanded && step.type in setOf(ExecutionStepType.Tool, ExecutionStepType.Agent),
+        enter = expandVertically(
+            animationSpec = tween(200, easing = FastOutSlowInEasing),
+        ) + fadeIn(animationSpec = tween(150)),
+        exit = shrinkVertically(
+            animationSpec = tween(180, easing = FastOutSlowInEasing),
+        ) + fadeOut(animationSpec = tween(120)),
+    ) {
         ExecutionStepDetails(step)
     }
 }
@@ -774,48 +934,96 @@ private fun ExecutionStepDetails(step: ExecutionStep) {
     val detail = step.detail?.trim().takeUnless { it.isNullOrEmpty() }
         ?: step.labels.joinToString(" ").trim()
     if (detail.isEmpty() && step.resultPreview.isNullOrBlank()) return
-    Column(
+    val flatDarkStyle = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val statusColor = when {
+        step.isError -> TimelineErrorRed
+        step.completed -> TimelineWebGreen
+        else -> TimelineToolOrange
+    }
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (flatDarkStyle) 0.055f else 0.035f),
+        border = BorderStroke(
+            width = 0.75.dp,
+            color = if (step.isError) {
+                MaterialTheme.colorScheme.error.copy(alpha = 0.35f)
+            } else {
+                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+            },
+        ),
         modifier = Modifier
             .fillMaxWidth()
             .padding(top = 2.dp)
             .testTag("reasoning-execution-detail-${step.id}"),
-        verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
-        if (detail.isNotEmpty()) {
-            Text(
-                text = detail,
-                color = MaterialTheme.colorScheme.onSurface,
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-        Text(
-            text = stringResource(
-                if (step.isError) {
-                    R.string.thinking_execution_failed
-                } else if (step.completed) {
-                    R.string.thinking_execution_completed
-                } else {
-                    R.string.thinking_execution_running
-                },
-            ),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            style = MaterialTheme.typography.labelSmall,
-        )
-        step.durationMs?.let { duration ->
-            Text(
-                text = stringResource(R.string.thinking_elapsed_duration, localizedExecutionDuration(duration)),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.labelSmall,
-            )
-        }
-        step.resultPreview?.takeIf(String::isNotBlank)?.let { result ->
-            androidx.compose.foundation.text.selection.SelectionContainer {
-                Text(
-                    text = result,
-                    color = if (step.isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.testTag("reasoning-execution-result-${step.id}"),
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 11.dp, vertical = 9.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .clip(CircleShape)
+                        .background(statusColor),
                 )
+                Text(
+                    text = stringResource(
+                        if (step.isError) {
+                            R.string.thinking_execution_failed
+                        } else if (step.completed) {
+                            R.string.thinking_execution_completed
+                        } else {
+                            R.string.thinking_execution_running
+                        },
+                    ),
+                    color = if (step.isError) statusColor else MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Medium,
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                step.durationMs?.let { duration ->
+                    Text(
+                        text = stringResource(R.string.thinking_elapsed_duration, localizedExecutionDuration(duration)),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+            }
+            if (detail.isNotEmpty()) {
+                Text(
+                    text = detail,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                )
+            }
+            step.resultPreview?.takeIf(String::isNotBlank)?.let { result ->
+                Surface(
+                    shape = RoundedCornerShape(7.dp),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (flatDarkStyle) 0.06f else 0.04f),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    androidx.compose.foundation.text.selection.SelectionContainer {
+                        Text(
+                            text = result,
+                            color = if (step.isError) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                            modifier = Modifier
+                                .padding(horizontal = 8.dp, vertical = 6.dp)
+                                .testTag("reasoning-execution-result-${step.id}"),
+                        )
+                    }
+                }
             }
         }
     }
@@ -874,7 +1082,7 @@ private fun CapsuleLabel(
                     painter = painterResource(icon),
                     contentDescription = null,
                     tint = iconTint ?: LocalContentColor.current,
-                    modifier = Modifier.size(16.dp),
+                    modifier = Modifier.size(15.dp),
                 )
             }
             Text(
@@ -909,16 +1117,25 @@ private fun CapsuleSurface(
 ) {
     val surfaceModifier = modifier.widthIn(max = maxWidth)
     val flatDarkStyle = MaterialTheme.colorScheme.background.luminance() < 0.5f
-    val color = if (flatDarkStyle) Color.Transparent else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f)
+    val shape = RoundedCornerShape(999.dp)
+    val color = if (flatDarkStyle) {
+        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.07f)
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
+    }
     val contentColor = MaterialTheme.colorScheme.onSurfaceVariant
-    val border = if (flatDarkStyle) null else BorderStroke(
-        width = 1.dp,
-        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+    val border = BorderStroke(
+        width = 0.75.dp,
+        color = if (flatDarkStyle) {
+            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.14f)
+        } else {
+            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+        },
     )
     if (onClick == null) {
         Surface(
             modifier = surfaceModifier,
-            shape = if (flatDarkStyle) RectangleShape else CircleShape,
+            shape = shape,
             color = color,
             contentColor = contentColor,
             border = border,
@@ -928,7 +1145,7 @@ private fun CapsuleSurface(
         Surface(
             onClick = onClick,
             modifier = surfaceModifier,
-            shape = if (flatDarkStyle) RectangleShape else CircleShape,
+            shape = shape,
             color = color,
             contentColor = contentColor,
             border = border,
@@ -959,13 +1176,19 @@ private fun WebsiteCapsule(
                 modifier = Modifier
                     .size(18.dp)
                     .clip(CircleShape)
-                    .background(if (flatDarkStyle) Color.Transparent else MaterialTheme.colorScheme.surface),
+                    .background(
+                        if (flatDarkStyle) {
+                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
+                        } else {
+                            MaterialTheme.colorScheme.surface
+                        }
+                    ),
                 contentAlignment = Alignment.Center,
             ) {
                 WebsiteIcon(
                     href = source.href,
                     tint = TimelineWebGreen,
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.size(16.dp),
                 )
             }
             Text(
