@@ -84,7 +84,8 @@ object ConversationNameHelper {
      */
     fun cleanAndTruncateText(text: String, maxLength: Int = 50): String {
         // 优化：直接用字符串方法替换换行，避免正则开销
-        val cleanText = text
+        // 标题只要前几十个字；首条消息可能是整篇粘贴的长文，先截短再做替换和正则。
+        val cleanText = text.take(maxLength * 4)
             .replace('\r', ' ')
             .replace('\n', ' ')
             .replace(WHITESPACE_REGEX, " ") // 使用预编译的正则

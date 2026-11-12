@@ -17,6 +17,9 @@ import androidx.compose.ui.res.stringResource
 import com.android.everytalk.R
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.ui.platform.LocalDensity
+import kotlinx.coroutines.flow.first
 import androidx.compose.ui.Alignment
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
@@ -94,16 +97,18 @@ fun AppDrawerContent(
     accountName: String? = null,
     listState: LazyListState = rememberLazyListState(),
     runningConversationIds: Set<String> = emptySet(),
+    /** 每次打开侧栏递增：重置菜单、弹窗等临时状态，并把当前会话滚到列表中部。 */
+    sessionKey: Int = 0,
 ) {
-    val selectedSet = remember { mutableStateListOf<Int>() }
-    var showDeleteConfirm by remember { mutableStateOf(false) }
-    var showClearAllConfirm by remember { mutableStateOf(false) }
-    var longPressPosition by remember { mutableStateOf<Offset?>(null) } // 长按位置，用于定位弹出菜单
-    var renamingIndex by remember { mutableStateOf<Int?>(null) }
-    var showCreateGroupDialog by remember { mutableStateOf(false) }
-    var showMoveToGroupDialog by remember { mutableStateOf<Int?>(null) }
-    var serverSelectionGroup by remember { mutableStateOf<String?>(null) }
-    var isAddGroupButtonVisible by remember(isGroupSectionExpanded) { mutableStateOf(isGroupSectionExpanded) } // 控制"创建分组"按钮的可见性（跟随展开状态）
+    val selectedSet = remember(sessionKey) { mutableStateListOf<Int>() }
+    var showDeleteConfirm by remember(sessionKey) { mutableStateOf(false) }
+    var showClearAllConfirm by remember(sessionKey) { mutableStateOf(false) }
+    var longPressPosition by remember(sessionKey) { mutableStateOf<Offset?>(null) } // 长按位置，用于定位弹出菜单
+    var renamingIndex by remember(sessionKey) { mutableStateOf<Int?>(null) }
+    var showCreateGroupDialog by remember(sessionKey) { mutableStateOf(false) }
+    var showMoveToGroupDialog by remember(sessionKey) { mutableStateOf<Int?>(null) }
+    var serverSelectionGroup by remember(sessionKey) { mutableStateOf<String?>(null) }
+    var isAddGroupButtonVisible by remember(isGroupSectionExpanded, sessionKey) { mutableStateOf(isGroupSectionExpanded) } // 控制"创建分组"按钮的可见性（跟随展开状态）
     // 分组删除保留原有动画；会话显示状态直接由历史列表决定。
     val deletingGroups = remember { mutableStateListOf<String>() }
     val scope = rememberCoroutineScope()
@@ -149,6 +154,36 @@ fun AppDrawerContent(
             ProcessedDrawerItems(pinned, custom, ungrouped)
         }
     }.value
+    // 打开侧栏时把当前会话放到列表中部；历史还在加载时等加载完再定位。
+    val currentLoadedIndex by rememberUpdatedState(loadedHistoryIndex)
+    val currentProcessedItems by rememberUpdatedState(processedItems)
+    val currentExpandedGroups by rememberUpdatedState(expandedGroups)
+    val density = LocalDensity.current
+    LaunchedEffect(sessionKey, isLoadingHistoryData, isImageGenerationMode) {
+        if (sessionKey == 0 || isLoadingHistoryData) return@LaunchedEffect
+        val target = currentLoadedIndex ?: return@LaunchedEffect
+        val items = currentProcessedItems
+        val itemHeightPx = with(density) { 64.dp.toPx() } // 与 DrawerConversationListItem 行高一致
+        // 与下方 LazyColumn 的 item 顺序一致：操作区、分组标题、分组内容、会话标题、[置顶标题、置顶内容]、未分组会话。
+        val pinnedSlots = if (items.pinned.isNotEmpty()) 2 else 0
+        val ungroupedPos = items.ungrouped.indexOfFirst { it.originalIndex == target }
+        val pinnedPos = items.pinned.indexOfFirst { it.originalIndex == target }
+        val (listIndex, innerOffsetPx) = when {
+            ungroupedPos >= 0 -> (4 + pinnedSlots + ungroupedPos) to 0f
+            pinnedPos >= 0 && "pinned" in currentExpandedGroups -> 5 to pinnedPos * itemHeightPx
+            pinnedPos >= 0 -> 4 to 0f
+            else -> 2 to 0f
+        }
+        snapshotFlow { listState.layoutInfo.totalItemsCount }.first { it > listIndex }
+        listState.scrollToItem(listIndex)
+        val info = listState.layoutInfo
+        val item = info.visibleItemsInfo.firstOrNull { it.index == listIndex } ?: return@LaunchedEffect
+        // 置顶容器是一个整体 item，只取其中那一行的高度来居中。
+        val rowHeight = if (pinnedPos >= 0 && listIndex == 5) itemHeightPx else item.size.toFloat()
+        val rowCenter = item.offset + innerOffsetPx + rowHeight / 2f
+        val viewportCenter = (info.viewportStartOffset + info.viewportEndOffset) / 2f
+        listState.scrollBy(rowCenter - viewportCenter)
+    }
     @Composable
     fun ConversationItem(itemData: FilteredConversationItem, modifier: Modifier = Modifier) {
         val isPinned = itemData.stableId in pinnedIds

@@ -12,8 +12,8 @@ class ConversationPreviewController(
     private val defaultNameFactory: (Int, Boolean) -> String =
         ConversationNameHelper::getDefaultConversationName,
 ) {
-    private val textConversationPreviewCache = LruCache<String, String>(100)
-    private val imageConversationPreviewCache = LruCache<String, String>(100)
+    private val textConversationPreviewCache = LruCache<String, String>(1000)
+    private val imageConversationPreviewCache = LruCache<String, String>(1000)
 
     fun clearAllCaches() {
         textConversationPreviewCache.evictAll()

@@ -341,14 +341,15 @@ class MainActivity : AppCompatActivity() {
                                         appViewModel.stateHolder.pinnedTextConversationIds.collectAsState().value
                                     }
 
-                                    // 列表位置不随每次打开重置，让当前会话保留在点击进入时的位置。
-                                    // 放在会话 key 外，菜单、弹窗等临时状态仍按原逻辑清理。
+                                    // 侧栏内容常驻组合，不再每次打开整棵重建；临时状态由 sessionKey 在内部重置，
+                                    // 打开时把当前会话滚到列表中部。
                                     val drawerListState = rememberLazyListState()
-                                    key(drawerSessionKey, isImageGenerationMode) {
+                                    key(isImageGenerationMode) {
                                         // 监听同一个账户状态，修改头像或昵称后侧栏立即更新，无需重启。
                                         val accountState by appViewModel.accountManager.state.collectAsState()
                                         AppDrawerContent(
                                             listState = drawerListState,
+                                            sessionKey = drawerSessionKey,
                                             runningConversationIds = appViewModel.runningConversationIds.collectAsState().value,
                                             accountAvatarUrl = accountState.user?.avatarUrl,
                                             accountName = accountState.user?.displayName,
