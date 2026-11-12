@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.screens.MainScreen.chat.text.ui
 
+import com.android.everytalk.ui.components.dialog.AppOutlinedButton
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandVertically
@@ -23,7 +24,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -157,7 +157,7 @@ internal fun MessageFileChangesSummary(message: Message, isRunning: Boolean, mod
                     Text(title, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     ChangeCounts(changes.sumOf { it.additions }, changes.sumOf { it.deletions })
                 }
-                TextButton(onClick = { selectedPath = single?.path; showSheet = true }) { Text(reviewLabel) }
+                AppOutlinedButton(onClick = { selectedPath = single?.path; showSheet = true }) { Text(reviewLabel) }
             }
             if (single == null) {
                 changes.take(if (expanded) changes.size else 3).forEach { change ->
@@ -180,7 +180,7 @@ internal fun MessageFileChangesSummary(message: Message, isRunning: Boolean, mod
                         ChangeCounts(change.additions, change.deletions)
                     }
                 }
-                if (changes.size > 3) TextButton(onClick = { expanded = !expanded }) {
+                if (changes.size > 3) AppOutlinedButton(onClick = { expanded = !expanded }) {
                     Text(if (expanded) stringResource(R.string.file_changes_collapse)
                         else stringResource(R.string.file_changes_more, changes.size - 3))
                 }

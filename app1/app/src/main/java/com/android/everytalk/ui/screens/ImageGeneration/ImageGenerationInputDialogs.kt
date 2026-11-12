@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.screens.ImageGeneration
 
+import com.android.everytalk.ui.components.dialog.AppOutlinedButton
 import com.android.everytalk.ui.theme.AppInputFieldShape
 import com.android.everytalk.statecontroller.*
 
@@ -217,7 +218,7 @@ internal fun ImageGenerationInputDialogs(
                     }
                 },
                 confirmButton = {
-                    TextButton(
+                    AppOutlinedButton(
                         onClick = {
                             val finalSteps = stepsValue.toInt().coerceIn(1, 20)
                             onChangeImageSteps(finalSteps)
@@ -229,7 +230,7 @@ internal fun ImageGenerationInputDialogs(
                     }
                 },
                 dismissButton = {
-                    TextButton(
+                    AppOutlinedButton(
                         onClick = { onShowStepsDialogChange(false) },
                         colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant)
                     ) {
@@ -309,7 +310,7 @@ internal fun ImageGenerationInputDialogs(
                 }
             },
             confirmButton = {
-                TextButton(
+                AppOutlinedButton(
                     onClick = {
                         val finalSteps = stepsText.toIntOrNull()?.coerceIn(1, 50) ?: 30
                         val finalGuidance = guidanceText.toFloatOrNull()?.coerceIn(1f, 10f) ?: 7.5f
@@ -319,7 +320,7 @@ internal fun ImageGenerationInputDialogs(
                 ) { Text(stringResource(R.string.action_confirm)) }
             },
             dismissButton = {
-                TextButton(onClick = { onShowParamsDialogChange(false) }) {
+                AppOutlinedButton(onClick = { onShowParamsDialogChange(false) }) {
                     Text(stringResource(R.string.action_cancel))
                 }
             }
@@ -373,7 +374,7 @@ internal fun ImageGenerationInputDialogs(
             },
             confirmButton = {},
             dismissButton = {
-                TextButton(onClick = { onShowGptQualityDialogChange(false) }) {
+                AppOutlinedButton(onClick = { onShowGptQualityDialogChange(false) }) {
                     Text(stringResource(R.string.action_cancel))
                 }
             }

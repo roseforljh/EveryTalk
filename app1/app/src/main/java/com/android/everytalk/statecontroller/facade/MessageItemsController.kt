@@ -341,7 +341,9 @@ open class MessageItemsController(
                                 it is ChatListItem.LoadingIndicator ||
                                     it is ChatListItem.AiMessageStreaming ||
                                     it is ChatListItem.AiMessageCodeStreaming ||
-                                    it is ChatListItem.StatusIndicator
+                                    it is ChatListItem.StatusIndicator ||
+                                    (it is ChatListItem.AiMessageExecutionGroup && it.active) ||
+                                    (it is ChatListItem.AiMessageProcessSegment && it.processIsActive)
                             } ?: false
 
                             val reasoningComplete = stateHolder.textReasoningCompleteMap[message.id] ?: false
@@ -835,16 +837,16 @@ open class MessageItemsController(
         val replyIsStreaming = state is com.android.everytalk.ui.state.AiBubbleState.Connecting ||
             state is com.android.everytalk.ui.state.AiBubbleState.Reasoning ||
             state is com.android.everytalk.ui.state.AiBubbleState.Streaming
+        val toolCallWriting = replyIsStreaming && message.executionStatus == TOOL_CALL_WRITING_STATUS
         val narrativeSegments = mutableSetOf<Int>()
         val segments = orderedAiOutputSegments(
             trace = message.executionTrace,
             narrativeSegments = narrativeSegments,
+            toolCallWriting = toolCallWriting,
         ).toMutableList()
         // 编写阶段还没有完整工具记录。追加临时过程段，后续真实工具沿用同一列表位置；
         // 不把未执行的操作写入历史，停止或失败后也不会残留“正在编写”。
-        if (replyIsStreaming && message.executionStatus == TOOL_CALL_WRITING_STATUS &&
-            segments.lastOrNull() !is OrderedAiOutputSegment.Process
-        ) {
+        if (toolCallWriting && segments.lastOrNull() !is OrderedAiOutputSegment.Process) {
             segments += OrderedAiOutputSegment.Process(
                 events = emptyList(),
                 detailStartIndex = executionTraceForProcessDisplay(
@@ -856,8 +858,8 @@ open class MessageItemsController(
             )
         }
         val lastProcessIndex = segments.indexOfLast { it is OrderedAiOutputSegment.Process }
-        // 流式期间旁白只是普通正文；回复结束后旁白和过程段一起归入总执行区。
-        val foldedNarratives: Set<Int> = if (replyIsStreaming) emptySet() else narrativeSegments
+        // 同一用户指令阶段中的旁白和过程段统一归入总执行区，总时长固定展示在最上方。
+        val foldedNarratives: Set<Int> = narrativeSegments
         val lastContentIndex = segments.indices.lastOrNull {
             segments[it] is OrderedAiOutputSegment.Content && it !in foldedNarratives
         } ?: -1
@@ -934,42 +936,52 @@ open class MessageItemsController(
             }
         }
         val processItemsBySegmentIndex = processItems.associateBy { it.segmentIndex }
-        // 回复结束后，同一用户指令阶段里连续的旁白和过程段归为一个总执行区。
-        // 组内各项原样保留（段序号、key 不变），只在最前面插入一个默认收起的标题。
+        // 同一用户指令阶段里连续的旁白和过程段归为一个总执行区，流式期间与结束后都将总时长置于最上方。
+        // 组内各项原样保留（段序号、key 不变），流式期间默认展开，回复结束后默认收起。
         val groupKeyBySegment = mutableMapOf<Int, String>()
-        if (!replyIsStreaming) {
-            val members = mutableListOf<Int>()
-            fun closeGroup() {
-                // 只有一项时外层标题和它自己的标题重复，不再包一层。
-                if (members.size > 1) {
-                    val key = executionGroupKey(message.id, members.first())
-                    members.forEach { groupKeyBySegment[it] = key }
-                }
-                members.clear()
+        val members = mutableListOf<Int>()
+        fun closeGroup() {
+            // 只有一项时外层标题和它自己的标题重复，不再包一层。
+            if (members.size > 1) {
+                val key = executionGroupKey(message.id, members.first())
+                members.forEach { groupKeyBySegment[it] = key }
             }
-            if (-1 in processItemsBySegmentIndex) members += -1
-            segments.forEachIndexed { index, segment ->
-                if (segment is OrderedAiOutputSegment.Process || index in foldedNarratives) {
-                    members += index
-                } else {
-                    closeGroup()
-                }
-            }
-            closeGroup()
+            members.clear()
         }
+        if (-1 in processItemsBySegmentIndex) members += -1
+        segments.forEachIndexed { index, segment ->
+            if (segment is OrderedAiOutputSegment.Process || index in foldedNarratives) {
+                members += index
+            } else {
+                closeGroup()
+            }
+        }
+        closeGroup()
         val pendingGroupHeaders = groupKeyBySegment.entries
             .groupBy({ it.value }, { it.key })
             .mapValues { (_, indexes) ->
-                val members = indexes.mapNotNull(processItemsBySegmentIndex::get)
+                val groupMembers = indexes.mapNotNull(processItemsBySegmentIndex::get)
+                // 只跟随组内仍在执行的过程；正式回答继续流式时，已结束的执行组不能继续计时。
+                val groupIsActive = !message.isError && activeProcessIndex >= 0 && activeProcessIndex in indexes
+                val startedAtMillis = groupMembers.mapNotNull { it.executionStartedAtMillis }.minOrNull()
+                    ?: indexes.mapNotNull { idx ->
+                        (segments.getOrNull(idx) as? OrderedAiOutputSegment.Content)?.startedAtMillis
+                    }.minOrNull()
+                val finishedAtMillis = if (groupIsActive) {
+                    null
+                } else {
+                    groupMembers.mapNotNull { it.executionFinishedAtMillis }.maxOrNull()
+                }
                 ChatListItem.AiMessageExecutionGroup(
                     messageId = message.id,
                     segmentIndex = indexes.min(),
-                    steps = members.flatMap { member ->
+                    steps = groupMembers.flatMap { member ->
                         member.events.filterIsInstance<ExecutionTraceEvent.Tool>().map { it.step }
                     },
-                    messageIsError = members.any { it.messageIsError },
-                    executionStartedAtMillis = members.mapNotNull { it.executionStartedAtMillis }.minOrNull(),
-                    executionFinishedAtMillis = members.mapNotNull { it.executionFinishedAtMillis }.maxOrNull(),
+                    messageIsError = groupMembers.any { it.messageIsError },
+                    executionStartedAtMillis = startedAtMillis,
+                    executionFinishedAtMillis = finishedAtMillis,
+                    active = groupIsActive,
                 )
             }
             .toMutableMap()

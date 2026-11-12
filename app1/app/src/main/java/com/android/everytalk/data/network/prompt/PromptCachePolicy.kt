@@ -91,6 +91,17 @@ internal object PromptCachePolicy {
         }
     }
 
+    /**
+     * 会话级缓存键，参考 pi（packages/ai/src/api/openai-responses.ts）：用会话 ID 作为 prompt_cache_key 和会话亲和标识。
+     * 中转和官方后端都按它把同一会话的请求路由到同一台机器，跨轮次复用前缀缓存；
+     * 旧做法按 system 哈希分组，不同会话挤在同一个键上，同一会话又可能被分到不同机器。
+     * 会话 ID 先做哈希：长度固定在 OpenAI 的 64 字符上限内，也不把本地 ID 原样发给第三方。
+     */
+    fun sessionCacheKey(conversationId: String?): String? = conversationId
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+        ?.let { "et-s-${sha256(it).take(CACHE_KEY_HASH_CHARS)}" }
+
     fun buildOpenAICacheKey(
         apiAddress: String?,
         model: String,

@@ -1,6 +1,8 @@
 package com.android.everytalk.data.memory
 
 import com.android.everytalk.data.DataClass.AbstractApiMessage
+import com.android.everytalk.data.DataClass.ApiContentPart
+import com.android.everytalk.data.DataClass.PartsApiMessage
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.database.entities.MemoryEntity
 import kotlinx.serialization.json.buildJsonObject
@@ -106,9 +108,27 @@ object MemoryPromptRenderer {
         return null
     }
 
-    /** 只在真实模型发送边界调用，原始消息列表保持不变，压缩与恢复不保存注入内容。 */
+    /**
+     * 只在真实模型发送边界调用，原始消息列表保持不变，压缩与恢复不保存注入内容。
+     *
+     * 记忆块含本地时间、按本轮问题挑选的条目和自动回忆片段，每次发送都会变。
+     * 放进开头的 system 会让供应商前缀缓存从 system 起全部失效，所以追加到本轮用户消息末尾：
+     * 之前的历史前缀逐字不变，下一次发送能一直命中到上一条用户消息正文结束。
+     * 同一次运行内本轮用户消息不变，工具循环的后续轮次也保持命中。
+     */
     fun inject(messages: List<AbstractApiMessage>, prompt: String): List<AbstractApiMessage> {
         if (prompt.isBlank()) return messages
+        val index = messages.indexOfLast { it.role == "user" && (it is SimpleTextApiMessage || it is PartsApiMessage) }
+        when (val current = messages.getOrNull(index)) {
+            is SimpleTextApiMessage -> return messages.toMutableList().also {
+                it[index] = current.copy(content = current.content + "\n\n" + prompt)
+            }
+            is PartsApiMessage -> return messages.toMutableList().also {
+                it[index] = current.copy(parts = current.parts + ApiContentPart.Text(prompt))
+            }
+            else -> Unit
+        }
+        // 没有用户消息（不应出现）时退回 system，保证资料不丢。
         val first = messages.firstOrNull()
         return if (first is SimpleTextApiMessage && first.role == "system") {
             listOf(first.copy(content = first.content + "\n\n" + prompt)) + messages.drop(1)

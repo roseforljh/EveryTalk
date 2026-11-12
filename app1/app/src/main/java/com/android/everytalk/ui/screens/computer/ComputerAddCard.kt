@@ -37,7 +37,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
@@ -95,7 +94,6 @@ internal fun ComputerAddCard(
     title: String = stringResource(R.string.computer_add_title),
     submitLabel: String = stringResource(R.string.computer_add_save),
     keepCredentialHint: Boolean = false,
-    allowBusyDismiss: Boolean = false,
     onCloudflareLogin: () -> Unit = {},
     onCloudflareAccountSelected: (String, String) -> Unit = { _, _ -> },
     cloudflareAccounts: List<com.android.everytalk.data.computer.CloudflareApiAccount> = emptyList(),
@@ -106,13 +104,13 @@ internal fun ComputerAddCard(
     val choiceColors = FilterChipDefaults.filterChipColors(
         containerColor = Color.Transparent,
         labelColor = contentColor,
-        selectedContainerColor = Color.Transparent,
+        selectedContainerColor = contentColor.copy(alpha = 0.12f),
         selectedLabelColor = contentColor,
         disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
         disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
     )
     Dialog(
-        onDismissRequest = { if (!isBusy || allowBusyDismiss) onDismiss() },
+        onDismissRequest = { onDismiss() },
         properties = DialogProperties(
             usePlatformDefaultWidth = false,
             decorFitsSystemWindows = false,
@@ -130,7 +128,7 @@ internal fun ComputerAddCard(
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
-                    onClick = { if (!isBusy || allowBusyDismiss) onDismiss() },
+                    onClick = { onDismiss() },
                 )
                 .statusBarsPadding()
                 .navigationBarsPadding()
@@ -154,11 +152,15 @@ internal fun ComputerAddCard(
                 color = dialogBackground,
             ) {
                 Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .verticalScroll(rememberScrollState())
-                        .padding(24.dp),
+                    modifier = Modifier.fillMaxWidth(),
                 ) {
+                    // 仅表单滚动，底部取消和提交按钮始终留在可视区域。
+                    Column(
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .verticalScroll(rememberScrollState())
+                            .padding(24.dp),
+                    ) {
                     Text(
                         text = title,
                         fontSize = 20.sp,
@@ -177,14 +179,14 @@ internal fun ComputerAddCard(
                             selected = form.provider == ComputerProvider.SSH,
                             onClick = { onFormChange(form.copy(provider = ComputerProvider.SSH)) },
                             label = { Text("SSH / VPS") }, enabled = !isBusy, colors = choiceColors,
-                            border = null,
+                            border = BorderStroke(1.dp, borderColor),
                             leadingIcon = if (form.provider == ComputerProvider.SSH) { { Icon(painterResource(R.drawable.ic_check), stringResource(R.string.state_selected)) } } else null,
                         )
                         FilterChip(
                             selected = form.provider == ComputerProvider.CLOUDFLARE,
                             onClick = { onFormChange(form.copy(provider = ComputerProvider.CLOUDFLARE)) },
                             label = { Text("Cloudflare") }, enabled = !isBusy, colors = choiceColors,
-                            border = null,
+                            border = BorderStroke(1.dp, borderColor),
                             leadingIcon = if (form.provider == ComputerProvider.CLOUDFLARE) { { Icon(painterResource(R.drawable.ic_check), stringResource(R.string.state_selected)) } } else null,
                         )
                     }
@@ -281,7 +283,7 @@ internal fun ComputerAddCard(
                             selected = form.authKind == ComputerAuthKind.PASSWORD,
                             onClick = { onFormChange(form.copy(authKind = ComputerAuthKind.PASSWORD)) },
                             label = { Text(stringResource(R.string.computer_auth_password)) },
-                            border = null,
+                            border = BorderStroke(1.dp, borderColor),
                             leadingIcon = if (form.authKind == ComputerAuthKind.PASSWORD) { { Icon(painterResource(R.drawable.ic_check), stringResource(R.string.state_selected)) } } else null,
                             enabled = !isBusy,
                             shape = AppDialogTextFieldShape,
@@ -292,7 +294,7 @@ internal fun ComputerAddCard(
                             selected = form.authKind == ComputerAuthKind.PRIVATE_KEY,
                             onClick = { onFormChange(form.copy(authKind = ComputerAuthKind.PRIVATE_KEY)) },
                             label = { Text(stringResource(R.string.computer_auth_private_key)) },
-                            border = null,
+                            border = BorderStroke(1.dp, borderColor),
                             leadingIcon = if (form.authKind == ComputerAuthKind.PRIVATE_KEY) { { Icon(painterResource(R.drawable.ic_check), stringResource(R.string.state_selected)) } } else null,
                             enabled = !isBusy,
                             shape = AppDialogTextFieldShape,
@@ -373,16 +375,17 @@ internal fun ComputerAddCard(
                             modifier = Modifier.padding(bottom = 12.dp),
                         )
                     }
+                    }
 
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(top = 8.dp),
+                            .padding(horizontal = 24.dp)
+                            .padding(top = 8.dp, bottom = 24.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         OutlinedButton(
                             onClick = onDismiss,
-                            enabled = !isBusy || allowBusyDismiss,
                             modifier = Modifier
                                 .weight(1f)
                                 .height(48.dp),
@@ -537,19 +540,27 @@ internal fun ComputerHostKeyDialog(
             }
         },
         confirmButton = {
-            TextButton(
+            Button(
                 onClick = onConfirm,
                 modifier = Modifier.height(48.dp),
                 shape = AppDialogButtonShape,
+                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                    containerColor = appDialogContentColor(),
+                    contentColor = appDialogContainerColor(),
+                ),
             ) {
                 Text(stringResource(R.string.computer_host_key_confirm))
             }
         },
         dismissButton = {
-            TextButton(
+            OutlinedButton(
                 onClick = onDismiss,
                 modifier = Modifier.height(48.dp),
                 shape = AppDialogButtonShape,
+                border = BorderStroke(1.dp, appDialogBorderColor()),
+                colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
+                    contentColor = appDialogContentColor(),
+                ),
             ) {
                 Text(stringResource(R.string.action_cancel))
             }

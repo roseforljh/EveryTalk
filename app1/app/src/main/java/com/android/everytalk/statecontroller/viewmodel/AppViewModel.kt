@@ -13,6 +13,7 @@ import coil3.imageLoader
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.util.storage.FileManager
 import com.android.everytalk.data.DataClass.Message
+import com.android.everytalk.data.DataClass.MessageContentPart
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.data.DataClass.GenerationConfig
@@ -305,6 +306,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                          }
                          persistenceManager.saveConversationFunctionToggleStates(stateHolder.conversationFunctionToggleStates.value)
                          pendingMessageController.migrateConversationId(oldId, newId)
+                         if (stateHolder._forkConversationIds.value.values.any { it == oldId || it == newId }) {
+                             forkPendingMessageController.migrateConversationId(oldId, newId)
+                         }
                      },
                      deleteConversationWorkspaces = { conversationId ->
                          computerManager.deleteWorkspacesForConversation(conversationId)
@@ -610,21 +614,48 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     /** Pending 复用现有 Room、Composer 状态和 MessageSender，不建立第二套发送链路。 */
-    internal val pendingMessageController: PendingMessageController by lazy {
-        PendingMessageController(
+    internal val pendingMessageController: PendingMessageController by lazy { createPendingMessageController(false) }
+
+    /** Fork 也复用持久化队列，仅将会话、草稿和运行状态投影到分支。 */
+    internal val forkPendingMessageController: PendingMessageController by lazy { createPendingMessageController(true) }
+
+    private fun createPendingMessageController(fork: Boolean): PendingMessageController {
+        val conversation = if (fork) kotlinx.coroutines.flow.combine(
+            stateHolder._currentConversationId, stateHolder._forkConversationIds,
+        ) { parent, forks -> forks[parent].orEmpty() }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, "") else stateHolder._currentConversationId
+        val activeMessage = if (fork) kotlinx.coroutines.flow.combine(
+            conversation, stateHolder.textApiRunVersion,
+        ) { id, _ -> stateHolder.textApiMessageIds[id] }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, null) else stateHolder._currentTextStreamingAiMessageId
+        val running = if (fork) activeMessage.map { it != null }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, false) else stateHolder._isTextApiCalling
+        val control = if (fork) kotlinx.coroutines.flow.combine(
+            activeMessage, apiHandler.agentRunControlSnapshots,
+        ) { id, snapshots -> id?.let(snapshots::get)?.state }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, null) else currentAgentRunControlState
+        return PendingMessageController(
             chatDao = AppDatabase.getDatabase(getApplication()).chatDao(),
             scope = viewModelScope,
-            currentConversationId = stateHolder._currentConversationId,
-            isApiCalling = stateHolder._isTextApiCalling,
-            isAbortInProgress = stateHolder._isRemoteCancellationPending,
-            agentRunControlState = currentAgentRunControlState,
+            currentConversationId = conversation,
+            isApiCalling = running,
+            isAbortInProgress = if (fork) MutableStateFlow(false) else stateHolder._isRemoteCancellationPending,
+            agentRunControlState = control,
+            recoverDispatches = !fork,
             hasComposerContent = {
-                stateHolder._text.value.isNotBlank() || stateHolder.selectedMediaItems.isNotEmpty()
+                if (fork) stateHolder._forkComposerText.value.isNotBlank() ||
+                    stateHolder.forkSelectedMediaItems.isNotEmpty() || stateHolder.forkQuoteReferences.isNotEmpty()
+                else stateHolder._text.value.isNotBlank() || stateHolder.selectedMediaItems.isNotEmpty() ||
+                    stateHolder.composerQuoteReferences.isNotEmpty()
             },
-            replaceComposer = { text, attachments ->
-                stateHolder._text.value = text
-                stateHolder.selectedMediaItems.clear()
-                stateHolder.selectedMediaItems.addAll(attachments)
+            replaceComposer = { text, attachments, parts ->
+                val media = if (fork) stateHolder.forkSelectedMediaItems else stateHolder.selectedMediaItems
+                val quotes = if (fork) stateHolder.forkQuoteReferences else stateHolder.composerQuoteReferences
+                (if (fork) stateHolder._forkComposerText else stateHolder._text).value = text
+                media.clear()
+                media.addAll(attachments)
+                quotes.clear()
+                quotes.addAll(parts.filterIsInstance<MessageContentPart.QuoteReference>().map { it.reference })
             },
             persistAttachments = { attachments, content ->
                 messageSender.processAttachments(
@@ -633,7 +664,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     textToActuallySend = content,
                 ).takeIf { it.success }?.processedAttachmentsForUi
             },
-            resumeStreaming = streamingControls::resume,
+            resumeStreaming = {
+                if (fork) activeMessage.value?.let(apiHandler::resumePausedAgent)
+                else streamingControls.resume()
+            },
             steerCurrentRun = { pending ->
                 apiHandler.steerCurrentAgent(
                     conversationId = pending.conversationId,
@@ -649,21 +683,30 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     text = pending.content,
                     contentParts = pending.contentParts,
                     attachments = pending.attachments,
+                    targetConversationId = pending.conversationId.takeIf { fork },
                 )
             },
             showMessage = ::showSnackbar,
             dispatch = { pending, onAccepted, onRejected, onFinished ->
-                val engaged = stateHolder.systemPromptEngagedState[pending.conversationId] ?: false
-                messageSender.sendMessage(
-                    messageText = pending.content,
-                    attachments = pending.attachments,
-                    systemPrompt = systemPrompt.value.takeIf { engaged },
-                    manualMessageId = pending.id,
-                    contentParts = pending.contentParts,
-                    onUserMessageAccepted = onAccepted,
-                    onSendRejected = onRejected,
-                    onTurnFinished = onFinished,
-                )
+                if (fork) {
+                    sendForkMessage(
+                        pending.content, pending.attachments, null, pending.contentParts,
+                        onUserMessageDisplayed = {}, onSendRejected = onRejected,
+                        onAccepted = onAccepted, onFinished = onFinished, manualMessageId = pending.id,
+                    )
+                } else {
+                    val engaged = stateHolder.systemPromptEngagedState[pending.conversationId] ?: false
+                    messageSender.sendMessage(
+                        messageText = pending.content,
+                        attachments = pending.attachments,
+                        systemPrompt = systemPrompt.value.takeIf { engaged },
+                        manualMessageId = pending.id,
+                        contentParts = pending.contentParts,
+                        onUserMessageAccepted = onAccepted,
+                        onSendRejected = onRejected,
+                        onTurnFinished = onFinished,
+                    )
+                }
             },
         )
     }
@@ -743,6 +786,22 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         get() = stateHolder._isCompactingContext.asStateFlow()
     val selectedMediaItems: SnapshotStateList<SelectedMediaItem>
         get() = stateHolder.selectedMediaItems
+    val composerQuoteReferences: SnapshotStateList<com.android.everytalk.data.DataClass.MessageQuoteReference>
+        get() = stateHolder.composerQuoteReferences
+    val forkQuoteReferences: SnapshotStateList<com.android.everytalk.data.DataClass.MessageQuoteReference>
+        get() = stateHolder.forkQuoteReferences
+    val forkSelectedMediaItems: SnapshotStateList<SelectedMediaItem>
+        get() = stateHolder.forkSelectedMediaItems
+    val forkComposerText: StateFlow<String>
+        get() = stateHolder._forkComposerText.asStateFlow()
+    val forkDrawerOpenRequestVersion: StateFlow<Int>
+        get() = stateHolder._forkDrawerOpenRequestVersion.asStateFlow()
+    val forkConversationIds: StateFlow<Map<String, String>>
+        get() = stateHolder._forkConversationIds.asStateFlow()
+    val textApiRunVersion: StateFlow<Long>
+        get() = stateHolder.textApiRunVersion.asStateFlow()
+    val quoteJump: StateFlow<ViewModelStateHolder.QuoteJump?>
+        get() = stateHolder._quoteJump.asStateFlow()
 
     val systemPromptExpandedState: SnapshotStateMap<String, Boolean>
         get() = stateHolder.systemPromptExpandedState
@@ -1162,6 +1221,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
   }
 
   init {
+         // Fork 分支与父会话的对应关系存本机；会话 ID 迁移时 stateHolder 已同步改写。
+         run {
+             val prefs = application.getSharedPreferences("fork_conversations", android.content.Context.MODE_PRIVATE)
+             stateHolder._forkConversationIds.value = prefs.all.mapNotNull { (k, v) -> (v as? String)?.let { k to it } }.toMap()
+             viewModelScope.launch {
+                 stateHolder._forkConversationIds.collect { links ->
+                     prefs.edit().clear().apply { links.forEach { (parent, fork) -> putString(parent, fork) } }.apply()
+                 }
+             }
+         }
          // 恢复上次选中的强调色；找不到或名字失效时保持默认。
          viewModelScope.launch {
              val saved = persistenceManager.loadAccentColorName()

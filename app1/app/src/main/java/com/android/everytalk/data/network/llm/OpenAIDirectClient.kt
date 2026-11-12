@@ -64,6 +64,10 @@ object OpenAIDirectClient {
                 contentType(ContentType.Application.Json)
                 setBody(buildOpenAIPayload(effectiveRequest))
                 header(HttpHeaders.Authorization, "Bearer ${effectiveRequest.apiKey}")
+                // 参考 pi：OpenRouter 按 x-session-id 把同一会话固定到同一上游，提高前缀缓存命中。
+                if (baseUrl.contains("openrouter.ai", ignoreCase = true)) {
+                    PromptCachePolicy.sessionCacheKey(effectiveRequest.conversationId)?.let { header("x-session-id", it) }
+                }
                 configureSSERequest()
             }) { response ->
                 if (!response.status.isSuccess()) {
@@ -133,12 +137,13 @@ object OpenAIDirectClient {
             }
         val normalizedTools = PromptCachePolicy.normalizeTools(request.tools)
         val officialOpenAIEndpoint = PromptCachePolicy.isOfficialOpenAIEndpoint(resolvedOpenAIApiAddress(request))
+        // 只对官方地址发 prompt_cache_key（与 pi 默认一致，部分兼容代理会拒绝未知字段），键按会话生成。
         val promptCacheKey = PromptCachePolicy.buildOpenAICacheKey(
             apiAddress = resolvedOpenAIApiAddress(request),
             model = request.model,
             messages = messagesWithSystemPrompt,
             tools = normalizedTools,
-        )
+        )?.let { PromptCachePolicy.sessionCacheKey(request.conversationId) ?: it }
         runCatching {
             Log.d(
                 TAG,

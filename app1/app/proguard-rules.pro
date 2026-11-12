@@ -158,3 +158,8 @@
 # ===== PDFBox (Fix R8 missing classes) =====
 -dontwarn com.gemalto.jp2.**
 -dontwarn com.tom_roush.pdfbox.**
+
+# 「询问Everytalk」通过系统复制项的回调反射读取选中文本，避免经过剪贴板。
+-keepclassmembers class androidx.compose.foundation.text.selection.SelectionManager {
+    androidx.compose.ui.text.AnnotatedString getSelectedText$foundation();
+}

@@ -749,14 +749,88 @@ private object RegularMarkdownStrongSpanPainter : ExtendedSpanPainter() {
     ): SpanDrawInstructions = noOpDrawInstructions
 }
 
-internal fun createRegularMarkdownStrongExtendedSpans(): ExtendedSpans =
-    ExtendedSpans(RegularMarkdownStrongSpanPainter, MarkdownDottedLinkPainter)
+internal fun createRegularMarkdownStrongExtendedSpans(
+    textFlash: androidx.compose.runtime.State<TextFlash?> = NoTextFlash,
+): ExtendedSpans = ExtendedSpans(RegularMarkdownStrongSpanPainter, MarkdownDottedLinkPainter, TextFlashPainter(textFlash))
 
 @Composable
 internal fun markdownExtendedSpansWithRegularStrongWeight(): MarkdownExtendedSpans =
     markdownExtendedSpans {
-        remember { createRegularMarkdownStrongExtendedSpans() }
+        val textFlash = LocalTextFlash.current
+        remember(textFlash) { createRegularMarkdownStrongExtendedSpans(textFlash) }
     }
+
+/** 搜索/引用跳转后要在正文里闪亮的文字；alpha 由列表项的高光动画驱动。 */
+internal data class TextFlash(
+    val phrases: List<String>,
+    val color: Color,
+    val alpha: androidx.compose.runtime.State<Float>,
+)
+
+private val NoTextFlash: androidx.compose.runtime.State<TextFlash?> = androidx.compose.runtime.mutableStateOf(null)
+
+/** 列表项提供一个稳定的 State，画笔在绘制阶段读取，动画只触发重绘、不触发重组和重排。 */
+internal val LocalTextFlash = androidx.compose.runtime.staticCompositionLocalOf { NoTextFlash }
+
+/**
+ * 正文里要标亮的范围：短语原样出现就标短语；整段文字都落在某条短语里（引用跨段、列表序号等）就标整段。
+ * 引用按行拆开匹配，因为每个段落是单独的一块文字。
+ */
+internal fun textFlashRanges(text: String, phrases: List<String>): List<IntRange> {
+    val ranges = mutableListOf<IntRange>()
+    val trimmed = text.trim()
+    for (phrase in phrases) {
+        var at = text.indexOf(phrase, ignoreCase = true)
+        if (at < 0) {
+            if (trimmed.length >= 2 && phrase.contains(trimmed, ignoreCase = true)) {
+                val start = text.indexOf(trimmed)
+                ranges += start until start + trimmed.length
+            }
+            continue
+        }
+        while (at >= 0) {
+            ranges += at until at + phrase.length
+            at = text.indexOf(phrase, at + phrase.length, ignoreCase = true)
+        }
+    }
+    return ranges
+}
+
+internal fun textFlashPhrases(quotedText: String): List<String> =
+    quotedText.lines().map(String::trim).filter(String::isNotEmpty).distinct()
+
+private class TextFlashPainter(
+    private val textFlash: androidx.compose.runtime.State<TextFlash?>,
+) : ExtendedSpanPainter() {
+    override fun decorate(span: SpanStyle, start: Int, end: Int, text: AnnotatedString, builder: AnnotatedString.Builder) = span
+    override fun decorate(linkAnnotation: LinkAnnotation, start: Int, end: Int, text: AnnotatedString, builder: AnnotatedString.Builder) =
+        linkAnnotation
+
+    override fun drawInstructionsFor(layoutResult: TextLayoutResult, color: Color?): SpanDrawInstructions {
+        var cachedPhrases: List<String>? = null
+        var cachedBoxes: List<androidx.compose.ui.geometry.Rect> = emptyList()
+        return SpanDrawInstructions {
+            val flash = textFlash.value ?: return@SpanDrawInstructions
+            val alpha = flash.alpha.value
+            if (alpha <= 0f || flash.phrases.isEmpty()) return@SpanDrawInstructions
+            if (cachedPhrases != flash.phrases) {
+                cachedPhrases = flash.phrases
+                cachedBoxes = textFlashRanges(layoutResult.layoutInput.text.text, flash.phrases)
+                    .flatMap { layoutResult.getBoundingBoxes(it.first, it.last + 1) }
+            }
+            val pad = 2.dp.toPx()
+            val radius = androidx.compose.ui.geometry.CornerRadius(4.dp.toPx())
+            cachedBoxes.forEach { box ->
+                drawRoundRect(
+                    color = flash.color.copy(alpha = flash.color.alpha * alpha),
+                    topLeft = Offset(box.left - pad, box.top),
+                    size = androidx.compose.ui.geometry.Size(box.width + pad * 2, box.height),
+                    cornerRadius = radius,
+                )
+            }
+        }
+    }
+}
 
 private class RegularMarkdownStrongAnnotatorSettings(
     private val delegate: AnnotatorSettings,

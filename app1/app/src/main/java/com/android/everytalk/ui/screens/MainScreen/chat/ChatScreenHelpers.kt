@@ -54,7 +54,6 @@ import com.android.everytalk.statecontroller.ConversationScrollState
 import com.android.everytalk.statecontroller.SimpleModeManager
 import com.android.everytalk.ui.components.AppTopBar
 import com.android.everytalk.ui.components.AnimatedWebSourcesDialog
-import com.android.everytalk.ui.components.EveryTalkLoadingIndicator
 import com.android.everytalk.ui.components.ScrollToBottomButton
 import com.android.everytalk.ui.components.WebSourcesDialogEdgeGap
 import com.android.everytalk.ui.components.ImagePreviewDialog
@@ -65,6 +64,10 @@ import com.android.everytalk.ui.components.dialog.appDialogContainerColor
 import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.ChatInputArea
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.ChatMessagesList
+import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.HistoryLoadingBubblePlaceholderItem
+import com.android.everytalk.ui.theme.ChatDimensions
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import com.android.everytalk.ui.components.content.LocalStickyHeaderTop
 import com.android.everytalk.ui.components.image.buildImagePreviewSelection
 import com.android.everytalk.ui.screens.MainScreen.chat.dialog.SystemPromptDialog
@@ -265,7 +268,7 @@ internal fun HistoryConversationLoadingOverlay(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background.copy(alpha = 0.88f))
+            .background(MaterialTheme.colorScheme.background)
             .pointerInput(Unit) {
                 awaitPointerEventScope {
                     while (true) {
@@ -275,13 +278,29 @@ internal fun HistoryConversationLoadingOverlay(
                     }
                 }
             },
-        contentAlignment = Alignment.Center,
     ) {
-        EveryTalkLoadingIndicator(
-            size = 32.dp,
-            strokeWidth = 4.dp,
-            contentDescription = stringResource(R.string.chat_loading_conversation),
-        )
+        val loadingDescription = stringResource(R.string.chat_loading_conversation)
+        // 骨架与真实消息列表同一顶部留白（状态栏 + 72dp），加载完成淡出时气泡位置不跳动。
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(
+                    start = ChatDimensions.HORIZONTAL_PADDING_END,
+                    end = ChatDimensions.HORIZONTAL_PADDING_END,
+                    top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 72.dp,
+                )
+                .semantics { contentDescription = loadingDescription },
+            verticalArrangement = Arrangement.spacedBy(18.dp),
+        ) {
+            buildHistoryLoadingBubblePlaceholders("overlay").forEach { item ->
+                val placeholder = item as ChatListItem.LoadingBubblePlaceholder
+                HistoryLoadingBubblePlaceholderItem(
+                    role = placeholder.role,
+                    widthFraction = placeholder.widthFraction,
+                    estimatedHeight = placeholder.estimatedHeightDp.dp,
+                )
+            }
+        }
     }
 }
 

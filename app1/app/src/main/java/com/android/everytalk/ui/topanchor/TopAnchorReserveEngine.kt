@@ -45,10 +45,45 @@ fun Modifier.appendTopAnchorReserve(reservePx: Int): Modifier {
     }
 }
 
+/**
+ * 在测量阶段上报手动展开区当前（含动画）的高度，与列表布局同帧，
+ * 引擎据此不把用户展开当成 AI 新输出去消耗底部预留。
+ */
+fun Modifier.reportExpansionHeight(onHeight: (Int) -> Unit): Modifier = layout { measurable, constraints ->
+    val placeable = measurable.measure(constraints)
+    onHeight(placeable.height)
+    layout(placeable.width, placeable.height) {
+        placeable.placeRelative(0, 0)
+    }
+}
+
+/**
+ * 用户点开的内容：只把点开那一刻已有的内容高度算作用户展开，
+ * 之后 AI 往里追加的高度仍算回复输出，照常消耗底部预留。
+ * [contentModifier] 挂在展开内容上测完整高度，[userExpandedHeight] 在外层测量时调用。
+ */
+class UserExpansionHeightTracker {
+    private var contentHeightPx = 0
+    private var baselineContentPx = -1
+
+    val contentModifier: Modifier = Modifier.reportExpansionHeight { contentHeightPx = it }
+
+    fun userExpandedHeight(animatedHeightPx: Int, expanded: Boolean): Int {
+        if (!expanded && animatedHeightPx <= 0) {
+            baselineContentPx = -1
+            return 0
+        }
+        if (baselineContentPx < 0) baselineContentPx = contentHeightPx
+        val aiGrowthPx = (contentHeightPx - baselineContentPx).coerceAtLeast(0)
+        return (animatedHeightPx - aiGrowthPx).coerceIn(0, baselineContentPx)
+    }
+}
+
 @Stable
 class TopAnchorReserveEngineState {
     private var nextTurnGeneration = 0L
-    private val interactiveExpansionKeys = mutableSetOf<String>()
+    /** 展开区 key → (所在列表项 key, 当前高度)。由组件在测量时写入、离开组合时移除。 */
+    private val interactiveExpansions = mutableMapOf<String, Pair<Any, Int>>()
 
     var runtime by mutableStateOf(TopAnchorRuntimeState())
         private set
@@ -66,21 +101,31 @@ class TopAnchorReserveEngineState {
         get() = runtime.phase != TopAnchorPhase.InitialSnap
 
     /** 用户展开的执行详情只改变展示高度，不能被当成 AI 新输出消耗底部预留。 */
-    val holdsReserveForInteractiveExpansion: Boolean
-        get() = interactiveExpansionKeys.isNotEmpty()
+    internal fun interactiveExpansionPx(itemKey: Any?): Int =
+        interactiveExpansions.values.sumOf { (key, heightPx) -> if (key == itemKey) heightPx else 0 }
 
     fun updateRuntime(next: TopAnchorRuntimeState) {
         runtime = next
     }
 
+    /** snapshot 那一帧实际排进列表的 reserve。 */
+    internal fun reserveIn(snapshot: TopAnchorLayoutSnapshot): Int =
+        runtime.reserveForBottomPadding(snapshot.afterContentPadding)
+
+    internal fun setReserve(reservePx: Int, bottomPaddingPx: Int) {
+        val next = reservePx.coerceAtLeast(0)
+        runtime = runtime.copy(
+            reservePx = next,
+            reserveBottomPaddingPx = if (next > 0) bottomPaddingPx else -1,
+        )
+    }
+
     fun clearRuntime() {
-        interactiveExpansionKeys.clear()
         reserveReleaseRequested = false
         runtime = TopAnchorRuntimeState()
     }
 
     fun activateTurn(turn: TopAnchorTurn) {
-        interactiveExpansionKeys.clear()
         reserveReleaseRequested = false
         nextTurnGeneration += 1
         val activatedTurn = turn.copy(generation = nextTurnGeneration)
@@ -142,7 +187,11 @@ class TopAnchorReserveEngineState {
         val trailingItem = layoutInfo.visibleItemsInfo.firstOrNull {
             it.index == trailingRealItemIndex
         } ?: return
-        val reserveInTrailingItem = if (reserveInsideTrailingItem) runtime.reservePx else 0
+        val reserveInTrailingItem = if (reserveInsideTrailingItem) {
+            runtime.reserveForBottomPadding(layoutInfo.afterContentPadding)
+        } else {
+            0
+        }
         val realContentBottom = trailingItem.offset +
             (trailingItem.size - reserveInTrailingItem).coerceAtLeast(0)
         val viewportContentBottom = layoutInfo.viewportEndOffset - layoutInfo.afterContentPadding
@@ -162,11 +211,11 @@ class TopAnchorReserveEngineState {
         }
     }
 
-    fun updateInteractiveExpansion(key: String, expanded: Boolean) {
-        if (expanded) {
-            interactiveExpansionKeys.add(key)
+    fun updateInteractiveExpansion(itemKey: Any, key: String, heightPx: Int) {
+        if (heightPx > 0) {
+            interactiveExpansions[key] = itemKey to heightPx
         } else {
-            interactiveExpansionKeys.remove(key)
+            interactiveExpansions.remove(key)
         }
     }
 }
@@ -370,10 +419,11 @@ private suspend fun correctTopAnchorOnce(
     // 两者相减后才是列表视口内的真实坐标，避免目标位置被顶部 padding 再向下推一次。
     val currentTopY = anchor.offset - snapshot.viewportStartOffset
     // 回复占位尚未出现时，reserve 会附着在用户锚点自身；计算气泡高度时必须扣除这段布局空间。
+    val appliedReservePx = state.reserveIn(snapshot)
     val reserveInAnchor = if (
         config.reserveInsideTrailingItem && anchor.index == trailingRealItemIndex
     ) {
-        state.reservePx
+        appliedReservePx
     } else {
         0
     }
@@ -393,10 +443,10 @@ private suspend fun correctTopAnchorOnce(
         viewportHeightPx = snapshot.viewportHeightPx,
         driftPx = driftPx,
         scrollConsumedPx = consumedPx,
-        currentReservePx = state.reservePx
+        currentReservePx = appliedReservePx
     )
-    if (nextReserve != state.reservePx) {
-        state.updateRuntime(state.runtime.copy(reservePx = nextReserve))
+    if (nextReserve != appliedReservePx) {
+        state.setReserve(nextReserve, snapshot.afterContentPadding)
     }
     return true
 }
@@ -412,15 +462,6 @@ private suspend fun runTopAnchorCorrectionLoop(
     config: TopAnchorConfig
 ) {
     var stableSinceNanos = 0L
-    var previousLoopSnapshot = listState.layoutInfo.toTopAnchorSnapshot(
-        firstVisibleItemIndex = listState.firstVisibleItemIndex,
-        firstVisibleItemScrollOffset = listState.firstVisibleItemScrollOffset
-    )
-    var previousLoopReservePx = state.reservePx
-    var previousLoopTrailingIndex = trailingRealItemIndex()
-    var previousUserControlledSnapshot: TopAnchorLayoutSnapshot? = null
-    var previousUserControlledReservePx = 0
-    var previousUserControlledTrailingIndex = -1
     var lastLayoutVersion = listState.layoutInfo.toTopAnchorSnapshot(
         firstVisibleItemIndex = listState.firstVisibleItemIndex,
         firstVisibleItemScrollOffset = listState.firstVisibleItemScrollOffset
@@ -439,8 +480,7 @@ private suspend fun runTopAnchorCorrectionLoop(
         val layoutChanged = snapshot.layoutVersion != lastLayoutVersion
         lastLayoutVersion = snapshot.layoutVersion
 
-        // 用户接管后停止自动纠偏。占位仍需随回复内容增长而收缩，
-        // 使真实内容逐步替代虚拟空间，同时保持可上滑回原锚点的总滚动范围不变。
+        // 用户接管后停止自动纠偏，但 reserve 仍按真实内容收缩。
         val corrected = if (state.runtime.phase == TopAnchorPhase.UserControlled) {
             false
         } else {
@@ -455,75 +495,27 @@ private suspend fun runTopAnchorCorrectionLoop(
                 config = config,
             )
         }
-        // 本帧发生过滚动或增加占位时，snapshot 仍是校正前的旧布局。
-        // 用旧快照收缩会立即撤销刚完成的校正，造成 reserve 与锚点位置逐帧抖动。
-        if (!corrected) {
-            val currentTrailingIndex = trailingRealItemIndex()
-            val reserveRepresentedBySnapshot = state.reservePx
-                if (state.reserveReleaseRequested) {
-                    // 手势触发的退出动画已经接管 reserve，禁止内容差分逻辑重复收缩。
-                    previousUserControlledSnapshot = null
-                    previousUserControlledReservePx = 0
-                    previousUserControlledTrailingIndex = -1
-                } else if (
-                    state.runtime.phase == TopAnchorPhase.UserControlled &&
-                    !state.holdsReserveForInteractiveExpansion
-                ) {
-                val reserveBeforeShrink = reserveRepresentedBySnapshot
-                val previousSnapshot = previousUserControlledSnapshot ?: previousLoopSnapshot
-                val previousReservePx = if (previousUserControlledSnapshot == null) {
-                    previousLoopReservePx
-                } else {
-                    previousUserControlledReservePx
-                }
-                val previousTrailingIndex = if (previousUserControlledSnapshot == null) {
-                    previousLoopTrailingIndex
-                } else {
-                    previousUserControlledTrailingIndex
-                }
-                if (
-                    previousSnapshot.layoutVersion != snapshot.layoutVersion
-                ) {
-                    val contentGrowthPx = computeVisibleResponseContentGrowthPx(
-                        previous = previousSnapshot,
-                        current = snapshot,
-                        anchorIndex = anchorIndex,
-                        previousTrailingRealItemIndex = previousTrailingIndex,
-                        currentTrailingRealItemIndex = currentTrailingIndex,
-                        previousReservePx = previousReservePx,
-                        currentReservePx = reserveBeforeShrink,
-                        reserveInsideTrailingItem = config.reserveInsideTrailingItem,
-                    )
-                    if (contentGrowthPx > 0) {
-                        state.updateRuntime(
-                            state.runtime.copy(
-                                reservePx = (reserveBeforeShrink - contentGrowthPx).coerceAtLeast(0)
-                            )
-                        )
-                    }
-                }
-                // snapshot 对应本帧收缩前的 reserve，保留该值供下一次布局做真实高度差分。
-                previousUserControlledSnapshot = snapshot
-                previousUserControlledReservePx = reserveBeforeShrink
-                previousUserControlledTrailingIndex = currentTrailingIndex
-            } else if (!state.holdsReserveForInteractiveExpansion) {
-                previousUserControlledSnapshot = null
-                previousUserControlledReservePx = 0
-                previousUserControlledTrailingIndex = -1
-                shrinkReserveIfPossible(state, snapshot, currentTrailingIndex, config)
-            }
+        // 本帧发生过滚动或增加占位时，snapshot 仍是校正前的旧布局，不能拿来收缩。
+        // 手势触发的退出动画已经接管 reserve，不再按内容收缩。
+        if (!corrected && !state.reserveReleaseRequested) {
+            val reserveBeforeShrink = state.reservePx
+            shrinkReserveToContent(
+                state = state,
+                snapshot = snapshot,
+                anchorIndex = anchorIndex,
+                trailingRealItemIndex = trailingRealItemIndex(),
+                targetAnchorY = targetAnchorY,
+                config = config,
+            )
             if (
                 state.runtime.phase == TopAnchorPhase.AnchoredRunning &&
-                reserveRepresentedBySnapshot > 0 &&
+                reserveBeforeShrink > 0 &&
                 state.reservePx == 0
             ) {
                 // 回答内容已完全填满置顶时创建的空白，交还给聊天列表继续向下跟随。
                 state.clearRuntime()
                 return
             }
-            previousLoopSnapshot = snapshot
-            previousLoopReservePx = reserveRepresentedBySnapshot
-            previousLoopTrailingIndex = currentTrailingIndex
         }
         if (
             state.runtime.phase == TopAnchorPhase.UserControlled &&
@@ -554,72 +546,68 @@ private suspend fun runTopAnchorCorrectionLoop(
     }
 }
 
-private fun computeVisibleResponseContentGrowthPx(
-    previous: TopAnchorLayoutSnapshot,
-    current: TopAnchorLayoutSnapshot,
+/**
+ * 让锚点停在目标位置所需 reserve 的上限：可视高度 - 目标位置 - 锚点到真实内容底部的高度。
+ * 只用可见项计算；锚点在视口上方或末项在视口下方时，真实高度只会更大，上限仍成立。
+ * 与滚动位置无关，用户滑开、子项替换或中间插入都不会漏扣，底部不会残留多余空白。
+ * 用户手动展开的高度不算回复内容。锚点和末项之间没有可见项时返回 -1。
+ */
+internal fun topAnchorReserveUpperBoundPx(
+    snapshot: TopAnchorLayoutSnapshot,
     anchorIndex: Int,
-    previousTrailingRealItemIndex: Int,
-    currentTrailingRealItemIndex: Int,
-    previousReservePx: Int,
-    currentReservePx: Int,
-    reserveInsideTrailingItem: Boolean,
+    trailingRealItemIndex: Int,
+    reserveInTrailingItemPx: Int,
+    targetAnchorY: Int,
+    config: TopAnchorConfig,
+    interactiveExpansionPx: (itemKey: Any?) -> Int = { 0 },
 ): Int {
-    if (anchorIndex < 0) return 0
-    val previousByIndex = previous.visibleItems.associateBy { it.index }
-    var sizeDeltaPx = 0
-
-    current.visibleItems.forEach { currentItem ->
-        if (currentItem.index <= anchorIndex || currentItem.index > currentTrailingRealItemIndex) {
-            return@forEach
-        }
-        val currentRealSize = currentItem.size - if (
-            reserveInsideTrailingItem && currentItem.index == currentTrailingRealItemIndex
-        ) {
-            currentReservePx
-        } else {
-            0
-        }
-        val previousItem = previousByIndex[currentItem.index]
-        if (previousItem != null) {
-            val previousRealSize = previousItem.size - if (
-                reserveInsideTrailingItem && previousItem.index == previousTrailingRealItemIndex
-            ) {
-                previousReservePx
-            } else {
-                0
-            }
-            sizeDeltaPx += currentRealSize.coerceAtLeast(0) - previousRealSize.coerceAtLeast(0)
-        } else if (current.totalItemsCount > previous.totalItemsCount) {
-            sizeDeltaPx += currentRealSize.coerceAtLeast(0)
-        }
+    if (anchorIndex < 0 || trailingRealItemIndex < anchorIndex) return -1
+    val first = snapshot.visibleItems.firstOrNull { it.index in anchorIndex..trailingRealItemIndex } ?: return -1
+    val last = snapshot.visibleItems.last { it.index in anchorIndex..trailingRealItemIndex }
+    fun TopAnchorVisibleItem.realSize() =
+        (size - if (index == trailingRealItemIndex) reserveInTrailingItemPx else 0).coerceAtLeast(0)
+    val topY = if (first.index == anchorIndex) {
+        computeTopAnchorY(
+            itemTopY = first.offset,
+            itemHeightPx = first.realSize(),
+            tallAnchorThresholdPx = config.tallAnchorThresholdPx,
+            tallAnchorVisibleHeightPx = config.tallAnchorVisibleHeightPx,
+        )
+    } else {
+        first.offset
     }
-
-    return sizeDeltaPx.coerceAtLeast(0)
+    val contentBottom = last.offset + last.realSize()
+    val availableBottom = snapshot.viewportEndOffset - snapshot.afterContentPadding
+    val targetOffset = targetAnchorY + snapshot.viewportStartOffset
+    val expandedPx = snapshot.visibleItems
+        .filter { it.index in first.index..last.index }
+        .sumOf { interactiveExpansionPx(it.key) }
+    return (availableBottom - targetOffset - (contentBottom - topY - expandedPx)).coerceAtLeast(0)
 }
 
-private fun shrinkReserveIfPossible(
+private fun shrinkReserveToContent(
     state: TopAnchorReserveEngineState,
     snapshot: TopAnchorLayoutSnapshot,
+    anchorIndex: Int,
     trailingRealItemIndex: Int,
+    targetAnchorY: Int,
     config: TopAnchorConfig,
 ) {
     if (state.reservePx <= 0 || trailingRealItemIndex !in 0 until snapshot.totalItemsCount) return
-    val trailing = snapshot.visibleItems.firstOrNull { it.index == trailingRealItemIndex }
-    if (trailing == null) {
-        val lastVisibleIndex = snapshot.visibleItems.lastOrNull()?.index ?: return
-        if (config.reserveInsideTrailingItem && trailingRealItemIndex > lastVisibleIndex) {
-            // 末尾真实项已经被增长后的回复推到视口下方，真实内容本身已覆盖全部 slack。
-            // reserve 内嵌在末项时可直接归零，避免不可见的末项永久携带大块底部空白。
-            state.updateRuntime(state.runtime.copy(reservePx = 0))
-        }
-        return
-    }
-    val reserveInTrailingItem = if (config.reserveInsideTrailingItem) state.reservePx else 0
-    val contentBottom = trailing.offset + (trailing.size - reserveInTrailingItem).coerceAtLeast(0)
-    val gapPx = (snapshot.viewportEndOffset - contentBottom - snapshot.afterContentPadding)
-        .coerceAtLeast(0)
-    val nextReserve = shrinkTopAnchorReservePx(state.reservePx, gapPx)
-    if (nextReserve < state.reservePx) {
-        state.updateRuntime(state.runtime.copy(reservePx = nextReserve))
+    val applied = state.reserveIn(snapshot)
+    val upperBound = topAnchorReserveUpperBoundPx(
+        snapshot = snapshot,
+        anchorIndex = anchorIndex,
+        trailingRealItemIndex = trailingRealItemIndex,
+        reserveInTrailingItemPx = if (config.reserveInsideTrailingItem) applied else 0,
+        targetAnchorY = targetAnchorY,
+        config = config,
+        interactiveExpansionPx = state::interactiveExpansionPx,
+    )
+    if (upperBound < 0) return
+    val next = shrinkTopAnchorReservePx(applied, upperBound)
+    // 输入法展开时 applied 可能已被抵消为 0；内容填满可视区就彻底放掉记录值。
+    if (next < applied || upperBound == 0) {
+        state.setReserve(next, snapshot.afterContentPadding)
     }
 }

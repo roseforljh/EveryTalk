@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.components
 
+import com.android.everytalk.ui.components.dialog.AppOutlinedButton
 import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.Context
@@ -132,13 +133,13 @@ fun MessageFileActions(file: SelectedMediaItem.GenericFile, onDismiss: () -> Uni
         icon = { AttachmentTypeIcon(file) },
         title = { Text(file.displayName) },
         text = {
-            Column {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(file.savedDownloadPath ?: stringResource(R.string.ui_file_attachment_hint), style = MaterialTheme.typography.bodySmall)
-                if (attachmentPreviewKind(file) != null) TextButton(onClick = { open(file) }) { Text(stringResource(R.string.ui_file_action_preview)) }
-                TextButton(onClick = { scope.launch { openMessageAttachment(context, file); onDismiss() } }) { Text(stringResource(R.string.ui_file_action_open)) }
-                TextButton(onClick = { scope.launch { openMessageAttachment(context, file, true); onDismiss() } }) { Text(stringResource(R.string.ui_file_action_open_with)) }
+                if (attachmentPreviewKind(file) != null) AppOutlinedButton(onClick = { open(file) }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.ui_file_action_preview)) }
+                AppOutlinedButton(onClick = { scope.launch { openMessageAttachment(context, file); onDismiss() } }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.ui_file_action_open)) }
+                AppOutlinedButton(onClick = { scope.launch { openMessageAttachment(context, file, true); onDismiss() } }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.ui_file_action_open_with)) }
                 val folderIntent = attachmentFolderIntent(file)
-                if (folderIntent != null) TextButton(onClick = {
+                if (folderIntent != null) AppOutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = {
                     try { context.startActivity(folderIntent) }
                     catch (_: ActivityNotFoundException) { AppToast.show(context, "系统未提供文件浏览器，文件位于 ${file.savedDownloadPath}") }
                     catch (_: SecurityException) { AppToast.show(context, "系统不允许定位此目录，文件位于 ${file.savedDownloadPath}") }
@@ -146,7 +147,7 @@ fun MessageFileActions(file: SelectedMediaItem.GenericFile, onDismiss: () -> Uni
                 }) { Text(stringResource(R.string.ui_file_action_show_folder)) }
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.ui_file_action_close)) } },
+        confirmButton = { AppOutlinedButton(onClick = onDismiss) { Text(stringResource(R.string.ui_file_action_close)) } },
     )
 }
 

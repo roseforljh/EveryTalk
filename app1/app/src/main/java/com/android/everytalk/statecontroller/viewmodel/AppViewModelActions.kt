@@ -1182,3 +1182,204 @@ import java.util.UUID
             }
         }
     }
+
+    /** 将长按选中的 AI 回复片段添加到当前会话输入框。 */
+    internal fun AppViewModel.addQuoteToCurrentChat(
+        quote: com.android.everytalk.data.DataClass.MessageQuoteReference,
+    ) {
+        if (stateHolder.composerQuoteReferences.none { it.id == quote.id }) {
+            stateHolder.composerQuoteReferences.add(quote)
+        }
+    }
+
+    /** 移除当前会话输入框中的指定引用片段。 */
+    internal fun AppViewModel.removeQuoteFromCurrentChat(quoteId: String) {
+        stateHolder.composerQuoteReferences.removeAll { it.id == quoteId }
+    }
+
+    /** 清空当前会话输入框中的所有引用片段。 */
+    internal fun AppViewModel.clearQuotesFromCurrentChat() {
+        stateHolder.composerQuoteReferences.clear()
+    }
+
+    /** 开启新会话（保持当前选中的主模型）并将选中文本作为引用标签放入输入框。 */
+    internal fun AppViewModel.startNewChatWithQuote(
+        quote: com.android.everytalk.data.DataClass.MessageQuoteReference,
+    ) {
+        historyController.cancelPendingImageHistoryLoad()
+        if (isConversationSearchActive.value) setConversationSearchActive(false)
+        restoredMessageDraft.value?.let(::consumeRestoredMessageDraft)
+        dismissSourcesDialog()
+        cancelPendingTextHistoryLoad()
+        apiHandler.detachTextConversationUi()
+        viewModelScope.launch {
+            try {
+                simpleModeManager.switchToTextMode(forceNew = true)
+                withContext(Dispatchers.Main.immediate) {
+                    stateHolder.composerQuoteReferences.clear()
+                    stateHolder.composerQuoteReferences.add(quote)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e("AppViewModel", "Error starting new chat with quote", e)
+                showSnackbar("启动新聊天失败: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * 当前会话的 Fork 分支 ID；没有就新建一条真实分支会话，继承父会话的提示词和功能开关（服务器在发送时直接用父会话的）。
+     * 分支和普通会话走同一条发送链路，附件、联网、MCP、Agent、技能和落库都一样。
+     */
+    internal fun AppViewModel.ensureForkConversation(): String {
+        val parentId = stateHolder._currentConversationId.value
+        stateHolder._forkConversationIds.value[parentId]?.let { return it }
+        val forkId = "new_chat_fork_${UUID.randomUUID()}"
+        stateHolder._forkConversationIds.update { it + (parentId to forkId) }
+        stateHolder.systemPrompts[parentId]?.let { stateHolder.systemPrompts[forkId] = it }
+        stateHolder.systemPromptEngagedState[parentId]?.let { stateHolder.systemPromptEngagedState[forkId] = it }
+        stateHolder.conversationFunctionToggleStates.value[parentId]?.let { toggle ->
+            stateHolder.conversationFunctionToggleStates.update { it + (forkId to toggle) }
+        }
+        return forkId
+    }
+
+    /** 抽屉打开已有分支时，把落库的分支消息装回内存，后续追问才能带上分支里的上下文。 */
+    internal fun AppViewModel.loadForkConversationIfNeeded(forkId: String) {
+        val list = stateHolder.textMessagesForConversation(forkId)
+        if (list.isNotEmpty() || stateHolder.textApiMessageIds.containsKey(forkId)) return
+        if (stateHolder.forkLoadJobs[forkId]?.isActive == true) return
+        val job = viewModelScope.launch {
+            val stored = persistenceManager.loadHistorySession(forkId) ?: return@launch
+            val messages = ConversationNameHelper.withoutStoredConversationTitle(stored)
+            if (list.isNotEmpty()) return@launch
+            messages.forEach { stateHolder.textMessageConversationIds[it.id] = forkId }
+            stateHolder.rememberSeenTextMessages(messages)
+            list.addAll(messages)
+        }
+        stateHolder.forkLoadJobs[forkId] = job
+        job.invokeOnCompletion { stateHolder.forkLoadJobs.remove(forkId, job) }
+    }
+
+    /** 将引用文本放进 Fork 分支输入框并展开右侧抽屉。 */
+    internal fun AppViewModel.forkQuoteToTaskDrawer(
+        quote: com.android.everytalk.data.DataClass.MessageQuoteReference,
+    ) {
+        loadForkConversationIfNeeded(ensureForkConversation())
+        if (stateHolder.forkQuoteReferences.none { it.id == quote.id }) {
+            stateHolder.forkQuoteReferences.add(quote)
+        }
+        stateHolder._forkDrawerOpenRequestVersion.update { it + 1 }
+    }
+
+    internal fun AppViewModel.onForkComposerTextChange(newText: String) {
+        stateHolder._forkComposerText.value = newText
+    }
+
+    internal fun AppViewModel.removeForkQuote(quoteId: String) {
+        stateHolder.forkQuoteReferences.removeAll { it.id == quoteId }
+    }
+
+    internal fun AppViewModel.clearForkQuotes() {
+        stateHolder.forkQuoteReferences.clear()
+    }
+
+    /** Fork 分支的发送：同一条发送链路，只是目标会话换成分支，并把父会话近期对话作为前置上下文。 */
+    internal fun AppViewModel.sendForkMessage(
+        messageText: String,
+        attachments: List<SelectedMediaItem>,
+        mimeType: String?,
+        contentParts: List<com.android.everytalk.data.DataClass.MessageContentPart>,
+        onUserMessageDisplayed: () -> Unit,
+        onSendRejected: () -> Unit,
+        onAccepted: (() -> Unit)? = null,
+        onFinished: (() -> Unit)? = null,
+        manualMessageId: String? = null,
+    ) {
+        val parentId = stateHolder._currentConversationId.value
+        val forkId = ensureForkConversation()
+        loadForkConversationIfNeeded(forkId)
+        // ponytail: 只带父会话最近 20 条问答，超长会话的更早内容靠引用片段和来源提问补足。
+        val pendingLoad = stateHolder.forkLoadJobs[forkId]
+        val parentHistory = stateHolder.textMessagesForConversation(parentId)
+            .filter { (it.sender == Sender.User || it.sender == Sender.AI) && !it.isError && it.contentStarted }
+            .takeLast(20)
+        // 分支旧消息还在从数据库装回时先等它完成，避免新提问先写进空列表、旧上下文丢失。
+        viewModelScope.launch {
+            pendingLoad?.join()
+            messageSender.sendMessage(
+                messageText = messageText,
+                attachments = attachments,
+                mimeType = mimeType,
+                contentParts = contentParts,
+                onUserMessageDisplayed = onUserMessageDisplayed,
+                onSendRejected = onSendRejected,
+                onUserMessageAccepted = onAccepted,
+                onTurnFinished = onFinished,
+                manualMessageId = manualMessageId,
+                systemPrompt = stateHolder.systemPrompts[forkId]
+                    ?.takeIf { stateHolder.systemPromptEngagedState[forkId] == true },
+                targetConversationId = forkId,
+                inheritedHistory = parentHistory,
+                computerConversationId = parentId,
+            )
+        }
+    }
+
+    /** 停止 Fork 分支当前的回复，不影响主会话。 */
+    internal fun AppViewModel.stopForkRun() {
+        val forkId = stateHolder._forkConversationIds.value[stateHolder._currentConversationId.value] ?: return
+        viewModelScope.launch { apiHandler.stopConversationRuns(forkId) }
+    }
+
+    /**
+     * 点击引用标签：跳到原消息所在会话，由消息列表按引用原文定位到具体段落并高亮 3 秒。
+     */
+    internal fun AppViewModel.jumpToQuotedMessage(
+        reference: com.android.everytalk.data.DataClass.MessageQuoteReference,
+    ) {
+        viewModelScope.launch {
+            // 同步来的引用可能还停在 cloud:UUID：先按 UUID 换成这台设备上的真实 ID。
+            val dao = com.android.everytalk.data.database.AppDatabase.getDatabase(getApplication<Application>()).chatDao()
+            val targetMessageId = if (reference.sourceMessageId.startsWith("cloud:")) {
+                dao.resolveLocalMessageReference(reference.sourceMessageId)
+            } else reference.sourceMessageId
+            val resolvedSourceConvId = if (reference.sourceConversationId.startsWith("cloud:")) {
+                dao.resolveLocalSessionReference(reference.sourceConversationId)
+            } else stateHolder.resolveConversationId(reference.sourceConversationId)
+            if (stateHolder.messages.none { it.id == targetMessageId }) {
+                val history = stateHolder._historicalConversations.value
+                val targetHistoryIndex = history.indexOfFirst { conv ->
+                    conv.any { it.id == targetMessageId } ||
+                        ConversationNameHelper.resolveStableId(conv) == resolvedSourceConvId
+                }
+                if (targetHistoryIndex < 0) {
+                    showSnackbar("原消息已不存在")
+                    return@launch
+                }
+                loadConversationFromHistory(targetHistoryIndex)
+            }
+            val jump = ViewModelStateHolder.QuoteJump(targetMessageId, reference.quotedText, System.nanoTime())
+            stateHolder.highlightClearJob?.cancel()
+            stateHolder._quoteJump.value = jump
+        }
+    }
+
+    /** 搜索结果跳转：打开会话，定位到第 occurrence 处关键词并沿用引用跳转的三秒高光。 */
+    internal fun AppViewModel.openConversationSearchHit(index: Int, messageId: String, keyword: String, occurrence: Int) {
+        loadConversationFromHistory(index)
+        if (messageId.isEmpty()) return
+        stateHolder.highlightClearJob?.cancel()
+        stateHolder._quoteJump.value = ViewModelStateHolder.QuoteJump(messageId, keyword, System.nanoTime(), occurrence)
+    }
+
+    /** 列表完成滚动后再开始计时，跨会话加载不会吃掉高光的三秒展示时间。 */
+    internal fun AppViewModel.onQuoteLocated(jump: ViewModelStateHolder.QuoteJump) {
+        if (stateHolder._quoteJump.value != jump) return
+        stateHolder.highlightClearJob?.cancel()
+        stateHolder.highlightClearJob = viewModelScope.launch {
+            delay(3_000L)
+            stateHolder._quoteJump.compareAndSet(jump, null)
+        }
+    }

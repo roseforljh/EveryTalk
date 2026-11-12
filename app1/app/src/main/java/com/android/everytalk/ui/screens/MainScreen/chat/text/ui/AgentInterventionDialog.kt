@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.screens.MainScreen.chat.text.ui
 
+import com.android.everytalk.ui.components.dialog.AppOutlinedButton
 import com.android.everytalk.R
 import com.android.everytalk.util.locale.localizeUiMessage
 import androidx.compose.ui.res.stringResource
@@ -19,7 +20,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -28,6 +28,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -159,9 +160,12 @@ internal fun AgentInterventionDialog(
                     Text(stringResource(R.string.agent_intervention_select_resource))
                     if (loading) Text(stringResource(R.string.agent_intervention_loading_resources))
                     resourceError?.let { Text(context.localizeUiMessage(it), color = MaterialTheme.colorScheme.error) }
-                    Column(Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState())) {
+                    Column(
+                        Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
                         resources.forEach { resource ->
-                            TextButton(onClick = { selectedId = resource.id }, enabled = !loading) {
+                            AppOutlinedButton(onClick = { selectedId = resource.id }, enabled = !loading, modifier = Modifier.fillMaxWidth()) {
                                 // Worker 的 displayName 和 id 就是同一个字符串，只有两者不同时才补第二行。
                                 val label = (if (selectedId == resource.id) "✓ " else "") + resource.displayName +
                                     if (resource.id == resource.displayName) "" else "\n" + resource.id
@@ -170,7 +174,7 @@ internal fun AgentInterventionDialog(
                         }
                     }
                     if (!loading && resources.isEmpty()) Text(stringResource(R.string.agent_intervention_no_resources))
-                    TextButton(onClick = { refresh++ }, enabled = !loading) { Text(stringResource(R.string.agent_intervention_refresh_resources)) }
+                    AppOutlinedButton(onClick = { refresh++ }, enabled = !loading) { Text(stringResource(R.string.agent_intervention_refresh_resources)) }
                 } else if (isCloudflareReauthorization) {
                     Text(
                         text = stringResource(R.string.agent_intervention_cloudflare_expired),
@@ -223,11 +227,12 @@ internal fun AgentInterventionDialog(
                             .fillMaxWidth()
                             .heightIn(min = 56.dp),
                     )
-                    TextButton(
+                    AppOutlinedButton(
+                        modifier = Modifier.align(Alignment.End),
                         enabled = !submitting && textReplyInput.isNotBlank(),
                         onClick = {
                             val reply = textReplyInput.trim()
-                            if (reply.isEmpty()) return@TextButton
+                            if (reply.isEmpty()) return@AppOutlinedButton
                             textReplyInput = ""
                             submitting = true
                             submissionError = null

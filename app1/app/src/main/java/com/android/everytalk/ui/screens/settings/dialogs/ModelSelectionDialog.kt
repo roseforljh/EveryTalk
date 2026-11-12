@@ -1,4 +1,5 @@
 package com.android.everytalk.ui.screens.settings.dialogs
+import com.android.everytalk.ui.components.dialog.AppOutlinedButton
 import com.android.everytalk.statecontroller.*
 
 import androidx.compose.foundation.BorderStroke
@@ -163,7 +164,7 @@ fun ModelSelectionDialog(
                         )
                     }
                     if (selectedTab != ModelCatalogTab.ADDED && currentModels.isNotEmpty()) {
-                        TextButton(
+                        AppOutlinedButton(
                             onClick = {
                                 updateSelectedModels(if (selectedModels.size == currentModels.size) {
                                     emptySet()
@@ -324,7 +325,7 @@ fun ModelSelectionDialog(
                     modifier = Modifier.fillMaxWidth(),
                     contentAlignment = Alignment.Center
                 ) {
-                    TextButton(
+                    AppOutlinedButton(
                         onClick = onManualInput
                     ) {
                         Text(

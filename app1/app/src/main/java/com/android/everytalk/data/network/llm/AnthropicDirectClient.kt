@@ -298,22 +298,37 @@ object AnthropicDirectClient {
         }.toString()
     }
 
-    /** 只在实际发送的稳定历史末尾加断点，不修改签名、工具配对或保存的原生上下文。 */
+    /**
+     * 只在实际发送的稳定历史上加断点，不修改签名、工具配对或保存的原生上下文。
+     * 两个断点（加上 system 共 3 个，Anthropic 上限 4 个）：
+     * 1. 稳定历史末尾：同一次运行的工具循环逐轮延伸命中；
+     * 2. 本轮用户消息之前：本轮用户消息末尾带有每次都变的记忆块，下一次发送时它已不同，
+     *    只有这个位置在下一次请求里逐字不变，跨轮次才能命中到上一轮为止的历史。
+     */
     private fun cacheStableHistory(messages: List<JsonObject>, runtimeCount: Int): JsonArray {
         val result = messages.toMutableList()
-        for (index in (messages.size - runtimeCount - 1) downTo 0) {
-            val content = messages[index]["content"] as? JsonArray ?: continue
+        fun mark(index: Int): Boolean {
+            val content = messages[index]["content"] as? JsonArray ?: return false
             val blockIndex = content.indexOfLast { block ->
                 (block as? JsonObject)?.get("type")?.jsonPrimitive?.contentOrNull in
                     setOf("text", "image", "tool_use", "tool_result", "document")
             }
-            if (blockIndex < 0) continue
+            if (blockIndex < 0) return false
             val blocks = content.toMutableList()
             blocks[blockIndex] = JsonObject(blocks[blockIndex].jsonObject +
                 ("cache_control" to buildJsonObject { put("type", "ephemeral") }))
             result[index] = JsonObject(messages[index] + ("content" to JsonArray(blocks)))
-            break
+            return true
         }
+        val last = ((messages.size - runtimeCount - 1) downTo 0).firstOrNull(::mark) ?: return JsonArray(result)
+        // 本轮用户提问：最后一条带文字的 user 消息（工具结果也是 user 角色，但只含 tool_result）。
+        val currentTurn = (last downTo 0).firstOrNull { index ->
+            messages[index]["role"]?.jsonPrimitive?.contentOrNull == "user" &&
+                (messages[index]["content"] as? JsonArray)?.any { block ->
+                    (block as? JsonObject)?.get("type")?.jsonPrimitive?.contentOrNull == "text"
+                } == true
+        }
+        if (currentTurn != null) (currentTurn - 1 downTo 0).firstOrNull(::mark)
         return JsonArray(result)
     }
 

@@ -1,8 +1,8 @@
 package com.android.everytalk.ui.components.auth
 
+import com.android.everytalk.ui.components.dialog.AppOutlinedButton
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -29,15 +29,15 @@ internal fun AccountSwitchProtectionDialog(
         title = { Text(stringResource(R.string.account_switch_title)) },
         text = { Text(stringResource(R.string.account_switch_description)) },
         confirmButton = {
-            TextButton(onClick = { protection.choose(AccountSwitchChoice.UPLOAD_TO_CURRENT) }) {
+            AppOutlinedButton(onClick = { protection.choose(AccountSwitchChoice.UPLOAD_TO_CURRENT) }) {
                 Text(stringResource(R.string.account_switch_upload))
             }
         },
         dismissButton = {
-            TextButton(onClick = { protection.choose(AccountSwitchChoice.KEEP_LOCAL) }) {
+            AppOutlinedButton(onClick = { protection.choose(AccountSwitchChoice.KEEP_LOCAL) }) {
                 Text(stringResource(R.string.account_switch_keep_local))
             }
-            TextButton(onClick = { protection.choose(AccountSwitchChoice.CLEAR_LOCAL) }) {
+            AppOutlinedButton(onClick = { protection.choose(AccountSwitchChoice.CLEAR_LOCAL) }) {
                 Text(stringResource(R.string.account_switch_clear_local))
             }
         },

@@ -7,6 +7,7 @@ import com.android.everytalk.data.database.entities.UserSettingEntity
 import com.android.everytalk.data.database.entities.SyncAttachmentEntity
 import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.MessageContentPart
+import com.android.everytalk.data.DataClass.MessageQuoteReference
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -40,7 +41,12 @@ internal object SyncPayloadMapper {
         },
     )
 
-    fun message(message: MessageEntity, sessionUuid: String): PushChange = PushChange(
+    /** 引用来源跨设备要换成同步 UUID，另一台设备才能找回原消息。 */
+    fun message(
+        message: MessageEntity,
+        sessionUuid: String,
+        quoteSourceUuids: (MessageQuoteReference) -> Pair<String?, String?> = { it.sourceConversationId to it.sourceMessageId },
+    ): PushChange = PushChange(
         entity = SyncEntity.MESSAGES.wireName,
         id = message.uuid,
         deleted = message.deleted,
@@ -57,7 +63,9 @@ internal object SyncPayloadMapper {
             message.reasoning?.let { put("reasoning", it) }
             if (!message.isIncomplete) {
                 // 已发送的 Skill 标签是正文结构；只传稳定引用，不传草稿、设备路径或技能文件。
-                if (message.contentParts.any { it is MessageContentPart.SkillReference }) {
+                if (message.contentParts.any {
+                        it is MessageContentPart.SkillReference || it is MessageContentPart.QuoteReference
+                    }) {
                     put("bodySegments", JsonArray(message.contentParts.map { part -> buildJsonObject {
                         when (part) {
                             is MessageContentPart.Text -> { put("type", "text"); put("text", part.text) }
@@ -65,6 +73,15 @@ internal object SyncPayloadMapper {
                                 put("type", "skill"); put("skillId", part.reference.skillId)
                                 put("displayName", part.reference.displayName); put("sourceType", part.reference.sourceType.name)
                                 put("contentHash", part.reference.contentHash)
+                            }
+                            is MessageContentPart.QuoteReference -> {
+                                val (sourceSession, sourceMessage) = quoteSourceUuids(part.reference)
+                                put("type", "quote")
+                                put("id", part.reference.id)
+                                put("sourceConversationId", sourceSession ?: part.reference.sourceConversationId)
+                                put("sourceMessageId", sourceMessage ?: part.reference.sourceMessageId)
+                                put("quotedText", part.reference.quotedText)
+                                put("sourceQuestion", part.reference.sourceQuestion)
                             }
                         }
                     } }))

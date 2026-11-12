@@ -1,5 +1,7 @@
 package com.android.everytalk.ui.screens.BubbleMain.Main
 
+import com.android.everytalk.ui.topanchor.reportExpansionHeight
+import com.android.everytalk.ui.topanchor.UserExpansionHeightTracker
 import androidx.compose.ui.res.painterResource
 
 import androidx.compose.animation.AnimatedVisibility
@@ -97,6 +99,8 @@ import com.android.everytalk.ui.components.streaming.contentVersionForRendering
 import com.mikepenz.markdown.model.State
 import com.mikepenz.markdown.model.parseMarkdown
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.filter
+import androidx.compose.runtime.snapshotFlow
 
 private const val EXECUTION_CONTAINER_COLLAPSE_MS = 280
 private const val EXECUTION_SECTION_HEIGHT_MS = 240
@@ -295,7 +299,6 @@ internal fun ReasoningToggleAndContent(
     executionTrace: List<ExecutionTraceEvent> = emptyList(),
     detailExecutionTrace: List<ExecutionTraceEvent> = executionTrace,
     detailExecutionTraceProvider: (() -> List<ExecutionTraceEvent>)? = null,
-    detailInitialEventIndex: Int = 0,
     webSearchResults: List<WebSearchResult> = emptyList(),
     isReasoningStreaming: Boolean,
     isReasoningComplete: Boolean,
@@ -304,11 +307,12 @@ internal fun ReasoningToggleAndContent(
     mainContentHasStarted: Boolean,
     executionStartedAtMillis: Long? = null,
     executionFinishedAtMillis: Long? = null,
+    hasOuterActiveExecutionGroup: Boolean = false,
     reasoningTextColor: Color,
     reasoningToggleDotColor: Color,
     modifier: Modifier = Modifier,
     streamingScrollState: ScrollState = rememberScrollState(),
-    onInteractiveExpansionChanged: (key: String, expanded: Boolean) -> Unit = { _, _ -> },
+    onInteractiveExpansionChanged: (key: String, expandedHeightPx: Int) -> Unit = { _, _ -> },
     onCompletedProcessExpand: () -> Unit = {},
     onVisibilityChanged: () -> Unit,
 ) {
@@ -326,12 +330,17 @@ internal fun ReasoningToggleAndContent(
         isReasoningStreaming = isReasoningStreaming,
     )
     var userExpanded by remember(currentMessageId) { mutableStateOf(false) }
+    // 用户点过才算手动展开；运行期自动展开属于 AI 输出，不能上报。
+    var userDrivenExpansion by remember(currentMessageId) { mutableStateOf(false) }
     // 正文首字出现就收起过程区，不必等待整条回复结束；收起后仍允许手动查看。
     val forceExpanded = (processIsActive || replyIsStreaming) && !mainContentHasStarted
     val executionChainExpanded = forceExpanded || userExpanded
     var nowMillis by remember(currentMessageId) { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(forceExpanded, currentMessageId) {
-        if (forceExpanded) userExpanded = false
+        if (forceExpanded) {
+            userExpanded = false
+            userDrivenExpansion = false
+        }
     }
     LaunchedEffect(processIsActive, currentMessageId) {
         // 回复结束时收回运行期间手动展开的过程；结束后仍可自由展开查看。
@@ -429,23 +438,52 @@ internal fun ReasoningToggleAndContent(
                         }
                     },
             ) {
+                val suppressRedundantActiveHeader = hasOuterActiveExecutionGroup &&
+                    processIsActive &&
+                    sections.isNotEmpty()
                 Column {
-                    ExecutionChainHeader(
-                        text = executionChainTitle,
-                        active = processIsActive,
-                        expanded = executionChainExpanded,
-                        textColor = reasoningTextColor,
-                        iconColor = reasoningToggleDotColor,
-                        onClick = {
-                            if (sections.isEmpty() && processIsActive) {
-                                openReasoningSheet()
-                            } else if (!forceExpanded) {
-                                // 在展开动画改变列表高度之前暂停跟随，避免查看已结束过程时被拉到底部。
-                                if (!userExpanded && !processIsActive) onCompletedProcessExpand()
-                                userExpanded = !userExpanded
-                            }
-                        },
-                    )
+                    if (!suppressRedundantActiveHeader) {
+                        ExecutionChainHeader(
+                            text = executionChainTitle,
+                            active = processIsActive,
+                            expanded = executionChainExpanded && !(hasOuterActiveExecutionGroup && processIsActive && sections.isEmpty()),
+                            textColor = reasoningTextColor,
+                            iconColor = reasoningToggleDotColor,
+                            onClick = {
+                                if (sections.isEmpty() && processIsActive) {
+                                    openReasoningSheet()
+                                } else if (!forceExpanded) {
+                                    // 在展开动画改变列表高度之前暂停跟随，避免查看已结束过程时被拉到底部。
+                                    if (!userExpanded && !processIsActive) onCompletedProcessExpand()
+                                    userDrivenExpansion = true
+                                    userExpanded = !userExpanded
+                                }
+                            },
+                        )
+                    }
+                    val chainExpansionKey = "$currentMessageId:chain"
+                    DisposableEffect(chainExpansionKey) {
+                        onDispose { onInteractiveExpansionChanged(chainExpansionKey, 0) }
+                    }
+                    // 整段手动展开时内部工具组已计入这里的高度，不再单独上报。
+                    val nestedExpansionChanged: (String, Int) -> Unit = if (userDrivenExpansion) {
+                        { key, _ -> onInteractiveExpansionChanged(key, 0) }
+                    } else {
+                        onInteractiveExpansionChanged
+                    }
+                    val chainExpansionTracker = remember(chainExpansionKey) { UserExpansionHeightTracker() }
+                    Column(
+                        Modifier.reportExpansionHeight { heightPx ->
+                            onInteractiveExpansionChanged(
+                                chainExpansionKey,
+                                if (userDrivenExpansion) {
+                                    chainExpansionTracker.userExpandedHeight(heightPx, executionChainExpanded)
+                                } else {
+                                    0
+                                },
+                            )
+                        }
+                    ) {
                     AnimatedVisibility(
                         visible = executionChainExpanded,
                         enter = fadeIn(tween(EXECUTION_SECTION_EXPAND_FADE_MS)) + expandVertically(
@@ -457,6 +495,7 @@ internal fun ReasoningToggleAndContent(
                             shrinkTowards = Alignment.Top,
                         ),
                     ) {
+                        Box(chainExpansionTracker.contentModifier) {
                         ExecutionProcessContent(
                             expansionNamespace = currentMessageId,
                             sections = sections,
@@ -465,9 +504,12 @@ internal fun ReasoningToggleAndContent(
                             active = processIsActive,
                             reasoningActive = isReasoningStreaming,
                             messageIsError = messageIsError,
+                            indentContent = !suppressRedundantActiveHeader,
                             onOpenDetails = openReasoningSheet,
-                            onInteractiveExpansionChanged = onInteractiveExpansionChanged,
+                            onInteractiveExpansionChanged = nestedExpansionChanged,
                         )
+                        }
+                    }
                     }
                 }
             }
@@ -484,7 +526,6 @@ internal fun ReasoningToggleAndContent(
             isReasoningActive = processIsActive,
             messageIsError = messageIsError,
             scrollState = streamingScrollState,
-            initialEventIndex = detailInitialEventIndex,
             onDismissRequest = { showReasoningSheet = false },
         )
     }
@@ -500,21 +541,34 @@ internal fun executionProcessIsActive(
     !messageIsError &&
     (replyIsStreaming || isReasoningStreaming)
 
-/** 回复结束后的总执行区标题，标题文字与单个执行区结束态一致。 */
+/** 总执行区标题，流式运行期间在最上方显示实时总时长，结束后显示总耗时。 */
 @Composable
 internal fun ExecutionGroupToggle(
     steps: List<ExecutionStep>,
     messageIsError: Boolean,
     executionStartedAtMillis: Long?,
     executionFinishedAtMillis: Long?,
+    active: Boolean = false,
     expanded: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var nowMillis by remember(executionStartedAtMillis, active) {
+        mutableLongStateOf(System.currentTimeMillis())
+    }
+    LaunchedEffect(active, executionStartedAtMillis) {
+        while (active) {
+            nowMillis = System.currentTimeMillis()
+            delay(1_000L)
+        }
+    }
     val elapsedText = executionStartedAtMillis?.let { startedAt ->
-        executionFinishedAtMillis?.minus(startedAt)?.takeIf { it >= 1_000L }
+        val endedAt = executionFinishedAtMillis ?: nowMillis.takeIf { active }
+        endedAt?.minus(startedAt)?.takeIf { it >= 1_000L }
     }?.let { localizedExecutionDuration(it) }
     val title = when {
+        active && elapsedText != null -> stringResource(R.string.thinking_processing_duration, elapsedText)
+        active -> stringResource(R.string.computer_action_working).trimEnd('…')
         messageIsError && elapsedText != null -> stringResource(R.string.thinking_failed_duration, elapsedText)
         messageIsError -> stringResource(R.string.thinking_execution_failed)
         elapsedText != null -> stringResource(R.string.thinking_elapsed_duration, elapsedText)
@@ -523,7 +577,7 @@ internal fun ExecutionGroupToggle(
     }
     ExecutionChainHeader(
         text = title,
-        active = false,
+        active = active,
         expanded = expanded,
         textColor = MaterialTheme.chatColors.reasoningText,
         iconColor = MaterialTheme.colorScheme.onSurface,
@@ -608,8 +662,9 @@ private fun ExecutionProcessContent(
     active: Boolean,
     reasoningActive: Boolean,
     messageIsError: Boolean,
+    indentContent: Boolean = true,
     onOpenDetails: () -> Unit,
-    onInteractiveExpansionChanged: (key: String, expanded: Boolean) -> Unit,
+    onInteractiveExpansionChanged: (key: String, expandedHeightPx: Int) -> Unit,
 ) {
     val latestToolGroupIndex = sections.indexOfLast { it is ExecutionProcessSection.ToolGroup }
     val activeNarrativeIndex = if (
@@ -619,10 +674,11 @@ private fun ExecutionProcessContent(
     } else {
         -1
     }
+    val horizontalPadding = if (indentContent) 12.dp else 0.dp
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 12.dp, end = 12.dp, top = 2.dp, bottom = 6.dp)
+            .padding(start = horizontalPadding, end = horizontalPadding, top = 2.dp, bottom = 6.dp)
             .testTag("reasoning-chain-summaries"),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
@@ -818,16 +874,13 @@ private fun ExecutionToolGroup(
     activeStatusText: String?,
     groupIndex: Int,
     onOpenDetails: () -> Unit,
-    onInteractiveExpansionChanged: (key: String, expanded: Boolean) -> Unit,
+    onInteractiveExpansionChanged: (key: String, expandedHeightPx: Int) -> Unit,
 ) {
     val stableKey = group.entries.firstOrNull()?.step?.id ?: "group-$groupIndex"
     val expansionKey = "$expansionNamespace:$stableKey"
     var expanded by remember(stableKey) { mutableStateOf(false) }
-    DisposableEffect(expansionKey, expanded) {
-        if (expanded) onInteractiveExpansionChanged(expansionKey, true)
-        onDispose {
-            if (expanded) onInteractiveExpansionChanged(expansionKey, false)
-        }
+    DisposableEffect(expansionKey) {
+        onDispose { onInteractiveExpansionChanged(expansionKey, 0) }
     }
     val arrowRotation by animateFloatAsState(
         targetValue = if (expanded) 0f else -90f,
@@ -883,6 +936,12 @@ private fun ExecutionToolGroup(
                     .graphicsLayer { rotationZ = arrowRotation },
             )
         }
+        val expansionTracker = remember(expansionKey) { UserExpansionHeightTracker() }
+        Column(
+            Modifier.reportExpansionHeight {
+                onInteractiveExpansionChanged(expansionKey, expansionTracker.userExpandedHeight(it, expanded))
+            }
+        ) {
         AnimatedVisibility(
             visible = expanded,
             enter = fadeIn(tween(EXECUTION_SECTION_EXPAND_FADE_MS)) + expandVertically(
@@ -894,7 +953,10 @@ private fun ExecutionToolGroup(
                 shrinkTowards = Alignment.Top,
             ),
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(
+                modifier = expansionTracker.contentModifier,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
                 // 主页面只预览最近三条，完整执行记录仍由详情抽屉展示。
                 group.entries.takeLast(EXECUTION_TOOL_PREVIEW_MAX_ITEMS).forEachIndexed { stepIndex, entry ->
                     InlineExecutionStep(
@@ -905,6 +967,7 @@ private fun ExecutionToolGroup(
                     )
                 }
             }
+        }
         }
     }
 }
@@ -1054,17 +1117,18 @@ private fun ReasoningBottomSheet(
     isReasoningActive: Boolean,
     messageIsError: Boolean,
     scrollState: ScrollState,
-    initialEventIndex: Int,
     onDismissRequest: () -> Unit,
 ) {
     val navigationBarBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-    var focusTop by remember(initialEventIndex) { mutableStateOf<Int?>(null) }
-    LaunchedEffect(focusTop, initialEventIndex) {
-        val target = focusTop ?: return@LaunchedEffect
-        if (initialEventIndex > 0) {
-            delay(250L)
-            scrollState.scrollTo(target.coerceIn(0, scrollState.maxValue))
-        }
+    // 打开时停在最新一步；内容增长或面板展开时，只要还停在底部就继续跟随，上翻查看时不打扰。
+    LaunchedEffect(scrollState) {
+        var lastMaxValue = 0
+        snapshotFlow { scrollState.maxValue }
+            .filter { it != Int.MAX_VALUE }
+            .collect { maxValue ->
+                if (scrollState.value >= lastMaxValue - 1) scrollState.scrollTo(maxValue)
+                lastMaxValue = maxValue
+            }
     }
     val executionLoadingDescription = stringResource(R.string.thinking_execution_loading)
     val sheetText = if (
@@ -1156,8 +1220,6 @@ private fun ReasoningBottomSheet(
             reasoningText = sheetText,
             isReasoningActive = isReasoningActive,
             messageIsError = messageIsError,
-            focusItemIndex = initialEventIndex,
-            onFocusItemPositioned = { focusTop = it },
             modifier = Modifier
                 .fillMaxWidth()
                 .semantics {

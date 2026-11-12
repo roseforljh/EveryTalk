@@ -82,6 +82,20 @@ data class ExecutionStep(
     val durationMs: Long? = null,
 )
 
+/**
+ * 用户从 AI 回复中长按选中的引用文本片段，记录来源会话 ID、消息 ID 与原始文本，
+ * 支持跨会话携带上下文以及点击标签跳回原消息并高亮。
+ */
+@Serializable
+data class MessageQuoteReference(
+    val id: String = UUID.randomUUID().toString(),
+    val sourceConversationId: String,
+    val sourceMessageId: String,
+    val quotedText: String,
+    /** 被引用 AI 回复所回答的用户提问，让新会话或分支里的模型知道这段文字的来历。 */
+    val sourceQuestion: String = "",
+)
+
 /** 用户消息正文中的有序内容。Skill 引用保持原位置并携带冻结版本。 */
 @Serializable
 sealed class MessageContentPart {
@@ -90,19 +104,33 @@ sealed class MessageContentPart {
 
     @Serializable
     data class SkillReference(val reference: MessageSkillReference) : MessageContentPart()
+
+    @Serializable
+    data class QuoteReference(val reference: MessageQuoteReference) : MessageContentPart()
 }
 
 fun List<MessageContentPart>.toApiText(fallback: String): String {
     if (isEmpty()) return fallback
-    return joinToString("") { part ->
+    val quotes = filterIsInstance<MessageContentPart.QuoteReference>().map { it.reference }
+    val mainText = filterNot { it is MessageContentPart.QuoteReference }.joinToString("") { part ->
         when (part) {
             is MessageContentPart.Text -> part.text
             is MessageContentPart.SkillReference -> {
                 val ref = part.reference
                 "<skill_ref id=\"${ref.skillId}\" content_hash=\"${ref.contentHash}\">${ref.displayName}</skill_ref>"
             }
+            is MessageContentPart.QuoteReference -> ""
+        }
+    }.ifBlank { fallback }
+    if (quotes.isEmpty()) return mainText
+    val quoteContext = "用户引用了此前 AI 回复中的片段，source_question 是当时用户的提问：\n" + quotes.joinToString("\n") { ref ->
+        buildString {
+            append("<quoted_context source_conversation_id=\"${ref.sourceConversationId}\" source_message_id=\"${ref.sourceMessageId}\">\n")
+            if (ref.sourceQuestion.isNotBlank()) append("<source_question>\n${ref.sourceQuestion}\n</source_question>\n")
+            append("<quoted_text>\n${ref.quotedText}\n</quoted_text>\n</quoted_context>")
         }
     }
+    return if (mainText.isBlank()) quoteContext else "$quoteContext\n\n$mainText"
 }
 
 /**

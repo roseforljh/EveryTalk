@@ -7,6 +7,8 @@ import androidx.room.withTransaction
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.android.everytalk.data.DataClass.Message
+import com.android.everytalk.data.DataClass.MessageContentPart
+import com.android.everytalk.data.DataClass.MessageQuoteReference
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.auth.SyncAccountBindingStore
 import com.android.everytalk.data.database.AppDatabase
@@ -502,6 +504,35 @@ class SyncEngineTest {
         assertEquals(SyncStatus.PENDING, db.chatDao().getStoredSession(s.id)!!.syncStatus)
         db.chatDao().updateSessionTitle(s.id, "再改", now = 100)
         assertEquals(101, db.chatDao().getStoredSession(s.id)!!.updatedAt.toInt())
+    }
+
+    @Test fun `引用片段随消息同步并在另一设备解析回原消息`() = runBlocking {
+        val db = device(); val s = seed(db); val store = RoomSyncStore(db)
+        val source = db.chatDao().getMessagesForSession(s.id).single()
+        val quoted = message("quoted", s).copy(contentParts = listOf(
+            MessageContentPart.QuoteReference(MessageQuoteReference(
+                sourceConversationId = s.id, sourceMessageId = source.id, quotedText = "被引用的回答",
+            )),
+            MessageContentPart.Text("请解释"),
+        ))
+        db.chatDao().writeMessages(listOf(quoted))
+        val change = store.pendingBatch().map { it.change }.single { it.id == quoted.uuid }
+        val segments = change.payload["bodySegments"]!!.jsonArray
+        assertEquals("quote", segments[0].jsonObject["type"]!!.jsonPrimitive.content)
+        // 上传的是同步 UUID，不是这台设备的本地主键。
+        assertEquals(s.uuid, segments[0].jsonObject["sourceConversationId"]!!.jsonPrimitive.content)
+        assertEquals(source.uuid, segments[0].jsonObject["sourceMessageId"]!!.jsonPrimitive.content)
+
+        // 另一台设备：原消息和引用一起到达后，来源能解析回本机 ID。
+        val other = device()
+        val otherStore = RoomSyncStore(other)
+        otherStore.applyPullPage(page(SyncPayloadMapper.session(s), SyncPayloadMapper.message(source, s.uuid), change))
+        val restored = other.chatDao().getMessageByUuid(quoted.uuid)!!
+        val quote = restored.contentParts.filterIsInstance<MessageContentPart.QuoteReference>().single().reference
+        // 另一台设备上原消息/会话的本地主键本来就和源设备不同，引用要指向这台设备的 ID。
+        assertEquals(other.chatDao().getMessageByUuid(source.uuid)!!.id, quote.sourceMessageId)
+        assertEquals(other.chatDao().getSessionByUuid(s.uuid)!!.id, quote.sourceConversationId)
+        assertEquals("被引用的回答", quote.quotedText)
     }
 
     @Test fun `上传中删除消息保留墓碑且旧响应不能复活`() = runBlocking {

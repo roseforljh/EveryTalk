@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.screens.computer
 
+import com.android.everytalk.ui.components.dialog.AppOutlinedButton
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
 import android.webkit.WebResourceError
@@ -29,7 +30,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
@@ -204,7 +204,7 @@ internal fun ComputerPreviewCreateDialog(
             }
         },
         dismissButton = {
-            TextButton(
+            AppOutlinedButton(
                 onClick = onDismiss,
                 enabled = !isBusy,
                 modifier = Modifier.height(48.dp),
@@ -283,7 +283,7 @@ internal fun ComputerPreviewList(
                         )
                     }
                     if (url != null && preview.status == ComputerPreviewStatus.ACTIVE) {
-                        TextButton(onClick = { onOpen(url) }) {
+                        AppOutlinedButton(onClick = { onOpen(url) }) {
                             Text(stringResource(R.string.computer_preview_view))
                         }
                     }
@@ -497,7 +497,7 @@ fun ComputerPublicPreviewConfirmationDialog(viewModel: AppViewModel) {
             }
         },
         dismissButton = {
-            TextButton(
+            AppOutlinedButton(
                 onClick = { viewModel.respondToComputerPublicPreview(false) },
                 modifier = Modifier.height(48.dp),
                 shape = AppDialogButtonShape,

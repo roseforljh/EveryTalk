@@ -45,6 +45,7 @@ data class MessageEditSession(
             when (it) {
                 is MessageContentPart.Text -> it.text
                 is MessageContentPart.SkillReference -> "‹${it.reference.displayName}›"
+                is MessageContentPart.QuoteReference -> ""
             }
         }
         // Compose 的 SnapshotStateList 不提供普通 List 的结构相等语义，先取快照再比较内容及顺序。

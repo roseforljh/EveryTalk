@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.screens.computer
 
+import com.android.everytalk.ui.components.dialog.AppOutlinedButton
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -47,7 +48,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -262,6 +262,7 @@ fun ComputerDetailScreen(
     }
 
     fun startEditHostKeyProbe() {
+        if (busyAction != null) return
         val currentComputer = computer ?: return
         val validationError = editForm.validationError(currentComputer.authKind)
         if (validationError != null) {
@@ -372,7 +373,7 @@ fun ComputerDetailScreen(
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Text(stringResource(R.string.computer_detail_missing))
-                    TextButton(onClick = { navController.popBackStack() }) {
+                    AppOutlinedButton(onClick = { navController.popBackStack() }) {
                         Text(stringResource(R.string.navigation_back))
                     }
                 }
@@ -525,7 +526,7 @@ fun ComputerDetailScreen(
     if (editDialogVisible) {
         ComputerAddCard(
             form = editForm,
-            isBusy = busyAction == "edit-probe" || busyAction == "edit-save",
+            isBusy = busyAction != null,
             progressText = editProgressText,
             progressDetailText = null,
             errorText = editErrorText,
@@ -535,7 +536,6 @@ fun ComputerDetailScreen(
             title = stringResource(R.string.computer_edit_title),
             submitLabel = stringResource(R.string.computer_edit_save),
             keepCredentialHint = computer.credentialState != ComputerCredentialState.MISSING,
-            allowBusyDismiss = true,
         )
     }
 
@@ -1241,7 +1241,7 @@ private fun ComputerAuditContent(audits: List<ComputerAuditEvent>) {
                 }
             }
             if (audits.size > previewLimit) {
-                TextButton(
+                AppOutlinedButton(
                     onClick = { showAllAudits = !showAllAudits },
                     modifier = Modifier
                         .align(Alignment.End)
@@ -1373,7 +1373,7 @@ internal fun ComputerFullApprovalWarningDialog(
             }
         },
         dismissButton = {
-            TextButton(
+            AppOutlinedButton(
                 onClick = onDismiss,
                 enabled = !isBusy,
                 shape = AppDialogButtonShape,
@@ -1435,7 +1435,7 @@ private fun ComputerReplacementHostKeyDialog(
             }
         },
         dismissButton = {
-            TextButton(
+            AppOutlinedButton(
                 onClick = onDismiss,
                 enabled = !isBusy,
                 modifier = Modifier.height(48.dp),
@@ -1496,7 +1496,7 @@ private fun ComputerDeleteDialog(
             }
         },
         dismissButton = {
-            TextButton(
+            AppOutlinedButton(
                 onClick = onDismiss,
                 enabled = !isBusy,
                 modifier = Modifier.height(48.dp),

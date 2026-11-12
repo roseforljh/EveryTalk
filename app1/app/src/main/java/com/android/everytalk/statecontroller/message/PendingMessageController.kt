@@ -65,7 +65,7 @@ internal class PendingMessageController(
     private val isAbortInProgress: StateFlow<Boolean>,
     private val agentRunControlState: StateFlow<AgentRunControlState?>,
     private val hasComposerContent: () -> Boolean,
-    private val replaceComposer: (String, List<SelectedMediaItem>) -> Unit,
+    private val replaceComposer: (String, List<SelectedMediaItem>, List<MessageContentPart>) -> Unit,
     private val persistAttachments: suspend (List<SelectedMediaItem>, String) -> List<SelectedMediaItem>?,
     private val resumeStreaming: () -> Unit,
     private val steerCurrentRun: suspend (PendingMessageEntity) -> Boolean,
@@ -77,6 +77,7 @@ internal class PendingMessageController(
         onRejected: () -> Unit,
         onFinished: () -> Unit,
     ) -> Unit,
+    private val recoverDispatches: Boolean = true,
 ) {
     private val operationMutex = Mutex()
     private val submissionInProgress = AtomicBoolean(false)
@@ -120,7 +121,8 @@ internal class PendingMessageController(
     }.stateIn(scope, SharingStarted.Eagerly, ChatRunState.Idle)
 
     init {
-        scope.launch(Dispatchers.IO) {
+        // 仅应用级主控制器恢复一次；打开 Fork 时不能把正在发送的主队列重新标成待发送。
+        if (recoverDispatches) scope.launch(Dispatchers.IO) {
             chatDao.recoverPendingDispatches()
         }
         scope.launch {
@@ -133,7 +135,7 @@ internal class PendingMessageController(
                     !hasComposerContent()
                 ) {
                     _composerMode.value = persistedEditing.toEditingMode()
-                    replaceComposer(persistedEditing.composerText, persistedEditing.attachments)
+                    replaceComposer(persistedEditing.composerText, persistedEditing.attachments, persistedEditing.contentParts)
                 }
             }
         }
@@ -148,7 +150,7 @@ internal class PendingMessageController(
                 if (editing != null && editing.conversationId != conversationId) {
                     withContext(Dispatchers.IO) { chatDao.cancelPendingMessageEdit(editing.pendingId) }
                     _composerMode.value = ComposerMode.Normal
-                    replaceComposer("", emptyList())
+                    replaceComposer("", emptyList(), emptyList())
                 }
             }
         }
@@ -162,7 +164,7 @@ internal class PendingMessageController(
         attachments: List<SelectedMediaItem>,
         onStored: () -> Unit,
     ) {
-        if ((content.isBlank() && attachments.isEmpty()) || !submissionInProgress.compareAndSet(false, true)) return
+        if ((content.isBlank() && attachments.isEmpty() && contentParts.none { it is MessageContentPart.QuoteReference }) || !submissionInProgress.compareAndSet(false, true)) return
         val conversationId = currentConversationId.value
         val now = System.currentTimeMillis()
         scope.launch {
@@ -209,13 +211,13 @@ internal class PendingMessageController(
             originalContentParts = pending.contentParts,
             originalAttachments = pending.attachments,
         )
-        replaceComposer(pending.composerText, pending.attachments)
+        replaceComposer(pending.composerText, pending.attachments, pending.contentParts)
         scope.launch {
             operationMutex.withLock {
                 val detached = withContext(Dispatchers.IO) { chatDao.detachPendingMessageForEdit(id) }
                 if (detached == 0 && (_composerMode.value as? ComposerMode.EditingPending)?.pendingId == id) {
                     _composerMode.value = ComposerMode.Normal
-                    replaceComposer("", emptyList())
+                    replaceComposer("", emptyList(), emptyList())
                     showMessage("这条消息已开始发送，无法编辑")
                 }
             }
@@ -231,7 +233,7 @@ internal class PendingMessageController(
         onStored: () -> Unit,
     ) {
         val editing = _composerMode.value as? ComposerMode.EditingPending ?: return
-        if ((content.isBlank() && attachments.isEmpty()) || !submissionInProgress.compareAndSet(false, true)) return
+        if ((content.isBlank() && attachments.isEmpty() && contentParts.none { it is MessageContentPart.QuoteReference }) || !submissionInProgress.compareAndSet(false, true)) return
         scope.launch {
             operationMutex.withLock {
                 val stableAttachments = persistAttachments(attachments, content)
@@ -269,7 +271,7 @@ internal class PendingMessageController(
                 val restored = withContext(Dispatchers.IO) { chatDao.cancelPendingMessageEdit(editing.pendingId) }
                 if (restored == 1 && (_composerMode.value as? ComposerMode.EditingPending)?.pendingId == editing.pendingId) {
                     _composerMode.value = ComposerMode.Normal
-                    replaceComposer("", emptyList())
+                    replaceComposer("", emptyList(), emptyList())
                 }
             }
         }
@@ -285,7 +287,7 @@ internal class PendingMessageController(
                 }
                 if ((_composerMode.value as? ComposerMode.EditingPending)?.pendingId == id) {
                     _composerMode.value = ComposerMode.Normal
-                    replaceComposer("", emptyList())
+                    replaceComposer("", emptyList(), emptyList())
                 }
             }
         }

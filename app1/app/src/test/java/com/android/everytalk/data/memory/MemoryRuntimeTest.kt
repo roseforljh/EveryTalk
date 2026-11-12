@@ -129,7 +129,8 @@ class MemoryRuntimeTest {
         val original = listOf(SimpleTextApiMessage(role = "system", content = "稳定规则"), SimpleTextApiMessage(role = "user", content = "问题"))
         val injected = MemoryPromptRenderer.inject(original, prompt)
         assertEquals("稳定规则", original.first().content)
-        assertTrue((injected.first() as SimpleTextApiMessage).content.contains("<everytalk-memory>"))
+        assertTrue((injected.first() as SimpleTextApiMessage).content == "稳定规则")
+        assertTrue((injected.last() as SimpleTextApiMessage).content.let { it.startsWith("问题") && it.contains("<everytalk-memory>") })
         val oldResult = AgentToolResultApiMessage(toolCallId = "call", toolName = MemoryTool.NAME, content = JsonPrimitive("已经删除的长期秘密"))
         val sanitized = MemoryPromptRenderer.forHistory(listOf(oldResult)).single() as AgentToolResultApiMessage
         assertEquals("call", sanitized.toolCallId)
@@ -287,7 +288,9 @@ class MemoryRuntimeTest {
         val loop = AgentLoop(AgentRunStore(database.agentDao()), memoryCoordinator = coordinator,
             modelTransport = ModelTurnTransport { turn ->
                 turns++
-                val prompt = turn.request.messages.filterIsInstance<SimpleTextApiMessage>().first { it.role == "system" }.content
+                // 动态记忆在本轮用户消息末尾；system 不含时间等每次都变的内容，供应商前缀缓存才能命中。
+                assertFalse(turn.request.messages.any { it.role == "system" && it.toString().contains("local_time") })
+                val prompt = turn.request.messages.filterIsInstance<SimpleTextApiMessage>().last { it.role == "user" }.content
                 assertTrue(prompt.contains(input.sessionId))
                 assertTrue(prompt.contains("timezone"))
                 assertTrue(prompt.contains("search_conversations"))

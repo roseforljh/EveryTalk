@@ -70,6 +70,9 @@ import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.ChatMessagesList
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.AgentTaskOverlay
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.buildAgentTaskItems
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.taskApprovalsForDisplay
+import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.buildForkTaskItem
+import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.FORK_TASK_ID
+import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.ComposerForkTarget
 import com.android.everytalk.ui.components.content.LocalStickyHeaderTop
 import com.android.everytalk.ui.components.image.buildImagePreviewSelection
 import com.android.everytalk.ui.screens.MainScreen.chat.dialog.SystemPromptDialog
@@ -162,6 +165,9 @@ fun ChatScreen(
         }
     }
     val currentTaskApprovals = taskApprovals.filter { it.runId == taskRun?.id }
+    val userMessagesMap = remember(messages.size, messages.lastOrNull()?.id) {
+        messages.associateBy { it.id }
+    }
     val taskItems = if (taskRun == null || taskTargets.size < 2) emptyList() else buildAgentTaskItems(
         status = taskRun.status,
         message = taskMessage,
@@ -175,7 +181,22 @@ fun ChatScreen(
                 com.android.everytalk.data.agent.SuspensionState.USER_DECISION_REQUIRED,
             )
         }.mapNotNull { it.parameters["computer_id"] }.toSet(),
-    )
+    ).map { it.copy(userMessages = userMessagesMap) }
+    // Fork 分支是一条真实会话；抽屉按它的消息实时生成时间线。
+    val forkConversationIds by viewModel.forkConversationIds.collectAsState()
+    val forkComposerText by viewModel.forkComposerText.collectAsState()
+    val forkDrawerOpenRequestVersion by viewModel.forkDrawerOpenRequestVersion.collectAsState()
+    val textApiRunVersion by viewModel.textApiRunVersion.collectAsState()
+    val forkConversationId = forkConversationIds[conversationId]
+    LaunchedEffect(forkConversationId) {
+        forkConversationId?.let { viewModel.loadForkConversationIfNeeded(it) }
+    }
+    val forkRunningMessageId = remember(forkConversationId, textApiRunVersion) {
+        forkConversationId?.let { viewModel.stateHolder.textApiMessageIds[it] }
+    }
+    val forkMessages = forkConversationId?.let { viewModel.stateHolder.textMessagesForConversation(it) }
+    val currentForkTask = forkMessages?.let { buildForkTaskItem(it.toList(), forkRunningMessageId) }
+    val allDrawerTasks = taskItems + listOfNotNull(currentForkTask)
     val taskPanelApprovals = taskApprovalsForDisplay(taskItems, currentTaskApprovals)
     val pendingHostCommand by viewModel.pendingComputerHostCommand.collectAsState()
     val pendingAgentEnableApproval by viewModel.pendingAgentEnableApproval.collectAsState()
@@ -543,6 +564,7 @@ fun ChatScreen(
     }
 
     var inputAreaHeightPx by remember { mutableIntStateOf(0) }
+    var taskDrawerComposerProgress by remember(conversationId) { mutableFloatStateOf(0f) }
     var topControlsBottomPx by remember { mutableIntStateOf(0) }
     val inputAreaHeightDp = with(density) { inputAreaHeightPx.toDp() }
     val topControlsBottomDp = with(density) { topControlsBottomPx.toDp() }
@@ -582,7 +604,7 @@ fun ChatScreen(
                         viewModel.getConversationPreviewText(index, isImageGeneration = false)
                     },
                     onQueryChange = viewModel::onConversationSearchQueryChange,
-                    onConversationClick = viewModel::loadConversationFromHistory,
+                    onSnippetClick = viewModel::openConversationSearchHit,
                 )
             } else {
             // 主内容区域 - 消息列表填满整个区域
@@ -681,10 +703,14 @@ fun ChatScreen(
                 }
             }
 
-            // 浮动输入框 - 对齐到底部
+            // 保持主输入框及草稿存活，透明度和轻微位移跟随抽屉进度，不在收起末尾突然重建。
             Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .graphicsLayer {
+                        alpha = 1f - taskDrawerComposerProgress
+                        translationY = 20.dp.toPx() * taskDrawerComposerProgress
+                    }
                     // 输入层始终盖在消息列表上方，消息列表的滚动和吸顶项不能遮住它。
                     .zIndex(2f),
                 contentAlignment = Alignment.BottomCenter
@@ -750,6 +776,10 @@ fun ChatScreen(
                 onHostCommandCardVisibilityChange = { isVisible ->
                     isHostCommandCardRendered = isVisible
                 },
+                quotes = viewModel.composerQuoteReferences,
+                onAddQuote = viewModel::addQuoteToCurrentChat,
+                onRemoveQuote = viewModel::removeQuoteFromCurrentChat,
+                onClearQuotes = viewModel::clearQuotesFromCurrentChat,
             )
             }
 
@@ -758,15 +788,73 @@ fun ChatScreen(
                 bottomPadding = inputAreaHeightDp + 12.dp,
                 suppressed = suppressScrollButtonForHostCard,
             )
-            taskRun?.let { run ->
+            if (taskRun != null || currentForkTask != null) {
+                val overlaySessionKey = if (taskRun != null) {
+                    "$conversationId:${taskRun.id}"
+                } else {
+                    "$conversationId:fork"
+                }
+                val activeModelLabel = selectedApiConfig?.name?.takeIf { it.isNotBlank() }
+                    ?: selectedApiConfig?.model
                 AgentTaskOverlay(
-                    sessionKey = "$conversationId:${run.id}",
-                    tasks = taskItems,
+                    sessionKey = overlaySessionKey,
+                    tasks = allDrawerTasks,
                     approvals = taskPanelApprovals,
-                    topAvoidance = sourcesDialogTopAvoidance,
+                    // 抽屉位于整屏坐标系，不能像弹窗一样再减一次状态栏高度。
+                    topAvoidance = maxOf(topControlsBottomDp, statusBarHeightDp) + 8.dp,
                     bottomAvoidance = inputAreaHeightDp + 72.dp,
                     onApproval = { pending, decision, onHandled ->
                         viewModel.apiHandler.respondToAgentApproval(pending.runId, pending.approvalRequestId, decision, onHandled)
+                    },
+                    allowSingleOrForkTask = currentForkTask != null,
+                    openRequestVersion = forkDrawerOpenRequestVersion,
+                    preferredTabId = if (currentForkTask != null) FORK_TASK_ID else null,
+                    modelName = activeModelLabel,
+                    onQuoteClick = viewModel::jumpToQuotedMessage,
+                    onComposerOpenProgress = { taskDrawerComposerProgress = it },
+                    forkComposer = forkConversationId?.let { forkId ->
+                        { drawerBackground ->
+                            val forkFocusRequester = remember { FocusRequester() }
+                            ChatInputArea(
+                                text = forkComposerText,
+                                inputBackgroundColor = drawerBackground,
+                                onTextChange = viewModel::onForkComposerTextChange,
+                                onSendMessageRequest = { messageText, _, attachments, mimeType, contentParts, onMessageDisplayed, onSendRejected ->
+                                    viewModel.sendForkMessage(messageText, attachments, mimeType, contentParts, onMessageDisplayed, onSendRejected)
+                                    keyboardController?.hide()
+                                },
+                                selectedMediaItems = viewModel.forkSelectedMediaItems,
+                                onAddMediaItem = { viewModel.forkSelectedMediaItems.add(it) },
+                                onRemoveMediaItemAtIndex = { index ->
+                                    if (index in viewModel.forkSelectedMediaItems.indices) viewModel.forkSelectedMediaItems.removeAt(index)
+                                },
+                                onClearMediaItems = { viewModel.forkSelectedMediaItems.clear() },
+                                isCodeExecutionEnabled = isCodeExecutionEnabled,
+                                onToggleCodeExecution = { viewModel.toggleCodeExecutionEnabled() },
+                                onPauseStreaming = { viewModel.stopForkRun() },
+                                onResumeStreaming = {},
+                                focusRequester = forkFocusRequester,
+                                selectedApiConfig = selectedApiConfig,
+                                onShowSnackbar = { viewModel.showSnackbar(it) },
+                                imeInsets = imeInsets,
+                                density = density,
+                                keyboardController = keyboardController,
+                                onFocusChange = {},
+                                onSendMessage = { _, _, _, _, _ -> },
+                                viewModel = viewModel,
+                                onShowVoiceInput = { navController.navigate(Screen.VOICE_INPUT_SCREEN) },
+                                onOpenComputerSettings = { navController.navigate(Screen.COMPUTER_SCREEN) },
+                                quotes = viewModel.forkQuoteReferences,
+                                onAddQuote = { viewModel.forkQuoteReferences.add(it) },
+                                onRemoveQuote = viewModel::removeForkQuote,
+                                onClearQuotes = viewModel::clearForkQuotes,
+                                forkTarget = ComposerForkTarget(
+                                    conversationId = forkId,
+                                    runningMessageId = forkRunningMessageId,
+                                    onStop = viewModel::stopForkRun,
+                                ),
+                            )
+                        }
                     },
                 )
             }

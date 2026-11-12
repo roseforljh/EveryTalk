@@ -792,16 +792,16 @@ class ChatScrollStateManager(
      * 1. 对齐精确：使用 beforeContentPadding 而非写死 0，确保 item 正好在 AppBar 下方
      * 2. 全程动画：无论距离远近都使用同一个 CubicBezierEasing，保证加速/减速手感一致
      */
-    fun scrollItemToTop(index: Int, scrollDurationMs: Int = 300) {
+    fun scrollItemToTop(index: Int, scrollDurationMs: Int = 300): Job {
         logger.debug("Scrolling item $index to top.")
         cancelAutoScrollJob()
         
         preventAutoScroll = true
         
-        autoScrollJob = coroutineScope.launch {
+        return coroutineScope.launch {
             snapshotFlow { listState.layoutInfo.totalItemsCount }
                 .first { total -> total > index }
-            
+
             val desiredItemOffsetPx = listState.layoutInfo.beforeContentPadding.coerceAtLeast(0)
 
             isProgrammaticScroll = true
@@ -814,7 +814,7 @@ class ChatScrollStateManager(
             } finally {
                 isProgrammaticScroll = false
             }
-        }
+        }.also { autoScrollJob = it }
     }
 
     fun scrollToTop(smooth: Boolean = true) {

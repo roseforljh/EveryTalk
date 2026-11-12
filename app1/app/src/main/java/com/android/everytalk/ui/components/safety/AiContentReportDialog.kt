@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.components.safety
 
+import com.android.everytalk.ui.components.dialog.AppOutlinedButton
 import androidx.annotation.StringRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -26,7 +27,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -233,7 +233,7 @@ fun AiContentReportDialog(
             }
         },
         confirmButton = {
-            TextButton(
+            AppOutlinedButton(
                 enabled = selectedCategory != null,
                 colors = ButtonDefaults.textButtonColors(
                     contentColor = accentColor,
@@ -247,7 +247,7 @@ fun AiContentReportDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            AppOutlinedButton(onClick = onDismiss) {
                 Text(stringResource(R.string.action_cancel), color = textColor)
             }
         },

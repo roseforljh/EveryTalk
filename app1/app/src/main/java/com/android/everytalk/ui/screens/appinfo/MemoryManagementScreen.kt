@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.screens.appinfo
 
+import com.android.everytalk.ui.components.dialog.AppOutlinedButton
 import androidx.activity.compose.BackHandler
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.background
@@ -25,7 +26,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
@@ -99,7 +99,7 @@ fun MemoryManagementScreen(onBack: () -> Unit, modifier: Modifier = Modifier, re
             item {
                 Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                     if (!loadError) CircularProgressIndicator()
-                    else TextButton(onClick = { retry++ }) { Text(stringResource(R.string.memory_retry)) }
+                    else AppOutlinedButton(onClick = { retry++ }) { Text(stringResource(R.string.memory_retry)) }
                 }
             }
         }
@@ -394,8 +394,8 @@ private fun ConfirmDialog(message: String, onDismiss: () -> Unit, onConfirm: () 
     AlertDialog(
         onDismissRequest = onDismiss,
         text = { Text(message) },
-        confirmButton = { TextButton(onClick = onConfirm) { Text(stringResource(R.string.action_remove), color = MaterialTheme.colorScheme.error) } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
+        confirmButton = { AppOutlinedButton(onClick = onConfirm) { Text(stringResource(R.string.action_remove), color = MaterialTheme.colorScheme.error) } },
+        dismissButton = { AppOutlinedButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
     )
 }
 

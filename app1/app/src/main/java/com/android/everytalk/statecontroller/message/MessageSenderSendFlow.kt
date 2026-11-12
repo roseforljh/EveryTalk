@@ -135,6 +135,12 @@ internal fun MessageSender.sendMessageInternal(
         onUserMessageAccepted: (() -> Unit)? = null,
         onSendRejected: (() -> Unit)? = null,
         onTurnFinished: (() -> Unit)? = null,
+        // 非空时发往指定的后台会话（Fork 分支），不读写主输入框和当前页面状态。
+        targetConversationId: String? = null,
+        // 只进请求上下文、不写入会话的前置历史；Fork 用它继承父会话。
+        inheritedHistory: List<UiMessage> = emptyList(),
+        // Agent 服务器与 Workspace 按这个会话取；Fork 共用父会话的服务器和工作区。
+        computerConversationId: String? = null,
     ) {
         val originalText = messageText.trim()
         val initialAttachments = attachments.toMutableList()
@@ -142,7 +148,11 @@ internal fun MessageSender.sendMessageInternal(
             initialAttachments.add(SelectedMediaItem.Audio(id = "audio_${UUID.randomUUID()}", mimeType = mimeType ?: "audio/3gpp", data = audioBase64))
         }
 
-        if (originalText.isBlank() && initialAttachments.isEmpty()) {
+        if (
+            originalText.isBlank() &&
+            initialAttachments.isEmpty() &&
+            contentParts.none { it is MessageContentPart.QuoteReference }
+        ) {
             viewModelScope.launch { showSnackbar("请输入消息内容或选择项目") }
             onSendRejected?.invoke()
             return
@@ -157,14 +167,15 @@ internal fun MessageSender.sendMessageInternal(
         // 会话归属与请求类型分开：统一聊天列表里可以交替调用文本和图片模型。
         val isImageRequest = isImageGeneration || "image" in currentConfig.outputModalities()
         // 发送入口固定归属；首次落库把临时 ID 迁到稳定 ID 后经 resolveConversationId 跟随。
-        var requestConversationId = if (isImageGeneration) {
+        var requestConversationId = targetConversationId ?: if (isImageGeneration) {
             stateHolder._currentImageGenerationConversationId.value
         } else {
             stateHolder._currentConversationId.value
         }
         val requestMessages = if (isImageGeneration) stateHolder.imageGenerationMessages
             else stateHolder.textMessagesForConversation(requestConversationId)
-        val requestLoadedHistoryIndex = if (isImageGeneration) stateHolder._loadedImageGenerationHistoryIndex.value
+        val requestLoadedHistoryIndex = if (targetConversationId != null) null
+            else if (isImageGeneration) stateHolder._loadedImageGenerationHistoryIndex.value
             else stateHolder._loadedHistoryIndex.value
 
         when (
@@ -264,7 +275,7 @@ internal fun MessageSender.sendMessageInternal(
                     Result.success(null)
                 } else {
                     captureComputerPreparation {
-                        prepareComputerRequest(requestConversationId, isAgentEnabledForRequest)
+                        prepareComputerRequest(computerConversationId ?: requestConversationId, isAgentEnabledForRequest)
                     }
                 }
             }
@@ -298,8 +309,10 @@ internal fun MessageSender.sendMessageInternal(
             val contentPartsToActuallySend = if (longTextAttachment == null) {
                 contentParts
             } else {
-                // 文本已经进入附件，仅保留技能引用，防止正文通过 contentParts 重复发送。
-                contentParts.filterIsInstance<MessageContentPart.SkillReference>()
+                // 文本已经进入附件，仅保留技能与引用文本片段，防止正文通过 contentParts 重复发送。
+                contentParts.filter {
+                    it is MessageContentPart.SkillReference || it is MessageContentPart.QuoteReference
+                }
             }
             val allAttachments = initialAttachments.toMutableList().apply {
                 if (longTextAttachment != null) add(longTextAttachment)
@@ -394,10 +407,10 @@ internal fun MessageSender.sendMessageInternal(
                 )
                 if (isImageGeneration) {
                     stateHolder._lastSentImageUserMessageId.value = newUserMessageForUi.id
-                } else {
+                } else if (targetConversationId == null) {
                     stateHolder._lastSentUserMessageId.value = newUserMessageForUi.id
                 }
-                if (!isFromRegeneration) {
+                if (!isFromRegeneration && targetConversationId == null) {
                    stateHolder._text.value = ""
                    stateHolder.clearSelectedMedia()
                 }
@@ -536,7 +549,7 @@ internal fun MessageSender.sendMessageInternal(
             requestConversationId = stateHolder.resolveConversationId(requestConversationId)
 
             withContext(Dispatchers.IO) {
-                val messagesInChatUiSnapshot = requestMessages.toList()
+                val messagesInChatUiSnapshot = inheritedHistory + requestMessages.toList()
                 logUiMessages("rawMessages", messagesInChatUiSnapshot)
                 val historyEndIndex = messagesInChatUiSnapshot.indexOfFirst { it.id == newUserMessageForUi.id }
                 val historyUiMessagesRaw = ConversationNameHelper.withoutStoredConversationTitle(
@@ -1096,7 +1109,7 @@ internal fun MessageSender.sendMessageInternal(
                     afterUserMessageId = newUserMessageForUi.id,
                     onMessagesProcessed = {
                         // 避免图像模式在AI占位阶段过早入库，仅文本模式此处保存
-                        if (!isImageGeneration) {
+                        if (!isImageGeneration && targetConversationId == null) {
                             viewModelScope.launch {
                                 historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = false)
                             }
@@ -1108,7 +1121,7 @@ internal fun MessageSender.sendMessageInternal(
                             showSnackbar(errorMessage)
                         }
                     },
-                    onNewAiMessageAdded = triggerScrollToBottom,
+                    onNewAiMessageAdded = if (targetConversationId == null) triggerScrollToBottom else ({}),
                     audioBase64 = if (isImageRequest) audioBase64 else null,
                     mimeType = mimeType,
                     isImageGeneration = isImageGeneration,

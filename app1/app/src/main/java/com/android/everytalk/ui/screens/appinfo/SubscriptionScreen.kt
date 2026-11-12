@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.screens.appinfo
 
+import com.android.everytalk.ui.components.dialog.AppOutlinedButton
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
@@ -19,7 +20,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.runtime.Composable
@@ -70,7 +70,7 @@ internal fun SubscriptionScreen(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                TextButton(onClick = { showDetails = true }) {
+                AppOutlinedButton(onClick = { showDetails = true }) {
                     Text(stringResource(R.string.subscription_details_action))
                 }
             }
@@ -144,7 +144,7 @@ internal fun SubscriptionScreen(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showDetails = false }) { Text(stringResource(R.string.action_close)) }
+                AppOutlinedButton(onClick = { showDetails = false }) { Text(stringResource(R.string.action_close)) }
             },
         )
     }
@@ -154,7 +154,7 @@ internal fun SubscriptionScreen(
             title = { Text(stringResource(R.string.subscription_unavailable_title)) },
             text = { Text(stringResource(R.string.subscription_unavailable_body, plan)) },
             confirmButton = {
-                TextButton(onClick = { requestedPlan = null }) { Text(stringResource(R.string.action_close)) }
+                AppOutlinedButton(onClick = { requestedPlan = null }) { Text(stringResource(R.string.action_close)) }
             },
         )
     }

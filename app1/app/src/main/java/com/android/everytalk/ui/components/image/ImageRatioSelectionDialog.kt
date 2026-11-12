@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.components
 
+import com.android.everytalk.ui.components.dialog.AppOutlinedButton
 import androidx.compose.ui.res.painterResource
 import com.android.everytalk.statecontroller.*
 
@@ -231,7 +232,7 @@ fun ImageRatioSelectionDialog(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 // 取消按钮
-                TextButton(
+                AppOutlinedButton(
                     onClick = onDismiss,
                     modifier = Modifier.align(Alignment.End)
                 ) {

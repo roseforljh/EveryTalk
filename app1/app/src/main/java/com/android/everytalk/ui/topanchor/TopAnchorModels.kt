@@ -44,8 +44,19 @@ data class TopAnchorRuntimeState(
     val activeTurn: TopAnchorTurn? = null,
     val retainedTurn: TopAnchorTurn? = null,
     val recordedAnchorY: Int = -1,
-    val reservePx: Int = 0
+    val reservePx: Int = 0,
+    /** 写入 reservePx 时列表的底部 padding；-1 表示未记录，不做补偿。 */
+    val reserveBottomPaddingPx: Int = -1,
 ) {
+    /**
+     * 输入法展开/收起只改变列表底部 padding。按与记录时的差值同帧抵消，
+     * 列表总滚动范围不变：展开时不多出可滚动空白，收起时也不会先掉下再拉回。
+     */
+    fun reserveForBottomPadding(bottomPaddingPx: Int): Int {
+        if (reservePx <= 0 || reserveBottomPaddingPx < 0) return reservePx.coerceAtLeast(0)
+        return (reservePx + reserveBottomPaddingPx - bottomPaddingPx).coerceAtLeast(0)
+    }
+
     val suppressesBottomScroll: Boolean
         get() = phase == TopAnchorPhase.InitialSnap ||
             phase == TopAnchorPhase.AnchoredRunning ||

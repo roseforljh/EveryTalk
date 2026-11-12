@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.screens.computer
 
+import com.android.everytalk.ui.components.dialog.AppOutlinedButton
 import com.android.everytalk.util.locale.localizeUiMessage
 import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.BorderStroke
@@ -501,9 +502,9 @@ internal fun CloudflareComputerDetail(
             titleContentColor = appDialogContentColor(), textContentColor = appDialogContentColor(),
             title = { Text(stringResource(R.string.cloudflare_choose_account)) },
             text = {
-                Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
+                Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     available.forEach { account ->
-                        TextButton(onClick = { selectedAccount = account.id }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                        AppOutlinedButton(onClick = { selectedAccount = account.id }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
                             Text((if (selectedAccount == account.id) "✓ " else "") + account.name)
                         }
                     }
@@ -520,7 +521,7 @@ internal fun CloudflareComputerDetail(
                     }
                 }, enabled = !busy && selectedAccount != null) { Text(stringResource(R.string.cloudflare_confirm_switch)) }
             },
-            dismissButton = { TextButton(onClick = { accounts = null }, enabled = !busy) { Text(stringResource(R.string.account_cancel)) } },
+            dismissButton = { AppOutlinedButton(onClick = { accounts = null }, enabled = !busy) { Text(stringResource(R.string.account_cancel)) } },
         )
     }
 
@@ -543,7 +544,7 @@ internal fun CloudflareComputerDetail(
                     }
                 }, enabled = !busy) { Text(stringResource(R.string.action_confirm)) }
             },
-            dismissButton = { TextButton(onClick = { pendingAction = null }, enabled = !busy) { Text(stringResource(R.string.account_cancel)) } },
+            dismissButton = { AppOutlinedButton(onClick = { pendingAction = null }, enabled = !busy) { Text(stringResource(R.string.account_cancel)) } },
         )
     }
 
@@ -566,11 +567,10 @@ internal fun CloudflareComputerDetail(
             textContentColor = appDialogContentColor(),
             title = { Text(stringResource(R.string.cloudflare_choose_workspace)) },
             text = {
-                Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
+                Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(stringResource(R.string.cloudflare_workspace_checks), style = MaterialTheme.typography.bodySmall)
-                    Spacer(Modifier.height(8.dp))
                     workspaces.forEach { workspace ->
-                        TextButton(
+                        AppOutlinedButton(
                             onClick = { selectedTemporaryWorkspace = workspace },
                             enabled = !temporaryBusy,
                             modifier = Modifier.fillMaxWidth(),
@@ -593,7 +593,7 @@ internal fun CloudflareComputerDetail(
                 ) { Text(stringResource(R.string.action_create)) }
             },
             dismissButton = {
-                TextButton(onClick = { temporaryWorkspaceDialogVisible = false }, enabled = !temporaryBusy) { Text(stringResource(R.string.account_cancel)) }
+                AppOutlinedButton(onClick = { temporaryWorkspaceDialogVisible = false }, enabled = !temporaryBusy) { Text(stringResource(R.string.account_cancel)) }
             },
         )
     }
@@ -641,17 +641,17 @@ private fun TemporaryWorkerCard(
             Text("${workspace?.id ?: deployment.sourceWorkspaceId} · ${localizedCloudflareStatus(deployment.claimStatus.name)}")
             deployment.workerUrl?.let { url ->
                 Text(url, style = MaterialTheme.typography.bodySmall)
-                TextButton(onClick = onOpenWorker, enabled = !busy) { Text(stringResource(R.string.cloudflare_open_worker)) }
+                AppOutlinedButton(onClick = onOpenWorker, enabled = !busy) { Text(stringResource(R.string.cloudflare_open_worker)) }
             }
             Text(stringResource(R.string.cloudflare_expires, java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.DEFAULT, java.text.DateFormat.DEFAULT, androidx.compose.ui.platform.LocalConfiguration.current.locales[0]).format(java.util.Date(deployment.expiresAt))), style = MaterialTheme.typography.bodySmall)
             when (deployment.claimStatus) {
                 TemporaryWorkerStatus.ACTIVE -> {
                     Text(stringResource(R.string.cloudflare_claim_description), style = MaterialTheme.typography.bodySmall)
-                    TextButton(onClick = onStartClaim, enabled = !busy) { Text(stringResource(R.string.cloudflare_start_claim)) }
+                    AppOutlinedButton(onClick = onStartClaim, enabled = !busy) { Text(stringResource(R.string.cloudflare_start_claim)) }
                 }
                 TemporaryWorkerStatus.CLAIM_PENDING -> {
-                    TextButton(onClick = onCompleteClaim, enabled = !busy) { Text(stringResource(R.string.cloudflare_complete_claim)) }
-                    TextButton(onClick = onCancelClaim, enabled = !busy) { Text(stringResource(R.string.cloudflare_cancel_claim)) }
+                    AppOutlinedButton(onClick = onCompleteClaim, enabled = !busy) { Text(stringResource(R.string.cloudflare_complete_claim)) }
+                    AppOutlinedButton(onClick = onCancelClaim, enabled = !busy) { Text(stringResource(R.string.cloudflare_cancel_claim)) }
                 }
                 TemporaryWorkerStatus.FAILED -> Text(stringResource(R.string.cloudflare_temporary_failed), style = MaterialTheme.typography.bodySmall)
                 TemporaryWorkerStatus.EXPIRED -> Text(stringResource(R.string.cloudflare_temporary_expired), style = MaterialTheme.typography.bodySmall)

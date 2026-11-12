@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.screens.mcp
 
+import com.android.everytalk.ui.components.dialog.AppOutlinedButton
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -174,7 +175,7 @@ fun McpServerListContent(
                 ) { Text(stringResource(R.string.action_remove)) }
             },
             dismissButton = {
-                TextButton(onClick = { serverToDelete = null }) { Text(stringResource(R.string.action_cancel)) }
+                AppOutlinedButton(onClick = { serverToDelete = null }) { Text(stringResource(R.string.action_cancel)) }
             },
         )
     }
@@ -393,16 +394,20 @@ private fun McpServerManageDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDelete) {
+            AppOutlinedButton(onClick = onDelete) {
                 Text(stringResource(R.string.action_remove), color = MaterialTheme.colorScheme.error)
             }
         },
         confirmButton = {
-            Row {
-                onEdit?.let { TextButton(onClick = it) { Text(stringResource(R.string.mcp_action_edit)) } }
-                onRelogin?.let { TextButton(onClick = it) { Text(stringResource(R.string.mcp_oauth_relogin)) } }
-                onMailReconfigure?.let { TextButton(onClick = it) { Text(stringResource(R.string.mcp_mail_reconfigure)) } }
-                TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_done)) }
+            // 按钮较多时自动换行，描边按钮之间保留间距。
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                onEdit?.let { AppOutlinedButton(onClick = it) { Text(stringResource(R.string.mcp_action_edit)) } }
+                onRelogin?.let { AppOutlinedButton(onClick = it) { Text(stringResource(R.string.mcp_oauth_relogin)) } }
+                onMailReconfigure?.let { AppOutlinedButton(onClick = it) { Text(stringResource(R.string.mcp_mail_reconfigure)) } }
+                AppOutlinedButton(onClick = onDismiss) { Text(stringResource(R.string.action_done)) }
             }
         },
     )
@@ -465,7 +470,7 @@ private fun McpApiKeyDialog(provider: McpKeyProvider, initialKey: String, onConf
             ) { Text(stringResource(R.string.mcp_mail_connect), fontWeight = FontWeight.SemiBold) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel), color = content) }
+            AppOutlinedButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel), color = content) }
         },
     )
 }
@@ -601,7 +606,7 @@ fun AddMcpServerDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel), color = content) }
+            AppOutlinedButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel), color = content) }
         },
     )
 }

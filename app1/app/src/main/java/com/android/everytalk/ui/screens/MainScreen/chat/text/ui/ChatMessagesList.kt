@@ -19,6 +19,12 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -69,10 +75,16 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.Message
+import com.android.everytalk.data.DataClass.MessageContentPart
+import com.android.everytalk.data.DataClass.MessageQuoteReference
 import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.statecontroller.freezeWhileStreamingPaused
+import com.android.everytalk.ui.components.selection.AskEveryTalkOptionDialog
+import com.android.everytalk.ui.components.selection.EveryTalkAskOption
+import com.android.everytalk.ui.components.selection.AskEveryTalkSelectionArea
+import com.android.everytalk.ui.components.selection.QuoteReferenceTagsRow
 import com.android.everytalk.ui.screens.BubbleMain.Main.AttachmentsContent
 import com.android.everytalk.ui.screens.BubbleMain.Main.ReasoningToggleAndContent
 import com.android.everytalk.ui.screens.BubbleMain.Main.ExecutionGroupToggle
@@ -112,6 +124,7 @@ import com.android.everytalk.ui.topanchor.RunTopAnchorReserveEngine
 import com.android.everytalk.ui.topanchor.TopAnchorConfig
 import com.android.everytalk.ui.topanchor.TopAnchorReserveEngineState
 import com.android.everytalk.ui.topanchor.appendTopAnchorReserve
+import com.android.everytalk.ui.topanchor.reportExpansionHeight
 import com.android.everytalk.ui.topanchor.mapChatItemsToTopAnchorItems
 import com.android.everytalk.ui.topanchor.resolveActiveTopAnchorTurn
 import com.android.everytalk.ui.topanchor.resolveTopAnchorResponseTargetId
@@ -230,8 +243,91 @@ internal fun resolveStaticMarkdownTargetListIndex(
     return currentListIndex - item.blockIndex + targetBlockIndex
 }
 
+/**
+ * 提取列表项对应的原始消息 ID，用于引用跳转 3 秒高亮与文本选中溯源。
+ */
+internal fun resolveChatListItemMessageId(item: ChatListItem): String? = when (item) {
+    is ChatListItem.UserMessage -> item.messageId
+    is ChatListItem.AiMessage -> item.messageId
+    is ChatListItem.AiMessageStreaming -> item.messageId
+    is ChatListItem.AiMessageCode -> item.messageId
+    is ChatListItem.AiMessageCodeStreaming -> item.messageId
+    is ChatListItem.AiMessageReasoning -> item.message.id
+    is ChatListItem.AiMessageSources -> item.messageId
+    is ChatListItem.AiMarkdownNode -> item.messageId
+    is ChatListItem.AiMessageContentSegment -> item.sourceMessageId
+    is ChatListItem.AiMessageProcessSegment -> item.messageId
+    is ChatListItem.AiMessageExecutionGroup -> item.messageId
+    is ChatListItem.AiMessageFooter -> item.message.id
+    is ChatListItem.ErrorMessage -> item.messageId
+    is ChatListItem.SystemMessage -> item.messageId
+    else -> null
+}
+
+/** 列表项里可供匹配引用原文的文字；Markdown 分块取它在原文中的片段。 */
+internal fun chatListItemSearchText(item: ChatListItem): String? = when (item) {
+    is ChatListItem.AiMarkdownNode -> item.preparedMessage.markdown.let { source ->
+        val start = item.nodes.first().startOffset.coerceIn(0, source.length)
+        val end = item.nodes.last().endOffset.coerceIn(start, source.length)
+        source.substring(start, end)
+    }
+    is ChatListItem.AiMessageContentSegment -> item.staticBlock?.let(::chatListItemSearchText) ?: item.text
+    is ChatListItem.AiMessage -> item.displayText
+    is ChatListItem.AiMessageCode -> item.displayText
+    is ChatListItem.AiMessageReasoning -> item.message.reasoning
+    is ChatListItem.UserMessage -> item.text
+    else -> null
+}
+
+/**
+ * 引用原文落在哪几个列表项：只比较字母和数字，忽略 Markdown 符号与空白；
+ * 把同一条消息的各段拼起来定位，跨段引用会覆盖起止之间的所有段；对不上时返回整条消息的项。
+ * occurrence >= 0 时是搜索关键词跳转：定位正文里第 occurrence 处关键词（不算思考过程），只高亮它所在的段。
+ */
+internal fun quoteHighlightTargets(
+    items: List<ChatListItem>,
+    messageId: String,
+    quotedText: String,
+    occurrence: Int = -1,
+): List<Int> {
+    val own = items.indices.filter {
+        resolveChatListItemMessageId(items[it]) == messageId &&
+            !(occurrence >= 0 && items[it] is ChatListItem.AiMessageReasoning)
+    }
+    if (own.isEmpty()) return emptyList()
+    val quoteKey = quoteMatchKey(quotedText)
+    if (quoteKey.isEmpty()) return own
+    val joined = StringBuilder()
+    val segmentStarts = IntArray(own.size)
+    val segmentEnds = IntArray(own.size)
+    own.forEachIndexed { i, index ->
+        segmentStarts[i] = joined.length
+        joined.append(chatListItemSearchText(items[index])?.let(::quoteMatchKey).orEmpty())
+        segmentEnds[i] = joined.length
+    }
+    var start = joined.indexOf(quoteKey)
+    repeat(occurrence.coerceAtLeast(0)) {
+        val next = joined.indexOf(quoteKey, start + quoteKey.length)
+        if (next >= 0) start = next
+    }
+    var end = start + quoteKey.length
+    if (start < 0) {
+        // 公式、链接等渲染文字和源码不完全一致时，用开头和结尾各一小段定位。
+        val head = quoteKey.take(12)
+        start = joined.indexOf(head)
+        if (start < 0) return own
+        val tail = quoteKey.takeLast(12)
+        val tailAt = joined.indexOf(tail, start)
+        end = if (tailAt < 0) start + head.length else tailAt + tail.length
+    }
+    return own.filterIndexed { i, _ -> segmentStarts[i] < end && segmentEnds[i] > start }
+}
+
+/** 引用和搜索定位只比较字母和数字，Markdown 符号、空白、大小写都不影响匹配。 */
+internal fun quoteMatchKey(text: String): String = text.filter(Char::isLetterOrDigit).lowercase()
+
 @Composable
-private fun rememberHistoryLoadingShimmerBrush(): Brush {
+internal fun rememberHistoryLoadingShimmerBrush(): Brush {
     val transition = rememberInfiniteTransition(label = "historyLoadingShimmer")
     val shimmerOffset by transition.animateFloat(
         initialValue = 0f,
@@ -302,14 +398,53 @@ fun ChatMessagesList(
     var isContextMenuVisible by remember { mutableStateOf(false) }
     var contextMenuMessage by remember { mutableStateOf<Message?>(null) }
     var contextMenuPressOffset by remember { mutableStateOf(Offset.Zero) }
+    var pendingAskEveryTalkQuote by remember { mutableStateOf<MessageQuoteReference?>(null) }
+    val quoteJump by viewModel.quoteJump.collectAsState()
     // 防重复触发：在极短时间内只允许一次预览弹出
     var lastImagePreviewAt by remember { mutableLongStateOf(0L) }
     val listCoroutineScope = rememberCoroutineScope()
     val footnoteNavigationByMessage = remember(scrollSessionKey) {
         mutableMapOf<String, FootnoteNavigationState>()
     }
-    // 回复结束后的总执行区默认收起，只记录用户手动展开的组。
+    // 流式执行期间总执行区默认展开，回复结束后默认收起，同时保留用户手动切换状态。
     val expandedExecutionGroups = remember(scrollSessionKey) { mutableStateMapOf<String, Boolean>() }
+    val activeExecutionGroupKeys = remember(chatItems) {
+        chatItems.mapNotNull { item ->
+            (item as? ChatListItem.AiMessageExecutionGroup)?.takeIf { it.active }?.stableId
+        }.toSet()
+    }
+
+    // 引用跳转：按引用原文找到消息里对应的段落，滚到那里并高亮；找不到段落时高亮整条消息。
+    val quoteHighlightIndexes = remember(chatItems, quoteJump) {
+        quoteJump?.let { quoteHighlightTargets(chatItems, it.messageId, it.quotedText, it.occurrence) }.orEmpty()
+    }
+    val quoteHighlightKeys = remember(chatItems, quoteHighlightIndexes) {
+        quoteHighlightIndexes.mapNotNullTo(hashSetOf()) { chatItems.getOrNull(it)?.stableId }
+    }
+    // 正文里闪亮的文字：高光淡出期间 quoteJump 已清空，所以单独记住最后一次的短语。
+    var flashPhrases by remember { mutableStateOf(emptyList<String>()) }
+    LaunchedEffect(quoteJump) {
+        quoteJump?.let { flashPhrases = com.android.everytalk.ui.components.markdown.textFlashPhrases(it.quotedText) }
+    }
+    val flashColor = if (isSystemInDarkTheme()) Color(0x73FFC83D) else Color(0xA6FFD54F)
+    val latestChatItems by rememberUpdatedState(chatItems)
+    LaunchedEffect(quoteJump?.token) {
+        val jump = quoteJump ?: return@LaunchedEffect
+        // 跨会话跳转时列表稍后才装载，等目标出现再滚动。
+        val target = kotlinx.coroutines.withTimeoutOrNull(3_000L) {
+            snapshotFlow { latestChatItems }
+                .map { items -> quoteHighlightTargets(items, jump.messageId, jump.quotedText, jump.occurrence).firstOrNull() }
+                .first { it != null }
+        } ?: return@LaunchedEffect
+        val groupKey = when (val targetItem = latestChatItems.getOrNull(target)) {
+            is ChatListItem.AiMessageContentSegment -> targetItem.executionGroupKey
+            is ChatListItem.AiMessageProcessSegment -> targetItem.executionGroupKey
+            else -> ""
+        }
+        if (groupKey.isNotEmpty()) expandedExecutionGroups[groupKey] = true
+        scrollStateManager.scrollItemToTop(target).join()
+        viewModel.onQuoteLocated(jump)
+    }
 
     val pauseAwareApiCalling = remember(viewModel) {
         viewModel.isTextApiCalling.freezeWhileStreamingPaused(viewModel.isStreamingPaused)
@@ -425,6 +560,11 @@ fun ChatMessagesList(
     }
 
     val fadeBackgroundColor = MaterialTheme.colorScheme.background
+    val listBottomPadding = additionalBottomPadding + 12.dp
+    // 与 LazyColumn 的 afterContentPadding 同帧取值，输入法开合时 reserve 同步抵消。
+    val appliedTopAnchorReservePx = topAnchorEngine.runtime.reserveForBottomPadding(
+        with(density) { listBottomPadding.roundToPx() }
+    )
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -465,7 +605,7 @@ fun ChatMessagesList(
                     start = ChatDimensions.HORIZONTAL_PADDING,
                     end = ChatDimensions.HORIZONTAL_PADDING,
                     top = topPadding,
-                    bottom = additionalBottomPadding + 12.dp
+                    bottom = listBottomPadding
                 ),
                 verticalArrangement = Arrangement.Top
             ) {
@@ -504,6 +644,19 @@ fun ChatMessagesList(
                 else -> Alignment.CenterStart
             }
 
+            val itemMessageId = resolveChatListItemMessageId(item)
+            val isItemHighlighted = item.stableId in quoteHighlightKeys
+            val highlightAlphaState = animateFloatAsState(
+                targetValue = if (isItemHighlighted) 1f else 0f,
+                animationSpec = tween(durationMillis = if (isItemHighlighted) 220 else 600),
+                label = "quoteHighlight",
+            )
+            val highlightAlpha by highlightAlphaState
+            val textFlash = rememberUpdatedState(
+                com.android.everytalk.ui.components.markdown.TextFlash(flashPhrases, flashColor, highlightAlphaState)
+            )
+            val highlightColor = MaterialTheme.colorScheme.primary
+
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -516,21 +669,79 @@ fun ChatMessagesList(
                             0.dp
                         }
                     )
+                    // 高光画在内容外沿，不改变布局，淡入淡出时列表不会跳动。
+                    .drawBehind {
+                        if (highlightAlpha > 0f) {
+                            val inset = 6.dp.toPx()
+                            val radius = androidx.compose.ui.geometry.CornerRadius(14.dp.toPx())
+                            val topLeft = Offset(-inset, -inset / 2)
+                            val area = androidx.compose.ui.geometry.Size(size.width + inset * 2, size.height + inset)
+                            drawRoundRect(highlightColor.copy(alpha = 0.14f * highlightAlpha), topLeft, area, radius)
+                            drawRoundRect(
+                                highlightColor.copy(alpha = 0.45f * highlightAlpha), topLeft, area, radius,
+                                style = androidx.compose.ui.graphics.drawscope.Stroke(1.dp.toPx()),
+                            )
+                        }
+                    }
                     .appendTopAnchorReserve(
-                        if (index == chatItems.lastIndex) topAnchorEngine.reservePx else 0
+                        if (index == chatItems.lastIndex) appliedTopAnchorReservePx else 0
                     ),
                 contentAlignment = itemAlignment
             ) {
+              androidx.compose.runtime.CompositionLocalProvider(
+                  com.android.everytalk.ui.components.markdown.LocalTextFlash provides textFlash,
+              ) {
                 val executionGroupKey = when (item) {
                     is ChatListItem.AiMessageContentSegment -> item.executionGroupKey
                     is ChatListItem.AiMessageProcessSegment -> item.executionGroupKey
                     else -> ""
                 }
+                val isGroupExpanded = if (executionGroupKey.isEmpty()) {
+                    true
+                } else {
+                    expandedExecutionGroups[executionGroupKey] ?: (executionGroupKey in activeExecutionGroupKeys)
+                }
+                val reportItemExpansion: (String, Int) -> Unit = { key, heightPx ->
+                    topAnchorEngine.updateInteractiveExpansion(item.stableId, key, heightPx)
+                }
+                // 手动展开已结束的执行组时，组内各项高度来自用户操作，不是 AI 新输出。
+                val groupManuallyExpanded = executionGroupKey.isNotEmpty() &&
+                    executionGroupKey !in activeExecutionGroupKeys &&
+                    expandedExecutionGroups.containsKey(executionGroupKey)
+                val groupExpansionKey = "group:${item.stableId}"
+                DisposableEffect(groupExpansionKey) {
+                    onDispose { reportItemExpansion(groupExpansionKey, 0) }
+                }
+                Box(
+                    Modifier.reportExpansionHeight { heightPx ->
+                        reportItemExpansion(groupExpansionKey, if (groupManuallyExpanded) heightPx else 0)
+                    }
+                ) {
                 AnimatedVisibility(
-                    visible = executionGroupKey.isEmpty() || expandedExecutionGroups[executionGroupKey] == true,
+                    visible = isGroupExpanded,
                     enter = fadeIn() + expandVertically(expandFrom = Alignment.Top),
                     exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Top),
                 ) {
+                    // 只有 AI 回复的选中菜单带「询问Everytalk」；用户自己的消息不需要。
+                    val isAiItem = itemMessageId != null &&
+                        item !is ChatListItem.UserMessage && item !is ChatListItem.SystemMessage
+                    AskEveryTalkSelectionArea(
+                        enabled = isAiItem,
+                        onAsk = { selectedText ->
+                            val sourceId = itemMessageId.orEmpty()
+                            val all = viewModel.stateHolder.messages
+                            val sourceIndex = all.indexOfFirst { it.id == sourceId }
+                            val question = if (sourceIndex < 0) "" else all.subList(0, sourceIndex)
+                                .lastOrNull { it.sender == com.android.everytalk.data.DataClass.Sender.User }
+                                ?.text.orEmpty()
+                            pendingAskEveryTalkQuote = MessageQuoteReference(
+                                sourceConversationId = conversationId,
+                                sourceMessageId = sourceId,
+                                quotedText = selectedText,
+                                sourceQuestion = question.take(2_000),
+                            )
+                        },
+                    ) {
 
                     // 根据消息类型渲染不同内容；这里不用 Column 包裹以避免额外布局抖动
                     // 前端消息列表渲染：这里按消息类型分发到不同气泡组件。
@@ -614,6 +825,21 @@ fun ChatMessagesList(
                                 ) {
                                     val message = item.message ?: viewModel.getMessageById(item.messageId)
                                     if (message != null) {
+                                        val quoteRefs = remember(message.contentParts) {
+                                            message.contentParts
+                                                .filterIsInstance<MessageContentPart.QuoteReference>()
+                                                .map { it.reference }
+                                        }
+                                        if (quoteRefs.isNotEmpty()) {
+                                            QuoteReferenceTagsRow(
+                                                quotes = quoteRefs,
+                                                onQuoteClick = { viewModel.jumpToQuotedMessage(it) },
+                                                onRemoveQuote = null,
+                                                modifier = Modifier
+                                                    .widthIn(max = bubbleMaxWidth * ChatDimensions.USER_BUBBLE_WIDTH_RATIO)
+                                                    .padding(bottom = 6.dp)
+                                            )
+                                        }
                                         if (!item.attachments.isNullOrEmpty()) {
                                             AttachmentsContent(
                                                 attachments = item.attachments,
@@ -707,12 +933,18 @@ fun ChatMessagesList(
                         }
 
                         is ChatListItem.AiMessageExecutionGroup -> {
-                            val expanded = expandedExecutionGroups[item.stableId] == true
+                            LaunchedEffect(item.active, item.stableId) {
+                                if (!item.active) {
+                                    expandedExecutionGroups.remove(item.stableId)
+                                }
+                            }
+                            val expanded = expandedExecutionGroups[item.stableId] ?: item.active
                             ExecutionGroupToggle(
                                 steps = item.steps,
                                 messageIsError = item.messageIsError,
                                 executionStartedAtMillis = item.executionStartedAtMillis,
                                 executionFinishedAtMillis = item.executionFinishedAtMillis,
+                                active = item.active,
                                 expanded = expanded,
                                 onClick = { expandedExecutionGroups[item.stableId] = !expanded },
                                 modifier = Modifier.padding(top = ChatMarkdownTextStyle.SPACING_PARAGRAPH_DP.dp),
@@ -760,7 +992,6 @@ fun ChatMessagesList(
                                 executionSteps = processSteps,
                                 executionTrace = item.events,
                                 detailExecutionTraceProvider = detailTraceProvider,
-                                detailInitialEventIndex = item.detailStartIndex,
                                 webSearchResults = item.webSearchResults,
                                 isReasoningStreaming = reasoningIsActive,
                                 isReasoningComplete = !reasoningIsActive,
@@ -769,9 +1000,10 @@ fun ChatMessagesList(
                                 mainContentHasStarted = false,
                                 executionStartedAtMillis = item.executionStartedAtMillis,
                                 executionFinishedAtMillis = item.executionFinishedAtMillis,
+                                hasOuterActiveExecutionGroup = item.executionGroupKey in activeExecutionGroupKeys,
                                 reasoningTextColor = MaterialTheme.chatColors.reasoningText,
                                 reasoningToggleDotColor = MaterialTheme.colorScheme.onSurface,
-                                onInteractiveExpansionChanged = topAnchorEngine::updateInteractiveExpansion,
+                                onInteractiveExpansionChanged = reportItemExpansion,
                                 onCompletedProcessExpand = {
                                     if (!isApiCalling) scrollStateManager.lockAutoScroll(untilUserScroll = true)
                                 },
@@ -823,7 +1055,7 @@ fun ChatMessagesList(
                                     executionFinishedAtMillis = item.message.executionFinishedAt,
                                     reasoningTextColor = MaterialTheme.chatColors.reasoningText,
                                     reasoningToggleDotColor = MaterialTheme.colorScheme.onSurface,
-                                    onInteractiveExpansionChanged = topAnchorEngine::updateInteractiveExpansion,
+                                    onInteractiveExpansionChanged = reportItemExpansion,
                                     onCompletedProcessExpand = {
                                         if (!isApiCalling) scrollStateManager.lockAutoScroll(untilUserScroll = true)
                                     },
@@ -1019,10 +1251,28 @@ fun ChatMessagesList(
                             }
                         }
                     }
+                    }
                 }
+                }
+              }
                 }
             }
-                
+
+        }
+
+        pendingAskEveryTalkQuote?.let { quote ->
+            AskEveryTalkOptionDialog(
+                quote = quote,
+                onDismiss = { pendingAskEveryTalkQuote = null },
+                onSelectOption = { option ->
+                    pendingAskEveryTalkQuote = null
+                    when (option) {
+                        EveryTalkAskOption.NEW_CONVERSATION -> viewModel.startNewChatWithQuote(quote)
+                        EveryTalkAskOption.CURRENT_CONVERSATION -> viewModel.addQuoteToCurrentChat(quote)
+                        EveryTalkAskOption.FORK -> viewModel.forkQuoteToTaskDrawer(quote)
+                    }
+                },
+            )
         }
 
         contextMenuMessage?.let { message ->

@@ -52,6 +52,36 @@ class ViewModelStateHolderStreamingStateTest {
     }
 
     @Test
+    fun `切换会话清空引用与分支草稿但迁移到稳定ID时保留`() {
+        val quote = com.android.everytalk.data.DataClass.MessageQuoteReference(
+            sourceConversationId = "a", sourceMessageId = "m", quotedText = "片段",
+        )
+        fun fillDrafts() {
+            stateHolder.composerQuoteReferences.add(quote)
+            stateHolder.forkQuoteReferences.add(quote)
+            stateHolder.forkSelectedMediaItems.add(
+                com.android.everytalk.models.SelectedMediaItem.Audio(id = "audio-1", mimeType = "audio/3gpp")
+            )
+            stateHolder._forkComposerText.value = "草稿"
+        }
+        stateHolder.setCurrentConversationId("a")
+        fillDrafts()
+        stateHolder.setCurrentConversationId("b")
+        assertTrue(stateHolder.composerQuoteReferences.isEmpty())
+        assertTrue(stateHolder.forkQuoteReferences.isEmpty())
+        assertTrue(stateHolder.forkSelectedMediaItems.isEmpty())
+        assertEquals("", stateHolder._forkComposerText.value)
+
+        // 首条消息落库后临时 ID 迁到稳定 ID，仍是同一会话，草稿不能丢。
+        stateHolder.setCurrentConversationId("new_chat_1")
+        fillDrafts()
+        stateHolder.migratedConversationIds["new_chat_1"] = "stable_1"
+        stateHolder.setCurrentConversationId("stable_1")
+        assertEquals(1, stateHolder.composerQuoteReferences.size)
+        assertEquals("草稿", stateHolder._forkComposerText.value)
+    }
+
+    @Test
     fun `reasoning chunks update only their dedicated state flow`() {
         val messageId = "reasoning-only-flow"
         stateHolder.createStreamingBuffer(messageId)

@@ -39,7 +39,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.CircularProgressIndicator
+import com.android.everytalk.ui.screens.MainScreen.HistorySkeletonLoading
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -72,6 +72,7 @@ import androidx.compose.ui.unit.dp
 import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.quoteMatchKey
 import com.android.everytalk.util.ConversationNameHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -95,6 +96,9 @@ internal data class ConversationSearchSnippet(
     val source: ConversationSearchSourceType,
     val text: String,
     val occurrenceCount: Int,
+    /** 片段第一处匹配所在的消息和它在该消息里是第几处；标题片段为空。 */
+    val messageId: String = "",
+    val occurrence: Int = 0,
 )
 
 internal enum class ConversationSearchSourceType(@StringRes val labelRes: Int) {
@@ -123,6 +127,7 @@ private data class ConversationSearchUiState(
 internal data class TextSearchSnippet(
     val text: String,
     val occurrenceCount: Int,
+    val firstOccurrence: Int = 0,
 )
 
 @Composable
@@ -131,7 +136,7 @@ internal fun ConversationSearchContent(
     conversations: List<List<Message>>,
     getConversationTitle: (Int) -> String,
     onQueryChange: (String) -> Unit,
-    onConversationClick: (Int) -> Unit,
+    onSnippetClick: (index: Int, messageId: String, keyword: String, occurrence: Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val sources = remember(conversations) {
@@ -172,13 +177,8 @@ internal fun ConversationSearchContent(
     Box(modifier = modifier.fillMaxSize()) {
         when {
             searchState.isSearching -> {
-                CircularProgressIndicator(
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .padding(top = 116.dp)
-                        .size(24.dp),
-                    strokeWidth = 2.dp,
-                )
+                // 搜索中显示与结果列表同位置的骨架，替代居中转圈。
+                Box(Modifier.padding(top = 84.dp)) { HistorySkeletonLoading() }
             }
 
             searchState.query.isNotEmpty() && searchState.results.isEmpty() -> {
@@ -213,7 +213,17 @@ internal fun ConversationSearchContent(
                             query = searchState.query,
                             expanded = expanded,
                             onToggle = { expandedResults[result.stableId] = !expanded },
-                            onConversationClick = { onConversationClick(result.originalIndex) },
+                            onSnippetClick = { snippet ->
+                                // 标题命中时定位到会话里第一处提到关键词的地方。
+                                val hit = snippet.takeIf { it.messageId.isNotEmpty() }
+                                    ?: result.snippets.firstOrNull { it.messageId.isNotEmpty() }
+                                onSnippetClick(
+                                    result.originalIndex,
+                                    hit?.messageId.orEmpty(),
+                                    searchState.query,
+                                    hit?.occurrence ?: 0,
+                                )
+                            },
                         )
                     }
                 }
@@ -241,7 +251,7 @@ private fun ConversationSearchResultCard(
     query: String,
     expanded: Boolean,
     onToggle: () -> Unit,
-    onConversationClick: () -> Unit,
+    onSnippetClick: (ConversationSearchSnippet) -> Unit,
 ) {
     val rotation by animateFloatAsState(
         targetValue = if (expanded) 90f else 0f,
@@ -319,7 +329,7 @@ private fun ConversationSearchResultCard(
                         ConversationSearchSnippetCard(
                             snippet = snippet,
                             query = query,
-                            onClick = onConversationClick,
+                            onClick = { onSnippetClick(snippet) },
                         )
                     }
                     if (result.isTruncated) {
@@ -521,6 +531,8 @@ internal fun buildConversationSearchResults(
                         source = message.sender.searchSourceType(),
                         text = snippet.text,
                         occurrenceCount = snippet.occurrenceCount,
+                        messageId = message.id,
+                        occurrence = snippet.firstOccurrence,
                     )
                     visibleOccurrences += snippet.occurrenceCount
                 }
@@ -558,6 +570,8 @@ internal fun buildSearchSnippets(
     val contextBefore = (bodyLimit - normalizedQuery.length) / 2
     val snippets = mutableListOf<TextSearchSnippet>()
     var positionIndex = 0
+    // 跳转时按字母数字比较，所以这里也在同一口径下数"第几处"，避免标点空白造成错位。
+    val queryKey = quoteMatchKey(normalizedQuery)
 
     while (positionIndex < positions.size) {
         val firstMatch = positions[positionIndex]
@@ -583,10 +597,22 @@ internal fun buildSearchSnippets(
                 if (trailingEllipsis) append('…')
             },
             occurrenceCount = nextPositionIndex - positionIndex,
+            firstOccurrence = countKeyOccurrences(quoteMatchKey(normalizedText.substring(0, firstMatch)), queryKey),
         )
         positionIndex = nextPositionIndex
     }
     return snippets
+}
+
+private fun countKeyOccurrences(text: String, key: String): Int {
+    if (key.isEmpty()) return 0
+    var count = 0
+    var at = text.indexOf(key)
+    while (at >= 0) {
+        count++
+        at = text.indexOf(key, at + key.length)
+    }
+    return count
 }
 
 private fun findSearchOccurrences(text: String, query: String): List<Int> {

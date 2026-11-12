@@ -70,6 +70,22 @@ class OpenAIResponsesClientPayloadTest {
     }
 
     @Test
+    fun `responses按会话发缓存键且中转地址也发`() {
+        // 参考 pi：同一会话的不同轮次用同一个键，中转据此把请求固定到同一上游。
+        val first = buildResponsesPayloadForTest(request("https://example.com/v1").copy(conversationId = "conv-1"))
+        val next = buildResponsesPayloadForTest(request(
+            "https://example.com/v1",
+            messages = listOf(PartsApiMessage(role = "user", parts = listOf(ApiContentPart.Text("next")))),
+        ).copy(conversationId = "conv-1"))
+        val other = buildResponsesPayloadForTest(request("https://example.com/v1").copy(conversationId = "conv-2"))
+        val key = Regex("\"prompt_cache_key\":\"([^\"]+)\"")
+        val firstKey = checkNotNull(key.find(first)).groupValues[1]
+        assertTrue(firstKey.startsWith("et-s-") && firstKey.length <= 64)
+        assertEquals(firstKey, checkNotNull(key.find(next)).groupValues[1])
+        assertFalse(firstKey == checkNotNull(key.find(other)).groupValues[1])
+    }
+
+    @Test
     fun `responses tool order should be deterministic`() {
         val alpha = tool("alpha")
         val beta = tool("beta")

@@ -2,6 +2,12 @@ package com.android.everytalk.ui.screens.MainScreen.chat.text.ui
 
 import android.app.Application
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.SemanticsActions
@@ -18,7 +24,14 @@ import com.android.everytalk.data.computer.ComputerRequestContext
 import com.android.everytalk.data.computer.ComputerToolApprovalRequest
 import com.android.everytalk.data.computer.PendingComputerToolApproval
 import org.junit.Assert.*
+import org.junit.After
+import org.junit.Before
 import org.junit.Rule
+import org.koin.core.context.startKoin
+import org.koin.core.context.stopKoin
+import org.koin.dsl.module
+import androidx.test.core.app.ApplicationProvider
+import com.android.everytalk.ui.components.math.MathJaxSvgRenderer
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
@@ -30,6 +43,19 @@ import org.robolectric.annotation.GraphicsMode
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class AgentTaskDrawerTest {
     @get:Rule val rule = createComposeRule()
+    private lateinit var mathRenderer: MathJaxSvgRenderer
+
+    // 抽屉正文走 Markdown 渲染，需要和聊天页一样注入公式渲染器。
+    @Before fun setUp() {
+        stopKoin()
+        mathRenderer = MathJaxSvgRenderer(ApplicationProvider.getApplicationContext())
+        startKoin { modules(module { single { mathRenderer } }) }
+    }
+
+    @After fun tearDown() {
+        stopKoin()
+        mathRenderer.close()
+    }
 
     @Test fun `新审批自动展开所属服务器且收起后不重复弹出下一条仍可审批`() {
         val trace = (1..20).map { index -> ExecutionTraceEvent.Tool(
@@ -110,7 +136,7 @@ class AgentTaskDrawerTest {
         rule.onNodeWithText("检查 18").assertIsDisplayed()
         rule.onNodeWithTag("agent-task-drawer").performTouchInput { swipeRight() }
         rule.onNodeWithTag("agent-task-drawer").assertDoesNotExist()
-        rule.onNodeWithTag("agent-task-handle").assertIsDisplayed()
+        rule.onNodeWithTag("agent-task-handle", useUnmergedTree = true).assertIsDisplayed()
     }
 
     @Test fun `工具结束但主任务未结束时不能提前显示服务器已完成`() {
@@ -152,16 +178,17 @@ class AgentTaskDrawerTest {
             AgentTaskOverlay("edge-session", tasks, emptyList(), 60.dp, 100.dp) { _, _, _ -> }
         } }
         rule.onNodeWithTag("agent-task-entry").assertDoesNotExist()
-        rule.onNodeWithTag("agent-task-handle").assertIsDisplayed()
+        rule.onNodeWithTag("agent-task-handle", useUnmergedTree = true).assertIsDisplayed()
             .assertWidthIsEqualTo(4.dp).assertHeightIsEqualTo(44.dp)
         rule.onNodeWithTag("agent-task-edge").performTouchInput { click() }
-        rule.onNodeWithTag("agent-task-drawer").assertDoesNotExist()
+        rule.onNodeWithTag("agent-task-drawer").assertIsDisplayed()
+        rule.onNodeWithTag("agent-task-drawer").performTouchInput { swipeRight() }
         rule.onNodeWithTag("agent-task-edge").performTouchInput { swipeUp() }
         rule.onNodeWithTag("agent-task-drawer").assertDoesNotExist()
         openFromEdge()
         rule.onNodeWithTag("agent-task-drawer").performTouchInput { swipeRight() }
         rule.onNodeWithTag("agent-task-drawer").assertDoesNotExist()
-        rule.onNodeWithTag("agent-task-handle").assertIsDisplayed()
+        rule.onNodeWithTag("agent-task-handle", useUnmergedTree = true).assertIsDisplayed()
         openFromEdge()
     }
 
@@ -172,7 +199,7 @@ class AgentTaskDrawerTest {
             AgentTaskOverlay("idle-session", tasks, emptyList(), 60.dp, 100.dp) { _, _, _ -> }
         } }
         rule.mainClock.advanceTimeBy(AgentTaskHandleIntroMillis + 1_500L)
-        rule.onNodeWithTag("agent-task-handle").assertExists()
+        rule.onNodeWithTag("agent-task-handle", useUnmergedTree = true).assertExists()
         openFromEdge()
     }
 
@@ -212,8 +239,137 @@ class AgentTaskDrawerTest {
         assertTrue("松手后应有中间过渡帧", drawer.getUnclippedBoundsInRoot().left >= reversedLeft)
         rule.mainClock.advanceTimeBy(1_000)
         drawer.assertDoesNotExist()
-        rule.onNodeWithTag("agent-task-handle").assertIsDisplayed()
+        rule.onNodeWithTag("agent-task-handle", useUnmergedTree = true).assertIsDisplayed()
         rule.mainClock.autoAdvance = true
+    }
+
+    @Test fun `Fork模式自动展开抽屉并在分支页放入输入框且引用可点击跳转`() {
+        val quote = MessageQuoteReference(
+            id = "q-1",
+            sourceConversationId = "conv-1",
+            sourceMessageId = "msg-ai-1",
+            quotedText = "这是一段被选中的 AI 回复内容",
+        )
+        val userMsg = Message(
+            id = "u-fork-1",
+            text = "请解释这段话",
+            sender = Sender.User,
+            contentParts = listOf(
+                MessageContentPart.QuoteReference(quote),
+                MessageContentPart.Text("请解释这段话"),
+            ),
+        )
+        val aiMsg = Message(
+            id = "a-fork-1",
+            text = "这是 Fork 分支的回答",
+            sender = Sender.AI,
+            contentStarted = true,
+        )
+        val forkTask = buildForkTaskItem(listOf(userMsg, aiMsg), runningMessageId = null)
+        var clickedQuote: MessageQuoteReference? = null
+        rule.setContent {
+            MaterialTheme {
+                AgentTaskOverlay(
+                    sessionKey = "fork-session",
+                    tasks = listOf(forkTask),
+                    approvals = emptyList(),
+                    topAvoidance = 20.dp,
+                    bottomAvoidance = 20.dp,
+                    allowSingleOrForkTask = true,
+                    openRequestVersion = 1,
+                    preferredTabId = FORK_TASK_ID,
+                    modelName = "DeepSeek-V3",
+                    onQuoteClick = { clickedQuote = it },
+                    forkComposer = { androidx.compose.material3.Text("fork-composer-slot") },
+                    onApproval = { _, _, _ -> },
+                )
+            }
+        }
+        rule.onNodeWithTag("agent-task-drawer").assertIsDisplayed()
+        rule.onNodeWithText("fork-composer-slot").assertIsDisplayed()
+        rule.onNodeWithText("请解释这段话").assertIsDisplayed()
+        rule.onNodeWithTag("agent-task-process-fork").performScrollToIndex(1)
+        rule.onNodeWithText("这是 Fork 分支的回答").assertIsDisplayed()
+        rule.onAllNodesWithTag("quote-reference-pill-q-1").onFirst().performClick()
+        assertEquals(quote, clickedQuote)
+        rule.onNodeWithTag("agent-task-drawer").assertDoesNotExist()
+        rule.mainClock.advanceTimeBy(AgentTaskHandleIntroMillis + 1_500L)
+        rule.onNodeWithTag("agent-task-handle", useUnmergedTree = true).assertIsDisplayed()
+        rule.onNodeWithTag("agent-task-edge").performClick()
+        rule.onNodeWithText("fork-composer-slot").assertIsDisplayed()
+        rule.onNodeWithTag("agent-task-tabs").assertDoesNotExist()
+    }
+
+    @Test fun `分支收起连续输出中间进度以恢复主输入框动画`() {
+        val progress = mutableListOf<Float>()
+        rule.setContent { MaterialTheme {
+            AgentTaskOverlay(
+                sessionKey = "fork-progress",
+                tasks = listOf(buildForkTaskItem(emptyList(), null)),
+                approvals = emptyList(), topAvoidance = 20.dp, bottomAvoidance = 20.dp,
+                allowSingleOrForkTask = true, openRequestVersion = 1,
+                forkComposer = { androidx.compose.material3.Text("composer") },
+                onComposerOpenProgress = { progress += it },
+                onApproval = { _, _, _ -> },
+            )
+        } }
+        rule.onNodeWithTag("agent-task-drawer").assertIsDisplayed()
+        rule.runOnIdle { progress.clear() }
+        rule.onNodeWithTag("agent-task-drawer").performTouchInput { swipeRight() }
+        rule.onNodeWithTag("agent-task-drawer").assertDoesNotExist()
+        rule.runOnIdle {
+            assertTrue("必须包含中间帧，而不是仅在关闭末尾切换", progress.any { it > 0f && it < 1f })
+            assertEquals(0f, progress.last(), 0.001f)
+        }
+    }
+
+    @Test fun `Fork铺满侧栏并只由自己的输入框预留底部高度`() {
+        rule.setContent { MaterialTheme {
+            AgentTaskOverlay(
+                sessionKey = "fork-insets",
+                tasks = listOf(buildForkTaskItem(emptyList(), null)),
+                approvals = emptyList(), topAvoidance = 20.dp, bottomAvoidance = 100.dp,
+                allowSingleOrForkTask = true, openRequestVersion = 1,
+                forkComposer = {
+                    Box(
+                        Modifier.testTag("fork-insets-composer")
+                            .windowInsetsPadding(WindowInsets(bottom = 100.dp)),
+                    ) {
+                        Box(Modifier.height(48.dp))
+                    }
+                },
+                onApproval = { _, _, _ -> },
+            )
+        } }
+        rule.onNodeWithTag("fork-insets-composer").assertHeightIsEqualTo(148.dp)
+        rule.onNodeWithTag("agent-task-tabs").assertDoesNotExist()
+    }
+
+    @Test fun `Fork时间线不重复插入Agent追问边界且运行中显示RUNNING`() {
+        val first = Message(id = "u1", text = "问题", sender = Sender.User)
+        val followUp = Message(id = "u2", text = "追问", sender = Sender.User)
+        val ai = Message(
+            id = "a1", text = "", sender = Sender.AI, reasoning = "想一想",
+            executionTrace = listOf(
+                ExecutionTraceEvent.Content("第一段"),
+                ExecutionTraceEvent.UserMessageBoundary("u2"),
+                ExecutionTraceEvent.Content("第二段"),
+            ),
+        )
+        val task = buildForkTaskItem(listOf(first, ai, followUp), runningMessageId = "a1")
+        assertEquals(AgentTaskPhase.RUNNING, task.phase)
+        assertEquals(
+            listOf("u1", "reasoning", "第一段", "u2", "第二段"),
+            task.trace.map {
+                when (it) {
+                    is ExecutionTraceEvent.UserMessageBoundary -> it.messageId
+                    is ExecutionTraceEvent.Reasoning -> "reasoning"
+                    is ExecutionTraceEvent.Content -> it.text
+                    else -> "?"
+                }
+            },
+        )
+        assertEquals(setOf("u1", "u2"), task.userMessages.keys)
     }
 
     private fun openFromEdge() {

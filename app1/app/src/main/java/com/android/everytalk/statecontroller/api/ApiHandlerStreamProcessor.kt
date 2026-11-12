@@ -766,8 +766,11 @@ internal class ApiHandlerStreamProcessor(
                 }
                 is AppStreamEvent.AgentFollowUpAccepted -> {
                     val latest = latestMessageForUpdate()
-                    updatedMessage = latest.copy(executionTrace = reduceExecutionTrace(latest.executionTrace, appEvent))
-                    if (messageList.none { it.id == appEvent.messageId }) {
+                    val nextTrace = reduceExecutionTrace(latest.executionTrace, appEvent)
+                    val traceBoundaryAdded = nextTrace != latest.executionTrace
+                    updatedMessage = latest.copy(executionTrace = nextTrace)
+                    messageList[messageIndex] = updatedMessage
+                    val addedNewUserMessage = if (messageList.none { it.id == appEvent.messageId }) {
                         val imageUrls = appEvent.attachments.mapNotNull { attachment ->
                             when (attachment) {
                                 is SelectedMediaItem.ImageFromUri -> attachment.filePath ?: attachment.uri.toString()
@@ -777,6 +780,11 @@ internal class ApiHandlerStreamProcessor(
                                 -> null
                             }
                         }.takeIf { it.isNotEmpty() }
+                        if (isImageGeneration) {
+                            stateHolder.imageMessageAnimationStates[appEvent.messageId] = true
+                        } else {
+                            stateHolder.textMessageAnimationStates[appEvent.messageId] = true
+                        }
                         messageList.add(
                             Message(
                                 id = appEvent.messageId,
@@ -796,6 +804,19 @@ internal class ApiHandlerStreamProcessor(
                                 forceSave = true,
                                 isImageGeneration = false,
                             )
+                        }
+                        true
+                    } else {
+                        false
+                    }
+                    if (addedNewUserMessage || traceBoundaryAdded) {
+                        if (isImageGeneration) {
+                            if (messageList === stateHolder.imageGenerationMessages) {
+                                stateHolder._lastSentImageUserMessageId.value = appEvent.messageId
+                            }
+                        } else if (messageList === stateHolder.messages) {
+                            stateHolder._lastSentUserMessageId.value = appEvent.messageId
+                            stateHolder.triggerScrollToBottom()
                         }
                     }
                 }

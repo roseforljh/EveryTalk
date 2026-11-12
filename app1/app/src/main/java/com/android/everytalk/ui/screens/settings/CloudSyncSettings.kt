@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.screens.settings
 
+import com.android.everytalk.ui.components.dialog.AppOutlinedButton
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -65,15 +66,15 @@ internal fun AccountDataActions(
         )
         if (state.pausedAfterCloudReset) {
             Text(stringResource(R.string.cloud_sync_cloud_reset_paused), style = MaterialTheme.typography.bodySmall)
-            TextButton(onClick = { showResumeConfirm = true }, enabled = state.configured) { Text(stringResource(R.string.cloud_sync_resume_upload)) }
+            AppOutlinedButton(onClick = { showResumeConfirm = true }, enabled = state.configured) { Text(stringResource(R.string.cloud_sync_resume_upload)) }
         }
     }
     if (showResumeConfirm) AlertDialog(
         onDismissRequest = { showResumeConfirm = false },
         title = { Text(stringResource(R.string.cloud_sync_resume_title)) },
         text = { Text(stringResource(R.string.cloud_sync_resume_description)) },
-        confirmButton = { TextButton(onClick = { showResumeConfirm = false; onResumeUpload() }) { Text(stringResource(R.string.cloud_sync_upload)) } },
-        dismissButton = { TextButton(onClick = { showResumeConfirm = false }) { Text(stringResource(R.string.cloud_sync_cancel)) } },
+        confirmButton = { AppOutlinedButton(onClick = { showResumeConfirm = false; onResumeUpload() }) { Text(stringResource(R.string.cloud_sync_upload)) } },
+        dismissButton = { AppOutlinedButton(onClick = { showResumeConfirm = false }) { Text(stringResource(R.string.cloud_sync_cancel)) } },
     )
 }
 
@@ -86,9 +87,9 @@ internal fun SyncEpochNotice(controller: SyncController, onUpload: () -> Unit) {
         ElevatedCard(Modifier.padding(12.dp).widthIn(max = 480.dp)) {
             Column(Modifier.padding(16.dp)) {
                 Text(stringResource(R.string.cloud_sync_cloud_reset_question))
-                Row {
-                    TextButton(onClick = onUpload) { Text(stringResource(R.string.cloud_sync_upload)) }
-                    TextButton(onClick = { controller.decideEpoch(false) }) { Text(stringResource(R.string.cloud_sync_dont_upload)) }
+                Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    AppOutlinedButton(onClick = onUpload) { Text(stringResource(R.string.cloud_sync_upload)) }
+                    AppOutlinedButton(onClick = { controller.decideEpoch(false) }) { Text(stringResource(R.string.cloud_sync_dont_upload)) }
                 }
             }
         }

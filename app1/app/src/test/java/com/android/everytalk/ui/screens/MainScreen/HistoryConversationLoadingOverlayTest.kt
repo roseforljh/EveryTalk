@@ -90,7 +90,7 @@ class HistoryConversationLoadingOverlayTest {
     }
 
     @Test
-    fun `history loading overlay displays full page progress indicator`() {
+    fun `history loading overlay displays full page skeleton`() {
         composeRule.setContent {
             MaterialTheme {
                 HistoryConversationLoadingOverlay()

@@ -1,4 +1,5 @@
 package com.android.everytalk.ui.components
+import com.android.everytalk.ui.components.dialog.AppOutlinedButton
 import com.android.everytalk.statecontroller.*
 
 import androidx.compose.foundation.background
@@ -481,12 +482,12 @@ private fun DeleteChatDialog(
             )
         },
         confirmButton = {
-            TextButton(onClick = onConfirm) {
+            AppOutlinedButton(onClick = onConfirm) {
                 Text(stringResource(R.string.action_delete), color = Color(0xFFEF5350), fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            AppOutlinedButton(onClick = onDismiss) {
                 Text(stringResource(R.string.action_cancel), color = textColor)
             }
         }

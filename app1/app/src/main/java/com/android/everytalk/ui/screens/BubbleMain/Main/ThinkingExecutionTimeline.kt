@@ -50,8 +50,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.UriHandler
@@ -400,8 +398,6 @@ internal fun ThinkingExecutionTimeline(
     reasoningText: String,
     isReasoningActive: Boolean,
     messageIsError: Boolean,
-    focusItemIndex: Int? = null,
-    onFocusItemPositioned: (Int) -> Unit = {},
     modifier: Modifier = Modifier,
     reasoningContent: @Composable (text: String, index: Int) -> Unit,
 ) {
@@ -439,13 +435,6 @@ internal fun ThinkingExecutionTimeline(
             .testTag("reasoning-execution-timeline"),
     ) {
         orderedItems.forEachIndexed { itemIndex, item ->
-            val focusModifier = if (itemIndex == focusItemIndex) {
-                Modifier.onGloballyPositioned { coordinates ->
-                    onFocusItemPositioned(coordinates.positionInParent().y.toInt())
-                }
-            } else {
-                Modifier
-            }
             when (item) {
                 is OrderedExecutionItem.Reasoning -> {
                     val currentReasoningIndex = reasoningNodeIndex++
@@ -466,7 +455,7 @@ internal fun ThinkingExecutionTimeline(
                                 collapsedReasoningIndices - currentReasoningIndex
                             }
                         },
-                        modifier = focusModifier.testTag(
+                        modifier = Modifier.testTag(
                             "reasoning-execution-reasoning-step-$currentReasoningIndex"
                         ),
                     ) {
@@ -504,7 +493,7 @@ internal fun ThinkingExecutionTimeline(
                                 collapsedReasoningIndices - currentReasoningIndex
                             }
                         },
-                        modifier = focusModifier.testTag(
+                        modifier = Modifier.testTag(
                             "reasoning-execution-commentary-step-$currentReasoningIndex"
                         ),
                     ) {
@@ -547,7 +536,7 @@ internal fun ThinkingExecutionTimeline(
                         last = nodeIndex == nodeCount - 1,
                         expanded = if (canExpand) isStepExpanded else null,
                         onToggleExpand = if (canExpand) toggleStepExpanded else null,
-                        modifier = focusModifier.testTag("reasoning-execution-step-$currentToolIndex"),
+                        modifier = Modifier.testTag("reasoning-execution-step-$currentToolIndex"),
                     ) {
                         ExecutionLabels(
                             step = step,

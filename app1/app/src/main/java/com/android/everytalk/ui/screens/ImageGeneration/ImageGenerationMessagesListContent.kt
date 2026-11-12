@@ -423,6 +423,11 @@ fun ImageGenerationMessagesList(
     }
 
     val fadeBackgroundColor = MaterialTheme.colorScheme.background
+    val listBottomPadding = additionalBottomPadding + 25.dp
+    // 与 LazyColumn 的 afterContentPadding 同帧取值，输入法开合时 reserve 同步抵消。
+    val appliedTopAnchorReservePx = topAnchorEngine.runtime.reserveForBottomPadding(
+        with(density) { listBottomPadding.roundToPx() }
+    )
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
@@ -467,7 +472,7 @@ fun ImageGenerationMessagesList(
                     start = 6.dp,
                     end = 16.dp,
                     top = topPadding,
-                    bottom = additionalBottomPadding + 25.dp
+                    bottom = listBottomPadding
                 ),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
@@ -501,7 +506,7 @@ fun ImageGenerationMessagesList(
                             this.translationY = translationY.value
                         }
                         .appendTopAnchorReserve(
-                            if (index == chatItems.lastIndex) topAnchorEngine.reservePx else 0
+                            if (index == chatItems.lastIndex) appliedTopAnchorReservePx else 0
                         )
                 ) {
                     when (item) {

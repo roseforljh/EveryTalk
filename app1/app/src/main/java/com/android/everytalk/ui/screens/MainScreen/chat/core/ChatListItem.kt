@@ -185,7 +185,7 @@ sealed interface ChatListItem {
         override val stableId: String = "${messageId}_process_$segmentIndex"
     }
 
-    /** 回复结束后一个用户指令阶段的总执行区标题；下方旁白和过程段原样保留，默认随它收起。 */
+    /** 一个用户指令阶段的总执行区标题；流式期间在顶部显示总处理时长，回复结束后默认收起下方旁白和过程段。 */
     data class AiMessageExecutionGroup(
         val messageId: String,
         // 组内第一项的段序号，用户追加消息按它插入到正确位置。
@@ -194,6 +194,7 @@ sealed interface ChatListItem {
         val messageIsError: Boolean,
         val executionStartedAtMillis: Long?,
         val executionFinishedAtMillis: Long?,
+        val active: Boolean = false,
     ) : ChatListItem {
         override val stableId: String = executionGroupKey(messageId, segmentIndex)
     }
@@ -328,9 +329,10 @@ internal fun executionTraceForProcessDisplay(
 internal fun orderedAiOutputSegments(
     trace: List<ExecutionTraceEvent>,
     narrativeSegments: MutableSet<Int>? = null,
+    toolCallWriting: Boolean = false,
 ): List<OrderedAiOutputSegment> {
     val displayTrace = executionTraceForDisplay(trace)
-    val narrativeContentIndexes = executionNarrativeContentIndexes(displayTrace)
+    val narrativeContentIndexes = executionNarrativeContentIndexes(displayTrace, toolCallWriting)
     val result = mutableListOf<OrderedAiOutputSegment>()
     var content = StringBuilder()
     var contentIsNarrative = false

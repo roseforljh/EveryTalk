@@ -67,13 +67,15 @@ class MemoryCoordinator(
                 else -> ""
             } }.orEmpty()
         val overview = database.memoryDao().getDocument(com.android.everytalk.data.database.entities.MemoryDocumentEntity.OVERVIEW_ID)
+        val context = MemoryWriteContext(state.settings.version, input.sessionId, input.userMessageId, MemoryOrigin.CHAT_EXPLICIT)
         val prompt = MemoryPromptRenderer.render(state.entries, user,
             minOf(MemoryPolicy.MAX_PROMPT_CHARACTERS, (input.tokenLimits.maxContextTokens - input.tokenLimits.maxOutputTokens) / 8),
-            conversationId = input.sessionId, overview = overview)
+            conversationId = input.sessionId, overview = overview) + recallPastConversations(user, context,
+                maxCharacters = (input.tokenLimits.maxContextTokens - input.tokenLimits.maxOutputTokens) / 8)
         val reserve = if (prompt.isEmpty()) 0 else RequestTokenEstimator.estimate(
             listOf(SimpleTextApiMessage(role = "system", content = prompt)), tools = null,
         ).totalInputTokens.toInt()
-        val snapshot = MemoryRequestSnapshot(MemoryWriteContext(state.settings.version, input.sessionId, input.userMessageId, MemoryOrigin.CHAT_EXPLICIT), user, prompt)
+        val snapshot = MemoryRequestSnapshot(context, user, prompt)
         // 后台整理其他闲置会话，不阻塞本次发送。
         scope.launch { consolidator.runOnce(input.request, input.sessionId, state.settings.version) }
         scope.launch {
@@ -84,6 +86,25 @@ class MemoryCoordinator(
             request = input.request.copy(messages = history, tools = tools + MemoryTool.definition(), localMemorySnapshot = snapshot),
             tokenLimits = input.tokenLimits.copy(maxContextTokens = (input.tokenLimits.maxContextTokens - reserve).coerceAtLeast(input.tokenLimits.maxOutputTokens + 1)),
         )
+    }
+
+    /** 用户提到以前的聊天时先检索本机会话；超时或失败只跳过，不影响发送。 */
+    private suspend fun recallPastConversations(user: String, context: MemoryWriteContext, maxCharacters: Int): String {
+        if (!PastConversationRecall.triggered(user)) return ""
+        val keywords = PastConversationRecall.keywords(user)
+        if (keywords.isBlank()) return ""
+        return try {
+            kotlinx.coroutines.withTimeoutOrNull(RECALL_TIMEOUT_MILLIS) {
+                val arguments = kotlinx.serialization.json.buildJsonObject {
+                    put("action", kotlinx.serialization.json.JsonPrimitive("search_conversations"))
+                    put("query", kotlinx.serialization.json.JsonPrimitive(keywords))
+                }
+                PastConversationRecall.render(keywords, historySearch.search(arguments, context), maxCharacters)
+            }.orEmpty()
+        } catch (cancelled: CancellationException) { throw cancelled
+        } catch (_: Exception) {
+            android.util.Log.w("Memory", "auto_recall_skipped"); ""
+        }
     }
 
     fun bind(runId: String, snapshot: MemoryRequestSnapshot?) {
@@ -138,3 +159,6 @@ internal suspend fun collectMemoryExtraction(
     check(completed) { "记忆提取回复缺少完成状态" }
     return final ?: result.toString()
 }
+
+/** 自动回忆的检索上限；首次建索引较慢时宁可跳过，也不拖住发送。 */
+private const val RECALL_TIMEOUT_MILLIS = 1_500L

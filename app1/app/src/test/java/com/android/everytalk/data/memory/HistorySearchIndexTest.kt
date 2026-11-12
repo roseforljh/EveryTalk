@@ -82,4 +82,23 @@ class HistorySearchIndexTest {
         database.chatDao().deleteSession("a")
         assertEquals(emptyList<String>(), ids("beta"))
     }
+
+    @Test fun `用户说之前给过时自动回忆能用原话找回另一段会话里的内容`() = runBlocking {
+        conversation("old", "服务器配置", "412 那台服务器的 GitHub token 是 ghp_example123" to 10L, "收到" to 11L)
+        conversation("now", "新会话", "随便聊聊" to 20L)
+        val repository = MemoryRepository(database)
+        repository.setSettings(true)
+        val context = MemoryWriteContext(repository.settings().version, "now", "now-0", MemoryOrigin.CHAT_EXPLICIT)
+        val user = "我记得之前有个服务器里我给过了，你去找找，肯定有的好像是412还是哪个，我忘记了"
+
+        assertTrue(PastConversationRecall.triggered(user))
+        val keywords = PastConversationRecall.keywords(user)
+        val arguments = kotlinx.serialization.json.buildJsonObject {
+            put("action", kotlinx.serialization.json.JsonPrimitive("search_conversations"))
+            put("query", kotlinx.serialization.json.JsonPrimitive(keywords))
+        }
+        val recall = PastConversationRecall.render(keywords, ConversationHistorySearch(database).search(arguments, context))
+        assertTrue(recall, recall.contains("ghp_example123"))
+        assertTrue(!PastConversationRecall.triggered("今天天气怎么样"))
+    }
 }

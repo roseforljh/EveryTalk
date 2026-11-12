@@ -8,6 +8,37 @@ import org.junit.Test
 /** 固定服务器页面与配置页面已经确认的关键视觉和键盘布局规则。 */
 class ComputerUiAlignmentRulesTest {
     @Test
+    fun `添加和编辑的取消按钮固定显示且忙碌时可用`() {
+        val source = sourceFile("ui/screens/computer/ComputerAddCard.kt").readText()
+        val actions = source.substringAfter(".padding(top = 8.dp, bottom = 24.dp)")
+            .substringBefore("/** 表单分组")
+        assertTrue(source.contains(".weight(1f, fill = false)"))
+        assertFalse(actions.contains("verticalScroll"))
+        val cancel = actions.substringAfter("OutlinedButton(").substringBefore("Button(")
+        assertTrue(cancel.contains("onClick = onDismiss"))
+        assertFalse(cancel.contains("enabled ="))
+        assertFalse(source.contains("allowBusyDismiss"))
+        val screen = sourceFile("ui/screens/computer/ComputerScreen.kt").readText()
+        val close = screen.substringAfter("fun closeAddCard()").substringBefore("fun returnToSettings")
+        assertTrue(close.contains("job?.cancel()"))
+        assertFalse(close.contains("if (isBusy) return"))
+        assertTrue(screen.contains("catch (cancelled: CancellationException)"))
+    }
+
+    @Test
+    fun `认证切换和主机指纹确认有可辨识的按钮样式`() {
+        val source = sourceFile("ui/screens/computer/ComputerAddCard.kt").readText()
+        val choices = source.substringAfter("if (form.provider == ComputerProvider.SSH) FlowRow(")
+            .substringBefore("\n                    if (form.authKind == ComputerAuthKind.PASSWORD) {")
+        assertTrue(Regex("border = BorderStroke").findAll(choices).count() == 2)
+        assertTrue(source.contains("selectedContainerColor = contentColor.copy(alpha = 0.12f)"))
+        val hostKey = source.substringAfter("internal fun ComputerHostKeyDialog(")
+        assertTrue(hostKey.contains("Button("))
+        assertTrue(hostKey.contains("ButtonDefaults.buttonColors("))
+        assertTrue(hostKey.contains("OutlinedButton("))
+        assertFalse(hostKey.contains("TextButton("))
+    }
+    @Test
     fun `服务器页顶部保持左返回和右侧双按钮胶囊`() {
         val source = sourceFile("ui/screens/computer/ComputerScreen.kt")
             .readText(Charsets.UTF_8)

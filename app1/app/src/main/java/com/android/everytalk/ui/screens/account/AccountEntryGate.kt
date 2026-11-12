@@ -1,14 +1,17 @@
 package com.android.everytalk.ui.screens.account
 
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Surface
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.unit.dp
+import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.rememberHistoryLoadingShimmerBrush
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.res.stringResource
@@ -39,18 +42,8 @@ internal fun AccountEntryGate(manager: AccountManager, content: @Composable () -
         }
     }
     when {
-        // 恢复会话期间固定使用黑底白圈，不沿用卡片表面色，避免启动时灰屏和蓝色闪烁。
-        !state.initialized -> Surface(Modifier.fillMaxSize(), color = Color.Black) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(
-                    modifier = Modifier.semantics {
-                        contentDescription = processingDescription
-                    },
-                    color = Color.White,
-                    trackColor = Color.Transparent,
-                )
-            }
-        }
+        // 恢复会话期间显示主界面骨架，底色与启动窗口一致，避免灰屏和闪烁。
+        !state.initialized -> StartupSkeleton(processingDescription)
         state.user != null || continueWithoutAccount -> content()
         showPrivacy -> PrivacyPolicyScreen(onBack = { showPrivacy = false })
         else -> AccountScreen(
@@ -78,17 +71,7 @@ internal fun AccountEntryGate(
     var showPrivacy by rememberSaveable { mutableStateOf(false) }
 
     when {
-        !startup.initialized -> Surface(Modifier.fillMaxSize(), color = Color.Black) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(
-                    modifier = Modifier.semantics {
-                        contentDescription = processingDescription
-                    },
-                    color = Color.White,
-                    trackColor = Color.Transparent,
-                )
-            }
-        }
+        !startup.initialized -> StartupSkeleton(processingDescription)
         startup.onboardingCompleted || authState is AuthState.SignedIn || authState is AuthState.SessionExpired -> content()
         showPrivacy -> PrivacyPolicyScreen(onBack = { showPrivacy = false })
         else -> AccountScreen(
@@ -96,6 +79,39 @@ internal fun AccountEntryGate(
             onBack = {},
             onPrivacy = { showPrivacy = true },
             onContinueWithoutAccount = { authRepository.chooseLocalOnly() },
+        )
+    }
+}
+
+/** 启动骨架：顶栏三个控件 + 底部输入框的轮廓，和主界面空会话布局对齐。 */
+@Composable
+private fun StartupSkeleton(description: String) {
+    val brush = rememberHistoryLoadingShimmerBrush()
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .systemBarsPadding()
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .semantics { contentDescription = description },
+    ) {
+        Row(
+            Modifier.fillMaxWidth().align(Alignment.TopCenter),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.size(40.dp).clip(CircleShape).background(brush))
+            Spacer(Modifier.weight(1f))
+            Box(Modifier.width(128.dp).height(32.dp).clip(RoundedCornerShape(16.dp)).background(brush))
+            Spacer(Modifier.weight(1f))
+            Box(Modifier.size(40.dp).clip(CircleShape).background(brush))
+        }
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(96.dp)
+                .align(Alignment.BottomCenter)
+                .clip(RoundedCornerShape(26.dp))
+                .background(brush),
         )
     }
 }

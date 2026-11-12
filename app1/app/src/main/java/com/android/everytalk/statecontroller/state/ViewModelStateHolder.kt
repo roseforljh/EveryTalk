@@ -9,6 +9,7 @@ import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.Message
+import com.android.everytalk.data.DataClass.MessageQuoteReference
 import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.data.DataClass.VoiceBackendConfig
 import com.android.everytalk.models.SelectedMediaItem
@@ -129,7 +130,16 @@ val _isStreamingPaused = MutableStateFlow(false)
     var imageApiJob: Job? = null
     /** 任务归属固定到会话；上面的单值只供当前页面显示，不能用于判断后台任务是否失效。 */
     val textApiJobs: MutableMap<String, Job> = ConcurrentHashMap()
-    val textApiMessageIds: MutableMap<String, String> = ConcurrentHashMap()
+    /** textApiMessageIds 每次增删都加一，后台会话（如 Fork）的运行状态靠它刷新界面。 */
+    val textApiRunVersion = MutableStateFlow(0L)
+    val textApiMessageIds: MutableMap<String, String> = object : ConcurrentHashMap<String, String>() {
+        private fun bump() = textApiRunVersion.update { it + 1 }
+        override fun put(key: String, value: String): String? = super.put(key, value).also { bump() }
+        override fun putIfAbsent(key: String, value: String): String? = super.putIfAbsent(key, value).also { if (it == null) bump() }
+        override fun remove(key: String): String? = super.remove(key).also { if (it != null) bump() }
+        override fun remove(key: String, value: String): Boolean = super.remove(key, value).also { if (it) bump() }
+        override fun clear() { super.clear(); bump() }
+    }
     val textMessageConversationIds: MutableMap<String, String> = ConcurrentHashMap()
     val preparingTextConversationIds = MutableStateFlow<Set<String>>(emptySet())
     private val textConversationMessages: MutableMap<String, SnapshotStateList<Message>> = ConcurrentHashMap()
@@ -214,6 +224,12 @@ val _isStreamingPaused = MutableStateFlow(false)
         textApiMessageIds.remove(fromId)?.let { textApiMessageIds.putIfAbsent(toId, it) }
         preparingTextConversationIds.update { if (fromId in it) it - fromId + toId else it }
         if (_currentConversationId.value == fromId) _currentConversationId.value = toId
+        _forkConversationIds.update { links ->
+            if (links.none { it.key == fromId || it.value == fromId }) links
+            else links.entries.associate { (parent, fork) ->
+                (if (parent == fromId) toId else parent) to (if (fork == fromId) toId else fork)
+            }
+        }
     }
 
     fun registerTextJob(sessionId: String, messageId: String, job: Job) {
@@ -291,13 +307,24 @@ val _isStreamingPaused = MutableStateFlow(false)
     // 为历史会话设置稳定的ID
     fun setConversationIdForHistory(historyIndex: Int) {
         // 使用历史索引生成稳定的ID
+        clearQuoteDrafts()
         _currentConversationId.value = "history_chat_$historyIndex"
         applyCurrentConversationFunctionToggleState()
     }
 
     fun setCurrentConversationId(conversationId: String) {
+        val previous = _currentConversationId.value
+        // 引用和 Fork 草稿只属于当前会话；临时 ID 迁到稳定 ID 是同一会话，不清。
+        if (resolveConversationId(previous) != conversationId) clearQuoteDrafts()
         _currentConversationId.value = conversationId
         applyCurrentConversationFunctionToggleState()
+    }
+
+    fun clearQuoteDrafts() {
+        composerQuoteReferences.clear()
+        forkQuoteReferences.clear()
+        forkSelectedMediaItems.clear()
+        _forkComposerText.value = ""
     }
 
     fun applyCurrentConversationFunctionToggleState() {
@@ -339,6 +366,7 @@ val _isStreamingPaused = MutableStateFlow(false)
         cacheTextConversation()
         _text.value = ""
         selectedMediaItems.clear()
+        clearQuoteDrafts()
         _isTextApiCalling.value = false
         _isRemoteCancellationPending.value = false
         // 页面切换不取消按会话登记的运行任务。
@@ -396,6 +424,23 @@ val _isStreamingPaused = MutableStateFlow(false)
 
     val selectedMediaItems: SnapshotStateList<SelectedMediaItem> =
         mutableStateListOf()
+    /** 主会话输入框中的引用文本标签列表。 */
+    val composerQuoteReferences: SnapshotStateList<MessageQuoteReference> =
+        mutableStateListOf()
+    /** Fork 分支输入框的草稿：引用、正文和附件，和主输入框互不影响。 */
+    val forkQuoteReferences: SnapshotStateList<MessageQuoteReference> =
+        mutableStateListOf()
+    val _forkComposerText = MutableStateFlow("")
+    val forkSelectedMediaItems: SnapshotStateList<SelectedMediaItem> = mutableStateListOf()
+    val _forkDrawerOpenRequestVersion = MutableStateFlow(0)
+    /** 父会话 ID → Fork 分支会话 ID。分支是一条真实会话，走主会话的完整发送链路。 */
+    val _forkConversationIds = MutableStateFlow<Map<String, String>>(emptyMap())
+    /** 正在从数据库装回内存的 Fork 分支；发送前要等它完成，否则分支旧上下文进不了请求。 */
+    internal val forkLoadJobs: MutableMap<String, Job> = ConcurrentHashMap()
+    /** 点击引用标签时要跳到的消息和引用原文，3 秒后清空，用于定位到具体段落并高亮。 */
+    data class QuoteJump(val messageId: String, val quotedText: String, val token: Long, val occurrence: Int = -1)
+    val _quoteJump = MutableStateFlow<QuoteJump?>(null)
+    internal var highlightClearJob: Job? = null
 
     val _historicalConversations = MutableStateFlow<List<List<Message>>>(emptyList())
     val _imageGenerationHistoricalConversations = MutableStateFlow<List<List<Message>>>(emptyList())

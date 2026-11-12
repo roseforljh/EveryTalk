@@ -1250,6 +1250,43 @@ class MessageItemsControllerStatusTest {
     }
 
     @Test
+    fun `正式回答仍在流式输出时执行组停止计时且结束后耗时不跳变`() = runBlocking {
+        val controller = MessageItemsControllerTestAccess.newController()
+        val messageId = "completed-process-streaming-answer"
+        controller.stateHolder.messages.add(Message(
+            id = messageId,
+            text = "先检查环境。正式回答继续输出。",
+            sender = Sender.AI,
+            contentStarted = true,
+            timestamp = 500L,
+            executionTrace = listOf(
+                ExecutionTraceEvent.Content("先检查环境。", startedAtMillis = 1_000L),
+                ExecutionTraceEvent.Tool(completedToolStep(), startedAtMillis = 2_000L, finishedAtMillis = 3_000L),
+                ExecutionTraceEvent.Content("正式回答继续输出。", startedAtMillis = 4_000L),
+            ),
+        ))
+        controller.stateHolder._isTextApiCalling.value = true
+        controller.stateHolder._currentTextStreamingAiMessageId.value = messageId
+        Snapshot.sendApplyNotifications()
+
+        val streamingItems = controller.chatListItemsForTest()
+        assertTrue(streamingItems.filterIsInstance<ChatListItem.AiMessageContentSegment>().last().isStreaming)
+        val streamingGroup = streamingItems.filterIsInstance<ChatListItem.AiMessageExecutionGroup>().single()
+        assertFalse(streamingGroup.active)
+        assertEquals(500L, streamingGroup.executionStartedAtMillis)
+        assertEquals(4_000L, streamingGroup.executionFinishedAtMillis)
+
+        controller.stateHolder.messages[0] = controller.stateHolder.messages[0].copy(executionFinishedAt = 14_000L)
+        controller.stateHolder._isTextApiCalling.value = false
+        controller.stateHolder._currentTextStreamingAiMessageId.value = null
+        Snapshot.sendApplyNotifications()
+        val completedItems = withTimeout(5_000) {
+            controller.chatListItems.first { items -> items.any { it is ChatListItem.AiMessageFooter } }
+        }
+        assertEquals(streamingGroup, completedItems.filterIsInstance<ChatListItem.AiMessageExecutionGroup>().single())
+    }
+
+    @Test
     fun `首段正文前保留请求到首字耗时组件`() {
         val controller = MessageItemsControllerTestAccess.newController()
         controller.stateHolder.messages.add(
@@ -1324,12 +1361,12 @@ class MessageItemsControllerStatusTest {
                     ExecutionTraceEvent.UserMessageBoundary("steer"), ExecutionTraceEvent.Content("调整后的回复。"))),
         )
         val expectedKeys = listOf(
-            listOf("content_0", "process_1"),
-            listOf("content_0", "process_1"),
-            listOf("content_0", "process_1", "content_2", "loading"),
-            listOf("content_0", "process_1", "content_2", "process_3"),
-            listOf("content_0", "process_1", "content_2", "process_3"),
-            listOf("content_0", "process_1", "content_2", "process_3", "steer", "content_5", "loading"),
+            listOf("execution_0", "content_0", "process_1"),
+            listOf("execution_0", "content_0", "process_1"),
+            listOf("execution_0", "content_0", "process_1", "content_2", "loading"),
+            listOf("execution_0", "content_0", "process_1", "content_2", "process_3"),
+            listOf("execution_0", "content_0", "process_1", "content_2", "process_3"),
+            listOf("execution_0", "content_0", "process_1", "content_2", "process_3", "steer", "content_5", "loading"),
         )
         phases.forEachIndexed { phaseIndex, message ->
             val previous = items
@@ -1382,11 +1419,12 @@ class MessageItemsControllerStatusTest {
         Snapshot.sendApplyNotifications()
 
         val writingItems = controller.chatListItemsForTest()
-        assertTrue(writingItems.first() is ChatListItem.AiMessageContentSegment)
+        val executionGroup = writingItems.first() as ChatListItem.AiMessageExecutionGroup
+        assertTrue(executionGroup.active)
         val writing = writingItems.filterIsInstance<ChatListItem.AiMessageProcessSegment>().single()
         assertEquals(TOOL_CALL_WRITING_STATUS, writing.activityStatusText)
         assertTrue(writing.processIsActive)
-        // 编写状态只在正文后追加临时过程；停止时原正文和 key 都必须保留。
+        // 编写状态只在正文后追加临时过程，并在最上方放置总执行区标题；停止时原正文和 key 都必须保留。
         assertTrue(writing.events.isEmpty())
         val content = writingItems.filterIsInstance<ChatListItem.AiMessageContentSegment>().single()
         assertEquals("先检查环境。", content.text)
@@ -1402,6 +1440,7 @@ class MessageItemsControllerStatusTest {
             }
         }
         assertTrue(stoppedItems.none { it is ChatListItem.AiMessageProcessSegment })
+        assertTrue(stoppedItems.none { it is ChatListItem.AiMessageExecutionGroup })
         assertEquals(content.stableId, stoppedItems.filterIsInstance<ChatListItem.AiMessageContentSegment>().single().stableId)
     }
 

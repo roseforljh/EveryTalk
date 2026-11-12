@@ -813,7 +813,10 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
         text: String,
         contentParts: List<MessageContentPart>,
         attachments: List<SelectedMediaItem>,
+        targetConversationId: String? = null,
     ) {
+        val conversationId = targetConversationId ?: stateHolder._currentConversationId.value
+        val messages = stateHolder.textMessagesForConversation(conversationId)
         val currentConfig = stateHolder._selectedApiConfig.value
         val imageUrls = attachments.mapNotNull { attachment ->
             when (attachment) {
@@ -835,13 +838,16 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
             providerName = currentConfig?.provider,
         )
         val added = withContext(Dispatchers.Main.immediate) {
-            if (stateHolder.messages.any { it.id == messageId }) {
+            if (messages.any { it.id == messageId }) {
                 false
             } else {
                 stateHolder.textMessageAnimationStates[messageId] = true
-                stateHolder.messages.add(message)
-                stateHolder._lastSentUserMessageId.value = messageId
-                triggerScrollToBottom()
+                stateHolder.textMessageConversationIds[messageId] = conversationId
+                messages.add(message)
+                if (targetConversationId == null) {
+                    stateHolder._lastSentUserMessageId.value = messageId
+                    triggerScrollToBottom()
+                }
                 true
             }
         }
@@ -849,7 +855,15 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
 
         val persisted = runCatching {
             withContext(Dispatchers.IO) {
-                historyManager.saveCurrentChatToHistoryNow(forceSave = true, isImageGeneration = false)
+                if (targetConversationId == null) {
+                    historyManager.saveCurrentChatToHistoryNow(forceSave = true, isImageGeneration = false)
+                } else {
+                    historyManager.saveConversationSnapshotNow(
+                        conversationId = conversationId,
+                        messages = messages.toList(),
+                        isImageGeneration = false,
+                    )
+                }
             }
         }.isSuccess
         if (!persisted) {
@@ -873,6 +887,9 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
         onUserMessageAccepted: (() -> Unit)? = null,
         onSendRejected: (() -> Unit)? = null,
         onTurnFinished: (() -> Unit)? = null,
+        targetConversationId: String? = null,
+        inheritedHistory: List<com.android.everytalk.data.DataClass.Message> = emptyList(),
+        computerConversationId: String? = null,
     ) {
         sendMessageInternal(
             messageText,
@@ -888,6 +905,9 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
             onUserMessageAccepted,
             onSendRejected,
             onTurnFinished,
+            targetConversationId,
+            inheritedHistory,
+            computerConversationId,
         )
     }
     private fun getFileName(contentResolver: ContentResolver, uri: Uri): String? {

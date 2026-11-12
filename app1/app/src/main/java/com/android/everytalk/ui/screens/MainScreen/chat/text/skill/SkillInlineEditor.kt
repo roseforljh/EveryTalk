@@ -30,10 +30,12 @@ internal data class SkillEditState(
 
 /** 从已发送内容恢复输入框占位符和原始 Skill 引用，保留顺序及冻结版本。 */
 internal fun restoreSkillEditor(text: String, parts: List<MessageContentPart>): SkillEditState {
-    val editorText = if (parts.isEmpty()) text else parts.joinToString("") {
+    val nonQuoteParts = parts.filterNot { it is MessageContentPart.QuoteReference }
+    val editorText = if (nonQuoteParts.isEmpty()) text else nonQuoteParts.joinToString("") {
         when (it) {
             is MessageContentPart.Text -> it.text
             is MessageContentPart.SkillReference -> SKILL_TAG_MARKER.toString()
+            is MessageContentPart.QuoteReference -> ""
         }
     }
     return SkillEditState(

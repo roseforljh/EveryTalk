@@ -6,6 +6,15 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
 import kotlinx.coroutines.flow.MutableStateFlow
+import androidx.lifecycle.viewModelScope
+import io.mockk.mockkStatic
+import io.mockk.unmockkStatic
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.advanceTimeBy
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 /** 直接调用 ViewModel 按钮入口，验证重组延迟和切换会话不会绕过真实状态检查。 */
@@ -27,6 +36,33 @@ class ComposerForceStopTest {
     private val viewModel = mockk<AppViewModel> {
         every { stateHolder } returns holder
         every { apiHandler } returns handler
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test fun `引用高光定位完成后三秒清除且旧定位不能清掉新定位`() = runTest {
+        val jump = ViewModelStateHolder.QuoteJump("ai-1", "片段", 1)
+        val next = jump.copy(token = 2)
+        val current = MutableStateFlow<ViewModelStateHolder.QuoteJump?>(jump)
+        every { holder._quoteJump } returns current
+        mockkStatic("androidx.lifecycle.ViewModelKt")
+        try {
+            every { viewModel.viewModelScope } returns backgroundScope
+            viewModel.onQuoteLocated(jump)
+            runCurrent()
+            advanceTimeBy(2_999)
+            assertEquals(jump, current.value)
+            current.value = next
+            advanceTimeBy(1)
+            runCurrent()
+            assertEquals(next, current.value)
+            viewModel.onQuoteLocated(next)
+            runCurrent()
+            advanceTimeBy(3_000)
+            runCurrent()
+            assertNull(current.value)
+        } finally {
+            unmockkStatic("androidx.lifecycle.ViewModelKt")
+        }
     }
 
     @Test

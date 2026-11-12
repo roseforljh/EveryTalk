@@ -44,6 +44,37 @@ class PendingMessageControllerTest {
         stopKoin()
     }
 
+    @Test fun `只有引用标签的追问也能入队并保留引用`() = runTest {
+        val quote = com.android.everytalk.data.DataClass.MessageContentPart.QuoteReference(
+            com.android.everytalk.data.DataClass.MessageQuoteReference(
+                sourceConversationId = "source", sourceMessageId = "message", quotedText = "原文",
+            ),
+        )
+        val stored = CompletableDeferred<Unit>()
+        var composerParts = emptyList<com.android.everytalk.data.DataClass.MessageContentPart>()
+        val controller = controller(
+            isRunning = MutableStateFlow(true),
+            replaceQuotes = { composerParts = it },
+        ) { _, _, _, _ -> }
+        controller.enqueue("", "", listOf(quote), emptyList()) { stored.complete(Unit) }
+        stored.await()
+        val row = controller.pendingMessages.first { it.size == 1 }.single()
+        assertEquals(listOf(quote), row.contentParts)
+        assertEquals("", row.content)
+        controller.beginEdit(row.id)
+        database.chatDao().observePendingMessages("conversation").first { it.single().status == "EDITING" }
+        assertEquals(listOf(quote), composerParts)
+        val saved = CompletableDeferred<Unit>()
+        controller.commitEdit("", "", composerParts, emptyList()) { saved.complete(Unit) }
+        saved.await()
+        assertEquals(listOf(quote), database.chatDao().observePendingMessages("conversation").first().single().contentParts)
+        controller.beginEdit(row.id)
+        database.chatDao().observePendingMessages("conversation").first { it.single().status == "EDITING" }
+        controller.cancelEdit()
+        controller.composerMode.first { it == ComposerMode.Normal }
+        assertEquals(emptyList<com.android.everytalk.data.DataClass.MessageContentPart>(), composerParts)
+    }
+
     @Test
     fun `编辑项从UI消失并挡住后续FIFO`() = runTest {
         val dao = database.chatDao()
@@ -496,6 +527,7 @@ class PendingMessageControllerTest {
     private fun kotlinx.coroutines.test.TestScope.controller(
         isRunning: MutableStateFlow<Boolean>,
         replaceComposer: (String) -> Unit = {},
+        replaceQuotes: (List<com.android.everytalk.data.DataClass.MessageContentPart>) -> Unit = {},
         steer: () -> Boolean = { true },
         recordSteered: suspend (PendingMessageEntity) -> Unit = {},
         isAbortInProgress: MutableStateFlow<Boolean> = MutableStateFlow(false),
@@ -512,7 +544,7 @@ class PendingMessageControllerTest {
         isAbortInProgress = isAbortInProgress,
         agentRunControlState = agentRunControlState,
         hasComposerContent = { false },
-        replaceComposer = { text, _ -> replaceComposer(text) },
+        replaceComposer = { text, _, parts -> replaceComposer(text); replaceQuotes(parts) },
         persistAttachments = { attachments, _ -> attachments },
         resumeStreaming = {},
         steerCurrentRun = { steer() },

@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.screens.appinfo
 
+import com.android.everytalk.ui.components.dialog.AppOutlinedButton
 import androidx.compose.ui.res.painterResource
 
 import android.text.format.DateUtils
@@ -27,7 +28,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -229,7 +229,7 @@ private fun StorageSelectionControl(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f),
         )
-        TextButton(onClick = onToggleAll) {
+        AppOutlinedButton(onClick = onToggleAll) {
             Text(
                 stringResource(
                     if (selectedCount == totalCount) R.string.storage_unselect_all

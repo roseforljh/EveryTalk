@@ -5,7 +5,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import net.schmizz.sshj.SSHClient
 import net.schmizz.sshj.common.Buffer
 import net.schmizz.sshj.common.KeyType
@@ -320,64 +323,99 @@ class ComputerSshClient internal constructor(
         val endpoint = ComputerEndpointValidator.validate(host, port)
         val verifier = CapturingHostKeyVerifier()
         val client = createClient(verifier)
-        try {
-            client.connect(endpoint.host, endpoint.port)
-            val hostKey = verifier.requireCaptured()
-            HostKeyProbeResult(
-                host = endpoint.host,
-                resolvedAddress = client.remoteAddress?.hostAddress
-                    ?: throw ComputerException(
-                        ComputerErrorCodes.HOST_RESOLUTION_FAILED,
-                        "无法确认服务器解析地址",
-                        retryable = true,
-                    ),
-                port = endpoint.port,
-                algorithm = hostKey.algorithm,
-                keyBlob = hostKey.blob,
-                fingerprint = hostKey.fingerprint,
-            )
-        } catch (error: Throwable) {
-            throw mapConnectionFailure(error)
-        } finally {
-            closeClient(client)
+        withCancellableClient(client) {
+            try {
+                client.connect(endpoint.host, endpoint.port)
+                val hostKey = verifier.requireCaptured()
+                HostKeyProbeResult(
+                    host = endpoint.host,
+                    resolvedAddress = client.remoteAddress?.hostAddress
+                        ?: throw ComputerException(
+                            ComputerErrorCodes.HOST_RESOLUTION_FAILED,
+                            "无法确认服务器解析地址",
+                            retryable = true,
+                        ),
+                    port = endpoint.port,
+                    algorithm = hostKey.algorithm,
+                    keyBlob = hostKey.blob,
+                    fingerprint = hostKey.fingerprint,
+                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                throw mapConnectionFailure(error)
+            } finally {
+                closeClient(client)
+            }
         }
     }
 
-    suspend fun connect(computer: Computer, credential: ComputerCredential): ComputerSshConnection =
-        withContext(Dispatchers.IO) {
-            val endpoint = ComputerEndpointValidator.validate(computer.host, computer.port, computer.username)
-            val algorithm = computer.hostKeyAlgorithm
-                ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器尚未确认 Host Key")
-            val blob = computer.hostKeyBlobBase64
-                ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器尚未确认 Host Key")
-            val verifier = PinnedHostKeyVerifier(algorithm, blob)
-            val client = createClient(verifier)
-            try {
-                client.connect(endpoint.host, endpoint.port)
-                authenticate(client, endpoint.username.orEmpty(), credential)
-                runCatching {
-                    client.socket?.apply {
-                        keepAlive = true
-                        tcpNoDelay = true
+    suspend fun connect(computer: Computer, credential: ComputerCredential): ComputerSshConnection {
+        // 在跨调度器返回的外面保留资源引用，处理 IO 已成功而调用方尚未接收时的取消。
+        var connected: ComputerSshConnection? = null
+        try {
+            return withContext(Dispatchers.IO) {
+                val endpoint = ComputerEndpointValidator.validate(computer.host, computer.port, computer.username)
+                val algorithm = computer.hostKeyAlgorithm
+                    ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器尚未确认 Host Key")
+                val blob = computer.hostKeyBlobBase64
+                    ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器尚未确认 Host Key")
+                val verifier = PinnedHostKeyVerifier(algorithm, blob)
+                val client = createClient(verifier)
+                withCancellableClient(client) {
+                    try {
+                        client.connect(endpoint.host, endpoint.port)
+                        authenticate(client, endpoint.username.orEmpty(), credential)
+                        runCatching {
+                            client.socket?.apply {
+                                keepAlive = true
+                                tcpNoDelay = true
+                            }
+                        }
+                        client.connection.keepAlive.keepAliveInterval = DEFAULT_KEEPALIVE_SECONDS
+                        ComputerSshConnection(client).also { connected = it }
+                    } catch (cancelled: CancellationException) {
+                        closeClient(client)
+                        throw cancelled
+                    } catch (error: Throwable) {
+                        closeClient(client)
+                        if (verifier.didDetectMismatch()) {
+                            throw ComputerException(
+                                code = ComputerErrorCodes.HOST_KEY_CHANGED,
+                                message = "服务器身份已变化，请先核对新指纹",
+                                action = "CONFIRM_HOST_KEY",
+                                cause = error,
+                            )
+                        }
+                        throw mapConnectionFailure(error, credential)
                     }
                 }
-                client.connection.keepAlive.keepAliveInterval = DEFAULT_KEEPALIVE_SECONDS
-                ComputerSshConnection(client)
-            } catch (error: Throwable) {
-                closeClient(client)
-                if (verifier.didDetectMismatch()) {
-                    throw ComputerException(
-                        code = ComputerErrorCodes.HOST_KEY_CHANGED,
-                        message = "服务器身份已变化，请先核对新指纹",
-                        action = "CONFIRM_HOST_KEY",
-                        cause = error,
-                    )
+            }
+        } catch (cancelled: CancellationException) {
+            connected?.let { connection ->
+                withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { connection.close() }
+            }
+            throw cancelled
+        } finally {
+            credential.clear()
+        }
+    }
+
+    /** 取消时关闭本次临时连接，唤醒阻塞的握手和认证；未交付的成功连接也会被关闭。 */
+    private suspend fun <T> withCancellableClient(client: SSHClient, block: () -> T): T = coroutineScope {
+        suspendCancellableCoroutine { continuation ->
+            continuation.invokeOnCancellation { closeClientOnIo(client) }
+            launch(Dispatchers.IO) {
+                try {
+                    coroutineContext.ensureActive()
+                    val result = block()
+                    continuation.resume(result) { _, _, _ -> closeClientOnIo(client) }
+                } catch (error: Throwable) {
+                    continuation.resumeWith(Result.failure(error))
                 }
-                throw mapConnectionFailure(error, credential)
-            } finally {
-                credential.clear()
             }
         }
+    }
 
     private fun createClient(verifier: HostKeyVerifier): SSHClient = clientFactory().apply {
         connectTimeout = connectTimeoutMillis
@@ -456,6 +494,11 @@ class ComputerSshClient internal constructor(
         }
     }
 
+    /** SSHJ.close 会加锁并写网络包，取消回调只能投递到 IO，不能同步堵住 UI。 */
+    private fun closeClientOnIo(client: SSHClient) {
+        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch { closeClient(client) }
+    }
+
     private fun closeClient(client: SSHClient) {
         runCatching { client.close() }
     }
@@ -483,11 +526,12 @@ class ComputerSshConnection internal constructor(private val client: SSHClient) 
         require(command.isNotBlank()) { "SSH 命令不能为空" }
         require(timeoutMillis > 0) { "命令超时必须大于 0" }
         require(maxOutputBytes > 0) { "输出上限必须大于 0" }
-        openChannel { client.startSession() }.use { session ->
+        val session = openChannel { client.startSession() }
+        try {
             val remoteCommand = openChannel { session.exec(command) }
             startedChannels.incrementAndGet()
-            try {
-                coroutineScope {
+            coroutineScope {
+                try {
                     val stdout = async(Dispatchers.IO) {
                         ComputerBoundedOutputReader.read(remoteCommand.inputStream, maxOutputBytes)
                     }
@@ -504,16 +548,11 @@ class ComputerSshConnection internal constructor(private val client: SSHClient) 
                     }
 
                     inputWriter.await()
-                    // 分片等待以响应协程取消：用户停止时先给远端进程发 TERM，再由 finally 关闭通道。
+                    // 分片等待以响应协程取消；finally 先结束本地读流，再异步通知远端。
                     val deadline = System.currentTimeMillis() + timeoutMillis
-                    try {
-                        while (remoteCommand.isOpen && System.currentTimeMillis() < deadline) {
-                            ensureActive()
-                            remoteCommand.join(200, TimeUnit.MILLISECONDS)
-                        }
-                    } catch (error: CancellationException) {
-                        runCatching { remoteCommand.signal(Signal.TERM) }
-                        throw error
+                    while (remoteCommand.isOpen && System.currentTimeMillis() < deadline) {
+                        ensureActive()
+                        remoteCommand.join(200, TimeUnit.MILLISECONDS)
                     }
                     val timedOut = remoteCommand.isOpen
                     if (timedOut) runCatching { remoteCommand.close() }
@@ -540,10 +579,23 @@ class ComputerSshConnection internal constructor(private val client: SSHClient) 
                         stdoutTruncated = stdoutResult.truncated,
                         stderrTruncated = stderrResult.truncated,
                     )
+                } finally {
+                    // SSHJ 的 Channel.close 会等待远端；本地流先 EOF，不能靠远端回复解除 read。
+                    if (!isActive) {
+                        runCatching { remoteCommand.inputStream.close() }
+                        runCatching { remoteCommand.errorStream.close() }
+                        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+                            runCatching { remoteCommand.signal(Signal.TERM) }
+                            runCatching { remoteCommand.close() }
+                        }
+                    } else {
+                        runCatching { remoteCommand.close() }
+                    }
                 }
-            } finally {
-                runCatching { remoteCommand.close() }
             }
+        } finally {
+            if (isActive) runCatching { session.close() }
+            else kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch { runCatching { session.close() } }
         }
     }
 

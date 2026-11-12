@@ -1,10 +1,16 @@
 package com.android.everytalk.ui.components.dialog
 import com.android.everytalk.statecontroller.*
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ButtonColors
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -12,6 +18,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.dp
 import com.android.everytalk.ui.components.EveryTalkLoadingIndicator
@@ -20,6 +27,32 @@ import com.android.everytalk.ui.theme.AppInputFieldShape
 val AppDialogShape = RoundedCornerShape(28.dp)
 val AppDialogButtonShape = RoundedCornerShape(24.dp)
 val AppDialogTextFieldShape = AppInputFieldShape
+
+/**
+ * 次要操作按钮，带描边。主题主色是黑白的，无边框 TextButton 和正文文字没有区别，看不出能点。
+ * 参数与 TextButton 一致，可直接替换。
+ */
+@Composable
+fun AppOutlinedButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    shape: Shape = AppDialogButtonShape,
+    colors: ButtonColors = ButtonDefaults.outlinedButtonColors(),
+    content: @Composable RowScope.() -> Unit,
+) {
+    val outline = MaterialTheme.colorScheme.outlineVariant
+    OutlinedButton(
+        onClick = onClick,
+        modifier = modifier,
+        enabled = enabled,
+        shape = shape,
+        colors = colors,
+        border = BorderStroke(1.dp, if (enabled) outline else outline.copy(alpha = 0.5f)),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+        content = content,
+    )
+}
 
 /**
  * 对话框异步确认按钮的固定尺寸内容。

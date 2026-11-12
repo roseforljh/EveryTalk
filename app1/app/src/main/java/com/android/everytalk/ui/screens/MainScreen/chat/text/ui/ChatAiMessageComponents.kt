@@ -1,5 +1,6 @@
 @file:OptIn(ExperimentalFoundationApi::class)
 package com.android.everytalk.ui.screens.MainScreen.chat.text.ui
+import com.android.everytalk.ui.components.dialog.AppOutlinedButton
 import com.android.everytalk.statecontroller.*
 import android.annotation.SuppressLint
 import com.android.everytalk.R
@@ -790,12 +791,12 @@ private fun ConfirmModelRegenerateDialog(
             )
         },
         confirmButton = {
-            TextButton(onClick = onConfirm) {
+            AppOutlinedButton(onClick = onConfirm) {
                 Text(stringResource(R.string.action_confirm), color = Color(0xFF66B5FF), fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
-            TextButton(onClick = onBack) {
+            AppOutlinedButton(onClick = onBack) {
                 Text(stringResource(R.string.navigation_back), color = textColor)
             }
         }

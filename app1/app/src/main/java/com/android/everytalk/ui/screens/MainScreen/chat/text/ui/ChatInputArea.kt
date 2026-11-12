@@ -137,6 +137,7 @@ import java.util.UUID
 import io.ktor.client.HttpClient
 import org.koin.java.KoinJavaComponent
 import com.android.everytalk.data.DataClass.MessageContentPart
+import com.android.everytalk.data.DataClass.MessageQuoteReference
 import com.android.everytalk.data.skill.MessageSkillReference
 import com.android.everytalk.data.skill.SkillSourceType
 import com.android.everytalk.data.skill.SkillRepository
@@ -171,6 +172,13 @@ private data class PendingAgentAction(
     val selectedComputers: List<Computer> = listOf(computer),
 )
 
+/** 输入框发往 Fork 分支时的覆盖项：运行状态和停止换成分支会话自己的。 */
+class ComposerForkTarget(
+    val conversationId: String,
+    val runningMessageId: String?,
+    val onStop: () -> Unit,
+)
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ChatInputArea(
@@ -203,8 +211,16 @@ fun ChatInputArea(
     mcpEnableApprovalRequest: PendingMcpEnableApproval? = null,
     onOpenComputerSettings: () -> Unit = {},
     onHostCommandCardVisibilityChange: (Boolean) -> Unit = {},
+    quotes: List<MessageQuoteReference> = emptyList(),
+    onAddQuote: (MessageQuoteReference) -> Unit = {},
+    onRemoveQuote: (String) -> Unit = {},
+    onClearQuotes: () -> Unit = {},
+    forkTarget: ComposerForkTarget? = null,
+    inputBackgroundColor: Color = MaterialTheme.colorScheme.background,
 ) {
     val context = LocalContext.current
+    val compactComposer = forkTarget != null
+    val composerTextStyle = if (compactComposer) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodyLarge
     val coroutineScope = rememberCoroutineScope()
     // 输入框保持同一份草稿，仅按实际输出能力切换快捷菜单，不再固定使用文本工具。
     val isImageModel = selectedApiConfig?.outputModalities()?.contains("image") == true
@@ -247,10 +263,12 @@ fun ChatInputArea(
     val computerSelections by viewModel.computerSelections.collectAsState()
     val currentConversationId by viewModel.currentConversationId.collectAsState()
     val pendingInterventions by viewModel.pendingInterventions.collectAsState()
+    // Fork 分支的问答和审批属于分支会话；Agent 与服务器设置仍跟随所在页面。
+    val runConversationId = forkTarget?.conversationId ?: currentConversationId
     val currentIntervention = pendingInterventions
         .asSequence()
         .filter {
-            it.sessionId == currentConversationId && it.state in setOf(
+            it.sessionId == runConversationId && it.state in setOf(
                 SuspensionState.WAITING_USER,
                 SuspensionState.WAITING_USER_REENTRY,
                 SuspensionState.USER_DECISION_REQUIRED,
@@ -283,11 +301,14 @@ fun ChatInputArea(
     }
     var pendingCloudflareReauthorization by remember { mutableStateOf<PendingIntervention?>(null) }
     var cloudflareReauthRunning by remember { mutableStateOf(false) }
-    val pendingMessages by viewModel.pendingMessages.collectAsState()
-    val composerMode by viewModel.composerMode.collectAsState()
-    val chatRunState by viewModel.chatRunState.collectAsState()
-    val runControlState by viewModel.currentAgentRunControlState.collectAsState()
-    val controlledMessageId by viewModel.stateHolder._currentTextStreamingAiMessageId.collectAsState()
+    val queueController = if (forkTarget == null) viewModel.pendingMessageController else viewModel.forkPendingMessageController
+    val pendingMessages by queueController.visiblePendingMessages.collectAsState()
+    val composerMode by queueController.composerMode.collectAsState()
+    val chatRunState by queueController.runState.collectAsState()
+    val controlSnapshots by viewModel.apiHandler.agentRunControlSnapshots.collectAsState()
+    val pageControlledMessageId by viewModel.stateHolder._currentTextStreamingAiMessageId.collectAsState()
+    val controlledMessageId = if (forkTarget == null) pageControlledMessageId else forkTarget.runningMessageId
+    val runControlState = controlledMessageId?.let { controlSnapshots[it]?.state }
     val conversationFunctionStates by viewModel.stateHolder.conversationFunctionToggleStates.collectAsState()
     val currentAgentResourceState = conversationFunctionStates[currentConversationId]?.agentResourceState
     val detachedComputerName = conversationFunctionStates[currentConversationId]?.detachedComputerName
@@ -364,7 +385,7 @@ fun ChatInputArea(
     }
 
     BackHandler(enabled = composerMode is ComposerMode.EditingPending) {
-        viewModel.cancelPendingMessageEdit()
+        queueController.cancelEdit()
     }
 
     /** 真正执行 Agent 开关。系统权限申请必须结束后才能进入这里。 */
@@ -601,12 +622,15 @@ fun ChatInputArea(
     // 当外部 text 变化时（如清空、恢复草稿），同步到本地状态
     // 使用 key 来区分外部变化和本地变化
     var lastExternalText by remember { mutableStateOf(text) }
+    var lastEditingPendingId by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(text, composerMode) {
-        if (text != lastExternalText) {
+        val editing = composerMode as? ComposerMode.EditingPending
+        if (text != lastExternalText || editing?.pendingId != lastEditingPendingId) {
+            syncJob?.cancel()
             lastExternalText = text
-            // 更新 TextFieldValue，保持光标在末尾
+            lastEditingPendingId = editing?.pendingId
+            // 编辑空文本引用消息时也恢复完整编辑状态，不依赖文本是否改变。
             localTextFieldValue = TextFieldValue(text, TextRange(text.length))
-            val editing = composerMode as? ComposerMode.EditingPending
             skillReferences = if (editing?.originalComposerText == text) {
                 editing.originalContentParts
                     .filterIsInstance<MessageContentPart.SkillReference>()
@@ -619,13 +643,19 @@ fun ChatInputArea(
     
     val restoredDraft by viewModel.restoredMessageDraft.collectAsState()
     val isRestoringMessage by viewModel.isRestoringMessage.collectAsState()
-    val messageEditSession by viewModel.messageEditSession.collectAsState()
+    val pageMessageEditSession by viewModel.messageEditSession.collectAsState()
+    val messageEditSession = pageMessageEditSession.takeIf { forkTarget == null }
     LaunchedEffect(restoredDraft) {
+        if (forkTarget != null) return@LaunchedEffect
         val draft = restoredDraft?.takeUnless { it.isImageGeneration } ?: return@LaunchedEffect
         syncJob?.cancel()
         val restored = restoreSkillEditor(draft.message.text, draft.message.contentParts)
         localTextFieldValue = restored.value
         skillReferences = restored.references
+        onClearQuotes()
+        draft.message.contentParts
+            .filterIsInstance<MessageContentPart.QuoteReference>()
+            .forEach { onAddQuote(it.reference) }
         restoredAttachmentIds = restoredAttachmentIds + draft.message.attachments.map { it.id }
         lastExternalText = restored.value.text
         onTextChange(restored.value.text)
@@ -671,6 +701,10 @@ fun ChatInputArea(
         localTextFieldValue = next.value
         skillReferences = next.references
         dismissedSlashQueryStart = null
+        if (forkTarget != null) {
+            lastExternalText = next.value.text
+            onTextChange(next.value.text)
+        }
     }
 
     BackHandler(enabled = activeSlashQuery != null) {
@@ -712,13 +746,13 @@ fun ChatInputArea(
     }
 
     LaunchedEffect(localText) {
-        // 取消上一次的同步任务
+        if (forkTarget != null) return@LaunchedEffect
         syncJob?.cancel()
         syncJob = coroutineScope.launch {
             delay(PerformanceConfig.STATE_DEBOUNCE_DELAY_MS)
             if (localText != text) {
-                onTextChange(localText)
                 lastExternalText = localText
+                onTextChange(localText)
             }
         }
     }
@@ -772,21 +806,27 @@ fun ChatInputArea(
         if (item != null) deleteDraftTextAttachments(listOf(item))
     }
 
+    val composerQuotes = quotes
+
     fun clearSubmittedComposer() {
         localTextFieldValue = TextFieldValue("", TextRange(0))
         skillReferences = emptyList()
         lastExternalText = ""
         onTextChange("")
         onClearMediaItems()
+        onClearQuotes()
         syncJob?.cancel()
         if (imeInsets.getBottom(density) > 0) keyboardController?.hide()
     }
 
     // 图标和点击共用同一事实；空白不是草稿，不能显示发送却执行暂停或打开语音。
-    val hasContent = localText.isNotBlank() || selectedMediaItems.isNotEmpty()
+    val hasContent = localText.isNotBlank() || selectedMediaItems.isNotEmpty() || composerQuotes.isNotEmpty()
+    val currentDraftParts = remember(localText, skillReferences, composerQuotes.toList()) {
+        composerQuotes.map { MessageContentPart.QuoteReference(it) } + buildSkillContentParts(localText, skillReferences)
+    }
     val canRestoreMessage = messageEditSession?.takeIf {
         it.belongsTo(currentConversationId, false)
-    }?.matchesDraft(displaySkillEditorText(localText, skillReferences), selectedMediaItems, buildSkillContentParts(localText, skillReferences)) == true
+    }?.matchesDraft(displaySkillEditorText(localText, skillReferences), selectedMediaItems, currentDraftParts) == true
     val primaryAction = resolveComposerPrimaryAction(
         runState = chatRunState,
         composerMode = composerMode,
@@ -802,12 +842,21 @@ fun ChatInputArea(
         if (viewModel.isRestoringMessage.value) return@send
         try {
             val hasDraft = hasContent
-            val contentParts = buildSkillContentParts(localText, skillReferences)
+            val contentParts = composerQuotes.map { MessageContentPart.QuoteReference(it) } +
+                buildSkillContentParts(localText, skillReferences)
             val displayText = displaySkillEditorText(localText, skillReferences)
             if (primaryAction == ComposerPrimaryAction.LOADING) {
                 // 转换、消息登记或强停处理中不可重复操作。
             } else if (primaryAction == ComposerPrimaryAction.RESTORE) {
                 viewModel.restoreOriginalMessages(displayText, selectedMediaItems.toList(), contentParts)
+            } else if (forkTarget != null && primaryAction in setOf(
+                    ComposerPrimaryAction.STOP, ComposerPrimaryAction.FORCE_STOP,
+                )) {
+                forkTarget.onStop()
+            } else if (forkTarget != null && primaryAction == ComposerPrimaryAction.PAUSE) {
+                controlledMessageId?.let(viewModel.apiHandler::requestPauseCurrentAgent)
+            } else if (forkTarget != null && primaryAction == ComposerPrimaryAction.RESUME) {
+                controlledMessageId?.let(viewModel.apiHandler::resumePausedAgent)
             } else if (primaryAction == ComposerPrimaryAction.STOP) {
                 viewModel.stopUncontrolledRun(controlledMessageId)
             } else if (primaryAction == ComposerPrimaryAction.FORCE_STOP) {
@@ -820,7 +869,7 @@ fun ChatInputArea(
                 if (!hasDraft) {
                     onShowSnackbar(context.getString(R.string.pending_message_empty))
                 } else {
-                    viewModel.commitPendingMessageEdit(
+                    queueController.commitEdit(
                         content = displayText,
                         composerText = localText,
                         contentParts = contentParts,
@@ -850,7 +899,7 @@ fun ChatInputArea(
                 if (selectedApiConfig == null) {
                     onShowSnackbar(context.getString(R.string.chat_input_select_api_configuration))
                 } else {
-                    viewModel.enqueuePendingMessage(
+                    queueController.enqueue(
                         content = displayText,
                         composerText = localText,
                         contentParts = contentParts,
@@ -891,8 +940,6 @@ fun ChatInputArea(
             onShowSnackbar(context.getString(R.string.chat_input_send_failed))
         }
     }
-
-    val inputBackgroundColor = MaterialTheme.colorScheme.background
 
     // 使用 WindowInsets 组合逻辑来统一处理底部间距，消除手动计算带来的动画抖动
     val navInsets = WindowInsets.navigationBarsIgnoringVisibility
@@ -966,7 +1013,7 @@ fun ChatInputArea(
                 }
 
                 FileChangesCapsule(
-                    messages = viewModel.stateHolder.messages,
+                    messages = viewModel.stateHolder.textMessagesForConversation(runConversationId),
                     activeMessageId = controlledMessageId,
                     isRunning = chatRunState != ChatRunState.Idle,
                 )
@@ -974,14 +1021,14 @@ fun ChatInputArea(
                 PendingMessageQueue(
                     messages = pendingMessages,
                     onEdit = { id ->
-                        if (localText.isNotBlank() || selectedMediaItems.isNotEmpty()) {
+                        if (localText.isNotBlank() || selectedMediaItems.isNotEmpty() || composerQuotes.isNotEmpty()) {
                             onShowSnackbar(context.getString(R.string.pending_message_finish_current_draft))
                         } else {
-                            viewModel.beginPendingMessageEdit(id)
+                            queueController.beginEdit(id)
                         }
                     },
-                    onDelete = viewModel::deletePendingMessage,
-                    onSendNow = viewModel::sendPendingMessageNow,
+                    onDelete = queueController::delete,
+                    onSendNow = queueController::sendNow,
                 )
 
                 // 普通输入附件继续沿用输入框的水平留白，权限卡片单独占满统一悬浮层宽度。
@@ -1104,7 +1151,7 @@ fun ChatInputArea(
                 val hasActiveTags = !isImageModel && activeTagCount > 0
 
                 // 加号固定在输入框内部左侧，不再做分离动画：整条就是一个圆角输入框。
-                val hasAnyContent = localText.isNotEmpty() || selectedMediaItems.isNotEmpty() || hasActiveTags
+                val hasAnyContent = localText.isNotEmpty() || selectedMediaItems.isNotEmpty() || hasActiveTags || composerQuotes.isNotEmpty()
 
                 val accent = com.android.everytalk.ui.theme.LocalAccentColor.current
                 // GPT SendButtonContainerColor（z7.c）：选了彩色强调色时按钮用强调色，默认/黑色保持黑白。
@@ -1153,14 +1200,14 @@ fun ChatInputArea(
                             animationSpec = tween(285, easing = CubicBezierEasing(0.2f, 0f, 0f, 1f)),
                         )
                     }
-                    val plusBoxWidth = 48.dp
-                    val plusHeight = 48.dp
+                    val plusBoxWidth = if (compactComposer) 44.dp else 48.dp
+                    val plusHeight = if (compactComposer) 44.dp else 48.dp
                     val borderColor = Color(0xFF48474C)
-                    val cornerRadius = 26.dp
+                    val cornerRadius = if (compactComposer) 22.dp else 26.dp
                     val composerShape = RoundedCornerShape(cornerRadius)
                     // 供弹窗宽度和输入框宽度复用：跟水平 padding 同步收窄。
                     // 外层 Column 已有 6dp 左右内边距，这里只补差额，让最终视觉边距是 37dp → 13dp。
-                    val composerSideGap = 37f + (13f - 37f) * expandProgress.value - 6f
+                    val composerSideGap = if (compactComposer) 6f else 37f + (13f - 37f) * expandProgress.value - 6f
                     val inputFieldWidth = (maxWidth - composerSideGap.dp * 2).coerceAtLeast(0.dp)
 
                     Box(
@@ -1219,7 +1266,7 @@ fun ChatInputArea(
                                         }
                                     ),
                                     tint = if (isDarkTheme) Color.White else Color(0xFF0D0D0D),
-                                    modifier = Modifier.size(24.dp)
+                                    modifier = Modifier.size(if (compactComposer) 20.dp else 24.dp)
                                 )
                             }
 
@@ -1446,6 +1493,11 @@ fun ChatInputArea(
                                 localTextFieldValue = next.value
                                 skillReferences = next.references
                                 dismissedSlashQueryStart = null
+                                if (forkTarget != null) {
+                                    // 抽屉可随时离开组合，输入事件内同步草稿，不能依赖之后才运行的 effect。
+                                    lastExternalText = next.value.text
+                                    onTextChange(next.value.text)
+                                }
                             },
                             visualTransformation = SkillTagVisualTransformation(
                                 references = skillReferences,
@@ -1494,22 +1546,32 @@ fun ChatInputArea(
                                     // 失焦时禁止滚动列表，否则正文在长按过程中位移，选择手势会被取消。
                                     if (focusState.isFocused) onFocusChange(true)
                                 },
-                            textStyle = MaterialTheme.typography.bodyLarge.copy(
+                            textStyle = composerTextStyle.copy(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             ),
                             cursorBrush = androidx.compose.ui.graphics.SolidColor(
                                 if (isDarkTheme) Color(0xFF99CEFF) else Color(0xFF0285FF)
                             ),
-                            maxLines = 5,
+                            maxLines = if (compactComposer) 4 else 5,
                             decorationBox = { innerTextField ->
                                 // 结构照 ChatGPT：收起是单行（加号在左、文字居中、发送在右），
                                 // 展开后文字占一行，底部再一行 [加号][标签...] ... [发送]。
                                 // 文字行的上下留白也随进度从 0 长到 8dp，光标始终落在行内垂直中心。
                                 Column(modifier = Modifier.fillMaxWidth()) {
+                                    if (composerQuotes.isNotEmpty()) {
+                                        com.android.everytalk.ui.components.selection.QuoteReferenceTagsRow(
+                                            quotes = composerQuotes,
+                                            onQuoteClick = { quote -> viewModel.jumpToQuotedMessage(quote) },
+                                            onRemoveQuote = onRemoveQuote,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(start = 14.dp, end = 14.dp, top = 10.dp),
+                                        )
+                                    }
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .heightIn(min = (52f + (48f - 52f) * expandProgress.value).dp)
+                                            .heightIn(min = if (compactComposer) 44.dp else (52f + (48f - 52f) * expandProgress.value).dp)
                                             .padding(
                                                 start = (48f + (14f - 48f) * expandProgress.value).dp,
                                                 end = (52f + (38f - 52f) * expandProgress.value).dp,
@@ -1526,7 +1588,7 @@ fun ChatInputArea(
                                             if (localText.isEmpty()) {
                                                 Text(
                                                     stringResource(R.string.chat_input_reply_hint),
-                                                    style = MaterialTheme.typography.bodyLarge,
+                                                    style = composerTextStyle,
                                                     color = if (isDarkTheme) Color(0xFFAFAFAF) else Color(0xFF8F8F8F)
                                                 )
                                             }
@@ -1552,8 +1614,8 @@ fun ChatInputArea(
                                                         placeable.place(0, 0)
                                                     }
                                                 }
-                                                .heightIn(min = 48.dp)
-                                                .padding(start = 48.dp, end = 10.dp, bottom = 6.dp),
+                                                .heightIn(min = if (compactComposer) 40.dp else 48.dp)
+                                                .padding(start = plusBoxWidth, end = 10.dp, bottom = if (compactComposer) 4.dp else 6.dp),
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             if (hasActiveTags) {
@@ -1621,6 +1683,7 @@ fun ChatInputArea(
                                 backgroundColor = buttonBackgroundColor,
                                 iconColor = iconColor,
                                 onClick = onSendClick,
+                                compact = compactComposer,
                             )
                         }
                     }
@@ -1983,6 +2046,7 @@ private fun SendButton(
     iconColor: Color,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    compact: Boolean = false,
 ) {
     AnimatedContent(
         targetState = primaryAction,
@@ -2009,7 +2073,7 @@ private fun SendButton(
                 containerColor = backgroundColor,
                 contentColor = iconColor
             ),
-            modifier = Modifier.size(36.dp)
+            modifier = Modifier.size(if (compact) 32.dp else 36.dp)
         ) {
             if (state == ComposerPrimaryAction.LOADING || state == ComposerPrimaryAction.FORCE_STOP) {
                 CircularProgressIndicator(

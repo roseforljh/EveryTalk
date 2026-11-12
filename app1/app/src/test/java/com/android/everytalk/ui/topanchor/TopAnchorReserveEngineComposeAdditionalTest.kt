@@ -1031,4 +1031,202 @@ class TopAnchorReserveEngineComposeAdditionalTest {
             assertEquals(items.size + 1, listState.layoutInfo.totalItemsCount)
         }
     }
+
+    @Test
+    fun `keyboard padding changes keep anchor fixed without extra bottom space`() {
+        composeRule.mainClock.autoAdvance = false
+        val turn = TopAnchorTurn("u2", "a2", "s1", 2L)
+        lateinit var engineState: TopAnchorReserveEngineState
+        lateinit var listState: LazyListState
+        lateinit var setKeyboard: (Boolean) -> Unit
+        lateinit var takeUserControl: () -> Unit
+        lateinit var growOffscreen: () -> Unit
+        lateinit var scrollBy: (Float) -> Unit
+        var targetAnchorYPx = 0
+
+        composeRule.setContent {
+            val density = LocalDensity.current
+            var keyboardOpen by remember { mutableStateOf(false) }
+            var answerHeight by remember { mutableStateOf(48.dp) }
+            val coroutineScope = rememberCoroutineScope()
+            listState = rememberLazyListState()
+            targetAnchorYPx = with(density) { 96.dp.toPx().toInt() }
+            engineState = remember {
+                TopAnchorReserveEngineState().also {
+                    it.updateRuntime(TopAnchorRuntimeState(phase = TopAnchorPhase.InitialSnap, activeTurn = turn))
+                }
+            }
+            setKeyboard = { keyboardOpen = it }
+            takeUserControl = engineState::releaseForUserScroll
+            growOffscreen = { answerHeight = 160.dp }
+            scrollBy = { delta -> coroutineScope.launch { listState.scrollBy(delta) } }
+            val bottomPadding = if (keyboardOpen) 140.dp else 80.dp
+            val applied = engineState.runtime.reserveForBottomPadding(with(density) { bottomPadding.roundToPx() })
+
+            RunTopAnchorReserveEngine(
+                state = engineState,
+                listState = listState,
+                anchorIndex = 2,
+                anchorKey = "u2",
+                targetAnchorY = targetAnchorYPx,
+                trailingRealItemIndex = 3,
+                isRunning = true,
+                config = TopAnchorConfig(
+                    tallAnchorThresholdPx = with(density) { 240.dp.toPx().toInt() },
+                    tallAnchorVisibleHeightPx = with(density) { 96.dp.toPx().toInt() },
+                    topInsetPx = targetAnchorYPx,
+                    stableWindowNanos = 1_000_000L,
+                    reserveInsideTrailingItem = true,
+                ),
+                enabled = engineState.runtime.hasRuntime,
+                hasResponseTarget = true,
+            )
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.height(640.dp),
+                contentPadding = PaddingValues(top = 96.dp, bottom = bottomPadding),
+            ) {
+                itemsIndexed(
+                    listOf(HarnessItem("u1", 280.dp), HarnessItem("a1", 720.dp), HarnessItem("u2", 80.dp)),
+                    key = { _, item -> item.id },
+                ) { _, item -> Box(Modifier.height(item.heightDp)) }
+                item(key = "a2") {
+                    Box(Modifier.appendTopAnchorReserve(applied).height(answerHeight))
+                }
+            }
+        }
+
+        fun frames(n: Int) = repeat(n) {
+            composeRule.mainClock.advanceTimeByFrame()
+            composeRule.waitForIdle()
+        }
+        fun anchorY() = listState.layoutInfo.visibleItemsInfo.first { it.key == "u2" }.offset -
+            listState.layoutInfo.viewportStartOffset
+        fun answerRealBottomGap(): Int {
+            val info = listState.layoutInfo
+            val answer = info.visibleItemsInfo.first { it.key == "a2" }
+            val applied = engineState.runtime.reserveForBottomPadding(info.afterContentPadding)
+            return info.viewportEndOffset - info.afterContentPadding - (answer.offset + answer.size - applied)
+        }
+
+        frames(16)
+        var pinnedY = 0
+        composeRule.runOnIdle {
+            assertTrue(engineState.reservePx > 0)
+            pinnedY = anchorY()
+            assertEquals(targetAnchorYPx, pinnedY)
+            setKeyboard(true)
+        }
+        // 每一帧都检查：输入法开合过程中锚点不能先掉再拉回。
+        repeat(6) {
+            frames(1)
+            composeRule.runOnIdle {
+                assertEquals(pinnedY, anchorY())
+            }
+        }
+        composeRule.runOnIdle {
+            val info = listState.layoutInfo
+            val last = info.visibleItemsInfo.last()
+            val overflow = last.offset + last.size - (info.viewportEndOffset - info.afterContentPadding)
+            assertTrue(engineState.runtime.hasRuntime)
+            assertTrue("键盘展开后不应还能向下滚出空白: overflow=$overflow", overflow <= 1)
+            setKeyboard(false)
+        }
+        repeat(6) {
+            frames(1)
+            composeRule.runOnIdle { assertEquals(pinnedY, anchorY()) }
+        }
+
+        // 用户接管并上滑，回复在视口外增长，回到底部后不能残留多余空白。
+        composeRule.runOnIdle {
+            assertFalse(listState.canScrollForward)
+            takeUserControl()
+            scrollBy(-900f)
+        }
+        frames(4)
+        composeRule.runOnIdle { growOffscreen() }
+        frames(4)
+        composeRule.runOnIdle { scrollBy(5_000f) }
+        frames(8)
+        composeRule.runOnIdle {
+            assertEquals(TopAnchorPhase.UserControlled, engineState.runtime.phase)
+            assertEquals(0, answerRealBottomGap() - engineState.runtime.reserveForBottomPadding(listState.layoutInfo.afterContentPadding))
+            assertEquals(pinnedY, anchorY())
+        }
+    }
+
+    @Test
+    fun `user collapse then re-expand of running group keeps reserve`() {
+        composeRule.mainClock.autoAdvance = false
+        val turn = TopAnchorTurn("u2", "a2", "s1", 2L)
+        lateinit var engineState: TopAnchorReserveEngineState
+        lateinit var setGroup: (Boolean?) -> Unit
+        var groupState by mutableStateOf<Boolean?>(null)
+
+        composeRule.setContent {
+            val density = LocalDensity.current
+            val listState = rememberLazyListState()
+            engineState = remember {
+                TopAnchorReserveEngineState().also {
+                    it.updateRuntime(TopAnchorRuntimeState(phase = TopAnchorPhase.InitialSnap, activeTurn = turn))
+                }
+            }
+            setGroup = { groupState = it }
+            val groupHeight = if (groupState == false) 0.dp else 120.dp
+            RunTopAnchorReserveEngine(
+                state = engineState,
+                listState = listState,
+                anchorIndex = 2,
+                anchorKey = "u2",
+                targetAnchorY = with(density) { 96.dp.toPx().toInt() },
+                trailingRealItemIndex = 4,
+                isRunning = true,
+                config = TopAnchorConfig(
+                    tallAnchorThresholdPx = with(density) { 240.dp.toPx().toInt() },
+                    tallAnchorVisibleHeightPx = with(density) { 96.dp.toPx().toInt() },
+                    topInsetPx = with(density) { 96.dp.toPx().toInt() },
+                    stableWindowNanos = 1_000_000L,
+                    reserveInsideTrailingItem = true,
+                ),
+                enabled = engineState.runtime.hasRuntime,
+                hasResponseTarget = true,
+            )
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.height(640.dp),
+                contentPadding = PaddingValues(top = 96.dp, bottom = 80.dp),
+            ) {
+                itemsIndexed(
+                    listOf(HarnessItem("u1", 280.dp), HarnessItem("a1", 720.dp), HarnessItem("u2", 80.dp)),
+                    key = { _, item -> item.id },
+                ) { _, item -> Box(Modifier.height(item.heightDp)) }
+                item(key = "g") { Box(Modifier.height(groupHeight)) }
+                item(key = "a2") {
+                    Box(Modifier.appendTopAnchorReserve(engineState.reservePx).height(48.dp))
+                }
+            }
+        }
+
+        fun frames(n: Int) = repeat(n) {
+            composeRule.mainClock.advanceTimeByFrame()
+            composeRule.waitForIdle()
+        }
+        frames(16)
+        var reserveBefore = 0
+        composeRule.runOnIdle {
+            reserveBefore = engineState.reservePx
+            assertTrue(reserveBefore > 0)
+            engineState.releaseForUserScroll()
+        }
+        frames(2)
+        composeRule.runOnIdle { setGroup(false) }
+        frames(6)
+        composeRule.runOnIdle { setGroup(true) }
+        frames(6)
+        composeRule.runOnIdle {
+            assertEquals(TopAnchorPhase.UserControlled, engineState.runtime.phase)
+            assertEquals(reserveBefore, engineState.reservePx)
+        }
+    }
 }
+

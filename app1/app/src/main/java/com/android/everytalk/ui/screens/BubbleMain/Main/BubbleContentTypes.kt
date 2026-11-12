@@ -547,6 +547,7 @@ private fun UserMessageWithSkillTags(
                         appendInlineContent("skill-${skillIndex++}", "/${part.reference.displayName}")
                         previousWasSkill = true
                     }
+                    is MessageContentPart.QuoteReference -> Unit
                 }
             }
         }.toAnnotatedString()

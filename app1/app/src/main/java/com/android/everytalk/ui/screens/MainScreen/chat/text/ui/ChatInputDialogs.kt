@@ -1,4 +1,5 @@
 package com.android.everytalk.ui.screens.MainScreen.chat.text.ui
+import com.android.everytalk.ui.components.dialog.AppOutlinedButton
 import com.android.everytalk.statecontroller.*
 
 import kotlin.math.max
@@ -208,7 +209,7 @@ internal fun AgentDisclosureDialog(
             }
         },
         dismissButton = {
-            TextButton(
+            AppOutlinedButton(
                 onClick = onDismiss,
                 shape = AppDialogButtonShape,
                 colors = ButtonDefaults.textButtonColors(
@@ -264,7 +265,7 @@ internal fun AgentWorkspaceRecreationDialog(
             ) { Text(stringResource(R.string.agent_workspace_recreate_confirm)) }
         },
         dismissButton = {
-            TextButton(
+            AppOutlinedButton(
                 onClick = onDismiss,
                 shape = AppDialogButtonShape,
                 colors = ButtonDefaults.textButtonColors(contentColor = appDialogContentColor()),
@@ -316,7 +317,7 @@ internal fun AgentServerDeletedDialog(
             ) { Text(stringResource(R.string.agent_server_deleted_choose)) }
         },
         dismissButton = {
-            TextButton(
+            AppOutlinedButton(
                 onClick = onDismiss,
                 shape = AppDialogButtonShape,
                 colors = ButtonDefaults.textButtonColors(contentColor = appDialogContentColor()),

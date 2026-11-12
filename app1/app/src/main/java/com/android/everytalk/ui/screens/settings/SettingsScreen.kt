@@ -1,4 +1,5 @@
 package com.android.everytalk.ui.screens.settings
+import com.android.everytalk.ui.components.dialog.AppOutlinedButton
 import com.android.everytalk.statecontroller.*
 
 import android.util.Log
@@ -113,7 +114,7 @@ fun SettingsScreen(
             onDismissRequest = viewModel.mcpManager::dismissOAuthMessage,
             text = { Text(message) },
             confirmButton = {
-                TextButton(onClick = viewModel.mcpManager::dismissOAuthMessage) {
+                AppOutlinedButton(onClick = viewModel.mcpManager::dismissOAuthMessage) {
                     Text(stringResource(R.string.action_done))
                 }
             },

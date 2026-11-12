@@ -495,6 +495,27 @@ class DirectClientLifecycleTest {
     }
 
     @Test
+    fun `Responses收到completed后即使连接不关闭也立即结束`() = runBlocking {
+        // 中转发完 response.completed 后不关连接：旧实现会一直等到连接超时，界面持续显示处理中。
+        val channel = ByteChannel(autoFlush = true)
+        val client = HttpClient(MockEngine {
+            respond(channel, headers = Headers.build {
+                append(HttpHeaders.ContentType, ContentType.Text.EventStream.toString())
+            })
+        })
+        channel.writeStringUtf8(buildString {
+            appendResponsesEvent("""{"type":"response.output_text.delta","delta":"ok"}""")
+            appendResponsesEvent("""{"type":"response.completed"}""")
+        })
+        val events = withTimeout(5_000) {
+            OpenAIResponsesClient.streamChatResponses(client, request("OpenAI", "OpenAI")).toList()
+        }
+        assertEquals("ok", events.filterIsInstance<AppStreamEvent.ContentFinal>().single().text)
+        assertEquals(listOf("stop"), events.filterIsInstance<AppStreamEvent.Finish>().map { it.reason })
+        client.close()
+    }
+
+    @Test
     fun `三个Provider把输出上限统一映射为length`() = runBlocking {
         val openAiBody = "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\ndata: [DONE]\n\n"
         withHttpClient(body = openAiBody) { client ->

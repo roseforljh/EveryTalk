@@ -144,6 +144,12 @@ interface ChatDao {
             ?: reference.removePrefix("cloud:").takeIf { runCatching { java.util.UUID.fromString(it).toString() == it }.getOrDefault(false) }
             ?: com.android.everytalk.data.database.entities.localSyncUuid("messages", reference)
 
+    /** 会话引用同理：按同步 UUID 换成这台设备上的会话 ID，还没到就留 cloud:UUID。 */
+    suspend fun resolveLocalSessionReference(reference: String): String {
+        val uuid = reference.removePrefix("cloud:")
+        return getSessionByUuid(uuid)?.id ?: "cloud:$uuid"
+    }
+
     /** 引用先到、消息后到时仍返回最终的本机 ID；真正到达后无需重排或创建替身消息。 */
     suspend fun resolveLocalMessageReference(reference: String): String {
         val uuid = resolveMessageSyncUuid(reference)

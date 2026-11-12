@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.screens.appinfo
 
+import com.android.everytalk.ui.components.dialog.AppOutlinedButton
 import androidx.compose.ui.res.painterResource
 import androidx.annotation.DrawableRes
 
@@ -33,7 +34,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -189,7 +189,7 @@ fun DataManagementScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showJunkConfirmation = false }) {
+                AppOutlinedButton(onClick = { showJunkConfirmation = false }) {
                     Text(stringResource(R.string.action_cancel))
                 }
             },
@@ -258,7 +258,7 @@ fun DataManagementScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { pendingDeleteEntries = emptyList() }) {
+                AppOutlinedButton(onClick = { pendingDeleteEntries = emptyList() }) {
                     Text(stringResource(R.string.action_cancel))
                 }
             },

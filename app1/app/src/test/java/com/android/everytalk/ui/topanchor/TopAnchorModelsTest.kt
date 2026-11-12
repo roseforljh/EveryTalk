@@ -155,17 +155,19 @@ class TopAnchorModelsTest {
     }
 
     @Test
-    fun `展开执行详情时冻结预留并在收起后释放`() {
+    fun `展开执行详情按所在列表项累计高度并在收起后释放`() {
         val state = TopAnchorReserveEngineState()
 
         state.activateTurn(TopAnchorTurn("u2", "a2", "s1", 0L))
-        state.updateInteractiveExpansion("a2:tool-1", expanded = true)
-        state.updateInteractiveExpansion("a2:tool-2", expanded = true)
+        state.updateInteractiveExpansion("a2", "a2:tool-1", 120)
+        state.updateInteractiveExpansion("a2", "a2:tool-2", 80)
+        state.updateInteractiveExpansion("a1", "a1:tool-1", 50)
 
-        assertTrue(state.holdsReserveForInteractiveExpansion)
-        state.updateInteractiveExpansion("a2:tool-1", expanded = false)
-        assertTrue(state.holdsReserveForInteractiveExpansion)
-        state.updateInteractiveExpansion("a2:tool-2", expanded = false)
-        assertFalse(state.holdsReserveForInteractiveExpansion)
+        assertEquals(200, state.interactiveExpansionPx("a2"))
+        state.updateInteractiveExpansion("a2", "a2:tool-1", 0)
+        assertEquals(80, state.interactiveExpansionPx("a2"))
+        state.updateInteractiveExpansion("a2", "a2:tool-2", 0)
+        assertEquals(0, state.interactiveExpansionPx("a2"))
+        assertEquals(50, state.interactiveExpansionPx("a1"))
     }
 }

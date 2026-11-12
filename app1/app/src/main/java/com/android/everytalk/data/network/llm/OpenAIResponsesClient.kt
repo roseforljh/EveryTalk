@@ -56,6 +56,11 @@ object OpenAIResponsesClient {
                         ),
                     )
                     header(HttpHeaders.Authorization, "Bearer ${request.apiKey}")
+                    // 会话亲和头（与 pi 相同）；经自家服务器中转时只转发白名单头，这两个头不会带上，缓存键仍在请求体里。
+                    PromptCachePolicy.sessionCacheKey(request.conversationId)?.let { key ->
+                        header("session-id", key)
+                        header("x-client-request-id", key)
+                    }
                     configureSSERequest()
                 }) { response ->
                     if (!response.status.isSuccess()) {
@@ -207,16 +212,18 @@ object OpenAIResponsesClient {
         )
             .normalizeAgentToolHistory()
         val normalizedTools = PromptCachePolicy.normalizeTools(request.tools)
-        val promptCacheKey = PromptCachePolicy.buildOpenAICacheKey(
-            apiAddress = resolvedOpenAIApiAddress(request),
-            model = request.model,
-            messages = messagesWithSystemPrompt,
-            tools = normalizedTools,
-        )
+        // 参考 pi：Responses 对所有地址都按会话发 prompt_cache_key，中转据此把同一会话固定到同一上游。
+        val promptCacheKey = PromptCachePolicy.sessionCacheKey(request.conversationId)
+            ?: PromptCachePolicy.buildOpenAICacheKey(
+                apiAddress = resolvedOpenAIApiAddress(request),
+                model = request.model,
+                messages = messagesWithSystemPrompt,
+                tools = normalizedTools,
+            )
         runCatching {
             Log.d(
                 TAG,
-                "Prompt cache prefix system=${PromptCachePolicy.systemFingerprint(messagesWithSystemPrompt)} " +
+                "Prompt cache key=${promptCacheKey.orEmpty().take(12)} prefix system=${PromptCachePolicy.systemFingerprint(messagesWithSystemPrompt)} " +
                     "profile=${PromptCachePolicy.toolProfile(normalizedTools)} " +
                     "tools=${PromptCachePolicy.toolSchemaHash(normalizedTools).take(16)}",
             )
@@ -758,7 +765,9 @@ object OpenAIResponsesClient {
                                 Log.w(TAG, "解析 Responses SSE 事件失败: ${e.message}")
                                 throw e
                             }
-                            if (safetyBlocked) break
+                            // response.completed/incomplete/failed 是协议里的最后一个事件，Responses 不发 [DONE]；
+                            // 中转或代理不及时关闭连接时，继续读会让回复已完成却一直显示处理中，直到连接超时。
+                            if (safetyBlocked || sawTerminalResponse) break
                         }
                         lineBuffer.clear()
                     }

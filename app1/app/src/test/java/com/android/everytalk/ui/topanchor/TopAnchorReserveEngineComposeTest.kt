@@ -212,14 +212,9 @@ class TopAnchorReserveEngineComposeTest {
                     )
                 }
             }
-            expandDetails = {
-                engineState.updateInteractiveExpansion("a2:tool", expanded = true)
-                answerHeight = 320.dp
-            }
-            collapseDetails = {
-                answerHeight = 80.dp
-                engineState.updateInteractiveExpansion("a2:tool", expanded = false)
-            }
+            expandDetails = { answerHeight = 320.dp }
+            collapseDetails = { answerHeight = 80.dp }
+            val expansionPx = with(density) { (answerHeight - 80.dp).roundToPx() }
 
             RunTopAnchorReserveEngine(
                 state = engineState,
@@ -254,6 +249,7 @@ class TopAnchorReserveEngineComposeTest {
                     Box(
                         Modifier
                             .appendTopAnchorReserve(engineState.reservePx)
+                            .reportExpansionHeight { engineState.updateInteractiveExpansion("a2", "a2:tool", expansionPx) }
                             .height(answerHeight)
                     )
                 }

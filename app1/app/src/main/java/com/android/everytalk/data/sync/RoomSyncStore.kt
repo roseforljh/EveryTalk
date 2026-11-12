@@ -4,6 +4,7 @@ import com.android.everytalk.data.DataClass.isBuiltinModel
 import androidx.room.withTransaction
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.MessageContentPart
+import com.android.everytalk.data.DataClass.MessageQuoteReference
 import com.android.everytalk.data.skill.MessageSkillReference
 import com.android.everytalk.data.skill.SkillSourceType
 import com.android.everytalk.data.DataClass.ModelParameters
@@ -476,7 +477,14 @@ internal class RoomSyncStore(
      * 这样 reasoning/tokenUsage 等大字段可以单独走 additive merge，不会再次修改正文。
      */
     private suspend fun messageChangeForPush(message: MessageEntity, sessionUuid: String): PushChange? {
-        val full = SyncPayloadMapper.message(message, sessionUuid)
+        val quoteSources = message.contentParts
+            .filterIsInstance<MessageContentPart.QuoteReference>()
+            .associate { it.reference.id to (
+                sourceSessionUuid(it.reference.sourceConversationId) to sourceMessageUuid(it.reference.sourceMessageId)
+                ) }
+        val full = SyncPayloadMapper.message(message, sessionUuid) { reference ->
+            quoteSources[reference.id] ?: (reference.sourceConversationId to reference.sourceMessageId)
+        }
         val archiveReady = settings.getValue("sync_resource_source:${message.uuid}") != null
         if (archiveReady && full.payload.toString().toByteArray().size > maxMessagePayloadBytes) {
             // 完整内容已通过加密文件持久化。普通消息仅保存稳定索引，绝不截断正文或制造新 UUID。
@@ -712,6 +720,19 @@ internal class RoomSyncStore(
                             item["displayName"]?.jsonPrimitive?.contentOrNull.orEmpty(),
                             item["sourceType"]?.jsonPrimitive?.contentOrNull?.let { runCatching { SkillSourceType.valueOf(it) }.getOrNull() } ?: SkillSourceType.LOCAL_IMPORT,
                             contentHash = item["contentHash"]?.jsonPrimitive?.contentOrNull.orEmpty()))
+                    }
+                    "quote" -> {
+                        val quotedText = item["quotedText"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+                        // 来源用同步 UUID 传输；本机先按 UUID 换成真实 ID，还没到就留着 cloud:UUID 等它到达。
+                        MessageContentPart.QuoteReference(MessageQuoteReference(
+                            id = item["id"]?.jsonPrimitive?.contentOrNull ?: java.util.UUID.randomUUID().toString(),
+                            sourceConversationId = item["sourceConversationId"]?.jsonPrimitive?.contentOrNull
+                                ?.let { chat.resolveLocalSessionReference(it) }.orEmpty(),
+                            sourceMessageId = item["sourceMessageId"]?.jsonPrimitive?.contentOrNull
+                                ?.let { chat.resolveLocalMessageReference(it) }.orEmpty(),
+                            quotedText = quotedText,
+                            sourceQuestion = item["sourceQuestion"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                        ))
                     }
                     else -> null
                 }

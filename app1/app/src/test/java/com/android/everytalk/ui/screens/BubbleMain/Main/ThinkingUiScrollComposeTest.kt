@@ -1297,7 +1297,7 @@ class ThinkingUiScrollComposeTest {
     }
 
     @Test
-    fun `长思考内容实时增长并保留用户阅读位置`() {
+    fun `执行过程面板打开停在最新一步并在底部时跟随增长`() {
         composeRule.mainClock.autoAdvance = false
         lateinit var scrollState: ScrollState
         lateinit var appendReasoning: () -> Unit
@@ -1350,7 +1350,7 @@ class ThinkingUiScrollComposeTest {
                 "viewport=$initialViewportHeight",
             initialMaxValue > 0,
         )
-        assertEquals(0, scrollState.value)
+        assertEquals("打开时应停在最底部", initialMaxValue, scrollState.value)
 
         composeRule.runOnIdle { appendReasoning() }
         repeat(4) {
@@ -1363,8 +1363,18 @@ class ThinkingUiScrollComposeTest {
                 "新增内容后滚动范围没有增长：before=$initialMaxValue, after=${scrollState.maxValue}",
                 scrollState.maxValue > initialMaxValue,
             )
-            assertEquals(0, scrollState.value)
+            assertEquals("停在底部时应跟随新内容", scrollState.maxValue, scrollState.value)
         }
+
+        // 用户上翻阅读后，新内容不能把位置拉回底部。
+        composeRule.runOnIdle { scrollState.dispatchRawDelta(-scrollState.value.toFloat()) }
+        composeRule.mainClock.advanceTimeByFrame()
+        composeRule.runOnIdle { appendReasoning() }
+        repeat(4) {
+            composeRule.mainClock.advanceTimeByFrame()
+            composeRule.waitForIdle()
+        }
+        composeRule.runOnIdle { assertEquals(0, scrollState.value) }
     }
 
     @Test
@@ -1547,7 +1557,7 @@ class ThinkingUiScrollComposeTest {
                 "增长后的 Markdown 仍不可滚动：max=${scrollState.maxValue}",
                 scrollState.maxValue > 0,
             )
-            assertEquals(0, scrollState.value)
+            assertEquals("原本放得下即视为在底部，内容增长后应跟随到最新", scrollState.maxValue, scrollState.value)
         }
         val topAfterOverflow = composeRule
             .onNodeWithTag("reasoning-sheet-content")

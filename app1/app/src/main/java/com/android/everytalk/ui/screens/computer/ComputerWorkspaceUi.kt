@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.screens.computer
 
+import com.android.everytalk.ui.components.dialog.AppOutlinedButton
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -23,7 +24,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -455,7 +455,7 @@ private fun ComputerSecretEditorDialog(
             }
         },
         dismissButton = {
-            TextButton(
+            AppOutlinedButton(
                 onClick = onDismiss,
                 enabled = !isBusy,
                 modifier = Modifier.height(48.dp),
@@ -505,7 +505,7 @@ private fun ComputerWorkspaceDeleteDialog(
             }
         },
         dismissButton = {
-            TextButton(
+            AppOutlinedButton(
                 onClick = onDismiss,
                 enabled = !isBusy,
                 modifier = Modifier.height(48.dp),

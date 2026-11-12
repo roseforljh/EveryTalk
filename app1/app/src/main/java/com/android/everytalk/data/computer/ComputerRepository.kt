@@ -210,55 +210,74 @@ class ComputerRepository(
         )
 
         val originalCredential = request.credential.copySecret()
-        addComputerMutex.withLock {
-            if (dao.findActiveSshComputer(endpoint.host, endpoint.port, endpoint.username.orEmpty()) != null) {
-                originalCredential.clear()
-                request.credential.clear()
-                sudoPassword?.fill('\u0000')
-                throw ComputerException(ComputerErrorCodes.COMPUTER_DUPLICATE, "这台 SSH 服务器已经添加过了")
+        var persistenceStarted = false
+        try {
+            addComputerMutex.withLock {
+                if (dao.findActiveSshComputer(endpoint.host, endpoint.port, endpoint.username.orEmpty()) != null) {
+                    throw ComputerException(ComputerErrorCodes.COMPUTER_DUPLICATE, "这台 SSH 服务器已经添加过了")
+                }
+                persistenceStarted = true
+                try {
+                    credentialStore.saveOriginalComputerCredential(computer.id, originalCredential)
+                    credentialStore.saveComputerSudoPassword(computer.id, sudoPassword)
+                    credentialStore.saveComputerCredential(computer.id, request.credential)
+                    dao.upsertComputer(computer.toEntity(json))
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Throwable) {
+                    credentialStore.deleteComputerCredential(computer.id)
+                    credentialStore.deleteOriginalComputerCredential(computer.id)
+                    credentialStore.deleteComputerSudoPassword(computer.id)
+                    throw error
+                }
             }
-            try {
-                credentialStore.saveOriginalComputerCredential(computer.id, originalCredential)
-                credentialStore.saveComputerSudoPassword(computer.id, sudoPassword)
-                credentialStore.saveComputerCredential(computer.id, request.credential)
+
+            return try {
+                dao.updateComputerStatus(computer.id, ComputerStatus.PROBING.name, null)
+                val capabilities = connectionPool.withConnection(computer) { connection ->
+                    onProgress(ComputerSetupStage.INSPECTING_VPS)
+                    probe.probe(connection, computer.port)
+                }
+                computer = computer.copy(
+                    status = ComputerStatus.READY,
+                    capabilities = capabilities,
+                    lastConnectedAt = System.currentTimeMillis(),
+                    lastErrorCode = null,
+                    updatedAt = System.currentTimeMillis(),
+                )
                 dao.upsertComputer(computer.toEntity(json))
-            } catch (error: Throwable) {
-                credentialStore.deleteComputerCredential(computer.id)
-                credentialStore.deleteOriginalComputerCredential(computer.id)
-                credentialStore.deleteComputerSudoPassword(computer.id)
-                request.credential.clear()
-                sudoPassword?.fill('\u0000')
+                onProgress(ComputerSetupStage.SECURING_CONNECTION)
+                computer = tryUpgradeToDedicatedKey(computer)
+                recordAudit(computer.id, "COMPUTER_ADDED", "SUCCESS", null)
+                computer
+            } catch (error: ComputerException) {
+                val status = when (error.code) {
+                    ComputerErrorCodes.HOST_KEY_CHANGED -> ComputerStatus.HOST_KEY_CHANGED
+                    ComputerErrorCodes.AUTH_FAILED, ComputerErrorCodes.PRIVATE_KEY_INVALID -> ComputerStatus.ACTION_REQUIRED
+                    else -> ComputerStatus.ERROR
+                }
+                dao.updateComputerStatus(computer.id, status.name, error.code)
+                recordAudit(computer.id, "COMPUTER_ADDED", "FAILED", error.code)
                 throw error
             }
-        }
-
-        return try {
-            dao.updateComputerStatus(computer.id, ComputerStatus.PROBING.name, null)
-            val capabilities = connectionPool.withConnection(computer) { connection ->
-                onProgress(ComputerSetupStage.INSPECTING_VPS)
-                probe.probe(connection, computer.port)
+        } catch (cancelled: CancellationException) {
+            if (persistenceStarted) withContext(NonCancellable + kotlinx.coroutines.Dispatchers.IO) {
+                connectionPool.disconnect(computer.id)
+                // upsert 可能已经写入但尚未恢复调用方，必须查实际记录而不是本地完成标记。
+                val saved = dao.getComputer(computer.id)
+                if (saved == null) {
+                    credentialStore.deleteComputerCredential(computer.id)
+                    credentialStore.deleteOriginalComputerCredential(computer.id)
+                    credentialStore.deleteComputerSudoPassword(computer.id)
+                } else if (saved.status in setOf(ComputerStatus.AUTHENTICATING.name, ComputerStatus.PROBING.name)) {
+                    dao.updateComputerStatus(computer.id, ComputerStatus.OFFLINE.name, null)
+                }
             }
-            computer = computer.copy(
-                status = ComputerStatus.READY,
-                capabilities = capabilities,
-                lastConnectedAt = System.currentTimeMillis(),
-                lastErrorCode = null,
-                updatedAt = System.currentTimeMillis(),
-            )
-            dao.upsertComputer(computer.toEntity(json))
-            onProgress(ComputerSetupStage.SECURING_CONNECTION)
-            computer = tryUpgradeToDedicatedKey(computer)
-            recordAudit(computer.id, "COMPUTER_ADDED", "SUCCESS", null)
-            computer
-        } catch (error: ComputerException) {
-            val status = when (error.code) {
-                ComputerErrorCodes.HOST_KEY_CHANGED -> ComputerStatus.HOST_KEY_CHANGED
-                ComputerErrorCodes.AUTH_FAILED, ComputerErrorCodes.PRIVATE_KEY_INVALID -> ComputerStatus.ACTION_REQUIRED
-                else -> ComputerStatus.ERROR
-            }
-            dao.updateComputerStatus(computer.id, status.name, error.code)
-            recordAudit(computer.id, "COMPUTER_ADDED", "FAILED", error.code)
-            throw error
+            throw cancelled
+        } finally {
+            originalCredential.clear()
+            request.credential.clear()
+            sudoPassword?.fill('\u0000')
         }
     }
 

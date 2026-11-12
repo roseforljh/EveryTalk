@@ -74,6 +74,10 @@ import com.android.everytalk.ui.screens.settings.SettingsTabMenu
 import com.android.everytalk.util.locale.localizeUiMessage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.collectLatest
@@ -94,6 +98,7 @@ fun ComputerScreen(
     var showTabMenu by remember { mutableStateOf(false) }
     var form by remember { mutableStateOf(ComputerAddFormState()) }
     var isBusy by remember { mutableStateOf(false) }
+    var addJob by remember { mutableStateOf<Job?>(null) }
     var setupStage by remember { mutableStateOf<ComputerSetupStage?>(null) }
     var errorText by remember { mutableStateOf<String?>(null) }
     var prepared by remember { mutableStateOf<PreparedComputerAdd?>(null) }
@@ -112,16 +117,37 @@ fun ComputerScreen(
     }
     val latestPrepared by rememberUpdatedState(prepared)
     val latestCloudflareToken by rememberUpdatedState(cloudflareToken)
+    val latestAddJob by rememberUpdatedState(addJob)
+
+    // 先登记再启动；旧任务取消后的收尾不能重置新表单的忙碌状态。
+    fun launchAddAction(block: suspend CoroutineScope.() -> Unit) {
+        if (isBusy) return
+        isBusy = true
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            try {
+                block()
+            } finally {
+                if (addJob === coroutineContext[Job]) {
+                    addJob = null
+                    setupStage = null
+                    isBusy = false
+                }
+            }
+        }
+        addJob = job
+        job.start()
+    }
+
     LaunchedEffect(Unit) {
         // 这是一次性 StateFlow 回调。consume 会把值清为 null，不能用 collectLatest，
         // 否则清空状态会取消正在进行的 Token 交换。
         CloudflareOAuthCallbackBus.callbacks.collect { uri ->
             if (uri == null) return@collect
-            if (!cloudflareOAuthFlow.ownsCallback(uri, form.id)) return@collect
+            if (!showAddCard || isBusy || !cloudflareOAuthFlow.ownsCallback(uri, form.id)) return@collect
             CloudflareOAuthCallbackBus.consume(uri)
-            isBusy = true
             errorText = null
-            runCatching {
+            launchAddAction {
+                try {
                 val result = cloudflareOAuthFlow.consume(uri, form.id)
                 try {
                     val accounts = withContext(Dispatchers.IO) { viewModel.listCloudflareAccounts(result.accessToken) }
@@ -129,6 +155,7 @@ fun ComputerScreen(
                     val identity = try { withContext(Dispatchers.IO) { viewModel.cloudflareLoginIdentity(result.accessToken) } }
                     catch (cancelled: CancellationException) { throw cancelled }
                     catch (_: Exception) { null }
+                    coroutineContext.ensureActive()
                     cloudflareAccounts = accounts
                     cloudflareToken = CloudflareTokenExchangeResult(
                         result.accessToken.copyOf(), result.refreshToken?.copyOf(), result.scopes, result.expiresInSeconds,
@@ -145,28 +172,54 @@ fun ComputerScreen(
                     result.accessToken.fill('\u0000')
                     result.refreshToken?.fill('\u0000')
                 }
-            }.onFailure { errorText = it.message ?: context.getString(R.string.cloudflare_login_failed) }
-            isBusy = false
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    errorText = error.message ?: context.getString(R.string.cloudflare_login_failed)
+                }
+            }
         }
     }
     ComputerSecureWindowEffect(showAddCard)
 
     DisposableEffect(Unit) {
         onDispose {
-            latestPrepared?.clear()
-            latestCloudflareToken?.accessToken?.fill('\u0000')
-            latestCloudflareToken?.refreshToken?.fill('\u0000')
+            val pending = latestPrepared
+            val token = latestCloudflareToken
+            val job = latestAddJob
+            job?.cancel()
+            // 等阻塞调用结束后再清零，避免认证仍在读取数组。
+            if (job != null) job.invokeOnCompletion {
+                pending?.clear()
+                token?.accessToken?.fill('\u0000')
+                token?.refreshToken?.fill('\u0000')
+            } else {
+                pending?.clear()
+                token?.accessToken?.fill('\u0000')
+                token?.refreshToken?.fill('\u0000')
+            }
         }
     }
 
     fun closeAddCard() {
-        if (isBusy) return
+        val job = addJob
+        val pending = prepared
+        val token = cloudflareToken
+        job?.cancel()
+        if (job != null) job.invokeOnCompletion {
+            pending?.clear()
+            token?.accessToken?.fill('\u0000')
+            token?.refreshToken?.fill('\u0000')
+        } else {
+            pending?.clear()
+            token?.accessToken?.fill('\u0000')
+            token?.refreshToken?.fill('\u0000')
+        }
+        addJob = null
+        isBusy = false
         viewModel.cloudflareOAuthStore.cancel(form.id)
-        cloudflareToken?.accessToken?.fill('\u0000')
-        cloudflareToken?.refreshToken?.fill('\u0000')
         cloudflareToken = null
         cloudflareAccounts = emptyList()
-        prepared?.clear()
         prepared = null
         hostKey = null
         setupStage = null
@@ -215,14 +268,14 @@ fun ComputerScreen(
     )
 
     fun startHostKeyProbe() {
+        if (isBusy) return
         if (form.provider == com.android.everytalk.data.computer.ComputerProvider.CLOUDFLARE) {
             errorText = cloudflareAddError(form)?.let(context::getString)
             if (errorText != null) return
             val token = cloudflareToken ?: run { errorText = context.getString(R.string.cloudflare_sign_in_first); return }
             val account = cloudflareAccounts.firstOrNull { it.id == form.cloudflareAccountId }
                 ?: run { errorText = context.getString(R.string.cloudflare_select_account); return }
-            isBusy = true
-            scope.launch {
+            launchAddAction {
                 try {
                     // 管理器会销毁它接收的 Token。传入副本，保存失败后保留表单内
                     // 尚未过期的 OAuth 结果供重试，避免“界面已登录但 Token 已清零”。
@@ -231,8 +284,11 @@ fun ComputerScreen(
                     viewModel.showSnackbar(context.getString(R.string.cloudflare_computer_added))
                     token.accessToken.fill('\u0000'); token.refreshToken?.fill('\u0000')
                     cloudflareToken = null; showAddCard = false; form = ComputerAddFormState()
-                } catch (error: Throwable) { errorText = error.message ?: context.getString(R.string.cloudflare_save_failed) }
-                finally { isBusy = false }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    errorText = error.message ?: context.getString(R.string.cloudflare_save_failed)
+                }
             }
             return
         }
@@ -246,12 +302,15 @@ fun ComputerScreen(
         prepared = current
         errorText = null
         setupStage = ComputerSetupStage.READING_HOST_KEY
-        isBusy = true
-        scope.launch {
+        launchAddAction {
+            var probeSucceeded = false
             try {
                 hostKey = withContext(Dispatchers.IO) {
                     viewModel.probeComputerHostKey(current.request)
                 }
+                probeSucceeded = true
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (error: Throwable) {
                 ComputerDiagnostics.logFailure(ComputerFailureStage.HOST_KEY_PROBE, error)
                 current.clear()
@@ -260,8 +319,7 @@ fun ComputerScreen(
                     error.message ?: context.getString(R.string.unknown_error),
                 )
             } finally {
-                setupStage = null
-                isBusy = false
+                if (!probeSucceeded) current.clear()
             }
         }
     }
@@ -272,8 +330,7 @@ fun ComputerScreen(
         hostKey = null
         setupStage = ComputerSetupStage.AUTHENTICATING
         errorText = null
-        isBusy = true
-        scope.launch {
+        launchAddAction {
             var addedComputer: com.android.everytalk.data.computer.Computer? = null
             try {
                 val added = withContext(Dispatchers.IO) {
@@ -291,6 +348,8 @@ fun ComputerScreen(
                 errorText = null
                 form = ComputerAddFormState()
                 showAddCard = false
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (error: Throwable) {
                 ComputerDiagnostics.logFailure(ComputerFailureStage.ADD_SERVER, error)
                 val localizedError = context.localizeUiMessage(
@@ -313,8 +372,6 @@ fun ComputerScreen(
             } finally {
                 current.clear()
                 if (prepared === current) prepared = null
-                setupStage = null
-                isBusy = false
             }
         }
     }

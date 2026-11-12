@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.screens.settings
 
+import com.android.everytalk.ui.components.dialog.AppOutlinedButton
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -16,7 +17,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -54,7 +54,7 @@ internal fun ModelCapabilityFields(config: ApiConfig, onChange: (ApiConfig) -> U
     Column(Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(stringResource(R.string.ui_model_capability_io_title), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-            TextButton(onClick = { onChange(config.copy(modelParameters = parameters.copy(inputModalities = null, outputModalities = null, supportsReasoning = null))) }) { Text(stringResource(R.string.ui_model_capability_use_catalog)) }
+            AppOutlinedButton(onClick = { onChange(config.copy(modelParameters = parameters.copy(inputModalities = null, outputModalities = null, supportsReasoning = null))) }) { Text(stringResource(R.string.ui_model_capability_use_catalog)) }
         }
         Text(if (parameters.resolvedCapability?.modalitiesSource == ModelCapabilitySource.COMMUNITY_CATALOG) "models.dev 标准 · 可手动调整" else "自定义模型能力 · 点击刷新从 models.dev 匹配", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         listOf(true, false).forEach { input ->

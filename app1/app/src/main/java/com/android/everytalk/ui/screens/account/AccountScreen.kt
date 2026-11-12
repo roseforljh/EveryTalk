@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.screens.account
 
+import com.android.everytalk.ui.components.dialog.AppOutlinedButton
 import com.android.everytalk.ui.components.ParticlesBackground
 import com.android.everytalk.ui.theme.AppInputFieldShape
 
@@ -141,7 +142,7 @@ internal fun AccountScreen(
                                 AccountAvatar(user.avatarUrl, user.displayName, stringResource(R.string.account_change_avatar),
                                     modifier = Modifier.fillMaxSize())
                             }
-                            TextButton(onClick = { avatarPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                            AppOutlinedButton(onClick = { avatarPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                                 enabled = !state.busy) { Text(stringResource(R.string.account_change_avatar)) }
                             Text(user.displayName, style = MaterialTheme.typography.titleLarge)
                             Text(user.email.orEmpty(), style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
@@ -238,7 +239,7 @@ internal fun AccountScreen(
                         Button(onClick = { manager.verifyEmailCode(code) }, enabled = !state.busy && !state.awaitingOAuth && code.length == 6,
                             modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp), shape = CircleShape,
                             colors = actionColors) { Text(stringResource(R.string.account_verify)) }
-                        TextButton(onClick = { manager.changeEmail() }, enabled = !state.busy && !state.awaitingOAuth) {
+                        AppOutlinedButton(onClick = { manager.changeEmail() }, enabled = !state.busy && !state.awaitingOAuth) {
                             Text(stringResource(R.string.account_change_email))
                         }
                     }
@@ -303,7 +304,7 @@ internal fun AccountScreen(
                                 Text(stringResource(R.string.account_oauth_pending_short),
                                     modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall,
                                     color = colors.onSurfaceVariant)
-                                TextButton(onClick = { manager.cancelOAuthLogin() }, enabled = !state.busy,
+                                AppOutlinedButton(onClick = { manager.cancelOAuthLogin() }, enabled = !state.busy,
                                     colors = ButtonDefaults.textButtonColors(contentColor = colors.onBackground)) {
                                     Text(stringResource(R.string.account_cancel_oauth))
                                 }
@@ -323,7 +324,7 @@ internal fun AccountScreen(
                     state.message?.let { Text(context.localizeUiMessage(it), style = MaterialTheme.typography.bodyMedium) }
                 }
                 if (state.configured && state.user == null && state.pendingEmail == null && !state.awaitingOAuth && state.message != null) {
-                    TextButton(onClick = { manager.refreshAccount() }, enabled = !state.busy) {
+                    AppOutlinedButton(onClick = { manager.refreshAccount() }, enabled = !state.busy) {
                         Text(stringResource(R.string.account_refresh))
                     }
                 }
@@ -393,9 +394,9 @@ internal fun AccountScreen(
         onDismissRequest = { showLogout = false },
         title = { Text(stringResource(R.string.account_logout)) },
         text = { Text(stringResource(R.string.account_logout_notice)) },
-        confirmButton = { TextButton(onClick = { showLogout = false; (onLogout ?: { manager.logout() })() }) {
+        confirmButton = { AppOutlinedButton(onClick = { showLogout = false; (onLogout ?: { manager.logout() })() }) {
             Text(stringResource(R.string.account_logout))
         } },
-        dismissButton = { TextButton(onClick = { showLogout = false }) { Text(stringResource(R.string.account_cancel)) } },
+        dismissButton = { AppOutlinedButton(onClick = { showLogout = false }) { Text(stringResource(R.string.account_cancel)) } },
     )
 }
