@@ -136,10 +136,10 @@ private fun compactStreamToolName(name: String, maxChars: Int = 24): String {
 }
 
 private fun buildToolCallStatus(toolName: String): String {
-    val compactName = compactStreamToolName(toolName)
+    val compactName = compactStreamToolName(com.android.everytalk.data.mcp.McpToolLabels.display(toolName))
     val prefix = when {
-        ComputerToolNames.all.any { it.equals(compactName, ignoreCase = true) } -> "运行 Agent"
-        compactName.contains("mcp", ignoreCase = true) -> "调用MCP"
+        ComputerToolNames.all.any { it.equals(toolName, ignoreCase = true) } -> "运行 Agent"
+        toolName.startsWith("mcp_", ignoreCase = true) -> "调用MCP"
         else -> "调用工具"
     }
     return if (compactName.isBlank()) prefix else "$prefix · $compactName"
@@ -175,9 +175,13 @@ internal fun executionStepForToolCall(
         "action",
     )
     val normalizedName = toolName.lowercase(Locale.ROOT)
+    // 界面显示“服务器 · 工具”，不显示哈希别名；工具搜索不是网页搜索，单独标注查询词。
+    val displayName = if (toolName == com.android.everytalk.data.agent.McpToolDiscovery.NAME && query.isNotBlank()) "$toolName · $query"
+        else com.android.everytalk.data.mcp.McpToolLabels.display(toolName)
     val type = when {
         ComputerToolNames.all.any { it.equals(normalizedName, ignoreCase = true) } ->
             ExecutionStepType.Agent
+        toolName == com.android.everytalk.data.agent.McpToolDiscovery.NAME -> ExecutionStepType.Tool
         query.isNotBlank() || normalizedName.contains("search") || normalizedName.contains("query") ->
             ExecutionStepType.Search
         url.isNotBlank() || normalizedName.contains("fetch") || normalizedName.contains("crawl") ->
@@ -186,9 +190,9 @@ internal fun executionStepForToolCall(
     }
     val labels = buildList {
         when (type) {
-            ExecutionStepType.Search -> add(query.ifBlank { toolName })
-            ExecutionStepType.Web -> add(url.ifBlank { toolName })
-            ExecutionStepType.Tool -> add(toolName)
+            ExecutionStepType.Search -> add(query.ifBlank { displayName })
+            ExecutionStepType.Web -> add(url.ifBlank { displayName })
+            ExecutionStepType.Tool -> add(displayName)
             ExecutionStepType.Agent -> add(agentTarget.ifBlank { toolName })
         }
     }

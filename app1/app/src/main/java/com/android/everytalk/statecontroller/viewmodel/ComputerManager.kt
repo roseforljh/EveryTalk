@@ -647,7 +647,7 @@ class ComputerManager(
                         workspaceId = localWorkspaceId(currentConversationId),
                         permissionMode = ComputerPermissionMode.MANUAL,
                     ),
-                    environmentPrompt = "当前使用 EveryTalk 内置本地 Workspace。local_bash 在临时内存快照中执行，文件变化不会自动保存；用户要求附件时必须使用 local_file_save，获得保存成功结果后才能说附件已发送。在介绍文件的正文位置使用 [文件名](返回的file_link) 提供可点击链接。不能访问系统文件或网络。",
+                    environmentPrompt = "You are using the EveryTalk built-in local Workspace. local_bash runs in a temporary in-memory snapshot and file changes are not saved automatically. When the user wants a file, save it with local_file_save and only say it was sent after a successful result; link it where you describe it as [file name](returned file_link). There is no access to system files or the network.",
                     permissionMode = ComputerPermissionMode.MANUAL,
                     provider = ComputerProvider.SSH,
                     localOnly = true,
@@ -1136,14 +1136,14 @@ internal fun buildComputerEnvironmentPrompt(computer: Computer, workspace: Compu
         ComputerPermissionMode.SMART -> "Where provided, set ask_user_approval to whether this action needs user approval."
         ComputerPermissionMode.FULL -> "All valid Agent operations execute directly without a user approval prompt."
     }
-    if (computer.provider == ComputerProvider.CLOUDFLARE) return "当前目标是 Cloudflare Computer，工具操作当前 Account 的资源。" +
-        "本地 just-bash 使用私有 Workspace 内存快照；local_file_save 保存文件并返回附件。在介绍文件的正文位置使用 [文件名](返回的file_link) 提供可点击链接。$permissionInstruction"
+    if (computer.provider == ComputerProvider.CLOUDFLARE) return "The target is a Cloudflare Computer; tools operate resources in the current account. " +
+        "Local just-bash uses a private in-memory Workspace snapshot; local_file_save saves a file and returns an attachment. Link files where you describe them as [file name](returned file_link). $permissionInstruction"
     return "Agent server tools operate the selected VPS directly over SSH, like a person logged in to it. " +
         "There is no sandbox or app-specific directory; these facts supersede any container or /workspace rules in earlier conversation history. " +
         "For long-running services use the server's own tools (systemd, tmux, nohup). " +
-        "用户需要的交付文件生成后必须调用 download，不能仅返回服务器路径。" +
-        "download 自动保存到手机 Download/App/AppTalk，并返回 saved_path、attachment_id 和 file_link；只有成功后才能告知用户已保存。" +
-        "在介绍每个交付文件的正文位置使用 Markdown 链接 [文件名](file_link的实际值)，不要只写路径或把所有文件堆到回复末尾。" +
+        "After creating a file the user needs, call download instead of only returning a server path. " +
+        "download saves it to the phone under Download/App/AppTalk and returns saved_path, attachment_id and file_link; only tell the user it is saved after success. " +
+        "Link each deliverable where you describe it as a Markdown link [file name](actual file_link), not as a bare path or a pile of links at the end. " +
         "$permissionInstruction " +
         "File, upload and download paths may be absolute or relative to the SSH user's home; exec and terminal start in home, set cwd as needed. " +
         "Architecture: $architecture. Available tools: ${ComputerToolNames.all.sorted().joinToString(", ")}."

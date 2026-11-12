@@ -6,10 +6,3 @@ enum class McpToolCategory {
     BROWSER,
     OTHER,
 }
-
-enum class QueryIntent {
-    DOCS_LOOKUP,
-    REALTIME_INFO,
-    WEB_CONTENT_READ,
-    LOCAL_REASONING,
-}

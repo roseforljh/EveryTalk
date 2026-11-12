@@ -41,6 +41,9 @@ internal fun applyGeneratedConversationTitle(
 
 /** 负责把首条用户问题转换为短会话标题；网络失败时由调用方保留原问题作为标题。 */
 internal object ConversationTitleGenerator {
+    /** 标题兜底最大字符数，能容纳 6 个英文单词，中文标题正常不会触发。 */
+    private const val MAX_TITLE_LENGTH = 32
+
     suspend fun generate(prompt: String, config: ApiConfig): String? {
         val request = ChatRequest(
             messages = listOf(
@@ -52,7 +55,8 @@ internal object ConversationTitleGenerator {
                 SimpleTextApiMessage(
                     id = "conversation-title-user",
                     role = "user",
-                    content = prompt,
+                    // 把原话包成待摘要的数据，避免模型把它当成提问来回答（例如回复"看不见图片"）。
+                    content = "<request>\n$prompt\n</request>",
                 ),
             ),
             provider = config.provider,
@@ -88,7 +92,8 @@ internal object ConversationTitleGenerator {
             .trim('"', '\'', '“', '”', '‘', '’', '`', '*', '#')
             .trim()
         return cleaned.takeIf(String::isNotBlank)?.let {
-            ConversationNameHelper.cleanAndTruncateText(it, 40)
+            // 长度主要由提示词约束（中文 4~12 字，其他语言 2~6 词），这里只做兜底截断。
+            ConversationNameHelper.cleanAndTruncateText(it, MAX_TITLE_LENGTH)
         }
     }
 }

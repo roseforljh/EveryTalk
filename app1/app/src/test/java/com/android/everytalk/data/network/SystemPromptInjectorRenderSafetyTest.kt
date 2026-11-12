@@ -29,18 +29,45 @@ class SystemPromptInjectorRenderSafetyTest {
     }
 
     @Test
-    fun `工具可以连续执行且只在关键进展说明`() {
-        val zhPrompt = SystemPromptInjector.getSystemPrompt("zh-CN")
-        val enPrompt = SystemPromptInjector.getSystemPrompt("en")
-
-        assertTrue(zhPrompt.contains("可以连续完成相关步骤"))
-        assertTrue(zhPrompt.contains("不重复索要已有授权"))
-        assertTrue(enPrompt.contains("Related calls may proceed together"))
-        assertTrue(enPrompt.contains("Reuse existing authorization"))
-        assertFalse(zhPrompt.contains("禁止只连续输出工具调用"))
-        assertFalse(enPrompt.contains("Before each tool call"))
+    fun `回复语言跟随用户最新消息而不是记忆或提示词语言`() {
+        val prompt = SystemPromptInjector.getSystemPrompt()
+        assertTrue(prompt.contains("reply in the language of the user's latest message, whatever language that is"))
+        assertTrue(prompt.contains("Memories, custom instructions, skills, tool results and earlier turns written in other languages do not change this"))
+        // 只有一份规则：首条消息无论什么语言，稳定前缀都一样。
+        assertEquals(
+            SystemPromptInjector.smartInjectSystemPrompt(listOf(SimpleTextApiMessage(role = "user", content = "你好"))).first(),
+            SystemPromptInjector.smartInjectSystemPrompt(listOf(SimpleTextApiMessage(role = "user", content = "こんにちは"))).first(),
+        )
     }
 
+    @Test
+    fun `规则内容覆盖工具Skill安全和Markdown约定`() {
+        val prompt = SystemPromptInjector.getSystemPrompt()
+        listOf(
+            "Related calls may proceed together", "Reuse existing authorization",
+            "load_skill", "read_skill_file", "A Skill catalog is an index", "Skills grant no permissions",
+            "request_agent", "request_user_input", "# AI content safety", "non-consensual intimate",
+            "one row per line", "escaped `\\|`", "code fences on separate lines", "do not backtick or split URLs",
+            "`\$...\$` or standalone `\$\$...\$\$`", "space after heading/list markers", "one item per line", "proper nesting",
+        ).forEach { assertTrue(it, prompt.contains(it)) }
+        assertFalse(prompt.contains("Before each tool call"))
+    }
+
+    @Test
+    fun `打包模块按固定顺序分段组合且与安全策略保持一致`() {
+        fun read(name: String) = checkNotNull(javaClass.getResourceAsStream("/system-prompts/base/$name.md"))
+            .bufferedReader(Charsets.UTF_8).use { it.readText() }.replace("\r\n", "\n").trim()
+        fun tag(name: String, body: String) = "<$name>\n$body\n</$name>"
+        val expected = listOf(
+            SystemPromptInjector.PROTOCOL_MARKER,
+            read("core"),
+            tag("execution", read("execution")),
+            tag("tools", read("tools")),
+            tag("output", read("output")),
+            tag("safety", com.android.everytalk.util.AiContentSafetyPolicy.systemInstruction("en")),
+        ).joinToString("\n\n")
+        assertEquals(expected, SystemPromptInjector.getSystemPrompt())
+    }
 
     @Test
     fun `existing custom system prompt should be merged behind stable EveryTalk prompt`() {
@@ -49,7 +76,7 @@ class SystemPromptInjectorRenderSafetyTest {
             SimpleTextApiMessage(role = "user", content = "解释协程"),
         )
 
-        val result = SystemPromptInjector.injectSystemPrompt(messages, userLanguage = "zh-CN")
+        val result = SystemPromptInjector.injectSystemPrompt(messages)
         val systemMessages = result.filter { it.role == "system" }
 
         assertEquals(1, systemMessages.size)
@@ -60,70 +87,8 @@ class SystemPromptInjectorRenderSafetyTest {
     }
 
     @Test
-    fun `stable prompt should include dynamic skill protocol`() {
-        val prompt = SystemPromptInjector.getSystemPrompt("zh-CN")
-
-        assertTrue(prompt.contains("load_skill"))
-        assertTrue(prompt.contains("read_skill_file"))
-        assertTrue(prompt.contains("Skill 目录只是索引"))
-        assertTrue(prompt.contains("Skill 不授予工具权限"))
-        assertTrue(prompt.contains("request_agent"))
-        assertTrue(prompt.contains("request_user_input"))
-        assertTrue(prompt.contains("# AI 内容安全"))
-        assertTrue(prompt.contains("非自愿私密内容"))
-    }
-
-    @Test
-    fun `保留渲染需要的格式且不强制禁止标准Markdown结构`() {
-        val zhPrompt = SystemPromptInjector.getSystemPrompt("zh-CN")
-        val enPrompt = SystemPromptInjector.getSystemPrompt("en")
-
-        assertTrue(zhPrompt.contains("表格每行独立、列数一致"))
-        assertTrue(zhPrompt.contains("竖线转义为 `\\|`"))
-        assertTrue(zhPrompt.contains("代码围栏独占一行"))
-        assertTrue(zhPrompt.contains("URL 不加反引号、不换行"))
-        assertTrue(zhPrompt.contains("`\$...\$` 或独立行 `\$\$...\$\$`"))
-        assertFalse(zhPrompt.contains("禁止把代码围栏嵌入列表或引用"))
-
-        assertTrue(enPrompt.contains("one row per line"))
-        assertTrue(enPrompt.contains("escaped `\\|`"))
-        assertTrue(enPrompt.contains("code fences on separate lines"))
-        assertTrue(enPrompt.contains("do not backtick or split URLs"))
-        assertTrue(enPrompt.contains("`\$...\$` or standalone `\$\$...\$\$`"))
-    }
-
-    @Test
-    fun `stable prompt should preserve list boundary and nesting contracts`() {
-        val zhPrompt = SystemPromptInjector.getSystemPrompt("zh-CN")
-        val enPrompt = SystemPromptInjector.getSystemPrompt("en")
-
-        assertTrue(zhPrompt.contains("标题和列表标记后留空格"))
-        assertTrue(zhPrompt.contains("每项另起一行"))
-        assertTrue(zhPrompt.contains("嵌套列表正确缩进"))
-
-        assertTrue(enPrompt.contains("space after heading/list markers"))
-        assertTrue(enPrompt.contains("one item per line"))
-        assertTrue(enPrompt.contains("proper nesting"))
-    }
-
-    @Test
-    fun `打包模块按固定顺序组合且与安全策略保持一致`() {
-        listOf("zh-CN", "en", "ja-JP").forEach { language ->
-            val directory = if (language.startsWith("zh")) "zh-CN" else "en"
-            val modules = listOf("core", "execution", "tools", "output").map { name ->
-                val stream = checkNotNull(javaClass.getResourceAsStream("/system-prompts/$directory/$name.md"))
-                stream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-                    .removePrefix("\uFEFF").replace("\r\n", "\n").replace('\r', '\n').trim()
-            }
-            val expected = (listOf(SystemPromptInjector.PROTOCOL_MARKER) + modules +
-                com.android.everytalk.util.AiContentSafetyPolicy.systemInstruction(language)).joinToString("\n\n")
-            assertEquals(expected, SystemPromptInjector.getSystemPrompt(language))
-        }
-    }
-
-    @Test
     fun `升级旧版包装时移除旧规则但保留自定义指令`() {
-        listOf(5, 6).forEach { version ->
+        listOf(5, 6, 7).forEach { version ->
             val oldPrompt = "[EveryTalk Prompt Protocol v$version]\n旧版固定规则"
             listOf("", "\n\n[EveryTalk Custom Instructions]\n请保留我的指令").forEach { custom ->
                 val result = SystemPromptInjector.injectSystemPrompt(listOf(
@@ -142,23 +107,12 @@ class SystemPromptInjectorRenderSafetyTest {
     @Test
     fun `专项提示打包可读且不会混入普通聊天`() {
         val tasks = listOf(SystemPromptModules.historySummary, SystemPromptModules.inputSummary,
-            SystemPromptModules.memoryExtraction, SystemPromptModules.conversationTitle, SystemPromptModules.mcpAccess)
+            SystemPromptModules.conversationMemory, SystemPromptModules.memoryConsolidation, SystemPromptModules.conversationTitle, SystemPromptModules.mcpAccess)
         val ordinary = SystemPromptInjector.getSystemPrompt()
         tasks.forEach { task ->
             assertTrue(task.isNotBlank())
             assertFalse(ordinary.contains(task))
         }
-    }
-
-    @Test
-    fun `stable prompt should stay independent from current question`() {
-        val mathMessages = listOf(SimpleTextApiMessage(role = "user", content = "证明矩阵公式"))
-        val codeMessages = listOf(SimpleTextApiMessage(role = "user", content = "修复 Kotlin 崩溃"))
-
-        val mathSystem = SystemPromptInjector.smartInjectSystemPrompt(mathMessages).first()
-        val codeSystem = SystemPromptInjector.smartInjectSystemPrompt(codeMessages).first()
-
-        assertEquals(mathSystem, codeSystem)
     }
 
     @Test
@@ -175,20 +129,11 @@ class SystemPromptInjectorRenderSafetyTest {
     }
 
     @Test
-    fun `stable prompt should not contain volatile runtime guidance`() {
-        val prompt = SystemPromptInjector.getSystemPrompt("zh-CN")
+    fun `stable prompt should not contain volatile runtime guidance and stay compact`() {
+        val prompt = SystemPromptInjector.getSystemPrompt()
 
-        assertFalse(prompt.contains("当前本地时间"))
-        assertFalse(prompt.contains("时区："))
         assertFalse(prompt.contains("get_current_datetime"))
-    }
-
-    @Test
-    fun `stable prompt should remain compact`() {
-        val zhPrompt = SystemPromptInjector.getSystemPrompt("zh-CN")
-        val enPrompt = SystemPromptInjector.getSystemPrompt("en")
-
-        assertTrue("中文稳定提示词过长: ${zhPrompt.length}", zhPrompt.length <= 2050)
-        assertTrue("英文稳定提示词过长: ${enPrompt.length}", enPrompt.length <= 2600)
+        assertFalse(prompt.contains("local_time"))
+        assertTrue("稳定提示词过长: ${prompt.length}", prompt.length <= 3200)
     }
 }

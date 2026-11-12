@@ -33,10 +33,12 @@ enum class McpOAuthProvider(val key: String, val serverId: String, val displayNa
     CLOUDFLARE("cloudflare", "mcp-cloudflare", "Cloudflare", "https://mcp.cloudflare.com/mcp"),
     NOTION("notion", "mcp-notion", "Notion", "https://mcp.notion.com/mcp"),
     GMAIL("gmail", "mcp-gmail", "Gmail", "https://oauth.everytalk.cc/mcp/gmail"),
-    MICROSOFT("microsoft", "mcp-microsoft", "微软邮箱", "https://oauth.everytalk.cc/mcp/microsoft");
+    MICROSOFT("microsoft", "mcp-microsoft", "微软邮箱", "https://oauth.everytalk.cc/mcp/microsoft"),
+    // 登录只为换取用户自己的 API Key，换到后交给 McpKeyProvider.PARALLEL 使用；此 ID 不会落库，也不显示为单独一行。
+    PARALLEL("parallel", "mcp-parallel-login", "Parallel", "https://mcp.parallel.ai/mcp?login");
 
-    // Notion 直接接受原生回调；Gmail 通过 ET Worker 交换 client secret 并转发回调。
-    val redirectUri: String get() = if (this == NOTION) appRedirectUri else "https://oauth.everytalk.cc/oauth/mcp/$key"
+    // Notion、Parallel 直接接受原生回调；Gmail 通过 ET Worker 交换 client secret 并转发回调。
+    val redirectUri: String get() = if (this == NOTION || this == PARALLEL) appRedirectUri else "https://oauth.everytalk.cc/oauth/mcp/$key"
     val appRedirectUri: String get() = "${mcpOAuthScheme()}://oauth/mcp/$key"
     val authorizationOrigin: String get() = when (this) {
         GITHUB -> "https://github.com"
@@ -44,7 +46,10 @@ enum class McpOAuthProvider(val key: String, val serverId: String, val displayNa
         NOTION -> "https://mcp.notion.com"
         GMAIL -> "https://accounts.google.com"
         MICROSOFT -> "https://login.microsoftonline.com"
+        PARALLEL -> "https://platform.parallel.ai"
     }
+    /** authorize/register/token 所在目录；Parallel 的授权端点在 /getKeys 下。 */
+    internal val oauthBase: String get() = if (this == PARALLEL) "$authorizationOrigin/getKeys" else authorizationOrigin
     fun defaultConfig(): McpServerConfig = McpServerConfig.StreamableHTTPServer(
         id = serverId,
         url = endpoint,
@@ -158,7 +163,7 @@ class McpOAuthManager(
             McpOAuthProvider.GITHUB -> githubClientId.also {
                 require(it.isNotBlank()) { "GitHub MCP OAuth Client ID 未配置" }
             }
-            McpOAuthProvider.CLOUDFLARE, McpOAuthProvider.NOTION -> registerPublicClient(provider)
+            McpOAuthProvider.CLOUDFLARE, McpOAuthProvider.NOTION, McpOAuthProvider.PARALLEL -> registerPublicClient(provider)
             McpOAuthProvider.GMAIL -> gmailClientId.also {
                 require(it.isNotBlank()) { "Gmail MCP OAuth Client ID 未配置" }
             }
@@ -193,12 +198,13 @@ class McpOAuthManager(
                 params["prompt"] = "consent"
             } else {
                 params["resource"] = provider.endpoint
+                if (provider == McpOAuthProvider.PARALLEL) params["scope"] = "key:read"
             }
         }
         val endpoint = if (provider == McpOAuthProvider.GITHUB) "https://github.com/login/oauth/authorize"
             else if (provider == McpOAuthProvider.GMAIL) "https://accounts.google.com/o/oauth2/v2/auth"
             else if (provider == McpOAuthProvider.MICROSOFT) "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
-            else "${provider.authorizationOrigin}/authorize"
+            else "${provider.oauthBase}/authorize"
         endpoint + "?" + params.entries.joinToString("&") { "${encode(it.key)}=${encode(it.value)}" }
     }
 
@@ -280,18 +286,18 @@ class McpOAuthManager(
             put("response_types", JsonArray(listOf(JsonPrimitive("code"))))
             put("token_endpoint_auth_method", "none")
         }
-        val payload = post("${provider.authorizationOrigin}/register", body.toString(), ContentType.Application.Json)
+        val payload = post("${provider.oauthBase}/register", body.toString(), ContentType.Application.Json)
         return payload["client_id"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
             ?: error("${provider.displayName} MCP 客户端注册失败")
     }
 
     private suspend fun exchange(provider: McpOAuthProvider, clientId: String, parameters: Parameters): McpAuthorizationSecret {
         val endpoint = if (provider in setOf(McpOAuthProvider.GITHUB, McpOAuthProvider.GMAIL, McpOAuthProvider.MICROSOFT))
-            "https://oauth.everytalk.cc/oauth/mcp/${provider.key}/token" else "${provider.authorizationOrigin}/token"
+            "https://oauth.everytalk.cc/oauth/mcp/${provider.key}/token" else "${provider.oauthBase}/token"
         val form = FormDataContent(Parameters.build {
             appendAll(parameters)
             append("client_id", clientId)
-            if (provider == McpOAuthProvider.CLOUDFLARE || provider == McpOAuthProvider.NOTION) {
+            if (provider == McpOAuthProvider.CLOUDFLARE || provider == McpOAuthProvider.NOTION || provider == McpOAuthProvider.PARALLEL) {
                 append("resource", provider.endpoint)
             }
         })

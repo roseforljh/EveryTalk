@@ -34,9 +34,6 @@ import com.android.everytalk.data.computer.PreparedComputerRequest
 import com.android.everytalk.data.network.ExternalWebSearchProvider
 import com.android.everytalk.data.network.MAX_ATTACHMENT_PAGE_CHARS
 import com.android.everytalk.statecontroller.mcp.dispatch.McpToolCandidate
-import com.android.everytalk.statecontroller.mcp.dispatch.QueryIntent
-import com.android.everytalk.statecontroller.mcp.dispatch.classifyMcpIntent
-import com.android.everytalk.statecontroller.mcp.dispatch.selectMcpCandidates
 import com.android.everytalk.statecontroller.mcp.dispatch.toToolDefinition
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
 import kotlinx.coroutines.CancellationException
@@ -108,7 +105,7 @@ internal fun builtInWebFetchToolDefinition(): Map<String, Any> {
         "type" to "function",
         "function" to mapOf(
             "name" to BUILT_IN_WEBFETCH_TOOL_NAME,
-            "description" to "读取网页正文及图片，或将网络图片作为视觉输入返回。已知是图片但无扩展名时指定 format=image；描述画面需以成功返回的视觉内容为依据。",
+            "description" to "Read a web page's text and images, or return a web image as visual input. Use format=image for an image URL without an extension; describe images only from successfully returned visual content.",
             "parameters" to mapOf(
                 "type" to "object",
                 "properties" to mapOf(
@@ -123,7 +120,7 @@ internal fun builtInWebFetchToolDefinition(): Map<String, Any> {
                     "format" to mapOf(
                         "type" to "string",
                         "enum" to listOf("auto", "image"),
-                        "description" to "默认 auto 自动识别常见图片直链；已知是图片但无扩展名时使用 image，直接下载为视觉输入。"
+                        "description" to "auto (default) detects common direct image links; use image for a known image without an extension to download it as visual input."
                     )
                 ),
                 "required" to listOf("url")
@@ -208,35 +205,31 @@ internal data class AttachmentProcessingResult(
 )
 
 data class PreparedMcpDispatch(
-    val intent: QueryIntent,
     val tools: List<Map<String, Any>>,
+    /** 延迟加载的 MCP 服务器目录；没有延迟服务器时为 null。 */
+    val serverCatalog: String? = null,
 )
 
+/**
+ * 不按关键词猜意图：工具全部交给 Agent 层按服务器分级声明，小服务器直接可见，
+ * 大服务器只在系统提示里列一行，由模型用 tool_search 按需加载（参考 Pi 的 deferred exposure）。
+ */
 internal fun prepareMcpDispatch(
-    messageText: String,
     allCandidates: List<McpToolCandidate>,
     enabled: Boolean = true,
 ): PreparedMcpDispatch {
-    val intent = classifyMcpIntent(messageText)
-    // 明确给出网址时，网页内容读取必须先交给内置 webfetch。
-    // 如果把 MCP 浏览器工具同时暴露给模型，模型可能直接选择 MCP，绕过
-    // 内置抓取。内置 webfetch 失败时仍会通过执行层的 fallback 使用这些候选。
-    val candidates = if (intent == QueryIntent.WEB_CONTENT_READ) {
-        emptyList()
-    } else {
-        selectMcpCandidates(intent, allCandidates)
-    }
+    val candidates = allCandidates.filter { it.enabled }.distinctBy { it.toolName }
+    if (candidates.isEmpty()) return PreparedMcpDispatch(emptyList())
     // 感知与执行权限分离：关闭时只提供带能力目录的申请工具，不提供外部工具的执行接口。
-    val tools = if (enabled) candidates.map { it.toToolDefinition() }
-    else if (candidates.isNotEmpty()) listOf(
+    if (!enabled) return PreparedMcpDispatch(listOf(
         com.android.everytalk.data.agent.mcpRequestToolDefinition(
-            candidates.joinToString("\n") { "- ${it.toolName}: ${it.description.take(300)}" },
+            candidates.joinToString("\n") { "- ${it.toolName}: ${com.android.everytalk.data.agent.McpToolDiscovery.tagServer(it.server, it.description).take(300)}" },
         ),
-    ) else emptyList()
-    return PreparedMcpDispatch(
-        intent = intent,
-        tools = tools,
-    )
+    ))
+    val tools = candidates.map { it.toToolDefinition() }
+    val instructions = candidates.filter { !it.serverInstructions.isNullOrBlank() }
+        .associate { it.server to it.serverInstructions.orEmpty() }
+    return PreparedMcpDispatch(tools, com.android.everytalk.data.agent.McpToolDiscovery.serverCatalog(tools, instructions))
 }
 
 /**
@@ -281,22 +274,22 @@ internal fun builtInReadAttachmentToolDefinition(): Map<String, Any> = mapOf(
     "type" to "function",
     "function" to mapOf(
         "name" to BUILT_IN_READ_ATTACHMENT_TOOL_NAME,
-        "description" to "分页读取当前会话中的文本附件，使用返回的 next_offset 继续读取。",
+        "description" to "Read a text attachment of this conversation page by page; continue with the returned next_offset.",
         "parameters" to mapOf(
             "type" to "object",
             "properties" to mapOf(
                 "attachment_id" to mapOf(
                     "type" to "string",
-                    "description" to "附件清单中的 attachment_id。",
+                    "description" to "attachment_id from the attachment list.",
                 ),
                 "offset" to mapOf(
                     "type" to "integer",
-                    "description" to "从返回的 next_offset 继续读取，首次读取传 0。",
+                    "description" to "Continue from the returned next_offset; use 0 for the first page.",
                     "minimum" to 0,
                 ),
                 "max_chars" to mapOf(
                     "type" to "integer",
-                    "description" to "本页最多返回字符数。",
+                    "description" to "Maximum characters for this page.",
                     "minimum" to 1,
                     "maximum" to MAX_ATTACHMENT_PAGE_CHARS,
                 ),
@@ -363,7 +356,7 @@ internal fun appendLocalBashTool(
             "type" to "function",
             "function" to mapOf(
                 "name" to "local_bash",
-                "description" to "在当前 App 私有 Workspace 的临时内存快照中执行受限 Bash 命令；不能访问系统文件或网络。命令产生的文件变化不会自动保存，需要保存时使用 local_file_save。",
+                "description" to "Run a restricted Bash command in a temporary in-memory snapshot of the app's private Workspace, without system files or network. File changes are not saved automatically; use local_file_save to keep them.",
                 "parameters" to mapOf(
                     "type" to "object",
                     "properties" to mapOf(
@@ -380,7 +373,7 @@ internal fun appendLocalBashTool(
             "type" to "function",
             "function" to mapOf(
                 "name" to ComputerToolNames.LOCAL_FILE_SAVE,
-                "description" to "经用户确认后保存文本文件到当前本地 Workspace，并返回可打开的文件引用。",
+                "description" to "Save a text file to the current local Workspace after user confirmation and return an openable file reference.",
                 "parameters" to mapOf("type" to "object", "properties" to mapOf(
                     "path" to mapOf("type" to "string"), "content" to mapOf("type" to "string")),
                     "required" to listOf("path", "content")),

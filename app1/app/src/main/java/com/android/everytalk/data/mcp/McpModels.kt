@@ -20,20 +20,34 @@ enum class McpKeyProvider(
     private val keyPrefix: String = "",
     /** 与联网搜索共用同一个 Key 的搜索服务 ID。 */
     val webSearchProviderId: String? = null,
+    private val anonymousUrl: String? = null,
 ) {
-    FIRECRAWL("mcp-firecrawl", "Firecrawl", "https://mcp.firecrawl.dev/{API_KEY}/v2/mcp", true, "https://www.firecrawl.dev/app/api-keys"),
-    EXA("mcp-exa", "Exa", "https://mcp.exa.ai/mcp?exaApiKey={API_KEY}&tools=web_search_exa,get_code_context_exa", true, "https://dashboard.exa.ai/api-keys", webSearchProviderId = "exa"),
+    // Bearer 同时接受 API Key 和账号登录换到的令牌。
+    PARALLEL("mcp-parallel", "Parallel", "https://mcp.parallel.ai/mcp", false, "https://platform.parallel.ai", "Authorization", keyPrefix = "Bearer "),
+    FIRECRAWL("mcp-firecrawl", "Firecrawl", "https://mcp.firecrawl.dev/{API_KEY}/v2/mcp", false, "https://www.firecrawl.dev/app/api-keys", anonymousUrl = "https://mcp.firecrawl.dev/v2/mcp"),
+    EXA("mcp-exa", "Exa", "https://mcp.exa.ai/mcp?exaApiKey={API_KEY}", false, "https://dashboard.exa.ai/api-keys", webSearchProviderId = "exa", anonymousUrl = "https://mcp.exa.ai/mcp"),
+    BRIGHT_DATA("mcp-brightdata", "Bright Data", "https://mcp.brightdata.com/mcp?token={API_KEY}", true, "https://brightdata.com/cp/setting/users"),
     TAVILY("mcp-tavily", "Tavily", "https://mcp.tavily.com/mcp/?tavilyApiKey={API_KEY}", true, "https://app.tavily.com/home", webSearchProviderId = "tavily"),
     JINA("mcp-jina", "Jina Reader", "https://mcp.jina.ai/v1", false, "https://jina.ai/api-dashboard/", "Authorization", keyPrefix = "Bearer "),
     CONTEXT7("mcp-context7", "Context7", "https://mcp.context7.com/mcp", false, "https://context7.com/dashboard", "CONTEXT7_API_KEY");
 
     /** 旧版本用随机 ID 添加过的同一服务也算已接入，不再显示内置行。 */
     fun matches(config: McpServerConfig): Boolean =
-        config.id == serverId || config.url.startsWith(urlTemplate.substringBefore("{API_KEY}"))
+        config.id == serverId || config.url == anonymousUrl ||
+            config.url.startsWith(urlTemplate.substringBefore("{API_KEY}"))
+
+    /** 从已保存的配置取回当前 Key，编辑时回填；匿名连接返回空。 */
+    fun keyOf(config: McpServerConfig): String = when {
+        keyHeader != null -> config.commonOptions.headers.firstOrNull { it.first == keyHeader }?.second?.removePrefix(keyPrefix).orEmpty()
+        config.url == anonymousUrl -> ""
+        else -> config.url.removePrefix(urlTemplate.substringBefore("{API_KEY}")).removeSuffix(urlTemplate.substringAfter("{API_KEY}"))
+    }
 
     fun config(apiKey: String): McpServerConfig {
         val key = apiKey.trim()
-        val url = if (keyHeader == null) urlTemplate.replace("{API_KEY}", key) else urlTemplate
+        // 匿名端点不带空 Key：Firecrawl 的路径和 Exa 的查询参数都不能留空占位。
+        val url = if (key.isEmpty() && anonymousUrl != null) anonymousUrl
+        else if (keyHeader == null) urlTemplate.replace("{API_KEY}", key) else urlTemplate
         val headers = if (keyHeader != null && key.isNotEmpty()) listOf(keyHeader to keyPrefix + key) else emptyList()
         return McpServerConfig.StreamableHTTPServer(serverId, McpCommonOptions(name = displayName, headers = headers), url)
     }
@@ -133,5 +147,7 @@ data class McpServerState(
     val config: McpServerConfig,
     val status: McpStatus = McpStatus.Idle,
     val tools: List<McpTool> = emptyList(),
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    /** 服务器 initialize 返回的说明，用于向模型介绍延迟加载的服务。 */
+    val instructions: String? = null,
 )

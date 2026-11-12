@@ -8,18 +8,9 @@ import org.junit.Test
 class MessageSenderMcpGuidanceTest {
 
     @Test
-    fun `docs request prioritizes docs without removing other tools`() {
-        val tools = prepareMcpDispatch(
-            messageText = "Room 2.8 migration 怎么写",
+    fun `所有工具都交给分级声明，描述带服务器名，不按关键词删减`() {
+        val prepared = prepareMcpDispatch(
             allCandidates = listOf(
-                com.android.everytalk.statecontroller.mcp.dispatch.toMcpToolCandidate(
-                    serverName = "Context7",
-                    tool = com.android.everytalk.data.mcp.McpTool("query-docs", "Query docs")
-                ),
-                com.android.everytalk.statecontroller.mcp.dispatch.toMcpToolCandidate(
-                    serverName = "Exa",
-                    tool = com.android.everytalk.data.mcp.McpTool("web_search_exa", "Search web")
-                ),
                 com.android.everytalk.statecontroller.mcp.dispatch.toMcpToolCandidate(
                     serverName = "Firecrawl",
                     tool = com.android.everytalk.data.mcp.McpTool("crawl_page", "Read page")
@@ -29,17 +20,17 @@ class MessageSenderMcpGuidanceTest {
                     tool = com.android.everytalk.data.mcp.McpTool("internal-service-call", "Business service")
                 )
             )
-        ).tools
+        )
 
-        val names = tools.map { functionDef -> ((functionDef["function"] as Map<*, *>)["name"] as String) }
-        assertEquals(listOf("query-docs", "web_search_exa"), names.take(2))
-        assertTrue("internal-service-call" in names)
+        val functions = prepared.tools.map { it["function"] as Map<*, *> }
+        assertEquals(listOf("crawl_page", "internal-service-call"), functions.map { it["name"] })
+        assertEquals("[Firecrawl] Read page", functions.first()["description"])
+        assertEquals(null, prepared.serverCatalog)
     }
 
     @Test
     fun `general request keeps enabled custom mcp tools available`() {
         val tools = prepareMcpDispatch(
-            messageText = "帮我创建一个客户工单",
             allCandidates = listOf(
                 com.android.everytalk.statecontroller.mcp.dispatch.toMcpToolCandidate(
                     serverName = "InternalService",
@@ -52,24 +43,8 @@ class MessageSenderMcpGuidanceTest {
     }
 
     @Test
-    fun `url request hides mcp browser tools so built in webfetch is selected first`() {
-        val tools = prepareMcpDispatch(
-            messageText = "请总结 https://example.com 的内容",
-            allCandidates = listOf(
-                com.android.everytalk.statecontroller.mcp.dispatch.toMcpToolCandidate(
-                    serverName = "Firecrawl",
-                    tool = com.android.everytalk.data.mcp.McpTool("crawl_page", "Read page"),
-                ),
-            ),
-        ).tools
-
-        assertTrue(tools.isEmpty())
-    }
-
-    @Test
     fun `disabled mcp exposes an approval tool and capability catalog instead of external tools`() {
         val tools = prepareMcpDispatch(
-            messageText = "帮我创建一个客户工单",
             allCandidates = listOf(
                 com.android.everytalk.statecontroller.mcp.dispatch.toMcpToolCandidate(
                     serverName = "InternalService",
@@ -89,7 +64,6 @@ class MessageSenderMcpGuidanceTest {
     @Test
     fun `disabled mcp adds mandatory approval guidance to the system prompt`() {
         val requestTool = prepareMcpDispatch(
-            messageText = "查看我的邮箱",
             allCandidates = listOf(
                 com.android.everytalk.statecontroller.mcp.dispatch.toMcpToolCandidate(
                     serverName = "Gmail",
@@ -101,7 +75,7 @@ class MessageSenderMcpGuidanceTest {
 
         val guidance = requireNotNull(mcpApprovalSystemPrompt(mcpEnabled = false, mcpTools = requestTool))
         assertTrue(guidance.contains("request_mcp"))
-        assertTrue(guidance.contains("等待用户批准"))
+        assertTrue(guidance.contains("wait for the user's approval"))
         assertTrue(mcpApprovalSystemPrompt(mcpEnabled = true, mcpTools = requestTool) == null)
     }
 

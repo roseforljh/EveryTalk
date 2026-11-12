@@ -1,0 +1,1725 @@
+[
+{
+"server": "Parallel",
+"name": "web_search",
+"description": "Purpose: Perform web searches and return\nLLM-friendly results, including excerpts that are usually sufficient to\nanswer directly without a follow-up fetch.\n\nIdeal Use Cases:\n- Answering questions that require fresh or current information\n- Research, comparison, documentation, and troubleshooting questions\n- Broad tasks where multiple `search_queries` can be issued in a single call\n\nFor multiple independent objectives, make one web_search call per objective\nconcurrently. Put related query variations for the same objective in a single\ncall's search_queries list.\n",
+"params": [
+"client_model",
+"objective",
+"search_queries",
+"session_id"
+]
+},
+{
+"server": "Parallel",
+"name": "web_fetch",
+"description": "Purpose: Fetch and extract relevant content\nfrom specific web URLs. Use only when web_search excerpts are insufficient\nfor the task at hand.\n\nIdeal Use Cases:\n- The user asked about a specific URL or page\n- You need exact wording or quotes that excerpts may have truncated\n- You need full-page analysis (long article, document, or page structure)\n- web_search excerpts are conflicting or clearly insufficient to answer\n\nFor multiple independent extraction objectives, make separate web_fetch calls\nconcurrently. Put related URLs that share one objective in a single call.\n",
+"params": [
+"allow_live_fetch",
+"client_model",
+"full_content",
+"objective",
+"search_queries",
+"session_id",
+"urls"
+]
+},
+{
+"server": "Parallel",
+"name": "web_decisions",
+"description": "\nAnswer typed questions about a subject using current web evidence. Call this\nonly when the user asks for web_decisions or Parallel Decisions by name, or asks\nfor a probability, a pick among options they give, or a score on a scale they\ngive. For other questions, including yes/no facts, use web_search; if this tool\nseems a better fit, suggest it to the user instead of calling it. Describe the\nsubject in `state` as JSON, for example {\"company\": \"Acme\"}. Name each question\nin `questions`; its answer comes back under the same name, with call-level\ncitations. Question types:\n- noul: the probabilit",
+"params": [
+"advanced_settings",
+"questions",
+"state"
+]
+},
+{
+"server": "Parallel",
+"name": "find_verticals",
+"description": "\nFind specialized data sources (verticals) for a request, beyond web search:\npreprints (bioRxiv, medRxiv), bioactive compounds (ChEMBL), clinical trials (ClinicalTrials.gov), Medicare national coverage (CMS), US healthcare providers (NPI Registry), biomedical literature (PubMed) and places and local businesses. Returns every vertical you can use, best match first, with its id and\nprice per call in US dollars, by `mode` when it has one. The best matches also\ncarry their full description and input schema. Then call search_vertical with an\nid and arguments that match its input schema. If no verti",
+"params": [
+"objective"
+]
+},
+{
+"server": "Parallel",
+"name": "search_vertical",
+"description": "\nQuery one vertical by its id from find_verticals, such as\n`pubmed.search_articles` or `clinical_trials.search_trials`. `arguments` must\nmatch the vertical's input schema. Returns the source's records and citations.\n",
+"params": [
+"arguments",
+"id"
+]
+},
+{
+"server": "Parallel",
+"name": "image_search",
+"description": "Find images on the web. Returns direct image URLs with the\npage each appears on, its title, and pixel dimensions when known. Results link to\nimages; they do not describe them. Use web_search for information about a\nsubject.",
+"params": [
+"client_model",
+"mode",
+"objective",
+"search_queries",
+"session_id"
+]
+},
+{
+"server": "Parallel",
+"name": "send_feedback",
+"description": "Report a problem with Parallel to the Parallel team. Use it when, while\nworking with Parallel, you see any of these:\n- A Parallel tool returned an error you didn't cause: a 5xx, a timeout, or a\n  rate limit you didn't expect.\n- Results were wrong, irrelevant, stale or missing something you know exists:\n  a wrong date or number, an excerpt the page doesn't support, an empty fetch of\n  a page that has content.\n- Parallel's docs, tool descriptions and behavior disagree, or you couldn't work\n  out how to call a tool.\n- An evaluation, benchmark or comparison you ran shows Parallel doing worse than\n",
+"params": [
+"actual",
+"category",
+"examples",
+"expected",
+"message",
+"product",
+"severity"
+]
+},
+{
+"server": "Firecrawl",
+"name": "firecrawl_scrape",
+"description": "\nScrape one URL and return its content: markdown by default, or HTML, links, screenshots, branding data, or a targeted answer. Use it when the request identifies a page and needs its content or defined fields: the user gives a URL or names a page or PDF and wants it read or summarized, or wants prices, specs, contact details or a table from it. Use `firecrawl_search` when additional web sources are needed; on an authenticated session, `firecrawl_map` lists a site's URLs and `firecrawl_crawl` collects a set of pages. `url` may omit the scheme (`example.com/page`); it is read as https.\n\nFirecraw",
+"params": [
+"alexandria",
+"conversationId",
+"domainTools",
+"excludeTags",
+"formats",
+"includeTags",
+"location",
+"lockdown",
+"maxAge",
+"mobile",
+"objective",
+"onlyMainContent",
+"parsers",
+"pdfOptions",
+"profile",
+"proxy",
+"queryOptions",
+"redactPII",
+"removeBase64Images",
+"requestId",
+"screenshotOptions",
+"skipTlsVerification",
+"storeInCache",
+"timeout",
+"toolDetail",
+"url",
+"waitFor",
+"zeroDataRetention"
+]
+},
+{
+"server": "Firecrawl",
+"name": "firecrawl_search",
+"description": "\nUse this when you need current or specific information from the web: recent events, latest releases and versions, prices, people and companies, statistics, or any fact that may have changed since your training data or that you are not sure of. Returns ranked results with query-relevant highlights; each web result is a title, URL, and description. Operators include quoted phrases, `-term`, `site:host`, `inurl:term`, `intitle:term`, and `related:host`; the set is non-exhaustive. `includeDomains` and `excludeDomains` are mutually exclusive hostname filters; categories limit result types to `rese",
+"params": [
+"categories",
+"conversationId",
+"domainTools",
+"enterprise",
+"excludeDomains",
+"filter",
+"highlights",
+"includeDomains",
+"limit",
+"location",
+"objective",
+"query",
+"scrapeOptions",
+"sources",
+"tbs",
+"toolDetail"
+]
+},
+{
+"server": "Firecrawl",
+"name": "firecrawl_parse",
+"description": "\nParse one supported document into markdown, HTML, links, summary, targeted answers, or JSON matching a schema. Supported inputs include common HTML, PDF, Word, RTF, OpenDocument, and spreadsheet files; PDF parsing can be bounded with `pdfOptions.maxPages`.\n\nLocal MCP reads `filePath` from the server filesystem. Hosted MCP uses two calls: first provide `filePath` to receive upload instructions, upload locally, then call again with the returned `uploadRef`; do not send both fields together. Remote web URLs belong in `firecrawl_scrape`.\n\nSet `redactPII` to request redaction of personally identif",
+"params": [
+"contentType",
+"conversationId",
+"declaredSizeBytes",
+"excludeTags",
+"filePath",
+"formats",
+"includeTags",
+"jsonOptions",
+"maxAge",
+"onlyMainContent",
+"parsers",
+"pdfOptions",
+"proxy",
+"queryOptions",
+"redactPII",
+"removeBase64Images",
+"skipTlsVerification",
+"storeInCache",
+"uploadRef",
+"zeroDataRetention"
+]
+},
+{
+"server": "Exa",
+"name": "web_search_exa",
+"description": "Search the web for any topic and get clean, ready-to-use content.\n\n      Best for: Finding current information, news, facts, people, companies, or answering questions about any topic.\n      Returns: Clean text content from top search results.\n\n      Query tips:\n      describe the ideal page, not keywords. \"blog post comparing React and Vue performance\" not \"React vs Vue\".\n      Use category:people / category:company to search through Linkedin profiles / companies respectively.\n      If highlights are insufficient, follow up with web_fetch_exa on the best URLs.",
+"params": [
+"numResults",
+"objective",
+"query"
+]
+},
+{
+"server": "Exa",
+"name": "web_fetch_exa",
+"description": "Read a webpage's full content as clean markdown. Use after web_search_exa when highlights are insufficient or to read any URL.\n\nBest for: Extracting full content from known URLs. Batch multiple URLs in one call.\nReturns: Clean text content and metadata from the page(s).",
+"params": [
+"maxCharacters",
+"urls"
+]
+},
+{
+"server": "Jina Reader",
+"name": "primer",
+"description": "Current time, user location and network environment for the session. Use before answering anything time- or location-dependent.",
+"params": []
+},
+{
+"server": "Jina Reader",
+"name": "guess_datetime_url",
+"description": "Guess when a page was published or last updated, with a confidence score. Checks HTTP headers, metadata, Schema.org, visible dates, feeds and sitemaps.",
+"params": [
+"url"
+]
+},
+{
+"server": "Jina Reader",
+"name": "capture_screenshot_url",
+"description": "Screenshot a page as base64 JPEG. Use when the page must be seen rather than read.",
+"params": [
+"firstScreenOnly",
+"return_url",
+"url"
+]
+},
+{
+"server": "Jina Reader",
+"name": "read_url",
+"description": "Fetch a URL (page or PDF) as clean markdown. Pass `question` to get only the passages answering it instead of the whole page - far cheaper than reading the full body into context.",
+"params": [
+"chunk_size",
+"ocr",
+"page",
+"question",
+"topk",
+"url",
+"withAllImages",
+"withAllLinks"
+]
+},
+{
+"server": "Jina Reader",
+"name": "search_web",
+"description": "Search the web. Returns titles, URLs and search-engine snippets.",
+"params": [
+"gl",
+"hl",
+"location",
+"num",
+"query",
+"tbs"
+]
+},
+{
+"server": "Jina Reader",
+"name": "search_arxiv",
+"description": "Search arXiv preprints (physics, maths, CS, quantitative biology and finance).",
+"params": [
+"num",
+"query",
+"tbs"
+]
+},
+{
+"server": "Jina Reader",
+"name": "search_ssrn",
+"description": "Search SSRN working papers (social science, economics, law, finance, management).",
+"params": [
+"num",
+"query",
+"tbs"
+]
+},
+{
+"server": "Jina Reader",
+"name": "search_jina_blog",
+"description": "Search Jina AI's news and blog at jina.ai/news: product announcements, model releases, technical write-ups.",
+"params": [
+"num",
+"query",
+"tbs"
+]
+},
+{
+"server": "Jina Reader",
+"name": "search_images",
+"description": "Search the web for images. Returns base64 JPEGs by default.",
+"params": [
+"gl",
+"hl",
+"location",
+"num",
+"query",
+"return_url",
+"tbs"
+]
+},
+{
+"server": "Jina Reader",
+"name": "sort_by_relevance",
+"description": "Rerank documents by relevance to a query, using Jina Reranker.",
+"params": [
+"documents",
+"query",
+"top_n"
+]
+},
+{
+"server": "Jina Reader",
+"name": "deduplicate_strings",
+"description": "Select the top-k semantically distinct strings from a list, dropping near-duplicates.",
+"params": [
+"k",
+"strings"
+]
+},
+{
+"server": "Jina Reader",
+"name": "extract_pdf",
+"description": "Extract figures, tables and equations from a PDF as images, by arXiv id or URL.",
+"params": [
+"id",
+"max_edge",
+"type",
+"url"
+]
+},
+{
+"server": "Context7",
+"name": "resolve-library-id",
+"description": "Resolves a package/product name to a Context7-compatible library ID and returns matching libraries.\n\nYou MUST call this function before 'Query Documentation' tool to obtain a valid Context7-compatible library ID UNLESS the user explicitly provides a library ID in the format '/org/project' or '/org/project/version' in their query.\n\nEach result includes:\n- Library ID: Context7-compatible identifier (format: /org/project)\n- Name: Library or package name\n- Description: Short summary\n- Code Snippets: Number of available code examples\n- Source Reputation: Authority indicator (High, Medium, Low, or U",
+"params": [
+"libraryName",
+"query"
+]
+},
+{
+"server": "Context7",
+"name": "query-docs",
+"description": "Retrieves and queries up-to-date documentation and code examples from Context7 for any programming library or framework.\n\nYou must call 'Resolve Context7 Library ID' tool first to obtain the exact Context7-compatible library ID required to use this tool, UNLESS the user explicitly provides a library ID in the format '/org/project' or '/org/project/version' in their query.\n\nDo not call this tool more than 3 times per question.\n\nIf you know the programming language the user is working in, pass it as `language` so the results match their setup.",
+"params": [
+"language",
+"libraryId",
+"query"
+]
+},
+{
+"server": "GitHub",
+"name": "actions_get",
+"description": "Get details about specific GitHub Actions resources.\nUse this tool to get details about individual workflows, workflow runs, jobs, and artifacts by their unique IDs.\n",
+"params": [
+"method",
+"owner",
+"repo",
+"resource_id"
+]
+},
+{
+"server": "GitHub",
+"name": "actions_list",
+"description": "Tools for listing GitHub Actions resources.\nUse this tool to list workflows in a repository, or list workflow runs, jobs, and artifacts for a specific workflow or workflow run.\n",
+"params": [
+"method",
+"owner",
+"page",
+"perPage",
+"repo",
+"resource_id",
+"workflow_jobs_filter",
+"workflow_runs_filter"
+]
+},
+{
+"server": "GitHub",
+"name": "actions_run_trigger",
+"description": "Trigger GitHub Actions workflow operations, including running, re-running, cancelling workflow runs, and deleting workflow run logs.",
+"params": [
+"inputs",
+"method",
+"owner",
+"ref",
+"repo",
+"run_id",
+"workflow_id"
+]
+},
+{
+"server": "GitHub",
+"name": "add_automation_to_group",
+"description": "Add one existing Automation to one exact group using its live membership version. It refuses to detach or move an Automation that already references another visible or unavailable group, and it never changes the Automation configuration or enabled state.",
+"params": [
+"automation_id",
+"expected_identity",
+"group_id",
+"owner",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "add_comment_to_pending_review",
+"description": "Add review comment to the requester's latest pending pull request review. A pending review needs to already exist to call this (check with the user if not sure).",
+"params": [
+"body",
+"line",
+"owner",
+"path",
+"pullNumber",
+"repo",
+"side",
+"startLine",
+"startSide",
+"subjectType"
+]
+},
+{
+"server": "GitHub",
+"name": "add_issue_comment",
+"description": "Add a comment and/or reaction to a specific issue or issue comment in a GitHub repository. Use this tool with pull requests as well (in this case pass pull request number as issue_number), but only if user is not asking specifically to add or react to review comments. At least one of body or reaction is required.",
+"params": [
+"body",
+"comment_id",
+"issue_number",
+"owner",
+"reaction",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "add_reply_to_pull_request_comment",
+"description": "Add a reply and/or reaction to an existing pull request comment. This can create a new comment linked as a reply to the specified comment, add an emoji reaction to the specified comment, or do both. At least one of body or reaction is required.",
+"params": [
+"body",
+"commentId",
+"owner",
+"pullNumber",
+"reaction",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "check_dependency_vulnerabilities",
+"description": "Check a list of dependencies for known vulnerabilities using the GitHub Security Advisory Database.\nThis tool queries the GitHub Advisory Database to find known security vulnerabilities affecting the specified packages.\n\nUse this tool when:\n- You want to check if project dependencies have known vulnerabilities\n- You are adding a new dependency to a project and should check it is safe before adding to the project\n\nThe tool accepts owner, repo, and a list of dependencies with their ecosystems and versions, then returns any matching security advisories with upgrade recommendations where available",
+"params": [
+"dependencies",
+"owner",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "create_automation",
+"description": "Create a Copilot Automation in a repository. Use get_automations_configuration_for_repository to check if automations are enabled for the repository, whether the caller can create automations and what automations configurations are allowed.",
+"params": [
+"allowed_custom_agents",
+"description",
+"disabled",
+"github_mcp_toolsets",
+"mcp_servers",
+"model",
+"name",
+"owner",
+"ownership",
+"prompt",
+"reasoning_effort",
+"repo",
+"require_actor_write_permission",
+"tools",
+"triggers",
+"write_scope"
+]
+},
+{
+"server": "GitHub",
+"name": "create_automation_group",
+"description": "Create one repository Automation group after explicit user approval. This tool creates only the group; use create_automation and add_automation_to_group for members. It never retries an unconfirmed write or adopts a group by name.",
+"params": [
+"description",
+"expected_identity",
+"name",
+"owner",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "create_branch",
+"description": "Create a new branch in a GitHub repository",
+"params": [
+"branch",
+"from_branch",
+"owner",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "create_gist",
+"description": "Create a new gist",
+"params": [
+"content",
+"description",
+"filename",
+"public"
+]
+},
+{
+"server": "GitHub",
+"name": "create_or_update_file",
+"description": "Create or update a single file in a GitHub repository. \nIf updating, you should provide the SHA of the file you want to update. Use this tool to create or update a file in a GitHub repository remotely; do not use it for local file operations.\n\nTo obtain the current blob SHA before updating, call the get_file_contents tool with the same owner, repo, and path, and set its ref parameter to this tool's branch value. The first text result reports the blob SHA for the requested path.\n\nSHA MUST be provided for existing file updates.\n",
+"params": [
+"allow_symlink_write",
+"branch",
+"content",
+"message",
+"owner",
+"path",
+"repo",
+"sha"
+]
+},
+{
+"server": "GitHub",
+"name": "create_pull_request",
+"description": "Create a new pull request in a GitHub repository.",
+"params": [
+"base",
+"body",
+"draft",
+"head",
+"maintainer_can_modify",
+"owner",
+"repo",
+"reviewers",
+"title"
+]
+},
+{
+"server": "GitHub",
+"name": "create_repository",
+"description": "Create a new GitHub repository in your account or specified organization",
+"params": [
+"autoInit",
+"description",
+"name",
+"organization",
+"private"
+]
+},
+{
+"server": "GitHub",
+"name": "create_repository_ruleset",
+"description": "Create a new ruleset at the repository, organization, or enterprise level",
+"params": [
+"bypass_actors",
+"conditions",
+"enforcement",
+"enterprise",
+"level",
+"name",
+"org",
+"owner",
+"repo",
+"rules",
+"target"
+]
+},
+{
+"server": "GitHub",
+"name": "custom_properties_read",
+"description": "Read custom properties at the repository, organization, or enterprise level. At the repository level this returns the property values assigned to a repository; at the organization and enterprise levels it returns the property definitions (schema). Select the level with the 'level' parameter.",
+"params": [
+"enterprise",
+"level",
+"org",
+"owner",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "custom_properties_write",
+"description": "Create or update custom properties at the repository, organization, or enterprise level. At the repository level this sets the property values on a repository (the properties must already be defined for the organization). Organization and enterprise definition writes preserve omitted writable fields by reading current definitions immediately before updating; concurrent definition updates remain last-write-wins. Select the level with the 'level' parameter.",
+"params": [
+"enterprise",
+"level",
+"org",
+"owner",
+"properties",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "delete_automation",
+"description": "Delete a Copilot Automation from a repository.",
+"params": [
+"automation_id",
+"owner",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "delete_file",
+"description": "Delete a file from a GitHub repository",
+"params": [
+"branch",
+"message",
+"owner",
+"path",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "discussion_comment_write",
+"description": "Write operations for discussion comments.\nSupports adding top-level comments, replying to existing comments, updating comment content, deleting comments, and marking or unmarking comments as the answer.",
+"params": [
+"body",
+"commentNodeID",
+"discussionNumber",
+"method",
+"owner",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "dismiss_notification",
+"description": "Dismiss a notification by marking it as read or done",
+"params": [
+"state",
+"threadID"
+]
+},
+{
+"server": "GitHub",
+"name": "fork_repository",
+"description": "Fork a GitHub repository to your account or specified organization",
+"params": [
+"organization",
+"owner",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "get_automation",
+"description": "Get a Copilot Automation in a repository.",
+"params": [
+"automation_id",
+"owner",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "get_automation_group",
+"description": "Get one exact repository Automation group and its current visible members. Membership comes from live state; no expected role count or completeness is inferred. No resources are changed.",
+"params": [
+"group_id",
+"owner",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "get_automation_revision",
+"description": "Get a revision of a Copilot Automation.",
+"params": [
+"automation_id",
+"owner",
+"repo",
+"revision_id"
+]
+},
+{
+"server": "GitHub",
+"name": "get_automations_configuration_for_repository",
+"description": "Get Copilot Automations configuration for a repository.",
+"params": [
+"owner",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "get_code_quality_finding",
+"description": "Get details of a specific code quality finding in a GitHub repository.",
+"params": [
+"findingNumber",
+"owner",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "get_code_scanning_alert",
+"description": "Get details of a specific code scanning alert in a GitHub repository.",
+"params": [
+"alertNumber",
+"owner",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "get_commit",
+"description": "Get details for a commit from a GitHub repository",
+"params": [
+"detail",
+"owner",
+"page",
+"perPage",
+"repo",
+"sha"
+]
+},
+{
+"server": "GitHub",
+"name": "get_copilot_session_events",
+"description": "Read one chronological page of a Copilot session's logs/output as SDK events. Use an explicit session_id from get_copilot_task_status. No polling, waiting, or execution changes. page_size defaults to 50 (maximum 100). Use page_number/next_page_number to traverse every event, including synthetic events. Alternatively pass next_after as after to resume; it may yield an empty page. after and page_number are mutually exclusive. total is the upstream unpaginated event count at this read, not a completion signal. Responses exceeding 4 MiB upstream or 512 KiB of combined serialized MCP content (exclu",
+"params": [
+"after",
+"page_number",
+"page_size",
+"session_id"
+]
+},
+{
+"server": "GitHub",
+"name": "get_copilot_space",
+"description": "This tool can be used to provide additional context to the chat from a specific Copilot space. If the user mentions the keyword 'Copilot space' with the name and owner of the space, execute this tool.\n\nThe response includes a table of contents (TOC) listing all documents in the space, followed by the full content of each document. Documents are separated by markers in the format: '--- Document N: path (size) ---'. When searching for specific information, use grep (or equivalent command) to search across all documents; the separator lines will help identify which document contains the matching ",
+"params": [
+"name",
+"owner"
+]
+},
+{
+"server": "GitHub",
+"name": "get_copilot_task_status",
+"description": "Read one current Copilot task-status snapshot by task_id using the invoking caller's access. Use an existing task's UUID, for example from its repository task URL, not an automation_id. Returns Mission Control's task state and timestamps, plus IDs, states, timestamps and recorded errors for every session. States are reported as-is, not interpreted as aggregate success; no primary session is selected. Does not return prompts, transcripts or events, poll, wait for completion, or relaunch work. When available, use get_copilot_session_events with an explicit returned session ID as session_id for e",
+"params": [
+"task_id"
+]
+},
+{
+"server": "GitHub",
+"name": "get_dependabot_alert",
+"description": "Get details of a specific dependabot alert in a GitHub repository.",
+"params": [
+"alertNumber",
+"owner",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "get_discussion",
+"description": "Get a specific discussion by ID",
+"params": [
+"discussionNumber",
+"owner",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "get_discussion_comments",
+"description": "Get comments from a discussion",
+"params": [
+"after",
+"discussionNumber",
+"includeReplies",
+"owner",
+"perPage",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "get_file_contents",
+"description": "Get the contents of a file or directory from a GitHub repository",
+"params": [
+"fields",
+"owner",
+"path",
+"ref",
+"repo",
+"sha"
+]
+},
+{
+"server": "GitHub",
+"name": "get_gist",
+"description": "Get gist content of a particular gist, by gist ID",
+"params": [
+"gist_id"
+]
+},
+{
+"server": "GitHub",
+"name": "get_global_security_advisory",
+"description": "Get a global security advisory",
+"params": [
+"ghsaId"
+]
+},
+{
+"server": "GitHub",
+"name": "get_job_logs",
+"description": "Get logs for GitHub Actions workflow jobs.\nUse this tool to retrieve logs for a specific job or all failed jobs in a workflow run.\nFor single job logs, provide job_id. For all failed jobs in a run, provide run_id with failed_only=true.\n",
+"params": [
+"failed_only",
+"job_id",
+"owner",
+"repo",
+"return_content",
+"run_id",
+"tail_lines"
+]
+},
+{
+"server": "GitHub",
+"name": "get_label",
+"description": "Get a specific label from a repository.",
+"params": [
+"name",
+"owner",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "get_latest_release",
+"description": "Get the latest release in a GitHub repository",
+"params": [
+"owner",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "get_me",
+"description": "Get details of the authenticated GitHub user. Use this when a request is about the user's own profile for GitHub. Or when information is missing to build other tool calls.",
+"params": []
+},
+{
+"server": "GitHub",
+"name": "get_notification_details",
+"description": "Get detailed information for a specific GitHub notification, always call this tool when the user asks for details about a specific notification, if you don't know the ID list notifications first.",
+"params": [
+"notificationID"
+]
+},
+{
+"server": "GitHub",
+"name": "get_release_by_tag",
+"description": "Get a specific release by its tag name in a GitHub repository",
+"params": [
+"owner",
+"repo",
+"tag"
+]
+},
+{
+"server": "GitHub",
+"name": "get_repository_tree",
+"description": "Get the tree structure (files and directories) of a GitHub repository at a specific ref or SHA",
+"params": [
+"owner",
+"path_filter",
+"recursive",
+"repo",
+"tree_sha"
+]
+},
+{
+"server": "GitHub",
+"name": "get_secret_scanning_alert",
+"description": "Get details of a specific secret scanning alert in a GitHub repository.",
+"params": [
+"alertNumber",
+"owner",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "get_tag",
+"description": "Get details about a specific git tag in a GitHub repository",
+"params": [
+"owner",
+"repo",
+"tag"
+]
+},
+{
+"server": "GitHub",
+"name": "get_team_members",
+"description": "Get member usernames of a specific team in an organization. Limited to organizations accessible with current credentials",
+"params": [
+"org",
+"team_slug"
+]
+},
+{
+"server": "GitHub",
+"name": "get_teams",
+"description": "Get details of the teams the user is a member of. Limited to organizations accessible with current credentials",
+"params": [
+"user"
+]
+},
+{
+"server": "GitHub",
+"name": "github_support_docs_search",
+"description": "Retrieve documentation relevant to answer GitHub product and support questions. Support topics include: GitHub Actions Workflows, Authentication, GitHub Support Inquiries, Pull Request Practices, Repository Maintenance, GitHub Pages, GitHub Packages, GitHub Discussions, Copilot Spaces",
+"params": [
+"query"
+]
+},
+{
+"server": "GitHub",
+"name": "issue_read",
+"description": "Get information about a specific issue in a GitHub repository.",
+"params": [
+"issue_number",
+"method",
+"owner",
+"page",
+"perPage",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "issue_write",
+"description": "Create a new or update an existing issue in a GitHub repository.",
+"params": [
+"assignees",
+"body",
+"duplicate_of",
+"issue_fields",
+"issue_number",
+"labels",
+"method",
+"milestone",
+"owner",
+"parent_issue_number",
+"parent_owner",
+"parent_repo",
+"repo",
+"state",
+"state_reason",
+"title",
+"type"
+]
+},
+{
+"server": "GitHub",
+"name": "label_write",
+"description": "Perform write operations on repository labels. To set labels on issues, use the 'update_issue' tool.",
+"params": [
+"color",
+"description",
+"method",
+"name",
+"new_name",
+"owner",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "list_automation_groups",
+"description": "List repository Automation groups and the authenticated account identity. Group data comes from live state; a saved link or name does not establish access. Use the returned identity as expected_identity for group mutations. No resources are changed.",
+"params": [
+"owner",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "list_automation_revisions",
+"description": "List revisions for a Copilot Automation.",
+"params": [
+"automation_id",
+"cursor",
+"owner",
+"perPage",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "list_automations",
+"description": "List Copilot Automations for a repository.",
+"params": [
+"owner",
+"ownership",
+"page",
+"perPage",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "list_available_automation_tools",
+"description": "List available tools for Copilot Automations.",
+"params": []
+},
+{
+"server": "GitHub",
+"name": "list_available_automation_triggers",
+"description": "List available triggers for Copilot Automations.",
+"params": []
+},
+{
+"server": "GitHub",
+"name": "list_branches",
+"description": "List branches in a GitHub repository",
+"params": [
+"owner",
+"page",
+"perPage",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "list_code_scanning_alerts",
+"description": "List code scanning alerts in a GitHub repository.",
+"params": [
+"owner",
+"page",
+"perPage",
+"ref",
+"repo",
+"severity",
+"state",
+"tool_name"
+]
+},
+{
+"server": "GitHub",
+"name": "list_commits",
+"description": "Get list of commits of a branch in a GitHub repository. Returns at least 30 results per page by default, but can return more if specified using the perPage parameter (up to 100).",
+"params": [
+"author",
+"fields",
+"owner",
+"page",
+"path",
+"perPage",
+"repo",
+"sha",
+"since",
+"until"
+]
+},
+{
+"server": "GitHub",
+"name": "list_copilot_spaces",
+"description": "Retrieves the list of Copilot Spaces accessible to the user, including their names and owners.",
+"params": []
+},
+{
+"server": "GitHub",
+"name": "list_dependabot_alerts",
+"description": "List dependabot alerts in a GitHub repository.",
+"params": [
+"after",
+"owner",
+"perPage",
+"repo",
+"severity",
+"state"
+]
+},
+{
+"server": "GitHub",
+"name": "list_discussion_categories",
+"description": "List discussion categories with their id and name, for a repository or organisation.",
+"params": [
+"owner",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "list_discussions",
+"description": "List discussions for a repository or organisation.",
+"params": [
+"after",
+"category",
+"direction",
+"orderBy",
+"owner",
+"perPage",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "list_gists",
+"description": "List gists for a user",
+"params": [
+"page",
+"perPage",
+"since",
+"username"
+]
+},
+{
+"server": "GitHub",
+"name": "list_global_security_advisories",
+"description": "List global security advisories from GitHub.",
+"params": [
+"affects",
+"cveId",
+"cwes",
+"ecosystem",
+"ghsaId",
+"isWithdrawn",
+"modified",
+"published",
+"severity",
+"type",
+"updated"
+]
+},
+{
+"server": "GitHub",
+"name": "list_issue_fields",
+"description": "List issue fields for a repository or organization. Returns field definitions including name, type (text, number, date, single_select), and for single_select fields the list of valid option names. When repo is omitted, returns org-level fields directly.",
+"params": [
+"owner",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "list_issue_types",
+"description": "List supported issue types for a repository or its owner organization. When repo is omitted, returns org-level issue types directly.",
+"params": [
+"owner",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "list_issues",
+"description": "List issues in a GitHub repository. For pagination, use the 'endCursor' from the previous response's 'pageInfo' in the 'after' parameter.",
+"params": [
+"after",
+"direction",
+"field_filters",
+"fields",
+"labels",
+"orderBy",
+"owner",
+"perPage",
+"repo",
+"since",
+"state"
+]
+},
+{
+"server": "GitHub",
+"name": "list_label",
+"description": "List labels from a repository, ordered by issue count (descending) so the most-used labels are returned first. For pagination, use the 'endCursor' from the previous response's 'pageInfo' in the 'after' parameter.",
+"params": [
+"after",
+"owner",
+"perPage",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "list_notifications",
+"description": "Lists all GitHub notifications for the authenticated user, including unread notifications, mentions, review requests, assignments, and updates on issues or pull requests. Use this tool whenever the user asks what to work on next, requests a summary of their GitHub activity, wants to see pending reviews, or needs to check for new updates or tasks. This tool is the primary way to discover actionable items, reminders, and outstanding work on GitHub. Always call this tool when asked what to work on next, what is pending, or what needs attention in GitHub.",
+"params": [
+"before",
+"filter",
+"owner",
+"page",
+"perPage",
+"repo",
+"since"
+]
+},
+{
+"server": "GitHub",
+"name": "list_org_repository_security_advisories",
+"description": "List repository security advisories for a GitHub organization.",
+"params": [
+"direction",
+"org",
+"sort",
+"state"
+]
+},
+{
+"server": "GitHub",
+"name": "list_pull_requests",
+"description": "List pull requests in a GitHub repository. If the user specifies an author, then DO NOT use this tool and use the search_pull_requests tool instead.",
+"params": [
+"base",
+"direction",
+"fields",
+"head",
+"owner",
+"page",
+"perPage",
+"repo",
+"sort",
+"state"
+]
+},
+{
+"server": "GitHub",
+"name": "list_releases",
+"description": "List releases in a GitHub repository",
+"params": [
+"fields",
+"owner",
+"page",
+"perPage",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "list_repository_collaborators",
+"description": "List collaborators of a GitHub repository. Results are paginated; the response includes `nextPage`, `prevPage`, `firstPage`, and `lastPage` fields. To get the next page, use the `nextPage` value as the `page` parameter.",
+"params": [
+"affiliation",
+"owner",
+"page",
+"perPage",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "list_repository_security_advisories",
+"description": "List repository security advisories for a GitHub repository.",
+"params": [
+"direction",
+"owner",
+"repo",
+"sort",
+"state"
+]
+},
+{
+"server": "GitHub",
+"name": "list_secret_scanning_alerts",
+"description": "List secret scanning alerts in a GitHub repository.",
+"params": [
+"owner",
+"page",
+"perPage",
+"repo",
+"resolution",
+"secret_type",
+"state"
+]
+},
+{
+"server": "GitHub",
+"name": "list_starred_repositories",
+"description": "List starred repositories",
+"params": [
+"direction",
+"page",
+"perPage",
+"sort",
+"username"
+]
+},
+{
+"server": "GitHub",
+"name": "list_tags",
+"description": "List git tags in a GitHub repository",
+"params": [
+"owner",
+"page",
+"perPage",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "manage_notification_subscription",
+"description": "Manage a notification subscription: ignore, watch, or delete a notification thread subscription.",
+"params": [
+"action",
+"notificationID"
+]
+},
+{
+"server": "GitHub",
+"name": "manage_repository_notification_subscription",
+"description": "Manage a repository notification subscription: ignore, watch, or delete repository notifications subscription for the provided repository.",
+"params": [
+"action",
+"owner",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "mark_all_notifications_read",
+"description": "Mark all notifications as read",
+"params": [
+"lastReadAt",
+"owner",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "merge_pull_request",
+"description": "Merge a pull request in a GitHub repository.",
+"params": [
+"commit_message",
+"commit_title",
+"expectedHeadSha",
+"merge_method",
+"owner",
+"pullNumber",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "projects_get",
+"description": "Get details about specific GitHub Projects resources.\nUse this tool to get details about individual projects, project fields, project items, and project views by their unique IDs.\n",
+"params": [
+"field_id",
+"field_names",
+"fields",
+"item_id",
+"method",
+"owner",
+"owner_type",
+"project_number",
+"status_update_id",
+"view_id"
+]
+},
+{
+"server": "GitHub",
+"name": "projects_list",
+"description": "Tools for listing GitHub Projects resources.\nUse this tool to list projects for a user or organization, or list project fields, items, views, and status updates for a specific project.\n",
+"params": [
+"after",
+"before",
+"field_names",
+"fields",
+"method",
+"owner",
+"owner_type",
+"perPage",
+"project_number",
+"query"
+]
+},
+{
+"server": "GitHub",
+"name": "projects_write",
+"description": "Create and manage GitHub Projects: create projects, add/update/delete items, bulk-update many items at once, manage views, create status updates, and add iteration fields.",
+"params": [
+"body",
+"field_name",
+"filter",
+"issue_number",
+"item_id",
+"item_owner",
+"item_repo",
+"item_type",
+"items",
+"iteration_duration",
+"iterations",
+"layout",
+"method",
+"name",
+"owner",
+"owner_type",
+"project_number",
+"pull_request_number",
+"start_date",
+"status",
+"target_date",
+"title",
+"updated_field",
+"view_id",
+"visible_field_names",
+"visible_fields"
+]
+},
+{
+"server": "GitHub",
+"name": "pull_request_read",
+"description": "Get information on a specific pull request in GitHub repository.",
+"params": [
+"after",
+"method",
+"owner",
+"page",
+"perPage",
+"pullNumber",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "pull_request_review_write",
+"description": "Create and/or submit, delete review of a pull request.\n\nAvailable methods:\n- create: Create a new review of a pull request. If \"event\" parameter is provided, the review is submitted. If \"event\" is omitted, a pending review is created.\n- submit_pending: Submit an existing pending review of a pull request. This requires that a pending review exists for the current user on the specified pull request. The \"body\" and \"event\" parameters are used when submitting the review.\n- delete_pending: Delete an existing pending review of a pull request. This requires that a pending review exists for the curren",
+"params": [
+"body",
+"commitID",
+"event",
+"method",
+"owner",
+"pullNumber",
+"repo",
+"threadId"
+]
+},
+{
+"server": "GitHub",
+"name": "push_files",
+"description": "Push multiple files to a GitHub repository in a single commit",
+"params": [
+"branch",
+"files",
+"message",
+"owner",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "remove_automation_from_group",
+"description": "Remove one existing Automation from one exact group using its live membership version. It never deletes, disables, or otherwise changes the Automation.",
+"params": [
+"automation_id",
+"expected_identity",
+"group_id",
+"owner",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "repository_ruleset_read",
+"description": "Read rulesets at the repository, organization, or enterprise level, and rule suites at the repository or organization level. Select the level with the 'level' parameter and the operation with the 'method' parameter.",
+"params": [
+"actor_name",
+"branch",
+"enterprise",
+"evaluate_status",
+"includes_parents",
+"level",
+"method",
+"org",
+"owner",
+"page",
+"perPage",
+"ref",
+"repo",
+"repository_name",
+"rule_suite_id",
+"rule_suite_result",
+"ruleset_id",
+"time_period"
+]
+},
+{
+"server": "GitHub",
+"name": "request_copilot_review",
+"description": "Request a GitHub Copilot code review for a pull request. Use this for automated feedback on pull requests, usually before requesting a human reviewer.",
+"params": [
+"owner",
+"pullNumber",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "run_automation",
+"description": "Request one real run of one exact Automation for manual or a configured non-manual event supported by Run now; this is not a dry run. For configured events, use get_automation to read the trigger's types and conclusions. Provide type, conclusion, and resource_url explicitly when the event requires them. Events involving issues, pull requests, workflow runs, or discussions require the corresponding URL; comment events require the exact comment permalink. When group_id is supplied, first verify current visible membership. Returns taskId for the requested run. Acceptance does not confirm task cre",
+"params": [
+"automation_id",
+"conclusion",
+"event",
+"expected_identity",
+"group_id",
+"owner",
+"repo",
+"resource_url",
+"type"
+]
+},
+{
+"server": "GitHub",
+"name": "run_secret_scanning",
+"description": "Scan files, content, or recent changes for secrets such as API keys, passwords, tokens, and credentials.\n\nThis tool is intended for targeted scans of specific files, snippets, or diffs provided directly as content. The files parameter accepts either a single string or an array of strings containing raw file contents or diff hunks, and returns detected secrets with their locations and related secret scanning metadata. Content must not be empty. For full repository scanning, other mechanisms are available.\n\nCaveats:\n\n- Only files within the codebase should be scanned. Files outside of the codeba",
+"params": [
+"files",
+"owner",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "search_code",
+"description": "Fast and precise code search across ALL GitHub repositories using GitHub's native search engine. Best for finding exact symbols, functions, classes, or specific code patterns.",
+"params": [
+"fields",
+"order",
+"page",
+"perPage",
+"query",
+"sort"
+]
+},
+{
+"server": "GitHub",
+"name": "search_commits",
+"description": "Search for commits across GitHub repositories using GitHub's commit search syntax. Useful for finding specific changes, authors, or messages across one or many repositories. Searches the default branch only.",
+"params": [
+"order",
+"page",
+"perPage",
+"query",
+"sort"
+]
+},
+{
+"server": "GitHub",
+"name": "search_issues",
+"description": "Search issues using natural-language semantic matching. Best for conceptual or paraphrased queries (e.g. \"login fails after password reset\"). Already scoped to is:issue.",
+"params": [
+"fields",
+"order",
+"owner",
+"page",
+"perPage",
+"query",
+"repo",
+"sort"
+]
+},
+{
+"server": "GitHub",
+"name": "search_orgs",
+"description": "Find GitHub organizations by name, location, or other organization metadata. Ideal for discovering companies, open source foundations, or teams.",
+"params": [
+"order",
+"page",
+"perPage",
+"query",
+"sort"
+]
+},
+{
+"server": "GitHub",
+"name": "search_pull_requests",
+"description": "Search for pull requests in GitHub repositories using issues search syntax already scoped to is:pr",
+"params": [
+"fields",
+"order",
+"owner",
+"page",
+"perPage",
+"query",
+"repo",
+"sort"
+]
+},
+{
+"server": "GitHub",
+"name": "search_repositories",
+"description": "Find GitHub repositories by name, description, readme, topics, or other metadata. Perfect for discovering projects, finding examples, or locating specific repositories across GitHub.",
+"params": [
+"minimal_output",
+"order",
+"page",
+"perPage",
+"query",
+"sort"
+]
+},
+{
+"server": "GitHub",
+"name": "search_users",
+"description": "Find GitHub users by username, real name, or other profile information. Useful for locating developers, contributors, or team members.",
+"params": [
+"order",
+"page",
+"perPage",
+"query",
+"sort"
+]
+},
+{
+"server": "GitHub",
+"name": "semantic_issue_similarity_search",
+"description": "Find issues that are semantically similar to a given issue using natural language understanding. Useful for identifying duplicates, related issues, or similar problems.",
+"params": [
+"issue_number",
+"owner",
+"page",
+"per_page",
+"repo",
+"threshold"
+]
+},
+{
+"server": "GitHub",
+"name": "star_repository",
+"description": "Star a GitHub repository",
+"params": [
+"owner",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "sub_issue_write",
+"description": "Add a sub-issue to a parent issue in a GitHub repository.",
+"params": [
+"after_id",
+"before_id",
+"issue_number",
+"method",
+"owner",
+"replace_parent",
+"repo",
+"sub_issue_id"
+]
+},
+{
+"server": "GitHub",
+"name": "ui_get",
+"description": "Fetch UI data for MCP Apps (labels, assignees, milestones, issue types, branches, issue fields, reviewers).",
+"params": [
+"method",
+"owner",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "unstar_repository",
+"description": "Unstar a GitHub repository",
+"params": [
+"owner",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "update_automation",
+"description": "Partially update a Copilot Automation. Omitted fields are unchanged; empty strings, arrays, and objects clear fields that support clearing. Use get_automations_configuration_for_repository to check if automations are enabled for the repository, whether the caller can update automations and what automations configurations are allowed.",
+"params": [
+"allowed_custom_agents",
+"automation_id",
+"description",
+"disabled",
+"github_mcp_toolsets",
+"mcp_servers",
+"model",
+"name",
+"owner",
+"prompt",
+"reasoning_effort",
+"repo",
+"require_actor_write_permission",
+"tools",
+"triggers",
+"write_scope"
+]
+},
+{
+"server": "GitHub",
+"name": "update_gist",
+"description": "Update an existing gist",
+"params": [
+"content",
+"description",
+"filename",
+"gist_id"
+]
+},
+{
+"server": "GitHub",
+"name": "update_issue_comment",
+"description": "Update the body of an existing issue or pull request conversation comment. This tool cannot update pull request review comments.",
+"params": [
+"body",
+"comment_id",
+"owner",
+"repo"
+]
+},
+{
+"server": "GitHub",
+"name": "update_pull_request",
+"description": "Update an existing pull request in a GitHub repository.",
+"params": [
+"base",
+"body",
+"draft",
+"maintainer_can_modify",
+"owner",
+"pullNumber",
+"repo",
+"reviewers",
+"state",
+"title"
+]
+},
+{
+"server": "GitHub",
+"name": "update_pull_request_branch",
+"description": "Update the branch of a pull request with the latest changes from the base branch.",
+"params": [
+"expectedHeadSha",
+"owner",
+"pullNumber",
+"repo"
+]
+}
+]

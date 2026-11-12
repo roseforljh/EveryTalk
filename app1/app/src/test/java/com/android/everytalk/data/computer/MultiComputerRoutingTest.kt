@@ -73,7 +73,7 @@ class MultiComputerRoutingTest {
         val states = prompt.substringAfter("<computer-session-state>")
         assertTrue(environment.contains("wa environment"))
         assertTrue(environment.contains("wb environment"))
-        assertTrue(environment.contains("无需切换会话"))
+        assertTrue(environment.contains("without switching conversations"))
         assertTrue(environment.contains("attachment_id"))
         assertTrue(states.contains("a running"))
         assertTrue(states.contains("b running"))

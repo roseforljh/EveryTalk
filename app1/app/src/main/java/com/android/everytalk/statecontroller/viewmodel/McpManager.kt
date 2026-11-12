@@ -37,15 +37,23 @@ class McpManager(private val context: Context) {
 
     init {
         scope.launch { removeDuplicateServers() }
+        scope.launch { serverStates.collect { McpToolLabels.update(it.values) } }
         scope.launch {
             McpOAuthCallbackBus.flow.filterNotNull().collect { uri ->
                 McpOAuthCallbackBus.consume(uri)
                 _oauthBusy.value = true
                 try {
                     val provider = oauth.consume(uri.toString())
-                    // 重新登录必须替换旧连接；配置中只保存地址，不保存 Authorization。
-                    clientManager.removeServer(provider.serverId)
-                    addServer(provider.defaultConfig())
+                    if (provider == McpOAuthProvider.PARALLEL) {
+                        // 登录换到的是用户自己的 Key：存进 Parallel 连接后删掉授权草稿，额度计入用户账号。
+                        val key = oauth.accessTokenFor(provider.defaultConfig()).orEmpty()
+                        oauth.logout(provider)
+                        addServer(McpKeyProvider.PARALLEL.config(key))
+                    } else {
+                        // 重新登录必须替换旧连接；配置中只保存地址，不保存 Authorization。
+                        clientManager.removeServer(provider.serverId)
+                        addServer(provider.defaultConfig())
+                    }
                     _oauthMessage.value = "${provider.displayName} 授权成功"
                 } catch (error: CancellationException) { throw error }
                 catch (error: Exception) { _oauthMessage.value = error.message ?: "MCP 登录失败" }
@@ -202,6 +210,7 @@ class McpManager(private val context: Context) {
                         serverName = state.config.name,
                         tool = tool,
                         exposedToolName = buildMcpToolAlias(state.config.id, tool.name),
+                        serverInstructions = state.instructions,
                     )
                 }
             }
@@ -233,12 +242,37 @@ class McpManager(private val context: Context) {
         return clientManager.callTool(toolName, arguments)
     }
 
-    suspend fun callToolResult(toolName: String, arguments: JsonObject): com.android.everytalk.data.network.AppToolExecutionResult =
-        clientManager.callToolResult(toolName, arguments)
+    suspend fun callToolResult(toolName: String, arguments: JsonObject): com.android.everytalk.data.network.AppToolExecutionResult {
+        // 调用前取候选：连接级失败会把服务器移出已连接列表，之后就查不到失败工具的类别。
+        val candidates = getDispatchCandidates()
+        return withMcpFallbackHint(clientManager.callToolResult(toolName, arguments), toolName, candidates)
+    }
 
     fun close() {
         scope.cancel()
         clientManager.close()
         oauthHttp.close()
     }
+}
+
+/**
+ * 失败时告诉模型其他服务的同类工具（搜索、读网页、文档），由模型决定是否换一家重试，
+ * 不在代码里自动重放：参数格式各家不同，且可能有副作用。
+ */
+internal fun withMcpFallbackHint(
+    result: com.android.everytalk.data.network.AppToolExecutionResult,
+    toolName: String,
+    candidates: List<McpToolCandidate>,
+): com.android.everytalk.data.network.AppToolExecutionResult {
+    val content = result.content as? JsonObject
+    val failed = candidates.firstOrNull { it.toolName == toolName }
+    if (result.isError != true || content == null || failed == null ||
+        failed.category == com.android.everytalk.statecontroller.mcp.dispatch.McpToolCategory.OTHER) return result
+    val alternatives = candidates.filter { it.category == failed.category && it.server != failed.server }.take(4)
+    if (alternatives.isEmpty()) return result
+    return result.copy(content = JsonObject(content + ("alternatives" to kotlinx.serialization.json.JsonPrimitive(
+        "This service failed. Tools with the same capability from other services: " +
+            alternatives.joinToString("; ") { "${it.toolName} (${com.android.everytalk.data.agent.McpToolDiscovery.tagServer(it.server, it.description.lineSequence().first().take(80))})" } +
+            ". Retry with one of them if it fits; if it is not declared yet, load it with tool_search first.",
+    ))))
 }

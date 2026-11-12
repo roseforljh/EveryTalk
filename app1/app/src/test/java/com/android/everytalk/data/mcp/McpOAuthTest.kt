@@ -287,6 +287,31 @@ class McpOAuthTest {
         } finally { client.close() }
     }
 
+    @Test fun `Parallel 登录走 getKeys 端点并换到用户自己的 Key`() = runTest {
+        val store = MemorySecrets()
+        val provider = McpOAuthProvider.PARALLEL
+        val client = HttpClient(MockEngine(MockEngineConfig().apply {
+            dispatcher = StandardTestDispatcher(testScheduler)
+            addHandler {
+                assertEquals("platform.parallel.ai", it.url.host)
+                when (it.url.encodedPath) {
+                    "/getKeys/register" -> respond("""{"client_id":"p-client"}""", HttpStatusCode.Created, headersOf("Content-Type", "application/json"))
+                    "/getKeys/token" -> respond("""{"access_token":"user-key","token_type":"Bearer"}""", HttpStatusCode.OK, headersOf("Content-Type", "application/json"))
+                    else -> error(it.url.encodedPath)
+                }
+            }
+        }))
+        try {
+            val flow = McpOAuthManager(store, client, "client") { 100_000L }
+            val url = Url(flow.start(provider))
+            assertEquals("/getKeys/authorize", url.encodedPath)
+            assertEquals("key:read", url.parameters["scope"])
+            assertEquals(provider.appRedirectUri, url.parameters["redirect_uri"])
+            assertEquals(provider, flow.consume("${provider.appRedirectUri}?code=c&state=${url.parameters["state"]}"))
+            assertEquals("user-key", flow.accessTokenFor(provider.defaultConfig()))
+        } finally { client.close() }
+    }
+
     @Test fun `Cloudflare 动态注册后拒绝取消过期及旧登录回调`() = runTest {
         val store = MemorySecrets()
         var time = 100_000L

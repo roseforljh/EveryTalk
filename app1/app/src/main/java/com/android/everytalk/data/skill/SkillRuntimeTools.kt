@@ -14,7 +14,7 @@ fun skillToolDefinitions(): List<Map<String, Any>> = listOf(
         "type" to "function",
         "function" to mapOf(
             "name" to SkillToolNames.LOAD_SKILL,
-            "description" to "读取 Skill 的完整 SKILL.md 和附带文件目录。决定使用任何 Skill 后必须先调用。",
+            "description" to "Read a Skill's full SKILL.md and its file list. Call this first after deciding to use any Skill.",
             "parameters" to mapOf(
                 "type" to "object",
                 "properties" to mapOf(
@@ -30,7 +30,7 @@ fun skillToolDefinitions(): List<Map<String, Any>> = listOf(
         "type" to "function",
         "function" to mapOf(
             "name" to SkillToolNames.READ_SKILL_FILE,
-            "description" to "按需读取已加载 Skill 的一个文本附带文件。",
+            "description" to "Read one text file bundled with a loaded Skill when needed.",
             "parameters" to mapOf(
                 "type" to "object",
                 "properties" to mapOf(

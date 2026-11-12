@@ -81,6 +81,7 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="${appOAuthScheme}" android:host="oauth" android:path="/mcp/gmail" />
                 <data android:scheme="${appOAuthScheme}" android:host="oauth" android:path="/mcp/microsoft" />
+                <data android:scheme="${appOAuthScheme}" android:host="oauth" android:path="/mcp/parallel" />
             </intent-filter>
         </activity-alias>
 

@@ -48,10 +48,29 @@ class McpServerFormTest {
         assertEquals("old", renewed.id)
         assertEquals("我的 Exa", renewed.name)
         assertTrue(!renewed.enabled)
-        assertTrue(renewed.url.contains("exaApiKey=b&"))
+        assertEquals("https://mcp.exa.ai/mcp?exaApiKey=b", renewed.url)
 
         assertEquals("https://mcp.tavily.com/mcp/?tavilyApiKey=tvly-1", McpKeyProvider.TAVILY.config("tvly-1").url)
         assertEquals(listOf("Authorization" to "Bearer jina-1"), McpKeyProvider.JINA.config("jina-1").commonOptions.headers)
         assertTrue(McpKeyProvider.JINA.config("").commonOptions.headers.isEmpty())
+    }
+
+    @Test
+    fun `匿名端点不带空凭据并保留完整搜索抓取工具`() {
+        assertEquals("https://mcp.parallel.ai/mcp", McpKeyProvider.PARALLEL.config("").url)
+        assertTrue(McpKeyProvider.PARALLEL.config("").headers.isEmpty())
+        assertEquals(listOf("Authorization" to "Bearer parallel-key"), McpKeyProvider.PARALLEL.config(" parallel-key ").commonOptions.headers)
+        assertEquals("parallel-key", McpKeyProvider.PARALLEL.keyOf(McpKeyProvider.PARALLEL.config("parallel-key")))
+        assertEquals("fc-1", McpKeyProvider.FIRECRAWL.keyOf(McpKeyProvider.FIRECRAWL.config("fc-1")))
+        assertEquals("", McpKeyProvider.FIRECRAWL.keyOf(McpKeyProvider.FIRECRAWL.config("")))
+        assertEquals("b", McpKeyProvider.EXA.keyOf(McpKeyProvider.EXA.config("b")))
+        assertEquals("https://mcp.firecrawl.dev/v2/mcp", McpKeyProvider.FIRECRAWL.config("").url)
+        assertEquals("https://mcp.exa.ai/mcp", McpKeyProvider.EXA.config("").url)
+        assertEquals("https://mcp.brightdata.com/mcp?token=token-1", McpKeyProvider.BRIGHT_DATA.config(" token-1 ").url)
+        listOf(McpKeyProvider.PARALLEL, McpKeyProvider.FIRECRAWL, McpKeyProvider.EXA).forEach { provider ->
+            assertTrue(!provider.keyRequired)
+            val legacy = provider.config("").clone(id = "legacy")
+            assertTrue(provider.matches(legacy))
+        }
     }
 }

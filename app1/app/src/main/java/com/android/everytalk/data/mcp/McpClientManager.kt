@@ -412,7 +412,8 @@ class McpClientManager(
             McpServerState(
                 config = updatedConfig,
                 status = McpStatus.Connected,
-                tools = tools
+                tools = tools,
+                instructions = client.serverInstructions?.trim()?.takeIf(String::isNotBlank),
             )
         }
 

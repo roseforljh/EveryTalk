@@ -323,15 +323,30 @@ class AgentRunStore(
         return state
     }
 
-    /** 只读成功发现回执，按首次加载顺序去重；恢复后仍以当前授权目录复核。 */
-    suspend fun loadedMcpToolIds(runId: String, beforeRequestId: String? = null): List<String> = dao.getEntries(runId)
+    /**
+     * 只读成功发现回执，按加载顺序返回（可能重复，调用方按最近一次去重）；恢复后仍以当前授权目录复核。
+     * 同一会话之前各轮加载的工具也算在内（Pi：加载的工具在该分支上一直保留），省得模型每轮重新搜索。
+     */
+    suspend fun loadedMcpToolIds(runId: String, beforeRequestId: String? = null): List<String> {
+        val current = dao.getRun(runId)
+        val earlier = current?.let { run ->
+            // ponytail: 只看最近 20 轮，避免长会话每轮扫全部条目；更早加载的工具需要时再搜一次即可。
+            dao.getRunsForSession(run.sessionId).filter { it.id != runId && it.createdAt <= run.createdAt }
+                .sortedBy { it.createdAt }.takeLast(20)
+                .flatMap { loadedMcpToolIdsOf(it.id, null) }
+        }.orEmpty()
+        return earlier + loadedMcpToolIdsOf(runId, beforeRequestId)
+    }
+
+    private suspend fun loadedMcpToolIdsOf(runId: String, beforeRequestId: String?): List<String> = dao.getEntries(runId)
         .sortedBy { it.sequence }
         .takeWhile { beforeRequestId == null || it.kind != AgentEntryKind.ASSISTANT.name || it.requestId != beforeRequestId }
-        .filter { it.kind == AgentEntryKind.TOOL_RESULT.name && it.status == AgentEntryStatus.FINAL.name }
+        .filter { it.kind == AgentEntryKind.TOOL_RESULT.name && it.status == AgentEntryStatus.FINAL.name &&
+            McpToolDiscovery.NAME in it.payloadJson }
         .flatMap { entry ->
             val result = json.decodeFromString(AgentContentBlock.ToolResult.serializer(), entry.payloadJson)
             if (result.toolName == McpToolDiscovery.NAME && !result.isError) result.loadedMcpToolIds else emptyList()
-        }.distinct()
+        }
 
     /** 仅以本 Run 已提交回执定位归档；跨请求复用 ID 时拒绝歧义。 */
     suspend fun archivedToolResult(runId: String, toolCallId: String): AgentContentBlock.ToolResult {
@@ -2120,7 +2135,9 @@ private fun unknownExecutionDetail(call: AgentContentBlock.ToolCall): String = w
     "upload" -> (call.arguments["destination_path"] as? JsonPrimitive)?.content.orEmpty()
     "download" -> (call.arguments["source_path"] as? JsonPrimitive)?.content.orEmpty()
     "open_port" -> (call.arguments["port"] as? JsonPrimitive)?.content.orEmpty()
-    else -> call.name
+    // 界面显示“服务器 · 工具”而不是哈希别名；工具搜索附上查询词。
+    McpToolDiscovery.NAME -> listOfNotNull(call.name, (call.arguments["query"] as? JsonPrimitive)?.content).joinToString(" · ")
+    else -> com.android.everytalk.data.mcp.McpToolLabels.display(call.name)
 }
 
 /** 无需人工决定时把 UNKNOWN 明确交回 AI，禁止恢复流程卡在隐藏审批上。 */

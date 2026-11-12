@@ -19,15 +19,15 @@ fun agentRequestToolDefinition(): Map<String, Any> = mapOf(
     "type" to "function",
     "function" to mapOf(
         "name" to AgentControlToolNames.REQUEST_AGENT,
-        "description" to "任务需要服务器执行能力时申请开启 Agent，批准后可用。",
+        "description" to "Request Agent access when the task needs server execution; usable after the user approves.",
         "parameters" to mapOf(
             "type" to "object",
             "properties" to mapOf(
-                "reason" to mapOf("type" to "string", "description" to "说明为什么当前任务需要 Agent"),
+                "reason" to mapOf("type" to "string", "description" to "Why the current task needs the Agent"),
                 "required_skill_ids" to mapOf(
                     "type" to "array",
                     "items" to mapOf("type" to "string"),
-                    "description" to "需要在 Agent 中使用的 Skill ID，可为空",
+                    "description" to "Skill IDs to use in the Agent; may be empty",
                 ),
             ),
             "required" to listOf("reason"),
@@ -44,11 +44,11 @@ fun mcpRequestToolDefinition(catalog: String = ""): Map<String, Any> = mapOf(
     "type" to "function",
     "function" to mapOf(
         "name" to AgentControlToolNames.REQUEST_MCP,
-        "description" to ("申请开启已连接的 MCP 外部工具，批准后可用；用户拒绝后尊重其选择。以下目录仅说明能力：\n" + catalog),
+        "description" to ("Request access to the connected MCP tools; usable after the user approves. Respect a refusal. The catalog below only describes capabilities:\n" + catalog),
         "parameters" to mapOf(
             "type" to "object",
             "properties" to mapOf(
-                "reason" to mapOf("type" to "string", "description" to "说明为什么当前任务需要 MCP 工具"),
+                "reason" to mapOf("type" to "string", "description" to "Why the current task needs MCP tools"),
             ),
             "required" to listOf("reason"),
             "additionalProperties" to false,
@@ -60,13 +60,13 @@ fun skillSecretRequestToolDefinition(): Map<String, Any> = mapOf(
     "type" to "function",
     "function" to mapOf(
         "name" to AgentControlToolNames.REQUEST_SKILL_SECRET,
-        "description" to "为已加载 Skill 申请受保护的凭据输入，返回受限 capability。凭据正文不进入聊天或模型，请勿在普通文本中索要。",
+        "description" to "Request protected credential input for a loaded Skill; returns a limited capability. The credential never enters the chat or the model, so never ask for it in plain text.",
         "parameters" to mapOf(
             "type" to "object",
             "properties" to mapOf(
-                "skill_id" to mapOf("type" to "string", "description" to "当前 Run 已加载的 Skill ID"),
-                "name" to mapOf("type" to "string", "description" to "环境变量名，例如 GITHUB_TOKEN"),
-                "reason" to mapOf("type" to "string", "description" to "说明为何需要该密钥"),
+                "skill_id" to mapOf("type" to "string", "description" to "Skill ID loaded in the current run"),
+                "name" to mapOf("type" to "string", "description" to "Environment variable name, e.g. GITHUB_TOKEN"),
+                "reason" to mapOf("type" to "string", "description" to "Why this secret is needed"),
             ),
             "required" to listOf("skill_id", "name", "reason"),
             "additionalProperties" to false,
@@ -78,15 +78,15 @@ fun protectedSecretRequestToolDefinition(): Map<String, Any> = mapOf(
     "type" to "function",
     "function" to mapOf(
         "name" to AgentControlToolNames.REQUEST_PROTECTED_SECRET,
-        "description" to "申请受保护的凭据输入。只填用途和目标，凭据正文由用户在专用输入框提供，不进入聊天或模型。",
+        "description" to "Request protected credential input. Give only the purpose and target; the user enters the credential in a dedicated field and it never enters the chat or the model.",
         "parameters" to mapOf(
             "type" to "object",
             "properties" to mapOf(
                 "scope" to mapOf("type" to "string", "enum" to SecretScope.entries.map { it.name }),
-                "target_id" to mapOf("type" to "string", "description" to "目标服务器、Workspace 或 Skill 的非敏感 ID"),
-                "name" to mapOf("type" to "string", "description" to "环境变量或凭据名称"),
-                "path" to mapOf("type" to "string", "description" to "SERVER_ENV 时的目标 .env 路径"),
-                "reason" to mapOf("type" to "string", "description" to "安全用途说明"),
+                "target_id" to mapOf("type" to "string", "description" to "Non-sensitive ID of the target server, Workspace or Skill"),
+                "name" to mapOf("type" to "string", "description" to "Environment variable or credential name"),
+                "path" to mapOf("type" to "string", "description" to "Target .env path for SERVER_ENV"),
+                "reason" to mapOf("type" to "string", "description" to "Non-sensitive purpose"),
             ),
             "required" to listOf("scope", "name", "reason"),
             "additionalProperties" to false,
@@ -98,7 +98,7 @@ fun capabilityRequestToolDefinition(): Map<String, Any> = mapOf(
     "type" to "function",
     "function" to mapOf(
         "name" to AgentControlToolNames.REQUEST_CAPABILITY,
-        "description" to "申请缺少的已注册 capability，提供原因和非敏感上下文；应用决定具体授权与投递方式。",
+        "description" to "Request a missing registered capability with a reason and non-sensitive context; the app decides how to grant and deliver it.",
         "parameters" to mapOf(
             "type" to "object",
             "properties" to mapOf(
@@ -117,12 +117,12 @@ fun userInputRequestToolDefinition(): Map<String, Any> = mapOf(
     "type" to "function",
     "function" to mapOf(
         "name" to AgentControlToolNames.REQUEST_USER_INPUT,
-        "description" to "请求用户补充关键输入；任务会暂停，收到用户提交的文字或附件后继续。",
+        "description" to "Ask the user for missing critical input; the task pauses and continues after the user submits text or attachments.",
         "parameters" to mapOf(
             "type" to "object",
             "properties" to mapOf(
-                "question" to mapOf("type" to "string", "description" to "要显示给用户的问题"),
-                "context" to mapOf("type" to "string", "description" to "可选的补充说明"),
+                "question" to mapOf("type" to "string", "description" to "Question shown to the user"),
+                "context" to mapOf("type" to "string", "description" to "Optional extra context"),
             ),
             "required" to listOf("question"),
             "additionalProperties" to false,

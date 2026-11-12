@@ -25,8 +25,8 @@ class ComputerToolCatalogTest {
             request = refreshComputerExecutionPolicy(request, prompt)
             val policy = request.messages.filter { it.id == "computer-execution-policy" }.single()
                 as com.android.everytalk.data.DataClass.SimpleTextApiMessage
-            assertTrue(policy.content.contains("名称=\"24\""))
-            assertTrue(policy.content.contains("名称=\"34\""))
+            assertTrue(policy.content.contains("name=\"24\""))
+            assertTrue(policy.content.contains("name=\"34\""))
             assertTrue(policy.content.contains("environment wa"))
             assertTrue(policy.content.contains("environment wb"))
             assertFalse(policy.content.contains("round"))

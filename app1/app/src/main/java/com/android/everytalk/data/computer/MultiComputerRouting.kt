@@ -11,21 +11,21 @@ import kotlinx.serialization.json.JsonPrimitive
 internal fun buildMultiComputerSessionPrompt(
     targets: List<Pair<ComputerTargetBinding, String>>,
 ): String = buildString {
-    appendLine("当前会话已选择下列多台服务器，可在同一任务中分别控制，无需切换会话。每次服务器工具调用必须指定 computer_id。")
-    appendLine("连接和认证由应用使用已保存的配置完成，不要因为同时操作多台服务器而索要密码或私钥。实际可执行范围以各目标的权限和工具结果为准。")
-    appendLine("根据用户目标自主选择服务器和步骤；独立的只读检查可同轮调用，互相依赖的步骤应等待前一步结果。最终用自然语言说明各台服务器的结果。")
+    appendLine("This conversation has selected the servers below; control each of them within the same task without switching conversations. Every server tool call must set computer_id.")
+    appendLine("The app connects and authenticates with saved settings; never ask for passwords or private keys because several servers are involved. What you can actually do depends on each target's permissions and tool results.")
+    appendLine("Choose servers and steps from the user's goal; independent read-only checks may run together, dependent steps wait for earlier results. Finally report each server's result in plain language.")
     if (targets.count { it.first.provider == ComputerProvider.SSH } > 1) {
-        appendLine("在已选 SSH 服务器间传文件：先对源服务器调用 download，取得成功结果中的 attachment_id；再对目标服务器调用 upload，使用该 attachment_id。A 到 B、B 到 A 都可如此完成，不需要两台服务器能直接互连。目录可先用 exec 打包，传输后在目标解包。路径以各自文件工具目录为准，必要时先用 exec 准备文件；不要把文件正文或凭据塞进聊天。")
+        appendLine("To move files between selected SSH servers, call download on the source to get attachment_id from the successful result, then call upload on the target with that attachment_id. This works in either direction and needs no direct link between the servers. Pack directories with exec first and unpack on the target. Paths follow each server's file tools; prepare files with exec when needed; never paste file contents or credentials into the chat.")
     }
     targets.forEach { (target, prompt) ->
-        appendLine("服务器 ID=${target.computerId}，名称=${JsonPrimitive(target.displayName)}：")
+        appendLine("Server ID=${target.computerId}, name=${JsonPrimitive(target.displayName)}:")
         appendLine(prompt.substringBefore("<computer-session-state>").trim())
     }
     val states = targets.filter { "<computer-session-state>" in it.second }
     if (states.isNotEmpty()) {
         appendLine("<computer-session-state>")
         states.forEach { (target, prompt) ->
-            appendLine("服务器 ID=${target.computerId}，名称=${JsonPrimitive(target.displayName)}：")
+            appendLine("Server ID=${target.computerId}, name=${JsonPrimitive(target.displayName)}:")
             appendLine(prompt.substringAfter("<computer-session-state>").substringBefore("</computer-session-state>").trim())
         }
         appendLine("</computer-session-state>")
@@ -100,7 +100,7 @@ fun multiComputerToolDefinitions(
                         "type" to "object",
                         "properties" to (properties + mapOf("computer_id" to mapOf(
                             "type" to "string",
-                            "description" to ("本次操作的服务器 ID；根据用户目标选择。可用目标：" +
+                            "description" to ("Server ID for this operation, chosen from the user's goal. Available targets: " +
                                 available.joinToString { "${it.computerId}=${JsonPrimitive(it.displayName)}" }),
                             "enum" to available.map { it.computerId },
                         ))),

@@ -18,12 +18,16 @@ data class McpToolCandidate(
     val category: McpToolCategory,
     val enabled: Boolean,
     val schema: McpInputSchema?,
+    /** 所属服务器的显示名称；工具别名是哈希，模型和工具搜索只能从描述前缀分辨同名工具属于哪家。 */
+    val server: String = "",
+    val serverInstructions: String? = null,
 )
 
 internal fun toMcpToolCandidate(
     serverName: String,
     tool: McpTool,
     exposedToolName: String = tool.name,
+    serverInstructions: String? = null,
 ): McpToolCandidate {
     val normalized = "$serverName ${tool.name} ${tool.description.orEmpty()}".lowercase()
     val category = when {
@@ -39,13 +43,15 @@ internal fun toMcpToolCandidate(
         category = category,
         enabled = tool.enable,
         schema = tool.inputSchema,
+        server = serverName,
+        serverInstructions = serverInstructions,
     )
 }
 
 internal fun McpToolCandidate.toToolDefinition(): Map<String, Any> {
     val functionDef = mutableMapOf<String, Any>(
         "name" to toolName,
-        "description" to description,
+        "description" to com.android.everytalk.data.agent.McpToolDiscovery.tagServer(server, description),
     )
 
     schema?.let { schemaValue ->

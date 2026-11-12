@@ -80,7 +80,7 @@ class PromptCacheIntegrationTest {
         val languageProbe = SystemPromptInjector.smartInjectSystemPrompt(
             frozen + SimpleTextApiMessage(id = "new-user", role = "user", content = "继续检查"),
         )
-        assertTrue((languageProbe.first() as SimpleTextApiMessage).content.contains("# 核心规则"))
+        assertTrue((languageProbe.first() as SimpleTextApiMessage).content.contains("Language: reply in the language of the user's latest message"))
         val nextAssistant = AgentAssistantApiMessage(
             id = "assistant-2",
             text = "再次读取构建结果",

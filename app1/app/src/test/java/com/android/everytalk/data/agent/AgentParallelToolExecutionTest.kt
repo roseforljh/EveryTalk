@@ -496,6 +496,22 @@ class AgentParallelToolExecutionTest {
     }
 
     @Test
+    fun `同一会话后续消息保留之前加载的MCP工具`() = runBlocking {
+        seedSession("mcp-session")
+        seedSession("mcp-other")
+        val input = loopRequest("mcp-session")
+        val first = store.createRun(input.sessionId, "u1", "a1", null, input.request)
+        store.appendToolResult(first.id, "r1", AgentContentBlock.ToolResult("s1", McpToolDiscovery.NAME, JsonPrimitive("ok"),
+            loadedMcpToolIds = listOf("mcp_hash_issue")))
+        store.appendToolResult(first.id, "r1", AgentContentBlock.ToolResult("s2", McpToolDiscovery.NAME, JsonPrimitive("bad"),
+            isError = true, loadedMcpToolIds = listOf("mcp_hash_failed")))
+        Thread.sleep(2)
+        val second = store.createRun(input.sessionId, "u2", "a2", null, input.request)
+        assertEquals(listOf("mcp_hash_issue"), store.loadedMcpToolIds(second.id))
+        assertTrue(store.loadedMcpToolIds(store.createRun("mcp-other", "u3", "a3", null, input.request).id).isEmpty())
+    }
+
+    @Test
     fun `中断Codemode不重放脚本且不恢复未提交状态`() = runBlocking {
         val session = "cm-interrupted"
         seedSession(session)

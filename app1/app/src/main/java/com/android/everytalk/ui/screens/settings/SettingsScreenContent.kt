@@ -304,8 +304,8 @@ private fun ExternalWebSearchProviderRow(
             Icon(
                 painter = painterResource(provider.iconRes),
                 contentDescription = null,
-                modifier = Modifier.size(20.dp),
-                tint = provider.accentColor.copy(alpha = contentAlpha),
+                modifier = Modifier.size(24.dp).alpha(if (isConfigured) 1f else 0.65f),
+                tint = Color.Unspecified,
             )
         }
         Spacer(modifier = Modifier.width(14.dp))

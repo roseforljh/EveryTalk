@@ -49,9 +49,6 @@ import com.android.everytalk.data.network.buildDirectMultimodalRequest
 import com.android.everytalk.data.network.isOfficialAnthropicMessagesAddress
 import com.android.everytalk.data.network.isOfficialOpenAIResponsesAddress
 import com.android.everytalk.statecontroller.mcp.dispatch.McpToolCandidate
-import com.android.everytalk.statecontroller.mcp.dispatch.QueryIntent
-import com.android.everytalk.statecontroller.mcp.dispatch.classifyMcpIntent
-import com.android.everytalk.statecontroller.mcp.dispatch.selectMcpCandidates
 import com.android.everytalk.statecontroller.mcp.dispatch.toToolDefinition
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
 import com.android.everytalk.util.AiContentSafetyDecision
@@ -630,31 +627,30 @@ internal fun MessageSender.sendMessageInternal(
                     selectedExternalProvider = selectedExternalProvider,
                     selectedExternalProviderApiKey = selectedExternalProviderApiKey,
                 )
-                val preparedMcpDispatch = if (dispatchCandidates.isNotEmpty()) {
-                    prepareMcpDispatch(
-                        messageText = originalText,
-                        allCandidates = dispatchCandidates,
-                        enabled = isMcpEnabledForRequest,
-                    )
-                } else {
-                    PreparedMcpDispatch(
-                        intent = classifyMcpIntent(originalText),
-                        tools = emptyList(),
-                    )
-                }
+                val preparedMcpDispatch = prepareMcpDispatch(
+                    allCandidates = dispatchCandidates,
+                    enabled = isMcpEnabledForRequest,
+                )
                 val mcpToolsForRequest = preparedMcpDispatch.tools
                 val shouldEnableGoogleSearch = isGeminiChannel && webSearchRouting.useNativeWebSearch
-                val mcpHasSearchTool = isMcpEnabledForRequest && mcpToolsForRequest.any { classifyMcpTool(it).isSearchLike }
+                // 只有直接可见的 MCP 搜索工具才能替代内置 web_search；延迟加载的不算，否则模型首轮没有搜索可用。
+                val mcpHasSearchTool = isMcpEnabledForRequest &&
+                    com.android.everytalk.data.agent.McpToolDiscovery.directTools(mcpToolsForRequest).any { classifyMcpTool(it).isSearchLike }
                 val shouldInjectWebSearchTool = !shouldEnableGoogleSearch && !mcpHasSearchTool
                         && webSearchRouting.externalProvider != null
 
                 val existingSystemMessageIndex = apiMessagesForBackend.indexOfFirst { it.role == "system" }
                 val existingSystemPrompt = existingSystemMessageIndex.takeIf { it >= 0 }
                     ?.let { index -> extractPrimaryText(apiMessagesForBackend[index]).trim().takeIf(String::isNotBlank) }
+                // 每段包在自己的标签里（参考 Pi 的分段系统提示），模型能分清用户指令和应用提供的上下文。
+                val section = com.android.everytalk.data.network.SystemPromptModules::section
+                val customInstructions = (systemPrompt?.trim()?.takeIf(String::isNotBlank) ?: existingSystemPrompt)
+                    ?.let { if (it.startsWith("<custom_instructions>")) it else section("custom_instructions", it) }
                 val effectiveSystemPrompt = listOfNotNull(
-                    systemPrompt?.trim()?.takeIf(String::isNotBlank) ?: existingSystemPrompt,
-                    preparedComputerRequest?.environmentPrompt,
+                    customInstructions,
+                    preparedComputerRequest?.environmentPrompt?.let { section("environment", it) },
                     skillSnapshotForRequest?.renderCatalog(),
+                    preparedMcpDispatch.serverCatalog?.let { section("mcp_servers", it) },
                     mcpApprovalSystemPrompt(
                         mcpEnabled = isMcpEnabledForRequest,
                         mcpTools = mcpToolsForRequest,

@@ -6,6 +6,7 @@ import com.android.everytalk.util.ConversationNameHelper
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** 验证标题清洗结果，确保模型失败或返回空文本时可以走首条问题兜底。 */
@@ -14,6 +15,8 @@ class ConversationTitleGeneratorTest {
     fun `normalize removes wrappers and truncates title`() {
         assertEquals("旅行计划", ConversationTitleGenerator.normalize("```\n“旅行计划”\n```") )
         assertNull(ConversationTitleGenerator.normalize("   "))
+        // 模型不听话输出长句时兜底截断到 32 字符以内。
+        assertTrue(ConversationTitleGenerator.normalize("很长".repeat(30))!!.length <= 32)
     }
 
     @Test

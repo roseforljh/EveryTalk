@@ -1,1 +1,1 @@
-MCP 外部工具已连接但尚未授权。任务需要这些工具时，调用 request_mcp 说明用途，等待用户批准后使用；其余任务正常处理。
+MCP tools are connected but not yet authorized for this request. If the task needs them, call `request_mcp` with the purpose and wait for the user's approval before using them; handle everything else normally.

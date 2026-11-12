@@ -15,6 +15,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
@@ -94,7 +95,8 @@ fun McpServerListContent(
                     SettingsRowDivider()
                 }
                 // 登录类服务不走通用地址表单；未接入时以灰色行常驻列表，点按即登录或配置授权码。
-                McpOAuthProvider.entries.filter { it.serverId !in serverStates }.forEach { provider ->
+                // Parallel 的登录只是换 Key，入口放在它的 Key 弹窗里。
+                McpOAuthProvider.entries.filter { it != McpOAuthProvider.PARALLEL && it.serverId !in serverStates }.forEach { provider ->
                     McpServerRow(
                         state = McpServerState(provider.defaultConfig().clone(commonOptions = McpCommonOptions(enable = false, name = provider.displayName))),
                         subtitle = stringResource(R.string.mcp_oauth_description),
@@ -122,10 +124,13 @@ fun McpServerListContent(
         val config = state.config
         val oauthProvider = McpOAuthProvider.entries.firstOrNull { it.serverId == config.id }
         val mailProvider = McpMailProvider.entries.firstOrNull { it.serverId == config.id }
+        val builtInKey = McpKeyProvider.entries.firstOrNull { it.matches(config) }
         McpServerManageDialog(
             state = state,
             onDismiss = { manageId = null },
-            onEdit = { manageId = null; serverToEdit = config }.takeIf { oauthProvider == null && mailProvider == null },
+            // 内置 Key 服务编辑时只改 Key（含登录），不用手填地址和请求头。
+            onEdit = { manageId = null; if (builtInKey != null) keyProvider = builtInKey else serverToEdit = config }
+                .takeIf { oauthProvider == null && mailProvider == null },
             onRelogin = oauthProvider?.let { { manageId = null; onLogin(it) } },
             onMailReconfigure = mailProvider?.let { { manageId = null; onConfigureMail(it, config.url) } },
             onDelete = { manageId = null; serverToDelete = config },
@@ -135,8 +140,10 @@ fun McpServerListContent(
     keyProvider?.let { provider ->
         McpApiKeyDialog(
             provider = provider,
-            initialKey = sharedKeys[provider].orEmpty(),
+            initialKey = serverStates.values.firstOrNull { provider.matches(it.config) }?.config?.let(provider::keyOf)
+                ?.takeIf { it.isNotBlank() } ?: sharedKeys[provider].orEmpty(),
             onConfirm = { onConnectKeyProvider(provider, it); keyProvider = null },
+            onLogin = if (provider == McpKeyProvider.PARALLEL) { { keyProvider = null; onLogin(McpOAuthProvider.PARALLEL) } } else null,
             onDismiss = { keyProvider = null },
         )
     }
@@ -184,35 +191,45 @@ fun McpSectionLabel(text: String) {
 }
 
 /** 名称决定品牌图标与强调色，自定义服务落到通用拼图图标。 */
-private data class McpBrand(val icon: Int, val color: Color, val track: Color = color)
+private data class McpBrand(val icon: Int, val color: Color, val track: Color = color, val tint: Color = Color.Unspecified)
 
 @Composable
-private fun mcpBrand(name: String): McpBrand {
+private fun mcpBrand(config: McpServerConfig): McpBrand {
+    // 内置连接按身份取品牌，用户修改显示名称后也不会丢失官方 Logo。
+    val name = McpKeyProvider.entries.firstOrNull { it.matches(config) }?.displayName
+        ?: McpOAuthProvider.entries.firstOrNull { it.serverId == config.id }?.displayName
+        ?: McpMailProvider.entries.firstOrNull { it.serverId == config.id }?.displayName
+        ?: config.name
     val n = name.lowercase()
     val mono = if (isSystemInDarkTheme()) Color(0xFFE6EDF3) else Color(0xFF24292F)
     return when {
         "cloudflare" in n -> McpBrand(R.drawable.ic_cloudflare, Color(0xFFF6821F))
-        "github" in n -> McpBrand(R.drawable.ic_github, mono, MaterialTheme.colorScheme.onSurfaceVariant)
-        "notion" in n -> McpBrand(R.drawable.ic_notion, mono, MaterialTheme.colorScheme.onSurfaceVariant)
+        "github" in n -> McpBrand(R.drawable.ic_github, mono, MaterialTheme.colorScheme.onSurfaceVariant, mono)
+        "notion" in n -> McpBrand(R.drawable.ic_notion, mono, MaterialTheme.colorScheme.onSurfaceVariant, mono)
         "gmail" in n -> McpBrand(R.drawable.ic_gmail, Color(0xFFEA4335))
         "microsoft" in n || "微软" in n -> McpBrand(R.drawable.ic_microsoft, Color(0xFF00A4EF))
         "qq" in n -> McpBrand(R.drawable.ic_qq, Color(0xFF12B7F5))
         "netease" in n || "网易" in n -> McpBrand(R.drawable.ic_netease, Color(0xFFE60012))
         "exa" in n -> McpBrand(R.drawable.ic_exa, Color(0xFF6366F1))
         "tavily" in n -> McpBrand(R.drawable.ic_tavily, Color(0xFF14B8A6))
-        "jina" in n -> McpBrand(R.drawable.ic_globe, Color(0xFF0EA5E9))
-        "context7" in n || "doc" in n -> McpBrand(R.drawable.ic_gpt_book_open_study, Color(0xFF10B981))
-        "crawl" in n || "web" in n -> McpBrand(R.drawable.ic_globe, Color(0xFFEF4444))
-        "search" in n -> McpBrand(R.drawable.ic_search, Color(0xFF3B82F6))
-        "mail" in n -> McpBrand(R.drawable.ic_gpt_email, Color(0xFF8B5CF6))
-        "code" in n -> McpBrand(R.drawable.ic_gpt_code, Color(0xFFF59E0B))
-        else -> McpBrand(R.drawable.ic_gpt_puzzle_piece, Color(0xFF6B7280))
+        "jina" in n -> McpBrand(R.drawable.ic_jina, Color(0xFF009191))
+        "context7" in n -> McpBrand(R.drawable.ic_context7, Color(0xFF047857))
+        "firecrawl" in n -> McpBrand(R.drawable.ic_firecrawl, Color(0xFFFA5D19))
+        "parallel" in n -> McpBrand(R.drawable.ic_parallel, Color(0xFF888888))
+        "brightdata" in n || "bright data" in n -> McpBrand(R.drawable.ic_brightdata, Color(0xFF397EFF))
+        "bocha" in n || "博查" in n -> McpBrand(R.drawable.ic_bocha, Color(0xFF006EFF))
+        "serpapi" in n -> McpBrand(R.drawable.ic_serpapi, Color(0xFF7950F2))
+        "crawl" in n || "web" in n -> McpBrand(R.drawable.ic_globe, Color(0xFFEF4444), tint = Color(0xFFEF4444))
+        "search" in n -> McpBrand(R.drawable.ic_search, Color(0xFF3B82F6), tint = Color(0xFF3B82F6))
+        "mail" in n -> McpBrand(R.drawable.ic_gpt_email, Color(0xFF8B5CF6), tint = Color(0xFF8B5CF6))
+        "code" in n -> McpBrand(R.drawable.ic_gpt_code, Color(0xFFF59E0B), tint = Color(0xFFF59E0B))
+        else -> McpBrand(R.drawable.ic_gpt_puzzle_piece, Color(0xFF6B7280), tint = Color(0xFF6B7280))
     }
 }
 
 @Composable
-private fun McpServerIcon(name: String, enabled: Boolean = true) {
-    val brand = mcpBrand(name)
+private fun McpServerIcon(config: McpServerConfig, enabled: Boolean = true) {
+    val brand = mcpBrand(config)
     Box(
         modifier = Modifier
             .size(36.dp)
@@ -223,8 +240,9 @@ private fun McpServerIcon(name: String, enabled: Boolean = true) {
         Icon(
             painter = painterResource(brand.icon),
             contentDescription = null,
-            modifier = Modifier.size(20.dp),
-            tint = if (enabled) brand.color else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+            // 品牌素材保留官方原色；仅透明度区分未接入状态，单色标志适配深浅主题。
+            modifier = Modifier.size(24.dp).alpha(if (enabled) 1f else 0.65f),
+            tint = brand.tint,
         )
     }
 }
@@ -241,7 +259,7 @@ private fun McpServerRow(state: McpServerState, onClick: () -> Unit, onToggle: (
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        McpServerIcon(config.name, config.enabled)
+        McpServerIcon(config, config.enabled)
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
             Text(
@@ -281,7 +299,7 @@ private fun McpServerRow(state: McpServerState, onClick: () -> Unit, onToggle: (
             modifier = Modifier.scale(0.8f),
             colors = SwitchDefaults.colors(
                 checkedThumbColor = Color.White,
-                checkedTrackColor = mcpBrand(config.name).track,
+                checkedTrackColor = mcpBrand(config).track,
                 checkedBorderColor = Color.Transparent,
                 uncheckedThumbColor = MaterialTheme.colorScheme.onSurfaceVariant,
                 uncheckedTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
@@ -340,7 +358,7 @@ private fun McpServerManageDialog(
         textContentColor = appDialogContentColor(),
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                McpServerIcon(config.name)
+                McpServerIcon(config)
                 Spacer(Modifier.width(12.dp))
                 Column {
                     Text(config.name, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -392,7 +410,7 @@ private fun McpServerManageDialog(
 
 /** 内置服务只填一个 API Key，旁边给出官方获取页面。 */
 @Composable
-private fun McpApiKeyDialog(provider: McpKeyProvider, initialKey: String, onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
+private fun McpApiKeyDialog(provider: McpKeyProvider, initialKey: String, onConfirm: (String) -> Unit, onLogin: (() -> Unit)?, onDismiss: () -> Unit) {
     var key by remember { mutableStateOf(initialKey) }
     val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
     val dialogBg = appDialogContainerColor()
@@ -418,8 +436,18 @@ private fun McpApiKeyDialog(provider: McpKeyProvider, initialKey: String, onConf
                     shape = AppDialogTextFieldShape,
                     colors = DialogTextFieldColors,
                 )
-                TextButton(onClick = { uriHandler.openUri(provider.keyPageUrl) }, contentPadding = PaddingValues(0.dp)) {
-                    Text(stringResource(R.string.mcp_get_api_key))
+                // 带边框的次要按钮：暗色模式下纯文字按钮看不出可点。
+                val secondary = ButtonDefaults.outlinedButtonColors(contentColor = content)
+                val border = androidx.compose.foundation.BorderStroke(1.dp, appDialogBorderColor())
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    onLogin?.let {
+                        OutlinedButton(onClick = it, shape = AppDialogButtonShape, colors = secondary, border = border, contentPadding = PaddingValues(horizontal = 12.dp)) {
+                            Text(stringResource(R.string.mcp_login_account, provider.displayName), maxLines = 1)
+                        }
+                    }
+                    OutlinedButton(onClick = { uriHandler.openUri(provider.keyPageUrl) }, shape = AppDialogButtonShape, colors = secondary, border = border, contentPadding = PaddingValues(horizontal = 12.dp)) {
+                        Text(stringResource(R.string.mcp_get_api_key), maxLines = 1)
+                    }
                 }
             }
         },
