@@ -10,6 +10,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  actions: write
 
 jobs:
   release:
@@ -59,8 +60,16 @@ jobs:
           PY
 
       - name: Release Please
+        id: release
         uses: googleapis/release-please-action@v4
         with:
           # 使用当前工作流自动生成的令牌，避免依赖可能过期的 PAT Secret。
           token: ${{ github.token }}
           release-type: simple
+
+      # 内置令牌创建的 Release 不会触发其他工作流，这里按新标签手动启动打包。
+      - name: Build release APK
+        if: ${{ steps.release.outputs.release_created }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run build-artifacts.yml -R "$GITHUB_REPOSITORY" --ref "${{ steps.release.outputs.tag_name }}"
