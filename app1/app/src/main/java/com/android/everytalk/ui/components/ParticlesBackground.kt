@@ -26,7 +26,7 @@ import kotlin.random.Random
 
 /**
  * 静态页背景粒子，移植自 React Bits Particles：球体内随机分布的点云沿视轴缓慢自转，
- * 每颗粒子按随机相位轻微漂浮，再透视投影到屏幕；近大远小、远处淡出、轻微闪烁，开场逐颗显现。
+ * 每颗粒子按随机相位轻微漂浮，再透视投影到屏幕；近大远小、远处淡出、轻微闪烁，开场逐颗显现；每次进入页面随机分布，之后无限运动。
  * 只在绘制阶段读取时钟，动画期间不触发重组；系统关闭动画时保持静止画面。
  */
 @Composable
@@ -37,9 +37,9 @@ fun ParticlesBackground(
     maxAlpha: Float = if (color.luminance() < 0.5f) 0.4f else 0.6f,
     count: Int = 200,
 ) {
-    val particles = remember(count) { createParticles(count) }
+    val particles = remember(count) { createParticles(count, Random.nextInt()) }
     val context = LocalContext.current
-    val clock = remember { mutableFloatStateOf(0f) }
+    val clock = remember { mutableFloatStateOf(Random.nextFloat() * 1000f) }
     val reveal = remember { mutableFloatStateOf(0f) }
     LaunchedEffect(Unit) {
         // 系统关闭动画或测试环境把动画倍率设为 0 时保持静止，避免无限帧循环让界面永不进入 idle。
@@ -49,9 +49,9 @@ fun ParticlesBackground(
             reveal.floatValue = 1f
             return@LaunchedEffect
         }
-        // 只驱动开场显现；显现结束后停止请求新帧，静止画面不会让界面一直处于"动画中"。
+        // 持续动画；页面离开组合或应用进入后台时帧时钟暂停，不会空耗。
         var last = 0L
-        while (reveal.floatValue < 1f) {
+        while (true) {
             withFrameNanos { now ->
                 val dt = if (last == 0L) 1f / 60f else ((now - last) / 1e9f).coerceIn(0.0005f, 0.05f)
                 last = now
@@ -107,8 +107,8 @@ fun ParticlesBackground(
 private class Particle(val x: Float, val y: Float, val z: Float, val r0: Float, val r1: Float, val r2: Float, val r3: Float)
 
 /** 在单位球内均匀取点：拒绝采样方向，再用立方根校正半径分布。 */
-private fun createParticles(count: Int): List<Particle> {
-    val random = Random(7920)
+private fun createParticles(count: Int, seed: Int): List<Particle> {
+    val random = Random(seed)
     return List(count) {
         var x: Float; var y: Float; var z: Float; var len: Float
         do {
