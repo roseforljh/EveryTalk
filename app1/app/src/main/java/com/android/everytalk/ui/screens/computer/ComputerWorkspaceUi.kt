@@ -170,38 +170,39 @@ internal fun ComputerWorkspaceCard(
             }
 
             if (expanded) {
-                ComputerDetailValue(
-                    label = stringResource(R.string.computer_workspace_last_used),
-                    value = formatComputerDate(workspace.lastUsedAt),
-                )
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 4.dp))
 
-                FlowRow(
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    OutlinedButton(
-                        onClick = { secretDialogVisible = true; dialogError = null },
-                        enabled = busyAction == null,
-                        modifier = Modifier.height(48.dp),
-                        shape = AppDialogButtonShape,
-                    ) {
-                        Text(stringResource(R.string.computer_secret_add))
-                    }
                     OutlinedButton(
                         onClick = { previewVisibility = ComputerPreviewVisibility.PRIVATE; dialogError = null },
                         enabled = busyAction == null && workspace.status == ComputerWorkspaceStatus.READY,
-                        modifier = Modifier.height(48.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(46.dp),
                         shape = AppDialogButtonShape,
                     ) {
-                        Text(stringResource(R.string.computer_preview_private_create))
+                        Text(
+                            text = stringResource(R.string.computer_preview_private_create),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                     OutlinedButton(
                         onClick = { previewVisibility = ComputerPreviewVisibility.PUBLIC; dialogError = null },
                         enabled = busyAction == null && workspace.status == ComputerWorkspaceStatus.READY,
-                        modifier = Modifier.height(48.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(46.dp),
                         shape = AppDialogButtonShape,
                     ) {
-                        Text(stringResource(R.string.computer_preview_public_create))
+                        Text(
+                            text = stringResource(R.string.computer_preview_public_create),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                 }
 
@@ -248,16 +249,38 @@ internal fun ComputerWorkspaceCard(
                     )
                 }
 
-                TextButton(
-                    onClick = { deleteDialogVisible = true; dialogError = null },
-                    enabled = busyAction == null,
-                    modifier = Modifier.height(48.dp),
-                    shape = AppDialogButtonShape,
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        text = stringResource(R.string.computer_workspace_delete),
-                        color = MaterialTheme.colorScheme.error,
-                    )
+                    OutlinedButton(
+                        onClick = { secretDialogVisible = true; dialogError = null },
+                        enabled = busyAction == null,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(44.dp),
+                        shape = AppDialogButtonShape,
+                    ) {
+                        Text(stringResource(R.string.computer_secret_add))
+                    }
+                    OutlinedButton(
+                        onClick = { deleteDialogVisible = true; dialogError = null },
+                        enabled = busyAction == null,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(44.dp),
+                        shape = AppDialogButtonShape,
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            MaterialTheme.colorScheme.error.copy(alpha = 0.45f),
+                        ),
+                    ) {
+                        Text(
+                            text = stringResource(R.string.computer_workspace_delete),
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
                 }
             }
         }

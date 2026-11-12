@@ -1,5 +1,11 @@
 package com.android.everytalk.ui.screens.computer
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.activity.compose.BackHandler
@@ -21,13 +27,16 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -37,7 +46,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -59,6 +67,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -74,11 +83,9 @@ import com.android.everytalk.data.computer.ComputerException
 import com.android.everytalk.data.computer.ComputerDiagnostics
 import com.android.everytalk.data.computer.ComputerFailureStage
 import com.android.everytalk.data.computer.ComputerPermissionMode
-import com.android.everytalk.data.computer.ComputerRunMode
 import com.android.everytalk.data.computer.ComputerStatus
 import com.android.everytalk.data.computer.HostKeyProbeResult
 import com.android.everytalk.statecontroller.AppViewModel
-import com.android.everytalk.statecontroller.cancelComputerOperation
 import com.android.everytalk.statecontroller.confirmComputerReplacementHostKey
 import com.android.everytalk.statecontroller.deleteComputer
 import com.android.everytalk.statecontroller.disconnectComputer
@@ -92,8 +99,6 @@ import com.android.everytalk.statecontroller.refreshComputer
 import com.android.everytalk.statecontroller.setComputerPermissionMode
 import com.android.everytalk.statecontroller.showSnackbar
 import com.android.everytalk.statecontroller.updateComputer
-import com.android.everytalk.statecontroller.logoutCloudflareComputer
-import com.android.everytalk.statecontroller.deleteLocalCloudflareComputer
 import com.android.everytalk.ui.components.floatingEdgeGradient
 import com.android.everytalk.ui.components.dialog.AppDialogShape
 import com.android.everytalk.ui.components.dialog.AppDialogButtonShape
@@ -162,14 +167,12 @@ fun ComputerDetailScreen(
     var editProgressText by remember { mutableStateOf<String?>(null) }
     var editErrorText by remember { mutableStateOf<String?>(null) }
     var deleteDialogVisible by remember { mutableStateOf(false) }
-    var cloudflareLocalAction by remember { mutableStateOf<String?>(null) }
     var replacementHostKey by remember { mutableStateOf<HostKeyProbeResult?>(null) }
     var moreSettingsExpanded by remember(computer?.id) { mutableStateOf(false) }
     var pendingPermissionMode by remember(computer?.id) { mutableStateOf<ComputerPermissionMode?>(null) }
     val genericFailure = stringResource(R.string.computer_action_failed)
     val latestEditPrepared by rememberUpdatedState(editPrepared)
     val latestActionJob by rememberUpdatedState(actionJob)
-    val latestBusyAction by rememberUpdatedState(busyAction)
     ComputerSecureWindowEffect(editDialogVisible)
 
     DisposableEffect(Unit) {
@@ -234,7 +237,8 @@ fun ComputerDetailScreen(
         navController.popBackStack()
     }
 
-    BackHandler(onBack = ::navigateBack)
+    // 仅在存在活动任务需要取消时拦截，空闲状态下交给 NavHost 驱动预测式侧滑返回预览。
+    BackHandler(enabled = busyAction != null, onBack = ::navigateBack)
 
     fun validationMessage(error: ComputerAddFormError): String = context.getString(
         when (error) {
@@ -387,15 +391,31 @@ fun ComputerDetailScreen(
                         ComputerOverviewCard(
                             computer = computer,
                             busyAction = busyAction,
+                            onRefresh = {
+                                launchAction("refresh") {
+                                    viewModel.refreshComputer(computer.id)
+                                    withContext(Dispatchers.Main) {
+                                        viewModel.showSnackbar(genericSuccessMessage(viewModel, R.string.computer_refresh_success))
+                                    }
+                                }
+                            },
                             onEdit = {
                                 editForm = computer.toEditFormState()
                                 editErrorText = null
                                 editDialogVisible = true
                             },
+                            onDisconnect = {
+                                launchAction("disconnect") {
+                                    viewModel.disconnectComputer(computer.id)
+                                }
+                            },
+                            onReplaceHostKey = {
+                                launchAction("host-key-probe") {
+                                    val result = viewModel.probeComputerReplacementHostKey(computer.id)
+                                    withContext(Dispatchers.Main) { replacementHostKey = result }
+                                }
+                            },
                         )
-                    }
-                    item {
-                        ComputerAgentUseCard(computer)
                     }
                     item {
                         ComputerPermissionSettingsCard(
@@ -414,14 +434,13 @@ fun ComputerDetailScreen(
                             },
                         )
                     }
-                    item {
-                        ComputerSectionTitle(title = stringResource(R.string.computer_workspace_section))
-                    }
-                    if (workspaces.isEmpty()) {
+                    if (workspaces.isNotEmpty()) {
                         item {
-                            ComputerEmptySection(stringResource(R.string.computer_workspace_empty))
+                            ComputerSectionTitle(
+                                title = stringResource(R.string.computer_workspace_section),
+                                detail = workspaces.size.toString(),
+                            )
                         }
-                    } else {
                         items(workspaces, key = { it.id }) { workspace ->
                             ComputerWorkspaceCard(
                                 viewModel = viewModel,
@@ -432,25 +451,6 @@ fun ComputerDetailScreen(
                                 onMessage = viewModel::showSnackbar,
                             )
                         }
-                    }
-                    item {
-                        ComputerMaintenanceCard(
-                            computer = computer,
-                            busyAction = busyAction,
-                            onRefresh = {
-                                launchAction("refresh") {
-                                    viewModel.refreshComputer(computer.id)
-                                    withContext(Dispatchers.Main) {
-                                        viewModel.showSnackbar(genericSuccessMessage(viewModel, R.string.computer_refresh_success))
-                                    }
-                                }
-                            },
-                            onDisconnect = {
-                                launchAction("disconnect") {
-                                    viewModel.disconnectComputer(computer.id)
-                                }
-                            },
-                        )
                     }
                     item {
                         ComputerMoreSettingsCard(
@@ -466,8 +466,6 @@ fun ComputerDetailScreen(
                                 }
                             },
                             onDelete = { deleteDialogVisible = true },
-                            onCloudflareLogout = { cloudflareLocalAction = "logout" },
-                            onCloudflareDeleteLocal = { cloudflareLocalAction = "delete-local" },
                         )
                     }
                 }
@@ -585,27 +583,6 @@ fun ComputerDetailScreen(
         },
     )
 
-    if (cloudflareLocalAction != null && computer.provider == com.android.everytalk.data.computer.ComputerProvider.CLOUDFLARE) {
-        AlertDialog(
-            onDismissRequest = { if (busyAction == null) cloudflareLocalAction = null },
-            title = { Text(if (cloudflareLocalAction == "logout") stringResource(R.string.cloudflare_logout_title) else stringResource(R.string.cloudflare_delete_computer_title)) },
-            text = { Text(stringResource(R.string.cloudflare_clear_local_description)) },
-            confirmButton = {
-                Button(onClick = {
-                    val action = cloudflareLocalAction ?: return@Button
-                    launchAction("cloudflare-$action", onCompletion = { cloudflareLocalAction = null }) {
-                        if (action == "logout") viewModel.logoutCloudflareComputer(computerId)
-                        else {
-                            viewModel.deleteLocalCloudflareComputer(computerId)
-                            withContext(Dispatchers.Main) { navController.popBackStack() }
-                        }
-                    }
-                }, enabled = busyAction == null) { Text(stringResource(R.string.action_confirm)) }
-            },
-            dismissButton = { TextButton(onClick = { cloudflareLocalAction = null }, enabled = busyAction == null) { Text(stringResource(R.string.account_cancel)) } },
-        )
-    }
-
     ComputerFullApprovalWarningDialog(
         visible = pendingPermissionMode == ComputerPermissionMode.FULL,
         isBusy = busyAction == "permission-mode",
@@ -625,91 +602,261 @@ fun ComputerDetailScreen(
 private fun genericSuccessMessage(viewModel: AppViewModel, resourceId: Int): String =
     viewModel.getApplication<android.app.Application>().getString(resourceId)
 
+/**
+ * 服务器顶部总览与连接操作卡片。
+ * 将状态徽章、连接地址、硬件资源指标以及检查连接/编辑信息/断开连接统一收拢在同一卡片内，
+ * 避免连接状态在顶部而连接动作散落在底部的割裂感。
+ */
 @Composable
 private fun ComputerOverviewCard(
     computer: Computer,
     busyAction: String?,
+    onRefresh: () -> Unit,
     onEdit: () -> Unit,
+    onDisconnect: () -> Unit,
+    onReplaceHostKey: () -> Unit,
 ) {
+    val isRefreshing = busyAction == "refresh"
+    val isDisconnecting = busyAction == "disconnect"
+    val isCheckingStatus = isRefreshing ||
+        computer.status == ComputerStatus.PROBING ||
+        computer.status == ComputerStatus.PROVISIONING ||
+        computer.status == ComputerStatus.VERIFYING
+
     ComputerSectionCard {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                painter = painterResource(R.drawable.ic_gpt_terminal),
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.size(28.dp),
-            )
-            Column(
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Box(
                 modifier = Modifier
-                    .padding(start = 12.dp)
-                    .weight(1f),
+                    .size(44.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.07f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_gpt_terminal),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 Text(
-                    text = stringResource(computerStatusLabelRes(computer)),
-                    color = if (computer.status == ComputerStatus.READY) {
-                        MaterialTheme.colorScheme.onSurface
-                    } else {
-                        MaterialTheme.colorScheme.error
-                    },
+                    text = "${computer.username}@${computer.host}:${computer.port}",
                     style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = "${computer.username}@${computer.host}:${computer.port}",
+                    text = stringResource(
+                        when (computer.credentialState) {
+                            ComputerCredentialState.DEDICATED_KEY -> R.string.computer_credential_dedicated
+                            ComputerCredentialState.ORIGINAL_ENCRYPTED -> R.string.computer_credential_original
+                            ComputerCredentialState.MISSING -> R.string.computer_credential_missing
+                        },
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+            ComputerStatusBadge(
+                computer = computer,
+                isChecking = isCheckingStatus,
+            )
         }
 
         computer.capabilities?.let { capabilities ->
-            val resources = buildList {
+            val resourceItems = buildList {
                 capabilities.cpuCount?.let { add(stringResource(R.string.computer_resource_cpu_short, it)) }
                 capabilities.memoryBytes?.let { add(stringResource(R.string.computer_resource_memory_short, formatComputerBytes(it))) }
                 capabilities.diskAvailableBytes?.let { add(stringResource(R.string.computer_resource_disk_short, formatComputerBytes(it))) }
-            }.joinToString("  ·  ")
-            if (resources.isNotBlank()) {
-                Text(
-                    text = resources,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+            }
+            if (resourceItems.isNotEmpty()) {
+                FlowRow(
                     modifier = Modifier.padding(top = 14.dp),
-                )
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    resourceItems.forEach { label ->
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f),
+                        ) {
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                            )
+                        }
+                    }
+                }
             }
         }
-        computer.lastErrorCode?.let { errorCode ->
-            Text(
-                text = stringResource(R.string.computer_detail_error_short, errorCode),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.padding(top = 8.dp),
-            )
+
+        if (computer.lastErrorCode != null || computer.status == ComputerStatus.HOST_KEY_CHANGED) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp),
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f),
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    computer.lastErrorCode?.let { errorCode ->
+                        Text(
+                            text = stringResource(R.string.computer_detail_error_short, errorCode),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    if (computer.status == ComputerStatus.HOST_KEY_CHANGED) {
+                        OutlinedButton(
+                            onClick = onReplaceHostKey,
+                            enabled = busyAction == null,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(42.dp),
+                            shape = AppDialogButtonShape,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.computer_action_host_key),
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    }
+                }
+            }
         }
-        OutlinedButton(
-            onClick = onEdit,
-            enabled = busyAction == null,
+
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 14.dp)
-                .height(48.dp),
-            shape = AppDialogButtonShape,
+                .padding(top = 14.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Text(stringResource(R.string.computer_action_edit))
+            Button(
+                onClick = onRefresh,
+                enabled = busyAction == null,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(48.dp),
+                shape = AppDialogButtonShape,
+            ) {
+                AppDialogActionContent(
+                    label = stringResource(R.string.computer_action_reconnect_probe),
+                    isLoading = isRefreshing,
+                    loadingContentDescription = stringResource(R.string.computer_action_working),
+                )
+            }
+            OutlinedButton(
+                onClick = onEdit,
+                enabled = busyAction == null,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(48.dp),
+                shape = AppDialogButtonShape,
+            ) {
+                Text(stringResource(R.string.computer_action_edit))
+            }
+        }
+
+        if (computer.status == ComputerStatus.READY || isDisconnecting) {
+            OutlinedButton(
+                onClick = onDisconnect,
+                enabled = busyAction == null,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp)
+                    .height(44.dp),
+                shape = AppDialogButtonShape,
+            ) {
+                AppDialogActionContent(
+                    label = stringResource(R.string.computer_action_disconnect),
+                    isLoading = isDisconnecting,
+                    loadingContentDescription = stringResource(R.string.computer_action_working),
+                )
+            }
         }
     }
 }
 
+/**
+ * 语义化连接状态胶囊：
+ * - 已就绪：绿色圆点 + 柔和底色
+ * - 已断开：中性灰圆点，不再误标为错误红
+ * - 检查中：旋转加载指示器
+ * - 离线/异常：错误红圆点与警示底色
+ */
 @Composable
-private fun ComputerAgentUseCard(computer: Computer) {
-    ComputerSectionCard {
-        Text(stringResource(R.string.computer_agent_use_title), style = MaterialTheme.typography.titleMedium)
-        Text(
-            text = stringResource(R.string.computer_agent_use_body),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 6.dp),
-        )
+private fun ComputerStatusBadge(
+    computer: Computer,
+    isChecking: Boolean,
+) {
+    val isErrorState = computer.status == ComputerStatus.OFFLINE ||
+        computer.status == ComputerStatus.ERROR ||
+        computer.status == ComputerStatus.ACTION_REQUIRED ||
+        computer.status == ComputerStatus.HOST_KEY_CHANGED ||
+        computer.status == ComputerStatus.CONFIGURATION_REQUIRED
+    val dotColor = when {
+        computer.status == ComputerStatus.READY -> Color(0xFF2EAF6D)
+        isErrorState -> MaterialTheme.colorScheme.error
+        else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+    }
+    val containerColor = when {
+        computer.status == ComputerStatus.READY -> Color(0xFF2EAF6D).copy(alpha = 0.12f)
+        isErrorState -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.45f)
+        else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f)
+    }
+    val textColor = when {
+        computer.status == ComputerStatus.READY -> Color(0xFF2EAF6D)
+        isErrorState -> MaterialTheme.colorScheme.error
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+
+    Surface(
+        shape = RoundedCornerShape(percent = 50),
+        color = containerColor,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            if (isChecking) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(12.dp),
+                    strokeWidth = 1.8.dp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(7.dp)
+                        .clip(CircleShape)
+                        .background(dotColor),
+                )
+            }
+            Text(
+                text = stringResource(computerStatusLabelRes(computer)),
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Medium,
+                color = textColor,
+            )
+        }
     }
 }
 
@@ -724,64 +871,30 @@ internal fun ComputerPermissionSettingsCard(
         Text(
             text = stringResource(R.string.computer_permission_mode_title),
             style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
         )
         Text(
             text = stringResource(R.string.computer_permission_mode_body),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 4.dp, bottom = 10.dp),
+            modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
         )
         ComputerPermissionModeSelector(
             selected = computer.permissionMode,
             enabled = busyAction == null,
             onSelect = onPermissionModeChange,
         )
-        Text(
-            text = summary,
-            style = MaterialTheme.typography.bodySmall,
-            color = if (computer.username == "root") {
-                MaterialTheme.colorScheme.error
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            },
-            modifier = Modifier.padding(top = 10.dp),
-        )
-    }
-}
-
-@Composable
-private fun ComputerMaintenanceCard(
-    computer: Computer,
-    busyAction: String?,
-    onRefresh: () -> Unit,
-    onDisconnect: () -> Unit,
-) {
-    ComputerSectionCard {
-        Text(
-            text = stringResource(R.string.computer_settings_maintenance),
-            style = MaterialTheme.typography.titleMedium,
-        )
-        FlowRow(
-            modifier = Modifier.padding(top = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Button(
-                onClick = onRefresh,
-                enabled = busyAction == null,
-                modifier = Modifier.height(48.dp),
-                shape = AppDialogButtonShape,
-            ) {
-                Text(stringResource(R.string.computer_action_reconnect_probe))
-            }
-            OutlinedButton(
-                onClick = onDisconnect,
-                enabled = busyAction == null,
-                modifier = Modifier.height(48.dp),
-                shape = AppDialogButtonShape,
-            ) {
-                Text(stringResource(R.string.computer_action_disconnect))
-            }
+        if (summary.isNotBlank()) {
+            Text(
+                text = summary,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (computer.username == "root") {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                modifier = Modifier.padding(top = 10.dp),
+            )
         }
     }
 }
@@ -795,8 +908,6 @@ private fun ComputerMoreSettingsCard(
     onExpandedChange: (Boolean) -> Unit,
     onReplaceHostKey: () -> Unit,
     onDelete: () -> Unit,
-    onCloudflareLogout: () -> Unit = {},
-    onCloudflareDeleteLocal: () -> Unit = {},
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -815,7 +926,11 @@ private fun ComputerMoreSettingsCard(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text(stringResource(R.string.computer_more_settings), style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            text = stringResource(R.string.computer_more_settings),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
                         Text(
                             text = stringResource(R.string.computer_more_settings_body),
                             style = MaterialTheme.typography.bodySmall,
@@ -837,73 +952,101 @@ private fun ComputerMoreSettingsCard(
                 }
             }
 
-            if (expanded) {
-                HorizontalDivider(Modifier.padding(horizontal = 16.dp))
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
-                    ComputerSettingsGroup(stringResource(R.string.computer_settings_security)) {
-                        ComputerDetailValue(
-                            stringResource(R.string.computer_detail_last_connected),
-                            formatComputerDate(computer.lastConnectedAt),
-                        )
-                        ComputerDetailValue(
-                            stringResource(R.string.computer_detail_credential),
-                            stringResource(
-                                when (computer.credentialState) {
-                                    ComputerCredentialState.DEDICATED_KEY -> R.string.computer_credential_dedicated
-                                    ComputerCredentialState.ORIGINAL_ENCRYPTED -> R.string.computer_credential_original
-                                    ComputerCredentialState.MISSING -> R.string.computer_credential_missing
-                                },
-                            ),
-                        )
-                        ComputerDetailValue(
-                            stringResource(R.string.computer_detail_host_key),
-                            computer.hostKeyFingerprint ?: "—",
-                        )
-                        if (computer.status == ComputerStatus.HOST_KEY_CHANGED) {
+            AnimatedVisibility(
+                visible = expanded,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut(),
+            ) {
+                if (expanded) {
+                    Column {
+                        HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp),
+                        ) {
+                            ComputerSettingsGroup(stringResource(R.string.computer_settings_security)) {
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(16.dp),
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f),
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        ComputerDetailValue(
+                                            stringResource(R.string.computer_detail_last_connected),
+                                            formatComputerDate(computer.lastConnectedAt),
+                                        )
+                                        ComputerDetailValue(
+                                            stringResource(R.string.computer_detail_credential),
+                                            stringResource(
+                                                when (computer.credentialState) {
+                                                    ComputerCredentialState.DEDICATED_KEY -> R.string.computer_credential_dedicated
+                                                    ComputerCredentialState.ORIGINAL_ENCRYPTED -> R.string.computer_credential_original
+                                                    ComputerCredentialState.MISSING -> R.string.computer_credential_missing
+                                                },
+                                            ),
+                                        )
+                                        Row(modifier = Modifier.fillMaxWidth()) {
+                                            Text(
+                                                text = stringResource(R.string.computer_detail_host_key),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.weight(0.38f),
+                                            )
+                                            Text(
+                                                text = computer.hostKeyFingerprint ?: "—",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                fontFamily = FontFamily.Monospace,
+                                                modifier = Modifier.weight(0.62f),
+                                            )
+                                        }
+                                    }
+                                }
+                                if (computer.status == ComputerStatus.HOST_KEY_CHANGED) {
+                                    OutlinedButton(
+                                        onClick = onReplaceHostKey,
+                                        enabled = busyAction == null,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(46.dp),
+                                        shape = AppDialogButtonShape,
+                                    ) {
+                                        Text(stringResource(R.string.computer_action_host_key))
+                                    }
+                                }
+                                Text(
+                                    text = stringResource(R.string.computer_model_data_notice),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+
+                            HorizontalDivider()
+                            ComputerSettingsGroup(stringResource(R.string.computer_audit_title)) {
+                                ComputerAuditContent(audits)
+                            }
+
+                            HorizontalDivider()
                             OutlinedButton(
-                                onClick = onReplaceHostKey,
+                                onClick = onDelete,
                                 enabled = busyAction == null,
-                                modifier = Modifier.height(48.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(48.dp),
                                 shape = AppDialogButtonShape,
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.45f)),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = MaterialTheme.colorScheme.error,
+                                ),
                             ) {
-                                Text(stringResource(R.string.computer_action_host_key))
+                                Text(
+                                    text = stringResource(R.string.computer_action_delete),
+                                    color = MaterialTheme.colorScheme.error,
+                                )
                             }
                         }
-                        Text(
-                            text = stringResource(R.string.computer_model_data_notice),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-
-                    HorizontalDivider()
-                    ComputerSettingsGroup(stringResource(R.string.computer_audit_title)) {
-                        ComputerAuditContent(audits)
-                    }
-
-                    HorizontalDivider()
-                    if (computer.provider == com.android.everytalk.data.computer.ComputerProvider.CLOUDFLARE) {
-                        OutlinedButton(onClick = onCloudflareLogout, enabled = busyAction == null, modifier = Modifier.height(48.dp)) {
-                            Text(stringResource(R.string.cloudflare_logout_title))
-                        }
-                        OutlinedButton(onClick = onCloudflareDeleteLocal, enabled = busyAction == null, modifier = Modifier.height(48.dp)) {
-                            Text(stringResource(R.string.cloudflare_delete_computer_title))
-                        }
-                        HorizontalDivider()
-                    }
-                    TextButton(
-                        onClick = onDelete,
-                        enabled = busyAction == null,
-                        modifier = Modifier.height(48.dp),
-                        shape = AppDialogButtonShape,
-                    ) {
-                        Text(
-                            text = stringResource(R.string.computer_action_delete),
-                            color = MaterialTheme.colorScheme.error,
-                        )
                     }
                 }
             }
@@ -937,12 +1080,16 @@ internal fun ComputerPermissionModeSelector(
                 enabled = enabled,
                 modifier = Modifier.fillMaxWidth(),
                 shape = shape,
-                color = Color.Transparent,
-                border = androidx.compose.foundation.BorderStroke(
-                    width = 1.dp,
-                    // 未选中也要看得见边框，否则在深色底上和背景糊成一片。
+                color = if (isSelected) {
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+                } else {
+                    Color.Transparent
+                },
+                border = BorderStroke(
+                    width = if (isSelected) 1.5.dp else 1.dp,
+                    // 选中态加深边框与浅底色，未选中保持清晰可见的细边框。
                     color = MaterialTheme.colorScheme.onSurface.copy(
-                        alpha = 0.22f,
+                        alpha = if (isSelected) 0.65f else 0.18f,
                     ),
                 ),
             ) {
@@ -950,11 +1097,16 @@ internal fun ComputerPermissionModeSelector(
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Column(Modifier.weight(1f)) {
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(end = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
                         Text(
                             text = stringResource(mode.titleResource()),
                             style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium,
+                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
                         )
                         Text(
                             text = stringResource(mode.bodyResource()),
@@ -988,16 +1140,16 @@ private fun ComputerPermissionMode.bodyResource(): Int = when (this) {
     ComputerPermissionMode.FULL -> R.string.computer_permission_full_body
 }
 
+/**
+ * 权限选项卡片自身已经展示对应说明，仅在 root + 每次批准时需要额外提示高权限风险。
+ */
 @Composable
-private fun computerPermissionSummary(computer: Computer): String = when (computer.permissionMode) {
-    ComputerPermissionMode.MANUAL -> if (computer.username == "root") {
+private fun computerPermissionSummary(computer: Computer): String =
+    if (computer.permissionMode == ComputerPermissionMode.MANUAL && computer.username == "root") {
         stringResource(R.string.computer_permission_direct_root)
     } else {
-        stringResource(R.string.computer_permission_container)
+        ""
     }
-    ComputerPermissionMode.SMART -> stringResource(R.string.computer_permission_smart_body)
-    ComputerPermissionMode.FULL -> stringResource(R.string.computer_permission_full_body)
-}
 
 @Composable
 internal fun ComputerSectionCard(content: @Composable ColumnScope.() -> Unit) {
@@ -1020,7 +1172,8 @@ private fun ComputerSectionTitle(title: String, detail: String? = null) {
     ) {
         Text(
             text = title,
-            style = MaterialTheme.typography.titleLarge,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
             modifier = Modifier.weight(1f),
         )
         detail?.let {
@@ -1034,22 +1187,11 @@ private fun ComputerSectionTitle(title: String, detail: String? = null) {
 }
 
 @Composable
-private fun ComputerEmptySection(text: String) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-    ) {
-        Text(
-            text = text,
-            modifier = Modifier.padding(18.dp),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-@Composable
 private fun ComputerAuditContent(audits: List<ComputerAuditEvent>) {
+    var showAllAudits by remember { mutableStateOf(false) }
+    val previewLimit = 8
+    val visibleAudits = if (showAllAudits) audits.take(50) else audits.take(previewLimit)
+
     Column {
         Text(
             text = stringResource(R.string.computer_audit_body),
@@ -1058,29 +1200,60 @@ private fun ComputerAuditContent(audits: List<ComputerAuditEvent>) {
             modifier = Modifier.padding(top = 2.dp, bottom = 8.dp),
         )
         if (audits.isEmpty()) {
-            Text(stringResource(R.string.computer_audit_empty), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                text = stringResource(R.string.computer_audit_empty),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         } else {
-            audits.take(50).forEachIndexed { index, event ->
-                if (index > 0) HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                Row {
-                    Column(Modifier.weight(1f)) {
-                        Text(auditEventLabel(event.eventType), style = MaterialTheme.typography.labelLarge)
-                        auditSafeSummary(event)?.let {
-                            Text(
-                                text = it,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f),
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    visibleAudits.forEachIndexed { index, event ->
+                        if (index > 0) HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(auditEventLabel(event.eventType), style = MaterialTheme.typography.labelLarge)
+                                auditSafeSummary(event)?.let {
+                                    Text(
+                                        text = it,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text(auditOutcomeLabel(event.outcome), style = MaterialTheme.typography.labelSmall)
+                                Text(
+                                    formatComputerDate(event.createdAt),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         }
                     }
-                    Column(horizontalAlignment = Alignment.End) {
-                        Text(auditOutcomeLabel(event.outcome), style = MaterialTheme.typography.labelSmall)
-                        Text(
-                            formatComputerDate(event.createdAt),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                }
+            }
+            if (audits.size > previewLimit) {
+                TextButton(
+                    onClick = { showAllAudits = !showAllAudits },
+                    modifier = Modifier
+                        .align(Alignment.End)
+                        .padding(top = 4.dp),
+                    shape = AppDialogButtonShape,
+                ) {
+                    Text(
+                        text = stringResource(
+                            if (showAllAudits) R.string.action_collapse else R.string.action_expand,
+                        ),
+                        style = MaterialTheme.typography.labelMedium,
+                    )
                 }
             }
         }

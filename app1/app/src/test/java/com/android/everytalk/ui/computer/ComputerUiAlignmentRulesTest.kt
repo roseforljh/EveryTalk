@@ -188,7 +188,7 @@ class ComputerUiAlignmentRulesTest {
             .readText(Charsets.UTF_8)
 
         assertTrue(source.contains("fun returnToChatHome()"))
-        assertTrue(source.contains("BackHandler(onBack = ::returnToChatHome)"))
+        assertTrue(source.contains("BackHandler(enabled = interceptBackToChat, onBack = ::returnToChatHome)"))
         assertTrue(source.contains("onClick = ::returnToChatHome"))
         assertTrue(source.contains("popBackStack(Screen.CHAT_SCREEN, inclusive = false)"))
     }
@@ -241,13 +241,21 @@ class ComputerUiAlignmentRulesTest {
         val workspaceSource = sourceFile("ui/screens/computer/ComputerWorkspaceUi.kt")
             .readText(Charsets.UTF_8)
 
-        assertTrue(detailSource.contains("ComputerAgentUseCard(computer)"))
+        assertFalse("不再渲染过时的隔离环境说明卡", detailSource.contains("ComputerAgentUseCard("))
+        assertFalse("不再将连接操作拆到独立底部维护卡", detailSource.contains("ComputerMaintenanceCard("))
+        assertTrue(detailSource.contains("ComputerOverviewCard("))
+        assertTrue(detailSource.contains("ComputerStatusBadge("))
         assertTrue(detailSource.contains("var moreSettingsExpanded"))
         assertTrue(detailSource.contains("ComputerMoreSettingsCard("))
         assertTrue(detailSource.contains("if (expanded)"))
         assertTrue(detailSource.contains("computer_more_settings"))
         assertTrue(detailSource.contains("ComputerPermissionSettingsCard("))
-        assertTrue(detailSource.contains("ComputerMaintenanceCard("))
+        assertTrue("仅在有会话项目时展示列表，不铺空占位卡片", detailSource.contains("if (workspaces.isNotEmpty())"))
+        val overviewSource = detailSource.substringAfter("private fun ComputerOverviewCard(")
+            .substringBefore("private fun ComputerStatusBadge(")
+        assertTrue(overviewSource.contains("computer_action_reconnect_probe"))
+        assertTrue(overviewSource.contains("computer_action_edit"))
+        assertTrue("仅在已连接或断开中展示断开连接按钮", overviewSource.contains("if (computer.status == ComputerStatus.READY || isDisconnecting)"))
         val moreSettingsSource = detailSource.substringAfter("private fun ComputerMoreSettingsCard(")
             .substringBefore("private fun ComputerSettingsGroup(")
         assertTrue(moreSettingsSource.contains("computer_settings_security"))
@@ -257,6 +265,7 @@ class ComputerUiAlignmentRulesTest {
         assertTrue(workspaceSource.contains("var expanded by remember(workspace.id)"))
         assertTrue(workspaceSource.contains("text = displayName"))
         assertTrue(workspaceSource.contains("if (expanded)"))
+        assertFalse("展开会话项目后不再重复渲染顶部已展示的最后使用时间", workspaceSource.contains("R.string.computer_workspace_last_used"))
     }
 
     @Test

@@ -3,13 +3,23 @@ package com.android.everytalk.ui.screens.computer
 import com.android.everytalk.util.locale.localizeUiMessage
 import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavController
 import android.content.Intent
@@ -43,6 +53,8 @@ import com.android.everytalk.statecontroller.beginTemporaryWorkerClaim
 import com.android.everytalk.statecontroller.completeTemporaryWorkerClaim
 import com.android.everytalk.statecontroller.cancelTemporaryWorkerClaim
 import com.android.everytalk.statecontroller.temporaryWorkerEnabled
+import com.android.everytalk.ui.components.floatingEdgeGradient
+import com.android.everytalk.ui.components.dialog.AppDialogButtonShape
 import com.android.everytalk.ui.components.dialog.AppDialogShape
 import com.android.everytalk.ui.components.dialog.appDialogContainerColor
 import com.android.everytalk.ui.components.dialog.appDialogContentColor
@@ -164,157 +176,321 @@ internal fun CloudflareComputerDetail(
         }
     }
 
-    Scaffold(modifier = modifier.fillMaxSize()) { insets ->
-        Column(
-            Modifier.padding(insets).padding(horizontal = 20.dp).verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+    val topButtonSize = 46.dp
+    val screenBackground = MaterialTheme.colorScheme.background
+    val isDarkTheme = isSystemInDarkTheme()
+    val topButtonBackground = if (isDarkTheme) Color(0xFF303030) else Color.White
+    val topButtonContentColor = if (isDarkTheme) Color.White else Color(0xFF0D0D0D)
+    val topContentPadding =
+        WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + topButtonSize + 24.dp
+    val bottomContentPadding =
+        WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 24.dp
+
+    Scaffold(
+        modifier = modifier.fillMaxSize(),
+        containerColor = screenBackground,
+        contentWindowInsets = WindowInsets(0.dp),
+    ) { insets ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(insets),
         ) {
-            TextButton(onClick = { navController.popBackStack() }) { Text(stringResource(R.string.account_back)) }
-            Text(computer.displayName, style = MaterialTheme.typography.headlineSmall)
-            Text("Cloudflare Computer", style = MaterialTheme.typography.labelLarge)
-            val authorization = details?.authorization
-            val grantedScopeCount = remember(authorization?.grantedScopesJson) {
-                runCatching { Json.decodeFromString<Set<String>>(authorization?.grantedScopesJson ?: "[]") }
-                    .getOrDefault(emptySet()).size
-            }
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    CloudflareInfoRow(stringResource(R.string.cloudflare_connection_status), stringResource(com.android.everytalk.ui.screens.MainScreen.chat.text.ui.computerStatusLabelRes(computer)))
-                    CloudflareInfoRow(stringResource(R.string.cloudflare_authorization), when {
-                        authorization == null -> stringResource(R.string.cloudflare_login_required)
-                        authorization.revoked -> stringResource(R.string.cloudflare_logged_out)
-                        authorization.expiresAt?.let { it <= System.currentTimeMillis() } == true -> stringResource(R.string.cloudflare_auth_expired)
-                        else -> stringResource(R.string.cloudflare_authorized)
-                    })
-                    CloudflareInfoRow(stringResource(R.string.cloudflare_identity), authorization?.identityDisplayName ?: stringResource(R.string.cloudflare_unavailable))
-                    if (grantedScopeCount > 0) CloudflareInfoRow(stringResource(R.string.cloudflare_scopes), stringResource(R.string.cloudflare_scope_count, grantedScopeCount))
-                    // 只有真的有部署或探测记录时才占版面，没记录不再铺一行“暂无”。
-                    deployments.firstOrNull()?.status?.let { CloudflareInfoRow(stringResource(R.string.cloudflare_recent_deployments), localizedCloudflareStatus(it)) }
-                    details?.latestHealth?.let { health ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(
+                        start = 16.dp,
+                        top = topContentPadding,
+                        end = 16.dp,
+                        bottom = bottomContentPadding,
+                    ),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                val authorization = details?.authorization
+                val grantedScopeCount = remember(authorization?.grantedScopesJson) {
+                    runCatching { Json.decodeFromString<Set<String>>(authorization?.grantedScopesJson ?: "[]") }
+                        .getOrDefault(emptySet()).size
+                }
+                ComputerSectionCard {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            text = "Cloudflare Computer",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
                         CloudflareInfoRow(
-                            stringResource(R.string.cloudflare_runtime),
-                            "${localizedCloudflareStatus(health.status)} · HTTP ${health.httpStatus ?: "—"} · ${health.latencyMs ?: "—"} ms",
+                            stringResource(R.string.cloudflare_connection_status),
+                            stringResource(com.android.everytalk.ui.screens.MainScreen.chat.text.ui.computerStatusLabelRes(computer)),
                         )
+                        CloudflareInfoRow(
+                            stringResource(R.string.cloudflare_authorization),
+                            when {
+                                authorization == null -> stringResource(R.string.cloudflare_login_required)
+                                authorization.revoked -> stringResource(R.string.cloudflare_logged_out)
+                                authorization.expiresAt?.let { it <= System.currentTimeMillis() } == true -> stringResource(R.string.cloudflare_auth_expired)
+                                else -> stringResource(R.string.cloudflare_authorized)
+                            },
+                        )
+                        CloudflareInfoRow(
+                            stringResource(R.string.cloudflare_identity),
+                            authorization?.identityDisplayName ?: stringResource(R.string.cloudflare_unavailable),
+                        )
+                        if (grantedScopeCount > 0) {
+                            CloudflareInfoRow(
+                                stringResource(R.string.cloudflare_scopes),
+                                stringResource(R.string.cloudflare_scope_count, grantedScopeCount),
+                            )
+                        }
+                        // 只有真的有部署或探测记录时才占版面，没记录不再铺一行“暂无”。
+                        deployments.firstOrNull()?.status?.let {
+                            CloudflareInfoRow(
+                                stringResource(R.string.cloudflare_recent_deployments),
+                                localizedCloudflareStatus(it),
+                            )
+                        }
+                        details?.latestHealth?.let { health ->
+                            CloudflareInfoRow(
+                                stringResource(R.string.cloudflare_runtime),
+                                "${localizedCloudflareStatus(health.status)} · HTTP ${health.httpStatus ?: "—"} · ${health.latencyMs ?: "—"} ms",
+                            )
+                        }
+                        error?.let {
+                            Text(
+                                text = context.localizeUiMessage(it),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 4.dp),
+                        ) {
+                            Button(
+                                onClick = {
+                                    runCatching { CloudflareOAuthLaunchCoordinator(context, oauthFlow).launch(oauthBinding).getOrThrow() }
+                                        .onFailure { error = it.message ?: context.getString(R.string.cloudflare_oauth_config_error) }
+                                },
+                                enabled = !busy,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(48.dp),
+                                shape = AppDialogButtonShape,
+                            ) {
+                                Text(
+                                    if (authorization == null) {
+                                        stringResource(R.string.cloudflare_sign_in)
+                                    } else {
+                                        stringResource(R.string.cloudflare_reauthorize)
+                                    },
+                                )
+                            }
+                            OutlinedButton(
+                                onClick = { perform { reload() } },
+                                enabled = !busy,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(48.dp),
+                                shape = AppDialogButtonShape,
+                            ) {
+                                Text(stringResource(R.string.action_refresh))
+                            }
+                        }
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    perform {
+                                        val available = withContext(Dispatchers.IO) { viewModel.listCloudflareComputerAccounts(computer.id) }
+                                        check(available.isNotEmpty()) { context.getString(R.string.cloudflare_no_accounts) }
+                                        selectedAccount = null
+                                        accounts = available
+                                    }
+                                },
+                                enabled = !busy,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(46.dp),
+                                shape = AppDialogButtonShape,
+                            ) {
+                                Text(stringResource(R.string.cloudflare_switch_account))
+                            }
+                            OutlinedButton(
+                                onClick = { pendingAction = "logout" },
+                                enabled = !busy,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(46.dp),
+                                shape = AppDialogButtonShape,
+                            ) {
+                                Text(stringResource(R.string.account_logout))
+                            }
+                        }
                     }
                 }
-            }
-            if (busy) CircularProgressIndicator(Modifier.size(24.dp))
-            error?.let { Text(context.localizeUiMessage(it), color = MaterialTheme.colorScheme.error) }
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-                Button(
-                    onClick = {
-                        runCatching { CloudflareOAuthLaunchCoordinator(context, oauthFlow).launch(oauthBinding).getOrThrow() }
-                            .onFailure { error = it.message ?: context.getString(R.string.cloudflare_oauth_config_error) }
-                    },
-                    enabled = !busy,
-                    modifier = Modifier.weight(1f),
-                ) { Text(if (authorization == null) stringResource(R.string.cloudflare_sign_in) else stringResource(R.string.cloudflare_reauthorize)) }
-                OutlinedButton(
-                    onClick = { perform { reload() } },
-                    enabled = !busy,
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                ) { Text(stringResource(R.string.action_refresh)) }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-                OutlinedButton(
-                    onClick = {
-                        perform {
-                            val available = withContext(Dispatchers.IO) { viewModel.listCloudflareComputerAccounts(computer.id) }
-                            check(available.isNotEmpty()) { context.getString(R.string.cloudflare_no_accounts) }
-                            selectedAccount = null
-                            accounts = available
+                ComputerPermissionSettingsCard(
+                    computer = computer,
+                    busyAction = if (busy) "permission-mode" else null,
+                    summary = cloudflarePermissionSummary(computer.permissionMode),
+                    onPermissionModeChange = { permissionMode ->
+                        if (permissionMode == computer.permissionMode) return@ComputerPermissionSettingsCard
+                        if (permissionMode == ComputerPermissionMode.FULL) {
+                            pendingPermissionMode = permissionMode
+                        } else {
+                            perform { viewModel.setComputerPermissionMode(computer.id, permissionMode) }
                         }
                     },
-                    enabled = !busy,
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                ) { Text(stringResource(R.string.cloudflare_switch_account)) }
-                OutlinedButton(
-                    onClick = { pendingAction = "logout" },
-                    enabled = !busy,
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                ) { Text(stringResource(R.string.account_logout)) }
-            }
-            TextButton(
-                onClick = { pendingAction = "delete" },
-                enabled = !busy,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
-            ) { Text(stringResource(R.string.cloudflare_delete_local)) }
-            ComputerPermissionSettingsCard(
-                computer = computer,
-                busyAction = if (busy) "permission-mode" else null,
-                summary = cloudflarePermissionSummary(computer.permissionMode),
-                onPermissionModeChange = { permissionMode ->
-                    if (permissionMode == computer.permissionMode) return@ComputerPermissionSettingsCard
-                    if (permissionMode == ComputerPermissionMode.FULL) {
-                        pendingPermissionMode = permissionMode
-                    } else {
-                        perform { viewModel.setComputerPermissionMode(computer.id, permissionMode) }
-                    }
-                },
-            )
-            if (viewModel.temporaryWorkerEnabled) Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Temporary Worker", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        stringResource(R.string.cloudflare_temporary_description),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    if (workspaces.isEmpty()) {
-                        Text(stringResource(R.string.cloudflare_workspace_empty), style = MaterialTheme.typography.bodySmall)
-                    } else {
-                        Button(
-                            onClick = {
-                                selectedTemporaryWorkspace = null
-                                temporaryWorkspaceDialogVisible = true
-                                temporaryError = null
-                            },
-                            enabled = !temporaryBusy,
-                        ) { Text(stringResource(R.string.cloudflare_create_temporary)) }
-                    }
-                    temporaryError?.let { Text(context.localizeUiMessage(it), color = MaterialTheme.colorScheme.error) }
-                    temporaryWorkers.forEach { deployment ->
-                        TemporaryWorkerCard(
-                            deployment = deployment,
-                            workspace = workspaces.firstOrNull { it.id == deployment.sourceWorkspaceId },
-                            busy = temporaryBusy,
-                            onOpenWorker = { deployment.workerUrl?.let(::openExternalUrl) },
-                            onStartClaim = {
-                                temporaryAction {
-                                    val pending = viewModel.beginTemporaryWorkerClaim(deployment.temporaryDeploymentId)
-                                    pending.claimUrl?.let { openExternalUrl(it) }
+                )
+                if (viewModel.temporaryWorkerEnabled) {
+                    ComputerSectionCard {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("Temporary Worker", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                stringResource(R.string.cloudflare_temporary_description),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            if (workspaces.isEmpty()) {
+                                Text(
+                                    stringResource(R.string.cloudflare_workspace_empty),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            } else {
+                                Button(
+                                    onClick = {
+                                        selectedTemporaryWorkspace = null
+                                        temporaryWorkspaceDialogVisible = true
+                                        temporaryError = null
+                                    },
+                                    enabled = !temporaryBusy,
+                                    modifier = Modifier.height(46.dp),
+                                    shape = AppDialogButtonShape,
+                                ) {
+                                    Text(stringResource(R.string.cloudflare_create_temporary))
                                 }
-                            },
-                            onCompleteClaim = {
-                                temporaryAction { viewModel.completeTemporaryWorkerClaim(deployment.temporaryDeploymentId) }
-                            },
-                            onCancelClaim = {
-                                temporaryAction { viewModel.cancelTemporaryWorkerClaim(deployment.temporaryDeploymentId) }
-                            },
-                        )
-                    }
-                }
-            }
-            if (deployments.isNotEmpty()) {
-                Text(stringResource(R.string.cloudflare_recent_deployments), style = MaterialTheme.typography.titleMedium)
-                deployments.forEach { deployment ->
-                    Card(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(12.dp)) {
-                            Text(deployment.workerName)
-                            Text(stringResource(R.string.cloudflare_deployment_status, localizedCloudflareStatus(deployment.status)))
-                            Text(deployment.safeSummary?.let(context::localizeUiMessage) ?: stringResource(R.string.cloudflare_no_summary), style = MaterialTheme.typography.bodySmall)
-                            deployment.versionId?.let { Text(stringResource(R.string.about_version, it), style = MaterialTheme.typography.bodySmall) }
+                            }
+                            temporaryError?.let { Text(context.localizeUiMessage(it), color = MaterialTheme.colorScheme.error) }
+                            temporaryWorkers.forEach { deployment ->
+                                TemporaryWorkerCard(
+                                    deployment = deployment,
+                                    workspace = workspaces.firstOrNull { it.id == deployment.sourceWorkspaceId },
+                                    busy = temporaryBusy,
+                                    onOpenWorker = { deployment.workerUrl?.let(::openExternalUrl) },
+                                    onStartClaim = {
+                                        temporaryAction {
+                                            val pending = viewModel.beginTemporaryWorkerClaim(deployment.temporaryDeploymentId)
+                                            pending.claimUrl?.let { openExternalUrl(it) }
+                                        }
+                                    },
+                                    onCompleteClaim = {
+                                        temporaryAction { viewModel.completeTemporaryWorkerClaim(deployment.temporaryDeploymentId) }
+                                    },
+                                    onCancelClaim = {
+                                        temporaryAction { viewModel.cancelTemporaryWorkerClaim(deployment.temporaryDeploymentId) }
+                                    },
+                                )
+                            }
                         }
                     }
                 }
+                if (deployments.isNotEmpty()) {
+                    ComputerSectionCard {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text(
+                                text = stringResource(R.string.cloudflare_recent_deployments),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            deployments.forEachIndexed { index, deployment ->
+                                if (index > 0) HorizontalDivider()
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(deployment.workerName, style = MaterialTheme.typography.labelLarge)
+                                    Text(
+                                        text = stringResource(R.string.cloudflare_deployment_status, localizedCloudflareStatus(deployment.status)),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    Text(
+                                        text = deployment.safeSummary?.let(context::localizeUiMessage) ?: stringResource(R.string.cloudflare_no_summary),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    deployment.versionId?.let {
+                                        Text(
+                                            text = stringResource(R.string.about_version, it),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                OutlinedButton(
+                    onClick = { pendingAction = "delete" },
+                    enabled = !busy,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp),
+                    shape = AppDialogButtonShape,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.45f)),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                ) {
+                    Text(stringResource(R.string.cloudflare_delete_local))
+                }
             }
-            Spacer(Modifier.height(24.dp))
+
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(bottomContentPadding)
+                    .floatingEdgeGradient(screenBackground, fromTop = false),
+            )
+
+            Row(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .floatingEdgeGradient(screenBackground, fromTop = true)
+                    .windowInsetsPadding(WindowInsets.statusBars)
+                    .padding(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TopCircleButton(
+                    iconRes = R.drawable.ic_arrow_back,
+                    contentDescription = stringResource(R.string.navigation_back),
+                    modifier = Modifier,
+                    onClick = { navController.popBackStack() },
+                )
+                Box(
+                    modifier = Modifier
+                        .height(topButtonSize)
+                        .widthIn(max = 220.dp)
+                        .shadow(3.dp, RoundedCornerShape(percent = 50), clip = false)
+                        .clip(RoundedCornerShape(percent = 50))
+                        .background(topButtonBackground)
+                        .padding(horizontal = 16.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = computer.displayName,
+                        color = topButtonContentColor,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
         }
     }
 
