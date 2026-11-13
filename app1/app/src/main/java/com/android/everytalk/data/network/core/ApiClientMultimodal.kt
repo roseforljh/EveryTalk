@@ -203,7 +203,17 @@ internal suspend fun buildDirectMultimodalRequest(
                             )
                         )
                         if (page == null || page.content.isBlank()) {
-                            documentTexts += "附件 ${item.id} 未生成可读文本预览，原文件仍保留在会话中，内容尚未读取。请根据可用工具和实际读取结果判断如何处理，不要仅凭扩展名认定文件不可用。"
+                            // 本地读不出文字（压缩包、未知二进制等）就把原文件交给上游，能不能处理由模型决定；
+                            // 上游拒收按原错误显示，不在本地替模型拦下。
+                            val bytes = readInlineAttachmentBytes(context, item.uri, item.displayName)
+                                ?: throw IOException("附件 ${item.displayName} 无法读取")
+                            inlineParts.add(
+                                com.android.everytalk.data.DataClass.ApiContentPart.InlineData(
+                                    base64Data = Base64.encodeToString(bytes, Base64.NO_WRAP),
+                                    mimeType = mime,
+                                    fileName = item.displayName,
+                                )
+                            )
                         }
                     }
                 }

@@ -56,6 +56,23 @@ class AttachmentToolExecutorTest {
     }
 
     @Test
+    fun `云任务附件封存完整文本不暴露路径也不新增文件`() = runTest {
+        val content = "中文😀".repeat(60_000)
+        val file = File(attachmentDir, "cloud-full.txt").apply { writeText(content) }
+        val attachment = SelectedMediaItem.GenericFile(Uri.fromFile(file), "cloud-file", "full.txt", "text/plain", filePath = file.absolutePath)
+        val before = attachmentDir.listFiles().orEmpty().map { it.name }.toSet()
+        val snapshot = AttachmentToolExecutor.cloudSnapshot(context, listOf(attachment))
+        val sealed = snapshot.getValue(attachment.id) as JsonObject
+        assertEquals(content, sealed.getValue("content").jsonPrimitive.content)
+        assertTrue(!snapshot.toString().contains(file.absolutePath))
+        assertEquals(before, attachmentDir.listFiles().orEmpty().map { it.name }.toSet())
+        val outside = File(context.cacheDir, "cloud-outside.txt").apply { writeText("private") }
+        try {
+            assertTrue(runCatching { AttachmentToolExecutor.cloudSnapshot(context, listOf(attachment.copy(filePath = outside.absolutePath))) }.isFailure)
+        } finally { outside.delete() }
+    }
+
+    @Test
     fun `8KB HTML按附件ID完整读取`() = runTest {
         val html = "<html><body>" + "正文内容".repeat(1_020) + "</body></html>"
         val file = File(attachmentDir, "small.html").apply { writeText(html, Charsets.UTF_8) }
@@ -293,7 +310,7 @@ class AttachmentToolExecutorTest {
     }
 
     @Test
-    fun `本地无法预读压缩包时仍保留附件并发送原消息`() = runTest {
+    fun `本地无法预读压缩包时把原文件按四种协议的文件块发给上游`() = runTest {
         val file = File(attachmentDir, "archive.7z").apply { writeBytes(byteArrayOf(0, -1, 42)) }
         val attachment = SelectedMediaItem.GenericFile(Uri.fromFile(file), "unsupported-local", file.name,
             "application/x-7z-compressed", file.absolutePath)
@@ -302,11 +319,26 @@ class AttachmentToolExecutorTest {
                 provider = "test", channel = "OpenAI兼容", apiAddress = "https://example.com/v1", apiKey = "", model = "test-model"),
             attachments = listOf(attachment), context = context,
         )
-        val text = (result.messages.single() as PartsApiMessage).parts.filterIsInstance<ApiContentPart.Text>().joinToString("\n") { it.text }
+        val parts = (result.messages.single() as PartsApiMessage).parts
+        val text = parts.filterIsInstance<ApiContentPart.Text>().joinToString("\n") { it.text }
         assertTrue("看看这个文件" in text)
         assertTrue("attachment_id: ${attachment.id}" in text)
-        assertTrue("原文件仍保留" in text)
-        assertTrue(ATTACHMENT_CONTENT_PAGE_MARKER !in text)
+        val raw = parts.filterIsInstance<ApiContentPart.InlineData>().single()
+        assertEquals(ApiContentPart.InlineData(Base64.encodeToString(byteArrayOf(0, -1, 42), Base64.NO_WRAP),
+            "application/x-7z-compressed", "archive.7z"), raw)
+        // 模型不支持图片也不能把原文件换成占位文字。
+        val textOnly = result.copy(localInputModalities = setOf("text"))
+        val openAi = OpenAIDirectClient.buildOpenAIPayload(textOnly)
+        assertTrue("\"type\":\"file\"" in openAi && "\"filename\":\"archive.7z\"" in openAi &&
+            "data:application/x-7z-compressed;base64,${raw.base64Data}" in openAi)
+        val responses = OpenAIResponsesClient.buildResponsesPayload(
+            textOnly.copy(channel = "OpenAI Codex"), emptyList())
+        assertTrue("\"type\":\"input_file\"" in responses && "\"filename\":\"archive.7z\"" in responses)
+        val anthropic = AnthropicDirectClient.buildAnthropicPayload(
+            textOnly.copy(channel = "Anthropic"))
+        assertTrue("\"type\":\"document\"" in anthropic && "\"media_type\":\"application/x-7z-compressed\"" in anthropic)
+        val gemini = GeminiDirectClient.buildGeminiPayload(textOnly.copy(channel = "Gemini"))
+        assertTrue("\"mimeType\":\"application/x-7z-compressed\"" in gemini && raw.base64Data in gemini)
     }
 
     @Test

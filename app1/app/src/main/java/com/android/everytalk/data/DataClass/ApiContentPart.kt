@@ -25,6 +25,9 @@ sealed class ApiContentPart {
         @SerialName("base64_data")
         val base64Data: String,
         @SerialName("mime_type")
-        val mimeType: String
+        val mimeType: String,
+        /** 非图片的原文件需要文件名，OpenAI 兼容与 Responses 的文件块要求带上。 */
+        @SerialName("file_name")
+        val fileName: String? = null,
     ) : ApiContentPart()
 }

@@ -302,13 +302,21 @@ object OpenAIDirectClient {
                                                                     put("url", dataUri)
                                                                 }
                                                             }
-                                                        } else {
-                                                            // 图片/其他 → image_url data URI
+                                                        } else if (mime.lowercase().startsWith("image/")) {
                                                             val dataUri = "data:${mime};base64,${part.base64Data}"
                                                             addJsonObject {
                                                                 put("type", "image_url")
                                                                 putJsonObject("image_url") {
                                                                     put("url", dataUri)
+                                                                }
+                                                            }
+                                                        } else {
+                                                            // 其他原文件按 Chat Completions 的 file 块发送，上游不支持就由上游报错。
+                                                            addJsonObject {
+                                                                put("type", "file")
+                                                                putJsonObject("file") {
+                                                                    put("filename", part.fileName ?: "attachment")
+                                                                    put("file_data", "data:${mime};base64,${part.base64Data}")
                                                                 }
                                                             }
                                                         }

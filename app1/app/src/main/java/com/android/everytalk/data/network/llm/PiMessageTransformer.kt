@@ -101,7 +101,8 @@ internal object PiMessageTransformer {
             .map { part ->
                 when (part) {
                     is ApiContentPart.Text -> part.copy(text = part.text.piSanitizeSurrogates())
-                    is ApiContentPart.InlineData -> if ("image" in request.localInputModalities) {
+                    // 只有图片按模型能力替换；其他原文件照样发给上游，由上游决定能否处理。
+                    is ApiContentPart.InlineData -> if (!part.mimeType.startsWith("image/") || "image" in request.localInputModalities) {
                         part
                     } else {
                         ApiContentPart.Text("(image omitted: model does not support images)")

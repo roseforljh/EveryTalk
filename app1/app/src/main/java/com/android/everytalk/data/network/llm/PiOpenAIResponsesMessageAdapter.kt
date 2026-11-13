@@ -113,9 +113,16 @@ internal object PiOpenAIResponsesMessageAdapter {
                             put("text", part.text)
                         })
                         is ApiContentPart.InlineData -> add(buildJsonObject {
-                            put("type", "input_image")
-                            put("detail", "auto")
-                            put("image_url", "data:${part.mimeType};base64,${part.base64Data}")
+                            val dataUri = "data:${part.mimeType};base64,${part.base64Data}"
+                            if (part.mimeType.lowercase().startsWith("image/")) {
+                                put("type", "input_image")
+                                put("detail", "auto")
+                                put("image_url", dataUri)
+                            } else {
+                                put("type", "input_file")
+                                put("filename", part.fileName ?: "attachment")
+                                put("file_data", dataUri)
+                            }
                         })
                         is ApiContentPart.FileUri -> add(buildJsonObject {
                             put("type", "input_text")

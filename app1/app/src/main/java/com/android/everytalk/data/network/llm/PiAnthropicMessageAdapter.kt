@@ -181,9 +181,15 @@ internal object PiAnthropicMessageAdapter {
                 }
             })
         } else {
+            // 其他原文件按 document 块原样发送；Anthropic 不接受的类型由上游报错，不在本地改写成文字。
             add(buildJsonObject {
-                put("type", "text")
-                put("text", "[不支持直接发送的附件类型: $mimeType]")
+                put("type", "document")
+                putJsonObject("source") {
+                    put("type", "base64")
+                    put("media_type", mimeType)
+                    put("data", part.base64Data.substringAfter(";base64,", part.base64Data))
+                }
+                part.fileName?.let { put("title", it) }
             })
         }
     }
