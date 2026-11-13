@@ -71,6 +71,20 @@ internal class SyncSettingsProjector(
         }
     }
 
+    /** 只在用户选择或删除服务器的事务中调用，区分明确取消和依赖尚未恢复。 */
+    suspend fun captureComputerSelection(conversationId: String, computerId: String?) {
+        val session = sessions.getStoredSession(conversationId)?.takeUnless { it.deleted } ?: return
+        val old = settings.getUserSetting("conversation_settings", session.uuid)
+        val value = old?.value?.let { syncJson.parseToJsonElement(it).jsonObject }.orEmpty()
+        settings.upsertUserSettings(listOf(UserSettingEntity(
+            kind = "conversation_settings", key = session.uuid,
+            value = JsonObject(value + ("computerId" to (computerId?.let(::JsonPrimitive) ?: JsonNull))).toString(),
+            uuid = old?.uuid ?: localSyncUuid("user_settings", "conversation_settings:${session.uuid}"),
+            updatedAt = maxOf(System.currentTimeMillis(), (old?.updatedAt ?: 0L) + 1),
+            syncStatus = SyncStatus.PENDING,
+        )))
+    }
+
     suspend fun refresh(onlyRejected: Boolean = false) = database.withTransaction {
         repairOnly = onlyRejected
         migrateLegacySettingKeys()
@@ -193,7 +207,9 @@ internal class SyncSettingsProjector(
             upsert("conversation_settings", session.uuid, buildJsonObject {
                 oldValue?.forEach { (name, element) -> put(name, element) }
                 if ("modelId" in oldValue.orEmpty() || models[session.id] != null) put("modelId", models[session.id] ?: JsonNull)
-                if ("computerId" in oldValue.orEmpty() || computerId != null) put("computerId", computerId?.let(::JsonPrimitive) ?: JsonNull)
+                // 缺少选择可能只是 Computer 尚未拉到或解密，不能反推用户清空了绑定。
+                // 真正的取消/删除由 captureComputerSelection 明确记录 null。
+                if (computerId != null) put("computerId", computerId)
                 oldValue?.get("systemPrompt")?.let { element -> put("systemPrompt", element) }
                 oldValue?.get("promptEnabled")?.let { element -> put("promptEnabled", element) }
                 legacyPrompt?.let { put("systemPrompt", it); put("promptEnabled", false) }

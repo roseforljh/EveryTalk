@@ -29,6 +29,10 @@ internal data class SyncHistoryArchive(val message: Message, val run: AgentRunEn
 @kotlinx.serialization.Serializable
 private data class SyncUploadedFile(val info: SyncFileInfo, val uploadedAt: Long)
 
+/** 已排队不等于云端已引用；版本与预期附件一起落盘，重启不重复生成随机密文。 */
+@kotlinx.serialization.Serializable
+private data class SyncQueuedResource(val revision: String, val attachments: Map<String, String>, val retired: List<String>)
+
 /**
  * 资源文件与普通记录分开传输。每次只补五条历史消息，进度写入 Room；断网或进程退出后
  * 重复上传由服务器按 SHA-256 去重。旧路径永不恢复，文件下载校验后才原子替换本机内容。
@@ -47,6 +51,10 @@ internal class SyncResourceSynchronizer(
     private var downloads = 0
     private var historyDek: ByteArray? = null
     private var chunkBytes = CHUNK_BYTES
+    private val queuedAttachments = linkedMapOf<String, String>() // attachmentId -> sha256，ACK 可重新分配 fileId。
+    private val retiringAttachments = linkedSetOf<String>()
+    private val repairingMessages = linkedSetOf<String>()
+    private val repairingSkills = linkedSetOf<String>()
     override fun close() { historyDek?.fill(0); historyDek = null }
 
     suspend fun synchronize() {
@@ -57,6 +65,8 @@ internal class SyncResourceSynchronizer(
         // 已拿到历史密钥就清理旧配置缺失提示；后面的暂时限流不能继续显示“未配置主密钥”。
         settings.deleteSetting("sync_rejected:services:resources")
         chunkBytes = api.fileChunkBytes()
+        finalizeQueuedResources()
+        repairRejectedResources()
         restoreAttachments()
         restoreSkills()
         uploadSkills()
@@ -66,17 +76,22 @@ internal class SyncResourceSynchronizer(
         val republish = settings.getValue("sync_resource_republish") == "true"
         val uploaded = settings.getByPrefix("sync_resource_source:").associate { it.key to it.value }
         val failures = settings.getByPrefix("sync_resource_failed:").associate { it.key to it.value }
+        val queued = settings.getByPrefix("sync_resource_queued:").associate { it.key to it.value }
         for (candidate in chat.getResourceSyncCandidates()) {
-            if (candidate.id.startsWith("cloud:") && !republish) continue
+            val repairing = candidate.uuid in repairingMessages
+            if (candidate.id.startsWith("cloud:") && !republish && !repairing) continue
             val marker = "sync_resource_source:${candidate.uuid}"
             val failureMarker = "sync_resource_failed:${candidate.uuid}"
             val candidateRevision = "$user:${candidate.storageFingerprint}"
-            if (uploaded[marker] == candidateRevision || failures[failureMarker] == candidateRevision) continue
+            if (!repairing && (uploaded[marker] == candidateRevision || failures[failureMarker] == candidateRevision ||
+                    queued["sync_resource_queued:${candidate.uuid}"]?.let { syncJson.decodeFromString<SyncQueuedResource>(it).revision } == candidateRevision)) continue
             val message = chat.getMessageByUuid(candidate.uuid)?.takeUnless { it.deleted } ?: continue
             val revision = "$user:${message.storageFingerprint}"
             val needsTransfer = needsArchive(message) || mediaItems(message).isNotEmpty()
             if (needsTransfer && transferred >= 5) { moreWork = true; return }
             val session = chat.getStoredSession(message.sessionId)?.takeUnless { it.deleted } ?: continue
+            queuedAttachments.clear()
+            retiringAttachments.clear()
             try { uploadMessage(message, session) }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (error: SyncHttpException) {
@@ -88,16 +103,114 @@ internal class SyncResourceSynchronizer(
                 settings.insertSetting(SystemSettingEntity("sync_rejected:messages:${message.uuid}", "RESOURCE_VALIDATION_FAILED"))
                 settings.insertSetting(SystemSettingEntity(failureMarker, revision)); continue
             }
-            // 上传期间又编辑了本地消息时，下一轮仍须补传新版本。
+            // 只记录“已排队”。引用确认前保留密文，进程退出后仍可修复过期 fileId。
             if (chat.getMessageByUuid(message.uuid)?.storageFingerprint == message.storageFingerprint) {
-                settings.insertSetting(SystemSettingEntity(marker, revision))
-                // 整条消息完成前保留相同密文和 nonce，防止后续附件 429 后重复生成前面的文件块。
-                root.listFiles()?.filter { it.name.startsWith("out-${message.uuid}-") || it.name.startsWith("tool-${message.uuid}-") }
-                    ?.forEach { it.delete() }
+                settings.insertSetting(SystemSettingEntity("sync_resource_queued:${message.uuid}", syncJson.encodeToString(
+                    SyncQueuedResource.serializer(), SyncQueuedResource(revision, queuedAttachments.toMap(), retiringAttachments.toList()))))
+                moreWork = true
             }
             if (needsTransfer) transferred++
         }
         settings.deleteSetting("sync_resource_republish")
+    }
+
+    /** 只有本版本的全部引用已获确认才收尾；排队完成不能当成同步完成。 */
+    private suspend fun finalizeQueuedResources() {
+        for (entry in settings.getByPrefix("sync_resource_queued:")) {
+            val messageId = entry.key.substringAfter(':')
+            val queued = syncJson.decodeFromString<SyncQueuedResource>(entry.value)
+            val message = chat.getMessageByUuid(messageId)
+            if (message == null || message.deleted) {
+                settings.deleteSetting(entry.key)
+                continue
+            }
+            if (queued.revision != "$user:${message.storageFingerprint}") continue
+            // 确认内容而非预约身份；ignored 后的权威记录可能使用同内容的另一个 fileId。
+            val confirmed = queued.attachments.all { (id, hash) ->
+                db.syncAttachmentDao().get(id)?.let { !it.deleted && it.syncStatus == SyncStatus.SYNCED && it.sha256 == hash } == true
+            }
+            if (!confirmed) continue
+            db.withTransaction {
+                for (id in queued.retired) db.syncAttachmentDao().get(id)?.takeUnless { it.deleted }?.let {
+                    db.syncAttachmentDao().upsert(it.copy(deleted = true, updatedAt = maxOf(System.currentTimeMillis(), it.updatedAt + 1), syncStatus = SyncStatus.PENDING))
+                }
+                settings.insertSetting(SystemSettingEntity("sync_resource_source:$messageId", queued.revision))
+                settings.deleteSetting(entry.key)
+            }
+            root.listFiles()?.filter { it.name.startsWith("out-$messageId-") || it.name.startsWith("tool-$messageId-") }?.forEach { it.delete() }
+        }
+    }
+
+    /** 旧版本的拒绝也按具体资源修复；不重排旧 fileId，不恢复用户主动保留本地的数据。 */
+    private suspend fun repairRejectedResources() {
+        for (failure in settings.getByPrefix("sync_rejected:").filter { it.value == "FILE_NOT_READY" }) {
+            val id = failure.key.substringAfterLast(':')
+            if (failure.key.startsWith("sync_rejected:attachments:")) {
+                val row = db.syncAttachmentDao().get(id)?.takeUnless { it.deleted } ?: continue
+                val message = chat.getMessageByUuid(row.messageId)?.takeUnless { it.deleted } ?: continue
+                val session = chat.getStoredSession(message.sessionId)?.takeUnless { it.deleted } ?: continue
+                val retryKey = "sync_resource_retry:$id"
+                if ((settings.getValue(retryKey)?.toLongOrNull() ?: 0) > System.currentTimeMillis()) continue
+                // 只废弃仍指向失效身份的回执；上次重传成功但引用尚未提交时保留进度。
+                val receiptKey = "sync_file_uploaded:$user:${row.sha256}"
+                settings.getValue(receiptKey)?.let { raw ->
+                    if (syncJson.decodeFromString<SyncUploadedFile>(raw).info.fileId == row.fileId) settings.deleteSetting(receiptKey)
+                }
+                val info = SyncFileInfo(requireNotNull(row.fileId), row.size, row.sha256, row.mime)
+                val cached = File(root, "${info.fileId}-${info.sha256}").takeIf { it.isFile && it.length() == info.size && syncFileHash(it) == info.sha256 }
+                // 暂态错误交给 Worker 退避；请求完成前不能记冷却，否则 429 后重启会跳过续传。
+                val next = if (cached != null) uploadFile(cached, row.mime) else api.reserveReadyFile(info)
+                if (next != null) {
+                    settings.insertSetting(SystemSettingEntity(retryKey, (System.currentTimeMillis() + 60_000).toString()))
+                    moreWork = true
+                    db.withTransaction {
+                        if (db.syncAttachmentDao().get(id) != row || chat.getMessageByUuid(message.uuid)?.deleted != false || chat.getStoredSession(session.id)?.deleted != false) return@withTransaction
+                        val updated = row.copy(fileId = next.fileId, updatedAt = maxOf(System.currentTimeMillis(), row.updatedAt + 1), syncStatus = SyncStatus.PENDING)
+                        db.syncAttachmentDao().upsert(updated)
+                        settings.getValue("sync_resource_meta:$id")?.let { raw ->
+                            val metadata = syncJson.parseToJsonElement(raw).jsonObject
+                            settings.insertSetting(SystemSettingEntity("sync_resource_meta:$id", JsonObject(metadata + mapOf("fileId" to JsonPrimitive(next.fileId), "clientModifiedAt" to JsonPrimitive(updated.updatedAt))).toString()))
+                        }
+                    }
+                } else {
+                    val metadata = settings.getValue("sync_resource_meta:$id")?.let { syncJson.parseToJsonElement(it).jsonObject }
+                    val canRebuild = when (metadata?.get("role")?.jsonPrimitive?.contentOrNull) {
+                        "message_archive" -> needsArchive(message) && (!message.id.startsWith("cloud:") || settings.getValue("sync_resource_restored:${message.uuid}") != null)
+                        "tool_result" -> metadata["resultPath"]?.jsonPrimitive?.contentOrNull?.let { safeResultFile(it).isFile } == true
+                        else -> mediaItems(message).any { it.id == metadata?.get("mediaId")?.jsonPrimitive?.contentOrNull && materialize(it) != null }
+                    }
+                    if (!canRebuild) {
+                        settings.insertSetting(SystemSettingEntity(retryKey, (System.currentTimeMillis() + 60_000).toString()))
+                        continue
+                    }
+                    // 有完整原件才能重建；cloud: 仅表示来源，不应挡住定向修复。
+                    repairingMessages += message.uuid
+                    settings.deleteSetting("sync_resource_source:${message.uuid}")
+                    settings.deleteSetting("sync_resource_queued:${message.uuid}")
+                    settings.deleteSetting("sync_resource_failed:${message.uuid}")
+                    settings.deleteSetting("sync_resource_receive_failed:${message.uuid}")
+                }
+            } else if (failure.key.startsWith("sync_rejected:user_settings:")) {
+                val row = settings.getUserSettingByUuid(id)?.takeIf { it.kind == "skills" && !it.deleted } ?: continue
+                val skill = db.skillDao().getInstallation(row.key) ?: continue
+                val version = db.skillDao().getVersion(skill.skillId, skill.currentHash) ?: continue
+                if (!File(version.rootPath, "SKILL.md").isFile) continue
+                val retryKey = "sync_resource_retry:$id"
+                if ((settings.getValue(retryKey)?.toLongOrNull() ?: 0) > System.currentTimeMillis()) continue
+                val value = syncJson.parseToJsonElement(row.value).jsonObject
+                val refs = (value["fileRefs"] as? JsonArray)?.mapNotNull { it.jsonPrimitive.contentOrNull }.orEmpty().toSet()
+                val invalidated = "invalidated:${row.updatedAt}"
+                if (settings.getValue(retryKey) != invalidated) {
+                    for (receipt in settings.getByPrefix("sync_file_uploaded:$user:")) {
+                        if (syncJson.decodeFromString<SyncUploadedFile>(receipt.value).info.fileId in refs) settings.deleteSetting(receipt.key)
+                    }
+                    // 同一失败版本只清一次旧回执；否则技能超过限流配额时永远重传不到后面的块。
+                    settings.insertSetting(SystemSettingEntity(retryKey, invalidated))
+                }
+                repairingSkills += row.key
+                settings.deleteSetting("sync_resource_failed:user_settings:$id")
+            }
+        }
     }
 
     private suspend fun uploadMessage(message: MessageEntity, session: ChatSessionEntity) {
@@ -203,7 +316,8 @@ internal class SyncResourceSynchronizer(
             if (metadata["messageId"]?.jsonPrimitive?.contentOrNull == message && metadata["role"]?.jsonPrimitive?.contentOrNull == role &&
                 (groupField == null || metadata[groupField]?.jsonPrimitive?.contentOrNull == groupValue) && previous != version) {
                 db.syncAttachmentDao().get(row.key.substringAfter(':'))?.takeUnless { it.deleted }?.let {
-                    db.syncAttachmentDao().upsert(it.copy(deleted = true, updatedAt = maxOf(System.currentTimeMillis(), it.updatedAt + 1), syncStatus = SyncStatus.PENDING))
+                    // 旧引用保留到新资源获确认，避免共享文件先失去最后一个引用。
+                    retiringAttachments += it.id
                 }
             }
         }
@@ -229,6 +343,9 @@ internal class SyncResourceSynchronizer(
             receipt.info.size == file.length() && receipt.info.sha256 == hash) return receipt.info
         val info = api.uploadFile(file, mime)
         require(info.size == file.length() && info.sha256 == hash)
+        // 与接收缓存共用路径，引用被拒或排队跨 TTL 时仍有原字节可补传。
+        val cached = File(root, "${info.fileId}-${info.sha256}")
+        if (file.canonicalFile != cached.canonicalFile) file.copyTo(cached, overwrite = true)
         settings.insertSetting(SystemSettingEntity(marker, syncJson.encodeToString(SyncUploadedFile.serializer(), SyncUploadedFile(info, System.currentTimeMillis()))))
         return info
     }
@@ -274,6 +391,7 @@ internal class SyncResourceSynchronizer(
         db.syncAttachmentDao().upsert(SyncAttachmentEntity(id, session.uuid, message.uuid,
             payload.getValue("name").jsonPrimitive.content, info.mime, info.size, info.sha256, info.fileId, kind, position,
             updatedAt = payload.getValue("clientModifiedAt").jsonPrimitive.long))
+        queuedAttachments[id] = info.sha256
     }
 
     private fun materialize(item: SelectedMediaItem): File? {
@@ -309,7 +427,7 @@ internal class SyncResourceSynchronizer(
         if (cleared > 0) syncDiagnostic("resource stale failures cleared=$cleared")
         val records = settings.getByPrefix("sync_resource_meta:").mapNotNull { row ->
             val id = row.key.substringAfter(':')
-            val attachment = db.syncAttachmentDao().get(id)?.takeUnless { it.deleted } ?: return@mapNotNull null
+            val attachment = db.syncAttachmentDao().get(id)?.takeIf { !it.deleted && it.syncStatus == SyncStatus.SYNCED } ?: return@mapNotNull null
             val payload = runCatching { syncJson.parseToJsonElement(row.value).jsonObject }.getOrNull() ?: return@mapNotNull null
             attachment to payload
         }
@@ -403,8 +521,16 @@ internal class SyncResourceSynchronizer(
                 db.withTransaction {
                     val current = chat.getMessageByUuid(messageId)?.takeUnless { it.deleted } ?: return@withTransaction
                     // 原设备已有可读原件时保留路径；本机文件丢失则允许用云端原件补回。
-                    if ((current.id.startsWith("cloud:") || current.attachments.any { materialize(it) == null }) && current.attachments != items) chat.writeMessages(listOf(current.toMessage().copy(attachments = items)
-                        .toEntity(current.sessionId).copy(uuid = current.uuid, updatedAt = current.updatedAt, syncStatus = current.syncStatus, everSynced = current.everSynced)))
+                    if ((current.id.startsWith("cloud:") || current.attachments.any { materialize(it) == null }) && current.attachments != items) {
+                        val restored = current.toMessage().copy(attachments = items).toEntity(current.sessionId).copy(
+                            uuid = current.uuid, updatedAt = current.updatedAt, syncStatus = current.syncStatus, everSynced = current.everSynced)
+                        chat.writeMessages(listOf(restored))
+                        // 这里只换成本机可读路径，不代表内容改变；已确认版本跟随新指纹，避免无意义回传。
+                        val sourceKey = "sync_resource_source:$messageId"
+                        if (settings.getValue(sourceKey) == "$user:${current.storageFingerprint}") {
+                            settings.insertSetting(SystemSettingEntity(sourceKey, "$user:${restored.storageFingerprint}"))
+                        }
+                    }
                 }
             }
             chat.getMessageByUuid(messageId)?.let { current ->
@@ -539,7 +665,7 @@ internal class SyncResourceSynchronizer(
         for (skill in db.skillDao().getAll()) {
             val row = settings.getUserSetting("skills", skill.skillId)?.takeUnless { it.deleted } ?: continue
             val value = syncJson.parseToJsonElement(row.value).jsonObject
-            if (value["fileManifest"] != null || value["manifestRef"] != null) continue
+            if (skill.skillId !in repairingSkills && (value["fileManifest"] != null || value["manifestRef"] != null)) continue
             val version = db.skillDao().getVersion(skill.skillId, skill.currentHash) ?: continue
             val directory = File(version.rootPath)
             if (!directory.isDirectory) continue
@@ -563,7 +689,7 @@ internal class SyncResourceSynchronizer(
                 val current = settings.getUserSetting("skills", row.key)?.takeUnless { it.deleted } ?: return@withTransaction
                 if (db.skillDao().getInstallation(skill.skillId)?.currentHash != skill.currentHash) return@withTransaction
                 val latest = syncJson.parseToJsonElement(current.value).jsonObject
-                val next = JsonObject(latest + mapOf("manifestRef" to syncJson.encodeToJsonElement(SyncFileInfo.serializer(), manifestInfo),
+                val next = JsonObject((latest - "fileManifest") + mapOf("manifestRef" to syncJson.encodeToJsonElement(SyncFileInfo.serializer(), manifestInfo),
                     "fileRefs" to JsonArray(refs)))
                 settings.upsertUserSettings(listOf(current.copy(value = next.toString(), updatedAt = maxOf(System.currentTimeMillis(), current.updatedAt + 1), syncStatus = SyncStatus.PENDING)))
             }
@@ -572,7 +698,8 @@ internal class SyncResourceSynchronizer(
     }
 
     private suspend fun restoreSkills() {
-        for (row in settings.getAllUserSettings().filter { it.kind == "skills" && !it.deleted }) {
+        for (row in settings.getAllUserSettings().filter { it.kind == "skills" && !it.deleted &&
+                settings.getValue("sync_rejected:user_settings:${it.uuid}") != "FILE_NOT_READY" }) {
             val skill = db.skillDao().getInstallation(row.key) ?: continue
             isolatedResource("user_settings", row.uuid, "receive:${row.updatedAt}") {
             val value = RoomSyncStore(db, SyncSecretManager(context), user).decodedSetting(row) ?: return@isolatedResource
@@ -614,7 +741,7 @@ internal class SyncResourceSynchronizer(
         if (settings.getValue(marker) == revision) return
         try {
             block()
-            settings.deleteSetting("sync_rejected:$entity:$id")
+            if (settings.getValue("sync_rejected:$entity:$id") != "FILE_NOT_READY") settings.deleteSetting("sync_rejected:$entity:$id")
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (error: SyncHttpException) {
             if (error.statusCode in setOf(401, 408, 409, 429) || error.statusCode >= 500) throw error

@@ -1,5 +1,6 @@
 import { TextDecoder, TextEncoder } from "text-encoding";
-import AbortController from "abort-controller";
+// 包的 browser 入口只转发浏览器原生对象；AndroidX 没有这些对象，必须加载真正的实现。
+import AbortController, { AbortSignal } from "abort-controller/dist/abort-controller.mjs";
 
 /**
  * Android JavaScriptSandbox 只有 ECMAScript，没有 DOM 和宿主网络。
@@ -10,6 +11,7 @@ const host = globalThis as typeof globalThis & { EveryTalkPumpTimers?: () => voi
 if (!host.TextEncoder) host.TextEncoder = TextEncoder;
 if (!host.TextDecoder) host.TextDecoder = TextDecoder;
 if (!host.AbortController) host.AbortController = AbortController;
+if (!host.AbortSignal) host.AbortSignal = AbortSignal;
 if (!host.performance) {
   const origin = Date.now();
   Object.defineProperty(host, "performance", { value: { timeOrigin: origin, now: () => Date.now() - origin } });

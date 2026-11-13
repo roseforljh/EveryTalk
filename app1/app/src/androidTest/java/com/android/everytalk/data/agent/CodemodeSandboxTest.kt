@@ -174,6 +174,48 @@ class CodemodeSandboxTest {
         } finally { database.close() }
     }
 
+    /** just-bash 与 codemode 共用 AndroidX 隔离引擎，但文件必须先获批保存才能跨调用读取。 */
+    @Test
+    fun localShellSavesAndRunsWithoutServer() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val root = java.io.File(context.cacheDir.canonicalFile, "local-shell-test-${java.util.UUID.randomUUID()}")
+        val workspace = com.android.everytalk.statecontroller.viewmodel.prepareLocalComputerRequest("local-shell-test")
+            .context.copy(runId = "test-run")
+        val saver = com.android.everytalk.data.computer.LocalFileSaveToolExecutor({ root })
+        val arguments = kotlinx.serialization.json.buildJsonObject {
+            put("path", JsonPrimitive("hello.sh"))
+            put("content", JsonPrimitive("echo \$((1 + 1))"))
+        }
+        try {
+            val approval = saver.approval(arguments, "save-test", workspace)
+            assertFalse(root.exists())
+            val saved = saver.execute(arguments, "save-test", workspace.copy(
+                approvedToolCallId = "save-test", approvedLocalFileWrite = approval,
+            ))
+            assertTrue(saved.file.isFile)
+            com.android.everytalk.data.computer.SandboxJustBashRuntime(context).use { runtime ->
+                val raw = runtime.execute(com.android.everytalk.data.computer.LocalShellRequest(
+                    id = "shell-test", command = "source hello.sh", files = mapOf("hello.sh" to saved.file.readText()),
+                ))
+                assertTrue(raw.toString(), raw.ok)
+                assertEquals("2\n", raw.stdout)
+                val executor = com.android.everytalk.data.computer.LocalBashToolExecutor(runtime, { root })
+                val result = executor.execute(kotlinx.serialization.json.buildJsonObject {
+                    put("command", JsonPrimitive("source hello.sh"))
+                }, workspace)
+                assertEquals(result.toString(), "true", result["ok"].toString())
+                assertEquals("2\n", result["stdout"]?.jsonPrimitive?.content)
+                val next = executor.execute(kotlinx.serialization.json.buildJsonObject {
+                    put("command", JsonPrimitive("cat hello.sh"))
+                }, workspace)
+                assertEquals("true", next["ok"].toString())
+                assertEquals(saved.file.readText(), next["stdout"]?.jsonPrimitive?.content)
+            }
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
     @Test
     fun neverResolvingPromiseAndInfiniteLoopFail() {
         val waiting = run("text(\"waiting\"); await new Promise(() => {})")

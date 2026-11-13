@@ -40,6 +40,8 @@ internal interface SyncApi {
     suspend fun recoverHistoryKey(): AccountSyncKey = throw SyncNotConfiguredException()
     suspend fun fileChunkBytes(): Long = 4L * 1024 * 1024
     suspend fun uploadFile(file: File, mime: String): SyncFileInfo = throw SyncNotConfiguredException()
+    /** 只重新协商已有内容；返回 null 表示服务端需要字节，不能把预约当成上传成功。 */
+    suspend fun reserveReadyFile(info: SyncFileInfo): SyncFileInfo? = null
     suspend fun downloadFile(info: SyncFileInfo, target: File) { throw SyncNotConfiguredException() }
 }
 
@@ -109,13 +111,7 @@ internal class KtorSyncApi(
         val size = file.length()
         require(size > 0)
         val hash = syncFileHash(file)
-        // 幂等标识由内容稳定导出；杀进程后重新申请能找到同一上传，不重复占配额。
-        val idempotency = UUID.nameUUIDFromBytes("$hash:$size:$mime".toByteArray()).toString()
-        val ticket: SyncUploadTicket = json.decodeFromString(request("/files/uploads", body = kotlinx.serialization.json.buildJsonObject {
-            put("size", kotlinx.serialization.json.JsonPrimitive(size)); put("sha256", kotlinx.serialization.json.JsonPrimitive(hash))
-            put("mime", kotlinx.serialization.json.JsonPrimitive(mime))
-        }.toString(), idempotency = idempotency))
-        require(UUID.fromString(ticket.fileId).toString() == ticket.fileId)
+        val ticket = reserveFile(size, hash, mime)
         if (ticket.status == "ready") return SyncFileInfo(ticket.fileId, size, hash, mime)
         require(ticket.status == "upload_required")
         val uploadId = requireNotNull(ticket.uploadId)
@@ -123,6 +119,24 @@ internal class KtorSyncApi(
         val result: SyncFileInfo = json.decodeFromString(request("/files/uploads/$uploadId", method = HttpMethod.Put, upload = file))
         require(result == SyncFileInfo(ticket.fileId, size, hash, mime)) { "文件上传校验失败" }
         return result
+    }
+
+    override suspend fun reserveReadyFile(info: SyncFileInfo): SyncFileInfo? {
+        val ticket = reserveFile(info.size, info.sha256, info.mime)
+        return if (ticket.status == "ready") info.copy(fileId = ticket.fileId) else null
+    }
+
+    /** 预约和重协商共用同一内容身份；需要上传时继续使用服务器返回的 uploadId。 */
+    private suspend fun reserveFile(size: Long, hash: String, mime: String): SyncUploadTicket {
+        require(size > 0 && hash.matches(Regex("[0-9a-f]{64}")))
+        val idempotency = UUID.nameUUIDFromBytes("$hash:$size:$mime".toByteArray()).toString()
+        val ticket: SyncUploadTicket = json.decodeFromString(request("/files/uploads", body = kotlinx.serialization.json.buildJsonObject {
+            put("size", kotlinx.serialization.json.JsonPrimitive(size)); put("sha256", kotlinx.serialization.json.JsonPrimitive(hash))
+            put("mime", kotlinx.serialization.json.JsonPrimitive(mime))
+        }.toString(), idempotency = idempotency))
+        require(UUID.fromString(ticket.fileId).toString() == ticket.fileId)
+        require(ticket.status in setOf("ready", "upload_required"))
+        return ticket
     }
 
     override suspend fun downloadFile(info: SyncFileInfo, target: File) {
@@ -164,6 +178,8 @@ internal class KtorSyncApi(
                 this.method = method ?: if (body == null) HttpMethod.Get else HttpMethod.Post
                 bearerAuth(access)
                 header("X-EveryTalk-Sync-Version", SYNC_VERSION)
+                // 服务器据此只通知其他设备拉取，不把本机的推送再推回本机。
+                header("X-EveryTalk-Device", LiveSync.deviceId)
                 if (includeSecretsEpoch) {
                     header("X-EveryTalk-Secrets-Epoch", readSecretsEpoch().toString())
                 }
@@ -178,8 +194,6 @@ internal class KtorSyncApi(
                                 while (true) { val count = input.read(buffer); if (count < 0) break; channel.writeFully(buffer, 0, count) }
                             }
                         }
-                // 服务器据此只通知其他设备拉取，不把本机的推送再推回本机。
-                header("X-EveryTalk-Device", LiveSync.deviceId)
                     })
                 } else if (body != null) {
                     contentType(ContentType.Application.Json)
@@ -206,6 +220,8 @@ internal class KtorSyncApi(
                 Triple(response.status.value, response.headers["Retry-After"]?.toLongOrNull(),
                     response.readTextAtMost(40L * 1024 * 1024))
             }
+            // 网络往返期间可能已退出或换账号，禁止把旧账号回执继续写入当前快照。
+            check(canRequest() && !isLocalOnly()) { "同步权限已撤回" }
             if (response.first == 401 && attempt == 0) {
                 check(canRequest()) { "同步权限已撤回" }
                 access = token(true)

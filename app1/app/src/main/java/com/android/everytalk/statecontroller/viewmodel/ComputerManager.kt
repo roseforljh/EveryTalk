@@ -639,19 +639,7 @@ class ComputerManager(
         return conversationIds.withCurrentId(conversationId) { currentConversationId ->
             val computer = repository.getSelectedComputer(currentConversationId)
             if (computer == null) {
-                // 本地执行器拥有自己的隔离边界，不伪造 SSH Computer，也不创建数据库记录。
-                return@withCurrentId PreparedComputerRequest(
-                    context = ComputerRequestContext(
-                        conversationId = currentConversationId,
-                        computerId = "local",
-                        workspaceId = localWorkspaceId(currentConversationId),
-                        permissionMode = ComputerPermissionMode.MANUAL,
-                    ),
-                    environmentPrompt = "You are using the EveryTalk built-in local Workspace. local_bash runs in a temporary in-memory snapshot and file changes are not saved automatically. When the user wants a file, save it with local_file_save and only say it was sent after a successful result; link it where you describe it as [file name](returned file_link). There is no access to system files or the network.",
-                    permissionMode = ComputerPermissionMode.MANUAL,
-                    provider = ComputerProvider.SSH,
-                    localOnly = true,
-                )
+                return@withCurrentId prepareLocalComputerRequest(currentConversationId)
             }
             suspend fun prepareTarget(computer: Computer): PreparedComputerRequest {
                 // 未授权 Cloudflare 仍保留目标快照，让工具边界发出结构化重新登录干预。
@@ -667,7 +655,7 @@ class ComputerManager(
                     workspaceManager.getOrCreateAppLocal(
                         computer.id,
                         currentConversationId,
-                        java.io.File(appContext.filesDir, "agent-workspaces"),
+                        java.io.File(appContext.filesDir.canonicalFile, "agent-workspaces"),
                     )
                 } else {
                     workspaceManager.getOrCreateLocal(computer.id, currentConversationId)
@@ -872,10 +860,12 @@ class ComputerManager(
                 check(workspace?.computerId == context.computerId) { "Workspace 与 Computer 不匹配" }
             }
             return LocalFileSaveToolExecutor(
-                workspaceRoot = { workspaceId -> java.io.File(appContext.filesDir, "agent-workspaces/$workspaceId") },
+                workspaceRoot = { workspaceId -> java.io.File(appContext.filesDir.canonicalFile, "agent-workspaces/$workspaceId") },
                 enabled = { featureFlags.localBashEnabled },
             ).approval(arguments, toolCallId, context)
         }
+        // 本地 Shell 和普通工具不访问服务器，不能拿本地 Workspace 去查询 SSH 权限。
+        if (toolName !in ComputerToolNames.allProviders) return null
         // 审批卡也可能在 Agent 已运行后才生成，必须读取详情页刚修改的权限。
         val refreshedContext = repository.refreshPermissionMode(context)
         val computer = repository.getComputer(refreshedContext.computerId)
@@ -1148,6 +1138,19 @@ internal fun buildComputerEnvironmentPrompt(computer: Computer, workspace: Compu
         "File, upload and download paths may be absolute or relative to the SSH user's home; exec and terminal start in home, set cwd as needed. " +
         "Architecture: $architecture. Available tools: ${ComputerToolNames.all.sorted().joinToString(", ")}."
 }
+
+/** 本地能力不依赖服务器开关；只生成隔离上下文，保存获批后才创建手机上的目录。 */
+internal fun prepareLocalComputerRequest(conversationId: String): PreparedComputerRequest = PreparedComputerRequest(
+    context = ComputerRequestContext(
+        conversationId = conversationId,
+        computerId = "local",
+        workspaceId = localWorkspaceId(conversationId),
+        permissionMode = ComputerPermissionMode.MANUAL,
+    ),
+    environmentPrompt = "You are using the EveryTalk built-in local Workspace on the phone. local_bash runs restricted Bash commands in a temporary in-memory snapshot; it has no Python, Node.js, system files or network. Use codemode for JavaScript computation. File changes are not saved automatically: use local_file_save to save a file after user confirmation, then link it as [file name](returned file_link). If the task needs a real server, use request_agent; local tools do not require server access.",
+    permissionMode = ComputerPermissionMode.MANUAL,
+    localOnly = true,
+)
 
 /** 本地 Workspace 目录名同时保留可读前缀和完整摘要，避免截断会话 ID 造成碰撞。 */
 private fun localWorkspaceId(conversationId: String): String {

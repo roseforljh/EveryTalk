@@ -547,6 +547,10 @@ internal fun MessageSender.sendMessageInternal(
                 )
             }
             requestConversationId = stateHolder.resolveConversationId(requestConversationId)
+            // 本地工具一直可用，但也必须绑定当前会话；不因此启用 Agent 或选择服务器。
+            val localWorkspaceRequest = if (!isImageGeneration && preparedComputerRequest == null && localBashEnabled()) {
+                com.android.everytalk.statecontroller.viewmodel.prepareLocalComputerRequest(requestConversationId)
+            } else null
 
             withContext(Dispatchers.IO) {
                 val messagesInChatUiSnapshot = inheritedHistory + requestMessages.toList()
@@ -661,7 +665,7 @@ internal fun MessageSender.sendMessageInternal(
                     ?.let { if (it.startsWith("<custom_instructions>")) it else section("custom_instructions", it) }
                 val effectiveSystemPrompt = listOfNotNull(
                     customInstructions,
-                    preparedComputerRequest?.environmentPrompt?.let { section("environment", it) },
+                    (preparedComputerRequest ?: localWorkspaceRequest)?.environmentPrompt?.let { section("environment", it) },
                     skillSnapshotForRequest?.renderCatalog(),
                     preparedMcpDispatch.serverCatalog?.let { section("mcp_servers", it) },
                     mcpApprovalSystemPrompt(
@@ -740,7 +744,7 @@ internal fun MessageSender.sendMessageInternal(
                     )
                     val toolsWithAgentRequest = appendAgentRequestTool(
                         tools = toolsWithAttachmentReader,
-                        agentRequestEnabled = preparedComputerRequest == null,
+                        computerRequest = preparedComputerRequest,
                     )
                     // 先校验自定义控制工具名称，再加入可信的 MCP 申请/执行接口。
                     val toolsWithMcp = toolsWithAgentRequest + mcpToolsForRequest
@@ -1014,7 +1018,7 @@ internal fun MessageSender.sendMessageInternal(
                         restoredState = activeCompressionState,
                         restoredStateCoversRequestPrefix = nativeThroughMessageId != null,
                     ),
-                    localComputerRequestContext = preparedComputerRequest?.context,
+                    localComputerRequestContext = (preparedComputerRequest ?: localWorkspaceRequest)?.context,
                     localSkillSnapshot = skillSnapshotForRequest,
                     imageGenRequest = if (isImageRequest) {
                         // 调试信息：检查发送的配置

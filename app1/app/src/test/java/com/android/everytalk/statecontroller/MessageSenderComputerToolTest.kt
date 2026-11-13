@@ -29,6 +29,16 @@ class MessageSenderComputerToolTest {
     }
 
     @Test
+    fun `本地 Agent 仍提供服务器申请而远端请求收起申请`() {
+        val local = com.android.everytalk.statecontroller.viewmodel.prepareLocalComputerRequest("chat")
+        for ((request, expected) in listOf(null to true, local to true, local.copy(localOnly = false) to false)) {
+            val names = appendAgentRequestTool(emptyList(), request).mapNotNull(::extractToolName)
+            assertEquals(expected, "request_agent" in names)
+            assertTrue("request_capability" in names)
+        }
+    }
+
+    @Test
     fun `agent rejects a custom tool that shadows a computer tool`() {
         val conflicting = listOf(
             mapOf(

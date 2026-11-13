@@ -964,7 +964,7 @@ class SyncEngineTest {
         val result = SyncEngine(api, RoomSyncStore(a), SyncStateStore(a), beforeComplete = {
             a.settingsDao().insertSetting(SystemSettingEntity("memory_enabled", "false"))
         }).runOnce()
-        assertEquals(SyncRunResult.MoreWork, result)
+        assertEquals(SyncRunResult.Completed, result)
         assertEquals(SyncRunResult.Completed, run(a, api))
         run(b, api)
         assertEquals("false", b.settingsDao().getValue("memory_enabled"))
@@ -1060,6 +1060,90 @@ class SyncEngineTest {
         assertEquals(updated.tokenUsage, restored.tokenUsage); assertEquals(listOf("mcp"), restored.enabledToolIds)
         assertEquals(3, restored.executionTrace.size)
         assertTrue(RoomSyncStore(b).pendingBatch().isEmpty())
+    }
+
+    @Test fun `附件修复不被旧响应确认且ignored必须回拉权威版本`() = runBlocking {
+        val db = device(); val s = seed(db); val store = RoomSyncStore(db); val api = FakeSyncApi()
+        val parent = db.chatDao().getMessageByUuid(message("local-0", s).uuid)!!
+        val row = SyncAttachmentEntity(UUID.randomUUID().toString(), s.uuid, parent.uuid,
+            "image.png", "image/png", 3, "a".repeat(64), UUID.randomUUID().toString(), "image", 0, updatedAt = 100)
+        db.syncAttachmentDao().upsert(row)
+        val batch = store.pendingBatch(); val response = api.push(batch.map { it.change })
+        val next = row.copy(fileId = UUID.randomUUID().toString(), updatedAt = 200)
+        db.syncAttachmentDao().upsert(next)
+        val marker = "sync_rejected:attachments:${row.id}"
+        db.settingsDao().insertSetting(SystemSettingEntity(marker, "FILE_NOT_READY"))
+        store.applyPush(response, batch)
+        store.applyPullPage(api.pull(0))
+        assertEquals(next, db.syncAttachmentDao().get(row.id))
+        assertEquals("FILE_NOT_READY", db.settingsDao().getValue(marker))
+        val snapshot = store.pendingBatch().single { it.entity == SyncEntity.ATTACHMENTS }
+        store.applyPush(PushResponse(listOf(PushResult(0, "attachments", row.id, "ignored", serverSeq = api.seq))), listOf(snapshot))
+        assertNotEquals(SyncStatus.SYNCED, db.syncAttachmentDao().get(row.id)!!.syncStatus)
+        assertEquals("FILE_NOT_READY", db.settingsDao().getValue(marker))
+        // ignored 后暂停旧版本，确保低于本机时间的权威记录也能完成对账，而非重复推送二十次。
+        store.applyPullPage(api.pull(0))
+        assertEquals(row.fileId, db.syncAttachmentDao().get(row.id)!!.fileId)
+        assertEquals(SyncStatus.SYNCED, db.syncAttachmentDao().get(row.id)!!.syncStatus)
+        assertTrue(store.pendingBatch().isEmpty())
+        store.applyPullPage(page(SyncPayloadMapper.attachment(row.copy(deleted = true)), since = api.seq))
+        store.applyPullPage(page(SyncPayloadMapper.attachment(row), since = api.seq + 1))
+        assertTrue(db.syncAttachmentDao().get(row.id)!!.deleted)
+        assertNull(db.settingsDao().getValue(marker))
+    }
+
+    @Test fun `服务器绑定跨页晚到时保留原选择且用户明确取消不会复活`() = runBlocking {
+        val db = device(); val s = session(); val store = RoomSyncStore(db)
+        val computer = com.android.everytalk.data.computer.Computer(
+            id = UUID.randomUUID().toString(), displayName = "远端", host = "example.org", port = 22, username = "user",
+            authKind = com.android.everytalk.data.computer.ComputerAuthKind.PASSWORD,
+            runMode = com.android.everytalk.data.computer.ComputerRunMode.DIRECT,
+        ).toEntity(syncJson)
+        val setting = UserSettingEntity("conversation_settings", s.uuid,
+            """{"agentEnabled":true,"computerId":"${computer.id}"}""", updatedAt = 100)
+        val computerValue = """{"displayName":"远端","provider":"SSH","host":"example.org","port":22,"username":"user","authKind":"PASSWORD","runMode":"DIRECT","sandboxImage":"","allowPrivateNetwork":false,"permissionMode":"FULL","createdAt":100}"""
+        val previous = computer.copy(id = UUID.randomUUID().toString(), createdAt = 100, updatedAt = 100)
+        db.computerDao().upsertComputer(previous)
+        db.settingsDao().upsertUserSettings(listOf(UserSettingEntity("computers", previous.id, computerValue, updatedAt = 100, syncStatus = SyncStatus.SYNCED)))
+        db.computerDao().selectComputer("cloud:${s.uuid}", previous.id)
+        store.applyPullPage(page(SyncPayloadMapper.session(s), SyncPayloadMapper.userSetting(setting)))
+        val local = db.chatDao().getSessionByUuid(s.uuid)!!
+        assertNull(db.computerDao().getSelectedComputerId(local.id))
+        // 无关的前台保存同样不能把等待中的远端 ID 投影成 null。
+        SyncSettingsProjector(db).refresh()
+        assertEquals(computer.id, syncJson.parseToJsonElement(db.settingsDao().getUserSetting("conversation_settings", s.uuid)!!.value).jsonObject["computerId"]!!.jsonPrimitive.content)
+        assertTrue(store.pendingBatch().isEmpty())
+        val computerSetting = UserSettingEntity("computers", computer.id,
+            """{"displayName":"远端","provider":"SSH","host":"example.org","port":22,"username":"user","authKind":"PASSWORD","runMode":"DIRECT","sandboxImage":"","allowPrivateNetwork":false,"permissionMode":"FULL","createdAt":100}""", updatedAt = 100)
+        store.applyPullPage(page(SyncPayloadMapper.userSetting(computerSetting), since = 2))
+        assertEquals(computer.id, db.computerDao().getSelectedComputerId(local.id))
+        val restoredPending = store.pendingBatch()
+        assertTrue(restoredPending.toString(), restoredPending.isEmpty())
+        db.withTransaction {
+            SyncSettingsProjector(db).captureComputerSelection(local.id, null)
+            db.computerDao().clearSelection(local.id)
+        }
+        store.restoreUnlockedSettings()
+        assertNull(db.computerDao().getSelectedComputerId(local.id))
+        val change = store.pendingBatch().single { it.change.payload["kind"]?.jsonPrimitive?.content == "conversation_settings" }.change
+        assertEquals(JsonNull, change.payload.getValue("value").jsonObject["computerId"])
+    }
+
+    @Test fun `解锁重放先恢复服务器再恢复会话选择和工作区`() = runBlocking {
+        val db = device(); val s = session(); db.chatDao().writeSession(s.copy(syncStatus = SyncStatus.SYNCED))
+        val computerId = UUID.randomUUID().toString()
+        val workspaceId = UUID.randomUUID().toString()
+        db.settingsDao().upsertUserSettings(listOf(
+            UserSettingEntity("conversation_settings", s.uuid, """{"agentEnabled":true,"computerId":"$computerId"}""", updatedAt = 100, syncStatus = SyncStatus.SYNCED),
+            UserSettingEntity("computer_workspaces", workspaceId, """{"localId":"$workspaceId","computerId":"$computerId","sessionId":"${s.uuid}","runMode":"DIRECT","createdAt":100}""", updatedAt = 100, syncStatus = SyncStatus.SYNCED),
+            UserSettingEntity("computers", computerId, """{"displayName":"远端","provider":"SSH","host":"example.org","port":22,"username":"user","authKind":"PASSWORD","runMode":"DIRECT","sandboxImage":"","allowPrivateNetwork":false,"permissionMode":"FULL","createdAt":100}""", updatedAt = 100, syncStatus = SyncStatus.SYNCED),
+        ))
+        val store = RoomSyncStore(db)
+        store.restoreUnlockedSettings()
+        assertEquals(computerId, db.computerDao().getSelectedComputerId(s.id))
+        assertNotNull(db.computerDao().getWorkspace(computerId, s.id))
+        val unlockedPending = store.pendingBatch()
+        assertTrue(unlockedPending.toString(), unlockedPending.isEmpty())
     }
 
     @Test fun `配置和会话设置先于引用到达后自动生效且不回传`() = runBlocking {

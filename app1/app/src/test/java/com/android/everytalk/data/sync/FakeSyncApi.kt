@@ -10,6 +10,11 @@ internal class FakeSyncApi : SyncApi {
     override suspend fun fileChunkBytes() = chunkSize
     override suspend fun recoverHistoryKey(): AccountSyncKey = AccountSyncKey(1, 0, java.util.Base64.getEncoder().encodeToString(ByteArray(32) { it.toByte() }))
     private val files = mutableMapOf<String, Pair<SyncFileInfo, ByteArray>>()
+    var validateFileReferences = false
+    fun expireFile(id: String) { files.remove(id) }
+    override suspend fun reserveReadyFile(info: SyncFileInfo): SyncFileInfo? = files.values.firstOrNull {
+        it.first.sha256 == info.sha256 && it.first.size == info.size
+    }?.first
     var fileUploads = 0
     override suspend fun uploadFile(file: java.io.File, mime: String): SyncFileInfo {
         require(file.length() <= chunkSize)
@@ -56,6 +61,10 @@ internal class FakeSyncApi : SyncApi {
             val old = rows[change.entity to id]
             val session = change.payload["sessionId"]?.jsonPrimitive?.content?.let { rows["sessions" to it] }
             val rejection = when {
+                validateFileReferences && change.entity == "attachments" && !change.deleted &&
+                    change.payload["fileId"]?.jsonPrimitive?.contentOrNull?.let { it !in files } == true -> "FILE_NOT_READY"
+                validateFileReferences && change.entity == "user_settings" && !change.deleted &&
+                    (change.payload["value"] as? JsonObject)?.get("fileRefs")?.jsonArray?.any { it.jsonPrimitive.content !in files } == true -> "FILE_NOT_READY"
                 change.entity == "messages" && !change.deleted &&
                     !isCanonicalUuid(change.payload["sessionId"]?.jsonPrimitive?.content.orEmpty()) -> "INVALID_SESSION_ID"
                 // 服务端不只检查本次增量，也检查同 UUID 合并后的总大小。

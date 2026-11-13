@@ -78,6 +78,10 @@ internal class PendingMessageController(
         onFinished: () -> Unit,
     ) -> Unit,
     private val recoverDispatches: Boolean = true,
+    /** 按会话登记的运行状态。切页时 isApiCalling 会短暂为 false，不能据此判断该会话空闲。 */
+    private val isConversationRunning: (String) -> Boolean = { false },
+    /** 上面的登记每次变化都会变；后台会话结束时靠它重新检查队列。 */
+    private val conversationRunVersion: StateFlow<Long> = MutableStateFlow(0L),
 ) {
     private val operationMutex = Mutex()
     private val submissionInProgress = AtomicBoolean(false)
@@ -140,7 +144,10 @@ internal class PendingMessageController(
             }
         }
         scope.launch {
-            combine(pendingMessages, isApiCalling, isAbortInProgress, agentRunControlState, composerMode) { _, _, _, _, _ -> Unit }
+            combine(
+                combine(pendingMessages, isApiCalling, isAbortInProgress) { _, _, _ -> Unit },
+                agentRunControlState, composerMode, conversationRunVersion,
+            ) { _, _, _, _ -> Unit }
                 .collect { dispatchNextIfIdle() }
         }
         scope.launch {
@@ -352,6 +359,7 @@ internal class PendingMessageController(
                     agentRunControlState.value != null ||
                     isAbortInProgress.value ||
                     isApiCalling.value ||
+                    isConversationRunning(conversationId) ||
                     activeDispatchIds[conversationId] != null
                 ) return@withLock
                 val editingPosition = (_composerMode.value as? ComposerMode.EditingPending)?.originalPosition

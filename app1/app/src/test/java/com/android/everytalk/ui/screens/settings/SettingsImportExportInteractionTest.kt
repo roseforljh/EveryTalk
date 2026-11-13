@@ -226,6 +226,50 @@ class SettingsImportExportInteractionTest {
     }
 
     @Test
+    fun `系统返回后退出动画中的设置按钮不能再次弹出聊天首页`() {
+        val model = mockk<AppViewModel>(relaxed = true)
+        every { model.apiConfigs } returns MutableStateFlow(emptyList())
+        every { model.imageGenApiConfigs } returns MutableStateFlow(emptyList())
+        every { model.selectedApiConfig } returns MutableStateFlow(null)
+        every { model.allProviders } returns MutableStateFlow(emptyList())
+        every { model.fetchedModels } returns MutableStateFlow(emptyList())
+        every { model.pendingConfigParams } returns MutableStateFlow(null)
+        every { model.isRefreshingModels } returns MutableStateFlow(emptySet())
+        every { model.showAutoFetchConfirmDialog } returns MutableStateFlow(false)
+        every { model.showModelSelectionDialog } returns MutableStateFlow(false)
+        every { model.mcpServerStates } returns MutableStateFlow(emptyMap())
+        every { model.mcpManager.oauthMessage } returns MutableStateFlow(null)
+        every { model.allMcpConfigs } returns MutableStateFlow(emptyMap())
+        every { model.externalWebSearchConfigs } returns MutableStateFlow(emptyMap())
+        every { model.selectedExternalWebSearchProviderId } returns MutableStateFlow(null)
+        every { model.showManualModelInputRequest } returns MutableSharedFlow()
+        lateinit var navController: NavHostController
+        composeRule.setContent {
+            MaterialTheme {
+                navController = rememberNavController()
+                NavHost(navController, startDestination = Screen.CHAT_SCREEN) {
+                    composable(Screen.CHAT_SCREEN) { Text("Chat home") }
+                    composable(Screen.SETTINGS_SCREEN) { SettingsScreen(model, navController, {}) }
+                }
+            }
+        }
+        composeRule.runOnIdle { navController.navigate(Screen.SETTINGS_SCREEN) }
+        composeRule.onNodeWithContentDescription("Back").performClick()
+        composeRule.runOnIdle { assertEquals(Screen.CHAT_SCREEN, navController.currentDestination?.route) }
+
+        composeRule.runOnIdle { navController.navigate(Screen.SETTINGS_SCREEN) }
+        val outgoingBack = requireNotNull(composeRule.onNodeWithContentDescription("Back")
+            .fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsActions.OnClick].action)
+        // 同一轮主线程内模拟系统先返回、旧按钮后收到点击；此时旧页面尚未被移出组合。
+        composeRule.runOnIdle {
+            assertTrue(navController.popBackStack())
+            outgoingBack()
+            assertEquals(Screen.CHAT_SCREEN, navController.currentDestination?.route)
+        }
+        composeRule.onNodeWithText("Chat home").assertIsDisplayed()
+    }
+
+    @Test
     fun `设置菜单路由所有双向组合使用同一动画且不影响外部页面`() {
         val routes = listOf(Screen.SETTINGS_SCREEN, Screen.COMPUTER_SCREEN, Screen.SKILL_SCREEN, Screen.ACCOUNT_SCREEN)
         routes.forEach { from ->

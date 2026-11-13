@@ -116,6 +116,35 @@ class AgentApprovalPersistenceTest {
     }
 
     @Test
+    fun `未知能力回传工具错误后模型仍可继续`() = runBlocking {
+        val sessionId = "session-invalid-capability"
+        database.chatDao().insertSession(ChatSessionEntity(sessionId, 1L, 1L, false))
+        val requests = mutableListOf<ChatRequest>()
+        val loop = AgentLoop(runStore = store, toolRuntime = AgentToolRuntime(executorProvider = { null }),
+            modelTransport = ModelTurnTransport { turn ->
+                requests += turn.request
+                if (requests.size == 1) flowOf(
+                    AppStreamEvent.ToolCall("capability", "request_capability", buildJsonObject {
+                        put("requested_capability", "request_agent"); put("reason_safe", "需要服务器")
+                    }), AppStreamEvent.Finish("tool_calls"),
+                ) else flowOf(AppStreamEvent.Content("已改用服务器申请工具"), AppStreamEvent.Finish("stop"))
+            })
+        val events = loop.run(AgentLoopRequest(
+            request = ChatRequest(messages = listOf(SimpleTextApiMessage(role = "user", content = "检查服务器")), provider = "OpenAI",
+                channel = "OpenAI兼容", apiAddress = "https://example.test", apiKey = "test", model = "test",
+                tools = listOf(capabilityRequestToolDefinition())),
+            sessionId = sessionId, userMessageId = "user", visibleAssistantMessageId = "assistant",
+            tokenLimits = ModelTokenLimits(maxOutputTokens = 512, maxContextTokens = 8_192),
+        )).toList()
+        assertEquals(2, requests.size)
+        val result = requests[1].messages.filterIsInstance<AgentToolResultApiMessage>().single()
+        assertTrue(result.isError)
+        assertTrue(result.content.toString().contains("直接调用 request_agent"))
+        assertTrue(events.none { it is AppStreamEvent.Error })
+        assertTrue(events.any { it is AppStreamEvent.Content && it.text == "已改用服务器申请工具" })
+    }
+
+    @Test
     fun `同一模型回合的重复ToolResult只保留第一份事实`() = runBlocking {
         seedRun()
         val first = AgentContentBlock.ToolResult(

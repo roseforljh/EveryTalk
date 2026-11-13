@@ -45,6 +45,140 @@ class SyncResourceSynchronizerTest {
     private suspend fun sync(db: AppDatabase, api: SyncApi) = SyncEngine(api, RoomSyncStore(db), SyncStateStore(db)).runOnce()
     @After fun close() { databases.forEach { it.close() }; directories.forEach { it.deleteRecursively() } }
 
+    @Test fun `文件引用过期后从上传块定向恢复且确认前保留失败`() = runBlocking {
+        val db = database(); val ctx = context(); val api = FakeSyncApi().apply { validateFileReferences = true }
+        val session = ChatSessionEntity("source", 1, 1, false)
+        db.chatDao().writeSession(session)
+        val image = File(ctx.filesDir, "repair.png").apply { writeBytes(byteArrayOf(4, 5, 6)) }
+        val message = Message(id = "repair", text = "图片", sender = Sender.User,
+            attachments = listOf(SelectedMediaItem.ImageFromUri(android.net.Uri.fromFile(image), "media", "image/png", image.absolutePath))).toEntity(session.id)
+        db.chatDao().writeMessages(listOf(message))
+        SyncResourceSynchronizer(ctx, db, api, user).use { it.synchronize() }
+        val old = db.syncAttachmentDao().getPending(10).single()
+        assertNotNull(db.settingsDao().getValue("sync_resource_queued:${message.uuid}"))
+        assertNull(db.settingsDao().getValue("sync_resource_source:${message.uuid}"))
+        // 模拟上传成功后离线跨 TTL；原文件也不在，但持久化块仍能修复。
+        api.expireFile(old.fileId!!); image.delete()
+        sync(db, api)
+        assertEquals("FILE_NOT_READY", db.settingsDao().getValue("sync_rejected:attachments:${old.id}"))
+        val limited = object : SyncApi by api {
+            override suspend fun uploadFile(file: File, mime: String): SyncFileInfo =
+                throw SyncHttpException(429, 30, "RATE_LIMITED", "模拟修复时限流")
+        }
+        try { SyncResourceSynchronizer(ctx, db, limited, user).use { it.synchronize() }; fail("应保留限流供 Worker 续传") }
+        catch (error: SyncHttpException) { assertEquals(429, error.statusCode) }
+        assertNull(db.settingsDao().getValue("sync_resource_retry:${old.id}"))
+        SyncResourceSynchronizer(ctx, db, api, user).use { it.synchronize() }
+        val repaired = db.syncAttachmentDao().get(old.id)!!
+        assertNotEquals(old.fileId, repaired.fileId)
+        assertEquals(SyncStatus.PENDING, repaired.syncStatus)
+        assertEquals("FILE_NOT_READY", db.settingsDao().getValue("sync_rejected:attachments:${old.id}"))
+        sync(db, api)
+        // 同内容的权威引用可采用另一预约身份；收尾比较内容哈希，不能永久等旧 fileId。
+        val accepted = db.syncAttachmentDao().get(old.id)!!
+        val cached = File(ctx.filesDir, "sync-resources/${UUID.nameUUIDFromBytes(user.toByteArray())}/${accepted.fileId}-${accepted.sha256}")
+        api.expireFile(accepted.fileId!!)
+        val canonical = api.uploadFile(cached, accepted.mime)
+        db.syncAttachmentDao().upsert(accepted.copy(fileId = canonical.fileId))
+        SyncResourceSynchronizer(ctx, db, api, user).use { it.synchronize() }
+        assertEquals(0, db.settingsDao().syncRejectedCount())
+        assertNotNull(db.settingsDao().getValue("sync_resource_source:${message.uuid}"))
+        assertNull(db.settingsDao().getValue("sync_resource_queued:${message.uuid}"))
+        val uploaded = api.fileUploads
+        SyncResourceSynchronizer(ctx, db, api, user).use { it.synchronize() }; sync(db, api)
+        assertEquals(uploaded, api.fileUploads)
+    }
+
+    @Test fun `旧版已完成标记与缺失块缓存仍可从原件定向修复`() = runBlocking {
+        val db = database(); val ctx = context(); val api = FakeSyncApi().apply { validateFileReferences = true }
+        val session = ChatSessionEntity("source", 1, 1, false); db.chatDao().writeSession(session)
+        val image = File(ctx.filesDir, "legacy.png").apply { writeBytes(byteArrayOf(7, 8, 9)) }
+        val message = Message(id = "legacy", text = "原件仍在", sender = Sender.User,
+            attachments = listOf(SelectedMediaItem.ImageFromUri(android.net.Uri.fromFile(image), "legacy-media", "image/png", image.absolutePath))).toEntity(session.id)
+        db.chatDao().writeMessages(listOf(message))
+        SyncResourceSynchronizer(ctx, db, api, user).use { it.synchronize() }
+        val row = db.syncAttachmentDao().getPending(10).single()
+        // 旧版提前写 source 并清临时块；本机原图仍可恢复，不能因 source 已存在永久跳过。
+        db.settingsDao().deleteSetting("sync_resource_queued:${message.uuid}")
+        db.settingsDao().insertSetting(SystemSettingEntity("sync_resource_source:${message.uuid}", "$user:${message.storageFingerprint}"))
+        File(ctx.filesDir, "sync-resources").deleteRecursively()
+        api.expireFile(row.fileId!!)
+        sync(db, api)
+        SyncResourceSynchronizer(ctx, db, api, user).use { it.synchronize() }
+        assertEquals(SyncStatus.PENDING, db.syncAttachmentDao().get(row.id)!!.syncStatus)
+        assertNotEquals(row.fileId, db.syncAttachmentDao().get(row.id)!!.fileId)
+        assertEquals("FILE_NOT_READY", db.settingsDao().getValue("sync_rejected:attachments:${row.id}"))
+        sync(db, api)
+        SyncResourceSynchronizer(ctx, db, api, user).use { it.synchronize() }
+        assertEquals(0, db.settingsDao().syncRejectedCount())
+        assertNotNull(db.settingsDao().getValue("sync_resource_source:${message.uuid}"))
+    }
+
+    @Test fun `失效引用没有原件时保留错误且已删除附件不复活`() = runBlocking {
+        val db = database(); val ctx = context(); val api = FakeSyncApi().apply { validateFileReferences = true }
+        val session = ChatSessionEntity("source", 1, 1, false); db.chatDao().writeSession(session)
+        val message = Message(id = "missing", text = "没有原件", sender = Sender.User).toEntity(session.id)
+        db.chatDao().writeMessages(listOf(message))
+        val row = SyncAttachmentEntity(UUID.randomUUID().toString(), session.uuid, message.uuid, "missing", "application/octet-stream", 3, "a".repeat(64), UUID.randomUUID().toString(), "file", 0)
+        db.syncAttachmentDao().upsert(row)
+        sync(db, api)
+        repeat(2) { SyncResourceSynchronizer(ctx, db, api, user).use { it.synchronize() } }
+        assertEquals("FILE_NOT_READY", db.settingsDao().getValue("sync_rejected:attachments:${row.id}"))
+        assertEquals(SyncStatus.LOCAL_ONLY, db.syncAttachmentDao().get(row.id)!!.syncStatus)
+        assertEquals(0, api.fileUploads)
+        db.syncAttachmentDao().upsert(row.copy(deleted = true, syncStatus = SyncStatus.SYNCED))
+        SyncResourceSynchronizer(ctx, db, api, user).use { it.synchronize() }
+        assertTrue(db.syncAttachmentDao().get(row.id)!!.deleted)
+        assertEquals(0, db.settingsDao().syncRejectedCount())
+    }
+
+    @Test fun `新资源当轮提交引用且技能失效只重传缺失文件`() = runBlocking {
+        val db = database(); val ctx = context(); val api = FakeSyncApi().apply { validateFileReferences = true }
+        val skillRoot = File(ctx.filesDir, "skill-repair").apply { mkdirs() }
+        File(skillRoot, "SKILL.md").writeText("---\nname: example\ndescription: test\n---\n\n# 内容")
+        val validated = SkillPackageValidator.validate(skillRoot)
+        val skill = SkillInstallationEntity("repair-skill", validated.name, validated.description, "LOCAL_IMPORT", null, null,
+            validated.contentHash, true, "AUTO", null, 100, 100, null, 0)
+        db.skillDao().saveVersion(skill, SkillVersionEntity(skill.skillId, skill.currentHash, null, skillRoot.absolutePath, "[]", "{}", 100))
+        SyncEngine(api, RoomSyncStore(db), SyncStateStore(db), beforeComplete = {
+            SyncResourceSynchronizer(ctx, db, api, user).use { it.synchronize() }
+        }).runOnce()
+        val setting = db.settingsDao().getUserSetting("skills", skill.skillId)!!
+        assertEquals(SyncStatus.SYNCED, setting.syncStatus)
+        val refs = syncJson.parseToJsonElement(setting.value).jsonObject.getValue("fileRefs").jsonArray
+        api.expireFile(refs.first().jsonPrimitive.content)
+        db.settingsDao().upsertUserSettings(listOf(setting.copy(updatedAt = setting.updatedAt + 1, syncStatus = SyncStatus.PENDING)))
+        sync(db, api)
+        assertEquals("FILE_NOT_READY", db.settingsDao().getValue("sync_rejected:user_settings:${setting.uuid}"))
+        // 旧云端技能快照不能清除较新但因失效引用暂停的本机修复版本。
+        val oldCloud = api.rows.getValue("user_settings" to setting.uuid)
+        RoomSyncStore(db).applyPullPage(PullResponse(listOf(oldCloud), api.seq, false, 0))
+        assertEquals("FILE_NOT_READY", db.settingsDao().getValue("sync_rejected:user_settings:${setting.uuid}"))
+        assertEquals(setting.updatedAt + 1, db.settingsDao().getUserSetting("skills", skill.skillId)!!.updatedAt)
+        val uploads = api.fileUploads
+        var remaining = 1
+        val limited = object : SyncApi by api {
+            override suspend fun uploadFile(file: File, mime: String): SyncFileInfo {
+                if (remaining-- <= 0) throw SyncHttpException(429, 30, "RATE_LIMITED", "模拟技能修复中断")
+                return api.uploadFile(file, mime)
+            }
+        }
+        try { SyncResourceSynchronizer(ctx, db, limited, user).use { it.synchronize() }; fail("应在清单上传前限流") }
+        catch (error: SyncHttpException) { assertEquals(429, error.statusCode) }
+        assertEquals(uploads + 1, api.fileUploads)
+        // 新同步器模拟重启：只剩一次预约配额，也应越过已传块并完成清单。
+        remaining = 1
+        SyncResourceSynchronizer(ctx, db, limited, user).use { it.synchronize() }
+        assertEquals("FILE_NOT_READY", db.settingsDao().getValue("sync_rejected:user_settings:${setting.uuid}"))
+        api.failPushNumber = api.pushes + 1
+        try { sync(db, api); fail("模拟服务端已接受但 ACK 丢失") } catch (_: java.io.IOException) { }
+        assertEquals("FILE_NOT_READY", db.settingsDao().getValue("sync_rejected:user_settings:${setting.uuid}"))
+        sync(db, api)
+        assertEquals(0, db.settingsDao().syncRejectedCount())
+        // 缺失的技能文件和包含新 fileId 的清单各上传一次，其他 ready 文件仅重新预约。
+        assertEquals(uploads + 2, api.fileUploads)
+    }
+
     @Test fun `超限正文思考工具轨迹图片与技能文件完整恢复且不回传`() = runBlocking {
         val a = database(); val b = database(); val ca = context(); val cb = context(); val api = FakeSyncApi()
         val session = ChatSessionEntity("source", 100, 100, false, "完整历史")
@@ -171,11 +305,17 @@ class SyncResourceSynchronizerTest {
             api.chunkSize = limit
             a.settingsDao().deleteSetting("sync_resource_source:${source.uuid}")
             SyncResourceSynchronizer(ca, a, api, user).use { it.synchronize() }
+            val retiring = a.syncAttachmentDao().getPending(100).filter { it.deleted }
+            assertTrue("新引用确认前不能删除旧块", retiring.isEmpty())
             sync(a, api); sync(b, api)
             SyncResourceSynchronizer(cb, b, api, user).use { it.synchronize() }
             val restored = b.chatDao().getMessageByUuid(source.uuid)!!.attachments.single() as SelectedMediaItem.ImageFromUri
             assertEquals("stable-media", restored.id)
             assertArrayEquals(image.readBytes(), File(restored.filePath!!).readBytes())
+            // 新组确认后再收尾旧组，并提交墓碑；下一次限额变化必须真正生成新分组。
+            SyncResourceSynchronizer(ca, a, api, user).use { it.synchronize() }
+            sync(a, api)
+            assertNull(a.settingsDao().getValue("sync_resource_queued:${source.uuid}"))
             assertEquals(0, a.settingsDao().syncRejectedCount()); assertEquals(0, b.settingsDao().syncRejectedCount())
         }
         val uploads = api.fileUploads

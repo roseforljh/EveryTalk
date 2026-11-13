@@ -105,6 +105,19 @@ class AgentControlToolsTest {
     }
 
     @Test
+    fun `工具名不能冒充 capability 且执行器专用能力不能由模型申请`() {
+        for (name in listOf("request_agent", "unknown", "privilege.sudo.execute")) {
+            val error = runCatching {
+                agentPauseRequest(AgentContentBlock.ToolCall("invalid", AgentControlToolNames.REQUEST_CAPABILITY, buildJsonObject {
+                    put("requested_capability", name); put("reason_safe", "需要执行")
+                }))
+            }.exceptionOrNull()
+            org.junit.Assert.assertTrue(error is IllegalArgumentException)
+            if (name == "request_agent") org.junit.Assert.assertTrue(error!!.message!!.contains("直接调用 request_agent"))
+        }
+    }
+
+    @Test
     fun `request_user_input 保存问题和补充说明`() {
         val request = agentPauseRequest(
             AgentContentBlock.ToolCall(

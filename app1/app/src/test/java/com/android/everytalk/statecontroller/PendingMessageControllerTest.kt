@@ -524,6 +524,31 @@ class PendingMessageControllerTest {
         assertEquals("queued", sent.await())
     }
 
+    @Test
+    fun `切回仍在后台运行的会话时页面运行标记短暂为false也不能提前发出队列`() = runTest {
+        database.chatDao().enqueuePendingMessage(pending("queued", "排队", 1))
+        val running = MutableStateFlow(false)
+        val backgroundRuns = mutableSetOf("conversation")
+        val runVersion = MutableStateFlow(0L)
+        val sent = CompletableDeferred<String>()
+        val controller = PendingMessageController(
+            chatDao = database.chatDao(), scope = backgroundScope,
+            currentConversationId = MutableStateFlow("conversation"), isApiCalling = running,
+            isAbortInProgress = MutableStateFlow(false), agentRunControlState = MutableStateFlow(null),
+            hasComposerContent = { false }, replaceComposer = { _, _, _ -> },
+            persistAttachments = { attachments, _ -> attachments }, resumeStreaming = {},
+            steerCurrentRun = { false }, recordSteeredMessage = {}, showMessage = {},
+            dispatch = { message, _, _, _ -> sent.complete(message.id) },
+            isConversationRunning = { it in backgroundRuns }, conversationRunVersion = runVersion,
+        )
+        controller.pendingMessages.first { it.size == 1 }
+        advanceUntilIdle()
+        assertTrue(!sent.isCompleted)
+        backgroundRuns.clear()
+        runVersion.value++
+        assertEquals("queued", sent.await())
+    }
+
     private fun kotlinx.coroutines.test.TestScope.controller(
         isRunning: MutableStateFlow<Boolean>,
         replaceComposer: (String) -> Unit = {},

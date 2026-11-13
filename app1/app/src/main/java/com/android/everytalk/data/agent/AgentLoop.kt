@@ -63,7 +63,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 
-internal const val MAX_AGENT_CONSECUTIVE_TOOL_CALLS = 100
 internal const val MAX_IDENTICAL_TOOL_CALLS = 3
 internal const val MAX_PARALLEL_TOOL_CALLS = 4
 internal const val PI_DEFAULT_MAX_PROVIDER_RETRIES = 3
@@ -2370,12 +2369,10 @@ private fun canonicalAgentValue(value: Any?): String = when (value) {
 }
 
 internal class ToolLoopGuard {
-    private var total = 0
     private var lastFingerprint: String? = null
     private var identicalCount = 0
 
     fun recordHistorical(call: AgentContentBlock.ToolCall) {
-        total++
         val fingerprint = agentTranscriptFingerprint(listOf(call.name, canonicalAgentValue(call.arguments)))
         identicalCount = if (fingerprint == lastFingerprint) identicalCount + 1 else 1
         lastFingerprint = fingerprint
@@ -2387,16 +2384,13 @@ internal class ToolLoopGuard {
     }
 
     fun record(call: AgentContentBlock.ToolCall): String? {
-        total++
         val fingerprint = agentTranscriptFingerprint(listOf(call.name, canonicalAgentValue(call.arguments)))
         identicalCount = if (fingerprint == lastFingerprint) identicalCount + 1 else 1
         lastFingerprint = fingerprint
-        return when {
-            total > MAX_AGENT_CONSECUTIVE_TOOL_CALLS ->
-                "本次 Agent 运行累计工具调用超过 $MAX_AGENT_CONSECUTIVE_TOOL_CALLS 次，已终止 Agent"
-            identicalCount >= MAX_IDENTICAL_TOOL_CALLS ->
-                "同一工具和参数连续调用 $MAX_IDENTICAL_TOOL_CALLS 次，已终止 Agent"
-            else -> null
+        return if (identicalCount >= MAX_IDENTICAL_TOOL_CALLS) {
+            "同一工具和参数连续调用 $MAX_IDENTICAL_TOOL_CALLS 次，已终止 Agent"
+        } else {
+            null
         }
     }
 }

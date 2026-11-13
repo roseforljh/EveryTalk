@@ -26,6 +26,13 @@ import com.android.everytalk.data.database.entities.SyncStatus
 import com.android.everytalk.data.database.entities.isSyncableTextSession
 import kotlinx.coroutines.flow.Flow
 
+/**
+ * 旧安装的 messages 由多次 ADD COLUMN 追加而成，物理列序与 message_drafts 不同；
+ * UNION 按位置拼接，SELECT * 会把草稿的值错位塞进别的列（NOT NULL 列读到 null 即崩溃）。
+ * 两边必须按列名显式列出。
+ */
+const val MESSAGE_COLUMNS = "id, sessionId, text, contentParts, sender, reasoning, contentStarted, isError, name, timestamp, isPlaceholderName, webSearchResults, currentWebSearchStage, imageUrls, attachments, outputType, parts, executionStatus, executionSteps, executionTrace, executionFinishedAt, enabledToolIds, computerIdSnapshot, workspaceIdSnapshot, modelName, providerName, tokenUsage, contextUsageSnapshot, contextCompressionState, storageFingerprint, uuid, updated_at, deleted, sync_status, ever_synced, is_incomplete"
+
 @Dao
 interface ChatDao {
     /** 记忆第一阶段的候选：闲置足够久、在时间窗内、有正式正文的文字会话，按最近活动排序。 */
@@ -298,10 +305,12 @@ interface ChatDao {
 
     // 旧数据的问题与回复可能共用同一毫秒。相同时间先问题后回复，再按同步 UUID 排序，
     // 不能依赖插入顺序或本机 ID，否则另一台手机会把回复排到问题之前。
-    @Query("SELECT * FROM (SELECT * FROM messages WHERE deleted = 0 UNION ALL SELECT * FROM message_drafts) WHERE sessionId = :sessionId AND sessionId IN (SELECT id FROM chat_sessions WHERE deleted = 0) ORDER BY timestamp ASC, CASE sender WHEN 'System' THEN 0 WHEN 'User' THEN 1 WHEN 'AI' THEN 2 ELSE 3 END, uuid ASC")
+    // 结果超过一个 CursorWindow 时会分段重查；并发会话同时写入会让分段错位读到空行，必须在同一事务快照内读完。
+    @Transaction
+    @Query("SELECT * FROM (SELECT $MESSAGE_COLUMNS FROM messages WHERE deleted = 0 UNION ALL SELECT $MESSAGE_COLUMNS FROM message_drafts) WHERE sessionId = :sessionId AND sessionId IN (SELECT id FROM chat_sessions WHERE deleted = 0) ORDER BY timestamp ASC, CASE sender WHEN 'System' THEN 0 WHEN 'User' THEN 1 WHEN 'AI' THEN 2 ELSE 3 END, uuid ASC")
     suspend fun getMessagesForSession(sessionId: String): List<MessageEntity>
 
-    @Query("SELECT * FROM (SELECT * FROM messages WHERE deleted = 0 UNION ALL SELECT * FROM message_drafts) WHERE sessionId = :sessionId AND id = :messageId AND sessionId IN (SELECT id FROM chat_sessions WHERE deleted = 0) LIMIT 1")
+    @Query("SELECT * FROM (SELECT $MESSAGE_COLUMNS FROM messages WHERE deleted = 0 UNION ALL SELECT $MESSAGE_COLUMNS FROM message_drafts) WHERE sessionId = :sessionId AND id = :messageId AND sessionId IN (SELECT id FROM chat_sessions WHERE deleted = 0) LIMIT 1")
     suspend fun getMessage(sessionId: String, messageId: String): MessageEntity?
 
     /** 后台 Agent 下载完成时，只更新原消息的附件，避免依赖当前打开的会话。 */
@@ -398,6 +407,7 @@ interface ChatDao {
     @Query("UPDATE chat_sessions SET sync_status = 'PENDING' WHERE uuid = :uuid")
     suspend fun markSessionPendingByUuid(uuid: String): Int
 
+    @Transaction // 全量结果必然分段重查，与 getMessagesForSession 同理需固定事务快照
     @Query(
         """
         SELECT id, sessionId, text, contentParts AS contentPartsJson, sender, reasoning, contentStarted, isError, name, timestamp,
@@ -412,7 +422,7 @@ interface ChatDao {
                tokenUsage AS tokenUsageJson,
                contextUsageSnapshot AS contextUsageSnapshotJson,
                contextCompressionState AS contextCompressionStateJson, is_incomplete
-        FROM (SELECT * FROM messages WHERE deleted = 0 UNION ALL SELECT * FROM message_drafts)
+        FROM (SELECT $MESSAGE_COLUMNS FROM messages WHERE deleted = 0 UNION ALL SELECT $MESSAGE_COLUMNS FROM message_drafts)
         WHERE sessionId IN (
             SELECT id FROM chat_sessions WHERE deleted = 0 AND (:isImageGen IS NULL OR isImageGeneration = :isImageGen)
         )
@@ -421,10 +431,11 @@ interface ChatDao {
     )
     suspend fun getRawMessagesForMode(isImageGen: Boolean?): List<RawMessageRow>
 
+    @Transaction // 全量结果必然分段重查，与 getMessagesForSession 同理需固定事务快照
     @Query(
         """
         SELECT id, sessionId, text, sender, timestamp, isPlaceholderName
-        FROM (SELECT * FROM messages WHERE deleted = 0 UNION ALL SELECT * FROM message_drafts)
+        FROM (SELECT $MESSAGE_COLUMNS FROM messages WHERE deleted = 0 UNION ALL SELECT $MESSAGE_COLUMNS FROM message_drafts)
         WHERE sessionId IN (
             SELECT id FROM chat_sessions WHERE deleted = 0 AND (:isImageGen IS NULL OR isImageGeneration = :isImageGen)
         )

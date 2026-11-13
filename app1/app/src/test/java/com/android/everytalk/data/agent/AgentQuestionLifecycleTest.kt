@@ -147,6 +147,37 @@ class AgentQuestionLifecycleTest {
     }
 
     @Test
+    fun `后台已接管续写时页面重复恢复不启动第二次请求`() = runBlocking {
+        val question = ask()
+        val received = Channel<AppStreamEvent>(Channel.UNLIMITED)
+        val observer = launch(start = CoroutineStart.UNDISPATCHED) {
+            coordinator.events.collect { received.send(it.second) }
+        }
+        try {
+            assertTrue(coordinator.answerUserQuestion(question.suspensionId, question.rowVersion,
+                requireNotNull(question.resolutionNonce), "继续"))
+            withTimeout(15_000) {
+                val request = resumedRequest.await()
+                val run = requireNotNull(database.agentDao().getRun(question.runId))
+                assertTrue(coordinator.isRunActive(run))
+                // 模拟页面审批恢复晚于服务恢复；重复收集必须自然结束，不能抛错或重复执行工具。
+                val duplicateEvents = coordinator.run(AgentLoopRequest(
+                    request, run.sessionId, run.userMessageId, run.visibleAssistantMessageId,
+                    ModelTokenLimits(maxOutputTokens = 512, maxContextTokens = 8192),
+                    existingRun = run,
+                )).toList()
+                assertTrue(duplicateEvents.isEmpty())
+                assertEquals(2, turns.get())
+                finishResponse.complete(Unit)
+                while (received.receive() !is AppStreamEvent.Finish) { /* 等待原续写正常完成。 */ }
+                assertEquals(AgentRunStatus.COMPLETED.name, database.agentDao().getRun(run.id)?.status)
+            }
+        } finally {
+            observer.cancelAndJoin()
+        }
+    }
+
+    @Test
     fun `旧版本或错误nonce的回答不会进入队列和用户历史`() = runBlocking {
         val question = ask()
         assertFalse(coordinator.answerUserQuestion(question.suspensionId, question.rowVersion,

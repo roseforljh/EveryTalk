@@ -403,7 +403,10 @@ class AgentRunCoordinator(
         val jobKey = request.existingRun?.id?.let { "run:$it" }
             ?: "message:${request.visibleAssistantMessageId}"
         val uiAttached = AtomicBoolean(true)
-        val job = scope.launchTrackedAgentJob(activeJobs, jobKey, pauseController, request.visibleAssistantMessageId) {
+        // 页面审批和服务恢复共用登记锁；已接管的 Run 继续通过应用级事件流投影，不能再次启动。
+        val job = resumeMutex.withLock {
+            if (request.existingRun?.let(::isRunActive) == true) return@withLock null
+            scope.launchTrackedAgentJob(activeJobs, jobKey, pauseController, request.visibleAssistantMessageId) {
             var foregroundActivity: java.io.Closeable? = null
             try {
                 request.existingRun?.let { snapshot ->
@@ -460,6 +463,11 @@ class AgentRunCoordinator(
                 AgentRecoveryDiagnostics.runtime("ended", request.visibleAssistantMessageId)
                 close()
             }
+            }
+        }
+        if (job == null) {
+            close()
+            return@callbackFlow
         }
         // 即使 scope 已取消、Job 尚未进入函数体，也必须关闭 UI 通道，避免永久挂起。
         job.invokeOnCompletion { error -> close(error) }

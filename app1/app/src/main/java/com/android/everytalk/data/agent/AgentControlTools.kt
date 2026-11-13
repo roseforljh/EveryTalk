@@ -154,6 +154,13 @@ fun agentPauseRequest(
     if (call.name.equals(AgentControlToolNames.REQUEST_CAPABILITY, ignoreCase = true)) {
         val capability = (call.arguments["requested_capability"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
         require(capability.isNotBlank() && capability.length <= 128) { "capability 无效" }
+        // 模型输入错误必须回到工具结果，不能直到 Broker 挂起时才终止整轮任务。
+        val policy = AgentInterventionPolicyRegistry().resolve(capability)
+        require(policy != null) {
+            if (capability == AgentControlToolNames.REQUEST_AGENT) "request_agent 是工具名，请直接调用 request_agent 申请服务器，不要通过 request_capability。"
+            else "未注册的 capability：$capability，请使用已注册能力或对应的专用工具。"
+        }
+        require(policy.minimumSource == InterventionRequestSource.MODEL_HINT) { "此能力必须由执行器确认，不能由模型直接申请。" }
         val reason = (call.arguments["reason_safe"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
         require(reason.isNotBlank()) { "reason_safe 不能为空" }
         val context = (call.arguments["user_visible_context"] as? JsonPrimitive)?.contentOrNull?.trim()?.take(500)

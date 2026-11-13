@@ -2,6 +2,9 @@ package com.android.everytalk.ui.components.popup
 
 import java.io.File
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -145,6 +148,62 @@ class AppFloatingCardRulesTest {
         assertTrue(confirmationSource.contains("footer = {"))
         assertTrue("确认卡必须保留到统一退场动画完成", confirmationSource.contains("visible = request != null"))
         assertTrue(confirmationSource.contains("onExitAnimationFinished = {"))
+    }
+
+    @Test
+    fun `Popup 安全区域会扣除 Dialog 起点偏移与系统导航栏高度`() {
+        // 模拟 Dialog 内 Popup 从状态栏下方 (0, 48) 起始，而测量高度却拿到整屏 1024。
+        val safeBounds = resolvePopupSafeBounds(
+            popupSize = IntSize(465, 1024),
+            popupScreenOffset = IntOffset(0, 48),
+            visibleDisplayFrame = IntRect(0, 48, 465, 976),
+            rootViewScreenBounds = IntRect(24, 52, 441, 972),
+            rootSafeInsets = IntRect(0, 0, 0, 0),
+        )
+        assertEquals(IntRect(0, 0, 465, 928), safeBounds)
+    }
+
+    @Test
+    fun `EdgeToEdge 场景下安全区域会保留状态栏与导航栏软键盘避让`() {
+        val safeBounds = resolvePopupSafeBounds(
+            popupSize = IntSize(1080, 2400),
+            popupScreenOffset = IntOffset.Zero,
+            visibleDisplayFrame = IntRect(0, 0, 1080, 2400),
+            rootViewScreenBounds = IntRect(0, 0, 1080, 2400),
+            rootSafeInsets = IntRect(0, 110, 0, 132),
+        )
+        assertEquals(IntRect(0, 110, 1080, 2268), safeBounds)
+    }
+
+    @Test
+    fun `下拉菜单最大可用高度在空间受限时收缩并在充足时保持上限`() {
+        val safeBounds = IntRect(0, 0, 465, 928)
+        // 锚点靠近底部：下方仅剩 241px，上方有 602px，应取较大侧且不超过请求上限 350px。
+        val bottomAnchor = IntRect(240, 617, 405, 672)
+        assertEquals(
+            350,
+            resolveDropdownAvailableMaxHeightPx(
+                anchorBounds = bottomAnchor,
+                safeBounds = safeBounds,
+                verticalOffsetPx = 5,
+                marginPx = 10,
+                requestedMaxHeightPx = 350,
+            ),
+        )
+
+        // 锚点处于矮视口中部（例如弹出键盘后）：上下都不够 350px，则收紧到较大一侧避免被遮挡。
+        val tightBounds = IntRect(0, 0, 465, 420)
+        val middleAnchor = IntRect(240, 190, 405, 245)
+        assertEquals(
+            175,
+            resolveDropdownAvailableMaxHeightPx(
+                anchorBounds = middleAnchor,
+                safeBounds = tightBounds,
+                verticalOffsetPx = 5,
+                marginPx = 10,
+                requestedMaxHeightPx = 350,
+            ),
+        )
     }
 
     private fun mainSourceRoot(): File {

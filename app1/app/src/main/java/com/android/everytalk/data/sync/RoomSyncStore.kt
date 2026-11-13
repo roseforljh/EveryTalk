@@ -128,8 +128,15 @@ internal class RoomSyncStore(
      */
     suspend fun restoreUnlockedSettings() = database.withTransaction {
         settings.getAllUserSettings().filter { !it.deleted && it.syncStatus == SyncStatus.SYNCED }.forEach { restoreSetting(it) }
+        restoreSettingReferences()
         projectSettings()
         SyncLocalChanges.notifyChanged()
+    }
+
+    /** 基础配置全部落库后再应用引用；页末和解锁后共用，避免遍历顺序丢失绑定。 */
+    private suspend fun restoreSettingReferences() {
+        settings.getSyncableUserSettings().filter { it.kind in setOf("conversation_settings", "computer_workspaces") }
+            .forEach { restoreSetting(it) }
     }
 
     /** 原 wire 保留在同步表；任何字段未解锁时不把半行数据写入业务表。 */
@@ -203,6 +210,9 @@ internal class RoomSyncStore(
                         updatedAt = setting.updatedAt,
                     ),
                 )
+            } else {
+                // 新绑定跨页晚到时停用旧服务器，不能继续执行到旧目标或把旧选择反写覆盖新绑定。
+                database.computerDao().clearSelection(session.id)
             }
         }
         if (value["computerId"] == JsonNull) database.computerDao().clearSelection(session.id)
@@ -485,7 +495,8 @@ internal class RoomSyncStore(
         val full = SyncPayloadMapper.message(message, sessionUuid) { reference ->
             quoteSources[reference.id] ?: (reference.sourceConversationId to reference.sourceMessageId)
         }
-        val archiveReady = settings.getValue("sync_resource_source:${message.uuid}") != null
+        val archiveReady = settings.getValue("sync_resource_source:${message.uuid}") != null ||
+            settings.getValue("sync_resource_queued:${message.uuid}") != null
         if (archiveReady && full.payload.toString().toByteArray().size > maxMessagePayloadBytes) {
             // 完整内容已通过加密文件持久化。普通消息仅保存稳定索引，绝不截断正文或制造新 UUID。
             return full.copy(payload = JsonObject(full.payload.filterKeys { it in setOf("sessionId", "sender", "timestamp", "name", "outputType", "isError", "modelName", "providerName") }))
@@ -560,6 +571,10 @@ internal class RoomSyncStore(
                         attachments.upsert(it.copy(deleted = true, syncStatus = SyncStatus.SYNCED))
                         settings.deleteSetting(rejectionKey(s))
                     }
+                } else if (code == "FILE_NOT_READY" && (s.entity == SyncEntity.ATTACHMENTS || s.entity == SyncEntity.USER_SETTINGS)) {
+                    // 暂停旧引用，交给资源阶段按内容重新协商；直接保留 PENDING 会在本轮反复提交同一个失效 fileId。
+                    // 拒绝证据一直保留到新引用真正获 ACK，也覆盖升级前已落为 LOCAL_ONLY 的记录。
+                    reject(s, code)
                 } else if (code == "SECRETS_EPOCH_MISMATCH") {
                     // 保留 PENDING，下一轮先 pull 最新密钥代次或重新计算可选字段后再试。
                     // 这类错误不能进入永久失败列表，也不能让有效变更被整批阻塞。
@@ -581,14 +596,17 @@ internal class RoomSyncStore(
                 SyncEntity.MESSAGES -> chat.markMessageSyncedIfVersion(s.change.id, s.version)
                 SyncEntity.MEMORIES -> memory.markSyncedIfVersion(s.change.id, s.version)
                 SyncEntity.USER_SETTINGS -> settings.markUserSettingSyncedIfVersion(result.canonicalId ?: s.change.id, s.version)
-                SyncEntity.ATTACHMENTS -> attachments.markSyncedIfVersion(s.change.id, s.version)
+                // ignored 不是引用确认：暂停此旧版本，随后从零回拉权威记录，不能反复提交或提前收尾。
+                SyncEntity.ATTACHMENTS -> if (result.status == "ignored") attachments.markRejectedIfVersion(s.change.id, s.version)
+                    else attachments.markSyncedIfVersion(s.change.id, s.version)
             }
             if (unchanged && result.status == "ignored" && s.entity != SyncEntity.MESSAGES) {
                 // 首次 pull 可能因本地 PENDING 而暂存了更旧的远端版本；服务器判旧写入
                 // ignored 后不会分配新序号，必须重放权威结果，否则两台会永远各显示各的。
                 settings.deleteSetting(SyncStateStore.KEY_CURSOR)
             }
-            settings.deleteSetting(rejectionKey(s))
+            // 旧 ACK 或 ignored 不能清除当前版本的引用错误；权威 pull 再对账。
+            if (unchanged && result.status != "ignored") settings.deleteSetting(rejectionKey(s))
         }
     }
 
@@ -637,8 +655,7 @@ internal class RoomSyncStore(
             }
         }
         projectSettings()
-        settings.getSyncableUserSettings().filter { it.kind in setOf("conversation_settings", "computer_workspaces") }
-            .forEach { restoreSetting(it) }
+        restoreSettingReferences()
         state.saveCursor(response.nextCursor, response.epoch)
       }
       if (response.changes.isNotEmpty()) SyncLocalChanges.notifyChanged()
@@ -864,8 +881,9 @@ internal class RoomSyncStore(
             return
         }
         val localRejection = old?.let { settings.getValue("sync_rejected:user_settings:${it.uuid}") }
-        val protectedLocal = !record.deleted && old?.deleted == false && old.syncStatus == SyncStatus.LOCAL_ONLY && localRejection in setOf(
-            "CONTAINS_SECRET", "FORBIDDEN_FIELD_NAME", "INVALID_ENVELOPE", "ACCOUNT_KEY_UNAVAILABLE", "CREDENTIAL_DECRYPTION_FAILED")
+        val protectedLocal = !record.deleted && old?.deleted == false && old.syncStatus == SyncStatus.LOCAL_ONLY && (
+            localRejection in setOf("CONTAINS_SECRET", "FORBIDDEN_FIELD_NAME", "INVALID_ENVELOPE", "ACCOUNT_KEY_UNAVAILABLE", "CREDENTIAL_DECRYPTION_FAILED") ||
+                (localRejection == "FILE_NOT_READY" && old.updatedAt > version))
         val local = old
         if (local != null && (protectedLocal || (local.syncStatus == SyncStatus.PENDING && local.updatedAt > version))) {
             // 等账号钥恢复后先修复本机内容；旧云端记录不能抢先覆盖待救的配置。
@@ -882,6 +900,12 @@ internal class RoomSyncStore(
             kind, key, value, record.id, version, record.deleted, SyncStatus.SYNCED,
         )
         settings.upsertUserSettings(listOf(setting))
+        // 通过版本保护的权威引用也能确认丢失的 ACK；旧 UUID 归并时同步清理对应失败。
+        listOfNotNull(old?.uuid, record.id).distinct().forEach { id ->
+            if (settings.getValue("sync_rejected:user_settings:$id") == "FILE_NOT_READY") {
+                settings.deleteSetting("sync_rejected:user_settings:$id")
+            }
+        }
         // 普通配置必须在拉取时生效，不能等待用户进入已取消的同步密码流程。
         if (!record.deleted) restoreSetting(setting) else {
             when (kind) {
@@ -980,9 +1004,13 @@ internal class RoomSyncStore(
                 (old ?: SyncAttachmentEntity(record.id, "", "", "", "application/octet-stream", 1, "0".repeat(64), kind = "file"))
                     .copy(deleted = true, syncStatus = SyncStatus.SYNCED),
             )
+            settings.deleteSetting("sync_rejected:attachments:${record.id}")
             return
         }
+        if (old?.deleted == true) return
         val payload = record.payload
+        // 文件重协商期间晚到的旧快照不能覆盖新 fileId；墓碑仍由上面的分支优先应用。
+        if (old?.syncStatus == SyncStatus.PENDING && old.updatedAt > modified(record)) return
         // 与游标同事务保留扩展字段，网络传输在事务外执行；杀进程后仍可继续下载。
         settings.insertSetting(SystemSettingEntity("sync_resource_meta:${record.id}", payload.toString()))
         val sessionId = requireNotNull(SyncPayloadMapper.string(payload, "sessionId"))
@@ -1005,6 +1033,10 @@ internal class RoomSyncStore(
             updatedAt = modified(record),
             syncStatus = SyncStatus.SYNCED,
         ))
+        // 到达这里的权威记录已通过版本保护，且对应云端实际接受的引用；也可确认丢失的 ACK。
+        if (settings.getValue("sync_rejected:attachments:${record.id}") == "FILE_NOT_READY") {
+            settings.deleteSetting("sync_rejected:attachments:${record.id}")
+        }
     }
 
     private companion object {

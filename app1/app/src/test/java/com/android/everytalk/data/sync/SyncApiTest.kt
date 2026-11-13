@@ -37,6 +37,36 @@ class SyncApiTest {
     private val emptyPull = """{"changes":[],"next_cursor":0,"has_more":false,"epoch":0}"""
     private val refresh = """{"access_token":"new-access","refresh_token":"refresh-2","expires_in":3600,"token_type":"bearer","user":{"id":"user-1","email":"hello@example.com"}}"""
 
+    @Test fun `文件引用按元数据重协商ready而不上传字节`() = runTest {
+        val id = java.util.UUID.randomUUID().toString()
+        val http = http { request ->
+            assertEquals(HttpMethod.Post, request.method)
+            assertEquals("/files/uploads", request.url.encodedPath)
+            assertNotNull(request.headers["Idempotency-Key"])
+            respond("""{"status":"ready","file_id":"$id"}""", HttpStatusCode.OK)
+        }
+        val api = KtorSyncApi("https://sync.example", account(http), { false }, httpClient = http)
+        val info = SyncFileInfo(java.util.UUID.randomUUID().toString(), 3, "a".repeat(64), "image/png")
+        assertEquals(info.copy(fileId = id), api.reserveReadyFile(info))
+        http.close()
+    }
+
+    @Test fun `预约需要字节不算ready且网络返回前撤回权限不接受回执`() = runTest {
+        var permitted = true
+        var revoke = false
+        val id = java.util.UUID.randomUUID().toString()
+        val http = http {
+            if (revoke) permitted = false
+            respond("""{"status":"upload_required","file_id":"$id","upload_id":"$id"}""", HttpStatusCode.OK)
+        }
+        val api = KtorSyncApi("https://sync.example", account(http), { false }, httpClient = http, canRequest = { permitted })
+        val info = SyncFileInfo(id, 3, "a".repeat(64), "image/png")
+        assertNull(api.reserveReadyFile(info))
+        revoke = true
+        assertTrue(runCatching { api.reserveReadyFile(info) }.exceptionOrNull() is IllegalStateException)
+        http.close()
+    }
+
     @Test fun `401仅刷新一次成功恢复原请求`() = runTest {
         var syncCalls = 0; var refreshCalls = 0
         val http = http { request ->

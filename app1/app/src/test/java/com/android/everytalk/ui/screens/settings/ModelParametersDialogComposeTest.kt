@@ -295,6 +295,31 @@ class ModelParametersDialogComposeTest {
         }
     }
 
+    @Test
+    fun `思考程度选项过多时下拉菜单限制最大高度并支持内部滚动`() {
+        val customEfforts = (1..12).map { "custom-$it" }
+        val config = openAICompatibleConfig().copy(
+            modelParameters = ModelParameters(
+                reasoningEffort = "medium",
+                customParameters = listOf(CustomModelParameter("reasoning_effort", "medium")),
+                customReasoningEfforts = customEfforts,
+            )
+        )
+
+        composeRule.setContent {
+            MaterialTheme {
+                ModelParametersDialog(
+                    config = config,
+                    onDismissRequest = {},
+                    onConfirm = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("思考程度下拉框").performScrollTo().performClick()
+        composeRule.onNodeWithText("custom-12").performScrollTo().assertIsDisplayed()
+    }
+
     private fun openAICompatibleConfig() = ApiConfig(
         address = "https://example.com",
         key = "test-key",

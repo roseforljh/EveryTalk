@@ -99,15 +99,20 @@ internal class SyncEngine(
         syncTimed("beforePull") { beforePull() }
         syncTimed("pull") { pullAll() }?.let { return@withLock it }
         syncTimed("afterPull") { afterPull() }
+        var resourcesPrepared = false
         repeat(20) {
             if (!canSync() || !state.isEnabled()) return@withLock SyncRunResult.Disabled
             val pending = syncTimed("pending") { store.pendingBatch() }
             if (pending.isEmpty()) {
                 // 先确认普通记录，再补文件；文件预约被限流时不能拖住模型凭据和文字回复。
                 // 资源恢复仍在同一把锁内，不能与其他 Worker 或换账号流程同时写入。
+                if (resourcesPrepared) return@withLock SyncRunResult.Completed
+                resourcesPrepared = true
                 syncTimed("beforeComplete") { beforeComplete() }
                 if (!canSync()) return@withLock SyncRunResult.Disabled
-                return@withLock if (store.pendingBatch(1).isEmpty()) SyncRunResult.Completed else SyncRunResult.MoreWork
+                if (store.pendingBatch(1).isEmpty()) return@withLock SyncRunResult.Completed
+                // 字节 ready 后立即提交引用；每轮只运行一次资源钩子，失败不会在这里忙转。
+                return@repeat
             }
             syncDiagnostic("push items=${pending.size} entities=${pending.groupingBy { it.entity }.eachCount()}")
             store.reservePush(pending)

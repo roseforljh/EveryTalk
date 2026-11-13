@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.components.popup
 
+import android.graphics.Rect as AndroidRect
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
@@ -41,7 +42,9 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
@@ -54,6 +57,8 @@ import androidx.compose.ui.unit.offset
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
@@ -354,6 +359,37 @@ fun AppFloatingCardPopup(
     matchAnchorWidth: Boolean = false,
     content: @Composable () -> Unit,
 ) {
+    AppFloatingCardPopupImpl(
+        visible = visible,
+        popupPositionProvider = popupPositionProvider,
+        onDismissRequest = onDismissRequest,
+        modifier = modifier,
+        properties = properties,
+        onExitAnimationFinished = onExitAnimationFinished,
+        shape = shape,
+        containerColor = containerColor,
+        border = border,
+        matchAnchorWidth = matchAnchorWidth,
+        maxCardHeightResolver = null,
+        content = content,
+    )
+}
+
+@Composable
+private fun AppFloatingCardPopupImpl(
+    visible: Boolean,
+    popupPositionProvider: PopupPositionProvider,
+    onDismissRequest: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+    properties: PopupProperties = PopupProperties(),
+    onExitAnimationFinished: () -> Unit = {},
+    shape: RoundedCornerShape = AppFloatingCardShape,
+    containerColor: Color = appFloatingCardContainerColor(),
+    border: BorderStroke? = appFloatingCardBorder(),
+    matchAnchorWidth: Boolean = false,
+    maxCardHeightResolver: ((anchorBounds: IntRect, safeBounds: IntRect) -> Int)? = null,
+    content: @Composable () -> Unit,
+) {
     var shouldRender by remember { mutableStateOf(visible) }
     LaunchedEffect(visible) {
         if (visible) shouldRender = true
@@ -388,6 +424,7 @@ fun AppFloatingCardPopup(
         return
     }
 
+    val hostView = LocalView.current
     var anchor by remember { mutableStateOf<Triple<IntRect, IntSize, LayoutDirection>?>(null) }
     val windowProvider = remember {
         object : PopupPositionProvider {
@@ -417,6 +454,8 @@ fun AppFloatingCardPopup(
             clippingEnabled = false,
         ),
     ) {
+        val popupView = LocalView.current
+        var popupScreenOffset by remember { mutableStateOf(IntOffset.Zero) }
         Layout(
             content = {
                 AppFloatingCardContainer(
@@ -431,6 +470,14 @@ fun AppFloatingCardPopup(
             },
             modifier = Modifier
                 .fillMaxSize()
+                .onGloballyPositioned {
+                    val loc = IntArray(2)
+                    popupView.getLocationOnScreen(loc)
+                    val nextOffset = IntOffset(loc[0], loc[1])
+                    if (nextOffset != popupScreenOffset) {
+                        popupScreenOffset = nextOffset
+                    }
+                }
                 .pointerInput(onDismissRequest, properties.dismissOnClickOutside) {
                     awaitEachGesture {
                         val p = awaitFirstDown(requireUnconsumed = false).position
@@ -440,19 +487,98 @@ fun AppFloatingCardPopup(
                 },
         ) { measurables, constraints ->
             val a = anchor
-            val cardConstraints = if (matchAnchorWidth && a != null) {
-                val w = a.first.width.coerceAtMost(constraints.maxWidth)
-                Constraints(minWidth = w, maxWidth = w, maxHeight = constraints.maxHeight)
+            // 优先使用实际屏幕坐标偏移，避免首次布局时窗口尚未触发 onGloballyPositioned。
+            val currentPopupOffset = if (popupView.isAttachedToWindow) {
+                val loc = IntArray(2)
+                popupView.getLocationOnScreen(loc)
+                IntOffset(loc[0], loc[1])
             } else {
-                constraints.copy(minWidth = 0, minHeight = 0)
+                popupScreenOffset
+            }
+            // 读取一次状态以确保偏移变化时触发重排。
+            popupScreenOffset
+            val safeBounds = if (clampToWindow) {
+                val visibleRect = AndroidRect().also { hostView.getWindowVisibleDisplayFrame(it) }
+                val visibleDisplayFrame = IntRect(
+                    visibleRect.left,
+                    visibleRect.top,
+                    visibleRect.right,
+                    visibleRect.bottom,
+                )
+                val rootView = hostView.rootView
+                val rootLoc = IntArray(2).also { rootView.getLocationOnScreen(it) }
+                val rootViewScreenBounds = IntRect(
+                    rootLoc[0],
+                    rootLoc[1],
+                    rootLoc[0] + rootView.width,
+                    rootLoc[1] + rootView.height,
+                )
+                val rawInsets = ViewCompat.getRootWindowInsets(hostView)?.getInsets(
+                    WindowInsetsCompat.Type.systemBars() or
+                        WindowInsetsCompat.Type.displayCutout() or
+                        WindowInsetsCompat.Type.ime(),
+                )
+                val rootSafeInsets = rawInsets?.let {
+                    IntRect(it.left, it.top, it.right, it.bottom)
+                }
+                resolvePopupSafeBounds(
+                    popupSize = IntSize(constraints.maxWidth, constraints.maxHeight),
+                    popupScreenOffset = currentPopupOffset,
+                    visibleDisplayFrame = visibleDisplayFrame,
+                    rootViewScreenBounds = rootViewScreenBounds,
+                    rootSafeInsets = rootSafeInsets,
+                )
+            } else {
+                IntRect(0, 0, constraints.maxWidth, constraints.maxHeight)
+            }
+            val maxCardWidth = safeBounds.width.coerceAtLeast(0)
+            val resolvedMaxHeight = if (a != null && maxCardHeightResolver != null) {
+                maxCardHeightResolver(a.first, safeBounds).coerceIn(0, safeBounds.height.coerceAtLeast(0))
+            } else {
+                safeBounds.height.coerceAtLeast(0)
+            }
+            val cardConstraints = if (matchAnchorWidth && a != null) {
+                val w = a.first.width.coerceAtMost(maxCardWidth)
+                Constraints(minWidth = w, maxWidth = w, maxHeight = resolvedMaxHeight)
+            } else {
+                Constraints(
+                    minWidth = 0,
+                    maxWidth = maxCardWidth,
+                    minHeight = 0,
+                    maxHeight = resolvedMaxHeight,
+                )
             }
             val card = measurables.first().measure(cardConstraints)
             val size = IntSize(card.width, card.height)
-            var pos = if (a == null) IntOffset.Zero else popupPositionProvider.calculatePosition(a.first, a.second, a.third, size)
+            var pos = if (a == null) {
+                IntOffset.Zero
+            } else if (clampToWindow) {
+                // 将锚点转换到安全区域坐标系，确保各类 PositionProvider 都能避开系统栏与键盘。
+                val shiftedAnchor = IntRect(
+                    a.first.left - safeBounds.left,
+                    a.first.top - safeBounds.top,
+                    a.first.right - safeBounds.left,
+                    a.first.bottom - safeBounds.top,
+                )
+                popupPositionProvider.calculatePosition(
+                    shiftedAnchor,
+                    safeBounds.size,
+                    a.third,
+                    size,
+                ) + safeBounds.topLeft
+            } else {
+                popupPositionProvider.calculatePosition(a.first, a.second, a.third, size)
+            }
             if (clampToWindow) {
                 pos = IntOffset(
-                    pos.x.coerceIn(0, (constraints.maxWidth - size.width).coerceAtLeast(0)),
-                    pos.y.coerceIn(0, (constraints.maxHeight - size.height).coerceAtLeast(0)),
+                    pos.x.coerceIn(
+                        safeBounds.left,
+                        (safeBounds.right - size.width).coerceAtLeast(safeBounds.left),
+                    ),
+                    pos.y.coerceIn(
+                        safeBounds.top,
+                        (safeBounds.bottom - size.height).coerceAtLeast(safeBounds.top),
+                    ),
                 )
             }
             cardRect[0] = IntRect(pos, size)
@@ -463,7 +589,80 @@ fun AppFloatingCardPopup(
     }
 }
 
-/** 下拉菜单定位：贴锚点下方起始边对齐，下方放不下时翻到上方。 */
+/**
+ * 计算悬浮卡片在 Popup 局部坐标系中的安全可视区域，
+ * 排除状态栏、导航栏/手势条、挖孔与软键盘，并修正 Dialog 下 Popup 窗口偏移导致的越界。
+ */
+internal fun resolvePopupSafeBounds(
+    popupSize: IntSize,
+    popupScreenOffset: IntOffset,
+    visibleDisplayFrame: IntRect?,
+    rootViewScreenBounds: IntRect?,
+    rootSafeInsets: IntRect?,
+): IntRect {
+    val maxWidth = popupSize.width.coerceAtLeast(0)
+    val maxHeight = popupSize.height.coerceAtLeast(0)
+    var left = 0
+    var top = 0
+    var right = maxWidth
+    var bottom = maxHeight
+
+    if (visibleDisplayFrame != null && visibleDisplayFrame.width > 0 && visibleDisplayFrame.height > 0) {
+        left = maxOf(left, visibleDisplayFrame.left - popupScreenOffset.x)
+        top = maxOf(top, visibleDisplayFrame.top - popupScreenOffset.y)
+        right = minOf(right, visibleDisplayFrame.right - popupScreenOffset.x)
+        bottom = minOf(bottom, visibleDisplayFrame.bottom - popupScreenOffset.y)
+    }
+
+    if (rootViewScreenBounds != null && rootSafeInsets != null &&
+        rootViewScreenBounds.width > 0 && rootViewScreenBounds.height > 0
+    ) {
+        if (rootSafeInsets.left > 0) {
+            left = maxOf(left, rootViewScreenBounds.left + rootSafeInsets.left - popupScreenOffset.x)
+        }
+        if (rootSafeInsets.top > 0) {
+            top = maxOf(top, rootViewScreenBounds.top + rootSafeInsets.top - popupScreenOffset.y)
+        }
+        if (rootSafeInsets.right > 0) {
+            right = minOf(right, rootViewScreenBounds.right - rootSafeInsets.right - popupScreenOffset.x)
+        }
+        if (rootSafeInsets.bottom > 0) {
+            bottom = minOf(bottom, rootViewScreenBounds.bottom - rootSafeInsets.bottom - popupScreenOffset.y)
+        }
+    }
+
+    val safeLeft = left.coerceAtMost(maxWidth)
+    val safeTop = top.coerceAtMost(maxHeight)
+    return IntRect(
+        left = safeLeft,
+        top = safeTop,
+        right = right.coerceAtLeast(safeLeft),
+        bottom = bottom.coerceAtLeast(safeTop),
+    )
+}
+
+/**
+ * 计算下拉菜单在安全区域内的最大可用高度（取锚点上方或下方较大一侧的剩余空间）。
+ * 小于该上限时菜单内容自适应高度，超出则限制在该高度内滚动。
+ */
+internal fun resolveDropdownAvailableMaxHeightPx(
+    anchorBounds: IntRect,
+    safeBounds: IntRect,
+    verticalOffsetPx: Int,
+    marginPx: Int,
+    requestedMaxHeightPx: Int,
+): Int {
+    val safeTop = safeBounds.top + marginPx
+    val safeBottom = safeBounds.bottom - marginPx
+    val belowSpace = (safeBottom - (anchorBounds.bottom + verticalOffsetPx)).coerceAtLeast(0)
+    val aboveSpace = ((anchorBounds.top - verticalOffsetPx) - safeTop).coerceAtLeast(0)
+    val bestSideSpace = maxOf(belowSpace, aboveSpace)
+    val fallbackSpace = (safeBounds.height - marginPx * 2).coerceAtLeast(0)
+    val availableSpace = if (bestSideSpace > 0) bestSideSpace else fallbackSpace
+    return minOf(requestedMaxHeightPx.coerceAtLeast(0), availableSpace)
+}
+
+/** 下拉菜单定位：贴锚点下方起始边对齐，下方放不下且上方空间更充足时翻到上方。 */
 private class DropdownBelowProvider(
     private val offset: IntOffset,
     private val margin: Int,
@@ -481,7 +680,14 @@ private class DropdownBelowProvider(
         }
         val below = anchorBounds.bottom + offset.y
         val above = anchorBounds.top - offset.y - popupContentSize.height
-        val y = if (below + popupContentSize.height <= windowSize.height - margin || above < margin) below else above
+        val belowSpace = (windowSize.height - margin) - below
+        val aboveSpace = (anchorBounds.top - offset.y) - margin
+        val y = when {
+            popupContentSize.height <= belowSpace -> below
+            popupContentSize.height <= aboveSpace -> above
+            aboveSpace > belowSpace -> above
+            else -> below
+        }
         return IntOffset(x, y)
     }
 }
@@ -502,18 +708,32 @@ fun AppDropdownMenu(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val density = LocalDensity.current
-    val provider = remember(offset, density) {
-        with(density) {
-            DropdownBelowProvider(IntOffset(offset.x.roundToPx(), offset.y.roundToPx()), 8.dp.roundToPx())
-        }
+    val marginPx = remember(density) { with(density) { 8.dp.roundToPx() } }
+    val offsetPx = remember(offset, density) {
+        with(density) { IntOffset(offset.x.roundToPx(), offset.y.roundToPx()) }
     }
-    AppFloatingCardPopup(
+    val requestedMaxHeightPx = remember(maxHeight, density) {
+        with(density) { maxHeight.roundToPx() }
+    }
+    val provider = remember(offsetPx, marginPx) {
+        DropdownBelowProvider(offsetPx, marginPx)
+    }
+    AppFloatingCardPopupImpl(
         visible = expanded,
         popupPositionProvider = provider,
         onDismissRequest = onDismissRequest,
         modifier = modifier,
         properties = PopupProperties(focusable = focusable, dismissOnClickOutside = true),
         matchAnchorWidth = matchAnchorWidth,
+        maxCardHeightResolver = { anchorBounds, safeBounds ->
+            resolveDropdownAvailableMaxHeightPx(
+                anchorBounds = anchorBounds,
+                safeBounds = safeBounds,
+                verticalOffsetPx = offsetPx.y,
+                marginPx = marginPx,
+                requestedMaxHeightPx = requestedMaxHeightPx,
+            )
+        },
     ) {
         Column(
             modifier = Modifier

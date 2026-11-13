@@ -508,7 +508,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         persistenceManager.saveConversationFunctionToggleStates(stateHolder.conversationFunctionToggleStates.value)
-        if (request.localComputerRequestContext != null) return request
+        // 本地 Workspace 不代表已有服务器；批准 request_agent 后仍要绑定用户选择的目标。
+        if (request.localComputerRequestContext?.let { it.computerId != "local" } == true) return request
         val prepared = computerManager.prepareRequest(conversationId, agentEnabled = true)
             ?: error("Agent 服务器准备失败")
         val syncedSkills = computerManager.syncSkills(
@@ -530,13 +531,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val requestToolName = com.android.everytalk.data.agent.AgentControlToolNames.REQUEST_AGENT
         val toolsWithoutRequest = request.tools.orEmpty().filterNot { tool ->
             val function = tool["function"] as? Map<*, *>
-            function?.get("name")?.toString()?.equals(requestToolName, ignoreCase = true) == true
+            val name = function?.get("name")?.toString()
+            name?.equals(requestToolName, ignoreCase = true) == true ||
+                name == "local_bash" || name == com.android.everytalk.data.computer.ComputerToolNames.LOCAL_FILE_SAVE
         }
+        val toolsWithLocalWorkspace = appendLocalBashTool(
+            toolsWithoutRequest,
+            enabled = (prepared.localOnly || prepared.provider == com.android.everytalk.data.computer.ComputerProvider.CLOUDFLARE) &&
+                computerManager.localBashEnabled,
+        )
         return request.copy(
             messages = messages,
             tools = appendComputerTools(
-                toolsWithoutRequest,
-                enabled = true,
+                toolsWithLocalWorkspace,
+                enabled = !prepared.localOnly,
                 permissionMode = prepared.permissionMode,
                 requestContext = prepared.context,
                 cloudflare = prepared.provider == com.android.everytalk.data.computer.ComputerProvider.CLOUDFLARE,
@@ -643,6 +651,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             isAbortInProgress = if (fork) MutableStateFlow(false) else stateHolder._isRemoteCancellationPending,
             agentRunControlState = control,
             recoverDispatches = !fork,
+            isConversationRunning = { id ->
+                stateHolder.textApiMessageIds.containsKey(id) || id in stateHolder.preparingTextConversationIds.value
+            },
+            conversationRunVersion = kotlinx.coroutines.flow.combine(
+                stateHolder.textApiRunVersion, stateHolder.preparingTextConversationIds,
+            ) { version, preparing -> version * 31 + preparing.hashCode() }
+                .stateIn(viewModelScope, SharingStarted.Eagerly, 0L),
             hasComposerContent = {
                 if (fork) stateHolder._forkComposerText.value.isNotBlank() ||
                     stateHolder.forkSelectedMediaItems.isNotEmpty() || stateHolder.forkQuoteReferences.isNotEmpty()
@@ -1209,14 +1224,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
       com.android.everytalk.data.computer.LocalBashToolExecutor(
           runtime = localBashRuntime,
           workspaceRoot = { workspaceId ->
-              java.io.File(getApplication<Application>().filesDir, "agent-workspaces/$workspaceId")
+              // 只规范化系统给出的应用目录；Workspace 及其子路径的符号链接仍由 Bridge 拒绝。
+              java.io.File(getApplication<Application>().filesDir.canonicalFile, "agent-workspaces/$workspaceId")
           },
           enabled = { computerFeatureFlags.localBashEnabled },
       )
   }
   private val localFileSaveToolExecutor by lazy {
       com.android.everytalk.data.computer.LocalFileSaveToolExecutor(
-          workspaceRoot = { workspaceId -> java.io.File(getApplication<Application>().filesDir, "agent-workspaces/$workspaceId") },
+          workspaceRoot = { workspaceId -> java.io.File(getApplication<Application>().filesDir.canonicalFile, "agent-workspaces/$workspaceId") },
           enabled = { computerFeatureFlags.localBashEnabled },
       )
   }
@@ -1366,22 +1382,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        // 优化：分阶段初始化，优先加载关键配置
-        // 调整：启用"上次打开会话"的恢复，保证多轮上下文在重启后延续（含图像模式）
-        persistenceManager.loadInitialData(
-            loadLastChat = true,
-            onLoadWarning = ::showSnackbar,
-        ) {
-                initialConfigPresent,
-                initialHistoryPresent ->
-            // 初始恢复完毕后才监听同步；重读预览不会收尾当前进程的流式草稿。
-            viewModelScope.launch {
-                com.android.everytalk.data.sync.SyncLocalChanges.revision.debounce(300).collect { revision ->
-                    if (revision == 0L) return@collect
-                    try {
-                        persistenceManager.refreshSyncedConfigurations(simpleModeManager::isInImageMode)
-                        _externalWebSearchConfigs.value = persistenceManager.loadExternalWebSearchConfigs().associateBy { it.providerId }
-                        persistenceManager.loadSelectedExternalWebSearchProviderId()?.let { _selectedExternalWebSearchProviderId.value = it }
         // 同账号其他设备运行中的回复：换成本机会话和消息 ID 后交给消息列表叠加显示。
         viewModelScope.launch {
             val chatDao = AppDatabase.getDatabase(getApplication()).chatDao()
@@ -1410,6 +1410,22 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
+        // 优化：分阶段初始化，优先加载关键配置
+        // 调整：启用"上次打开会话"的恢复，保证多轮上下文在重启后延续（含图像模式）
+        persistenceManager.loadInitialData(
+            loadLastChat = true,
+            onLoadWarning = ::showSnackbar,
+        ) {
+                initialConfigPresent,
+                initialHistoryPresent ->
+            // 初始恢复完毕后才监听同步；重读预览不会收尾当前进程的流式草稿。
+            viewModelScope.launch {
+                com.android.everytalk.data.sync.SyncLocalChanges.revision.debounce(300).collect { revision ->
+                    if (revision == 0L) return@collect
+                    try {
+                        persistenceManager.refreshSyncedConfigurations(simpleModeManager::isInImageMode)
+                        _externalWebSearchConfigs.value = persistenceManager.loadExternalWebSearchConfigs().associateBy { it.providerId }
+                        persistenceManager.loadSelectedExternalWebSearchProviderId()?.let { _selectedExternalWebSearchProviderId.value = it }
                         val history = withContext(Dispatchers.IO) { persistenceManager.roomDataSource.loadChatHistoryPreviewResult() }
                         stateHolder._historicalConversations.value = history.sessions.map { it.messages }
                         stateHolder.conversationGroups.value = persistenceManager.loadConversationGroups()

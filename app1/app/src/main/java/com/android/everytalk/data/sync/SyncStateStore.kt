@@ -214,7 +214,7 @@ internal class SyncStateStore(private val database: AppDatabase) {
         settings.markAllUserSettingsPending()
         // 云端 epoch 变化后，旧的远端字段清单已经失效；重新上传必须从消息核心字段开始。
         settings.getByPrefix("sync_message_fields:").forEach { settings.deleteSetting(it.key) }
-        listOf("sync_resource_source:", "sync_resource_failed:", "sync_resource_receive_failed:").forEach { prefix ->
+        listOf("sync_resource_source:", "sync_resource_queued:", "sync_resource_retry:", "sync_resource_failed:", "sync_resource_receive_failed:").forEach { prefix ->
             settings.getByPrefix(prefix).forEach { settings.deleteSetting(it.key) }
         }
         settings.insertSetting(SystemSettingEntity("sync_resource_republish", "true"))
@@ -231,7 +231,7 @@ internal class SyncStateStore(private val database: AppDatabase) {
                 value = stripAccountFields(syncJson.parseToJsonElement(row.value), true)?.toString() ?: "{}")))
         }
         database.openHelper.writableDatabase.execSQL("DELETE FROM sync_attachments")
-        listOf("sync_resource_meta:", "sync_private_applied:", "sync_secret_cache:", "sync_resource_restored:").forEach { prefix ->
+        listOf("sync_resource_meta:", "sync_resource_queued:", "sync_resource_retry:", "sync_private_applied:", "sync_secret_cache:", "sync_resource_restored:").forEach { prefix ->
             settings.getByPrefix(prefix).forEach { settings.deleteSetting(it.key) }
         }
     }

@@ -213,6 +213,10 @@ class SyncCredentialSynchronizerTest {
         val ssh = Computer(id = sshId, displayName = "SSH", host = "ssh.example.org", username = "user", port = 22, authKind = ComputerAuthKind.PASSWORD, runMode = ComputerRunMode.DIRECT).toEntity(syncJson)
         val cf = ssh.copy(id = cfId, displayName = "CF", provider = ComputerProvider.CLOUDFLARE.name)
         a.computerDao().upsertComputer(ssh); a.computerDao().upsertComputer(cf)
+        val session = ChatSessionEntity("bound-session", 1, 1, false)
+        a.chatDao().writeSession(session)
+        a.computerDao().selectComputer(session.id, sshId)
+        a.settingsDao().insertSetting(SystemSettingEntity("conversation_function_toggle_states", """{"${session.id}":{"agentEnabled":true}}"""))
         val authorization = CloudflareAuthorizationEntity("auth", "cf:credential", "[]", 1, null, false, 1)
         a.computerDao().upsertCloudflareAuthorization(authorization)
         a.computerDao().upsertCloudflareConfig(CloudflareComputerConfigEntity(cf.id, authorization.authorizationId, "account", "CF", "{}"))
@@ -267,6 +271,8 @@ class SyncCredentialSynchronizerTest {
         assertEquals("oauth-test-only", stores[1].second.read("token:github"))
         assertEquals("variable-test-only", stores[1].third.load("vars", "TEST_VALUE")!!.concatToString())
         assertEquals(ComputerStatus.DISCONNECTED.name, b.computerDao().getComputer(sshId)!!.status)
+        val restoredSession = b.chatDao().getSessionByUuid(session.uuid)!!
+        assertEquals(sshId, b.computerDao().getSelectedComputerId(restoredSession.id))
         assertFalse(cloud.rows.values.joinToString().contains("test-only"))
         val pushes = cloud.pushes; sync(1); assertEquals(pushes, cloud.pushes)
 

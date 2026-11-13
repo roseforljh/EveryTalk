@@ -385,16 +385,15 @@ internal fun appendLocalBashTool(
 /** Agent 和 Skill 密钥申请名称由应用独占，模型只能通过这两张接口申请。 */
 internal fun appendAgentRequestTool(
     tools: List<Map<String, Any>>,
-    agentRequestEnabled: Boolean,
+    computerRequest: PreparedComputerRequest?,
 ): List<Map<String, Any>> {
     val conflict = tools.mapNotNull(::extractToolName).firstOrNull { name ->
         com.android.everytalk.data.agent.AgentControlToolNames.all.any { it.equals(name, ignoreCase = true) }
     }
     require(conflict == null) { "Agent 控制工具名已被占用：$conflict" }
-    // 开启 Agent 的申请只在 Agent 未运行时才有意义；
-    // Secret 与能力接力申请反过来只在 Agent 运行中才有意义，选了服务器目标时同样必须下发。
+    // 本地 Workspace 不代表已有服务器；仅在真正绑定远端目标后收起申请入口。
     return tools + buildList {
-        if (agentRequestEnabled) add(com.android.everytalk.data.agent.agentRequestToolDefinition())
+        if (computerRequest == null || computerRequest.localOnly) add(com.android.everytalk.data.agent.agentRequestToolDefinition())
         add(com.android.everytalk.data.agent.skillSecretRequestToolDefinition())
         add(com.android.everytalk.data.agent.protectedSecretRequestToolDefinition())
         add(com.android.everytalk.data.agent.capabilityRequestToolDefinition())

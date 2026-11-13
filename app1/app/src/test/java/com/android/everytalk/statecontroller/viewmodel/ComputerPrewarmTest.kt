@@ -17,6 +17,18 @@ import java.util.concurrent.atomic.AtomicInteger
 
 class ComputerPrewarmTest {
     @Test
+    fun `本地工具有稳定隔离上下文但不替代服务器申请`() {
+        val local = prepareLocalComputerRequest("session-1")
+        assertTrue(local.localOnly)
+        assertEquals("local", local.context.computerId)
+        assertEquals("session-1", local.context.conversationId)
+        assertEquals(local.context.workspaceId, prepareLocalComputerRequest("session-1").context.workspaceId)
+        assertFalse(local.context.workspaceId == prepareLocalComputerRequest("session-2").context.workspaceId)
+        assertTrue(local.environmentPrompt.contains("no Python, Node.js"))
+        assertTrue(local.environmentPrompt.contains("request_agent"))
+    }
+
+    @Test
     fun `旧容器记录不会让环境提示要求隔离工作区且每轮读取当前规则`() {
         val computer = com.android.everytalk.data.computer.Computer(
             id = "server", displayName = "server", host = "example.com", port = 22, username = "user",

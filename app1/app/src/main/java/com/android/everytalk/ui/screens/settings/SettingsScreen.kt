@@ -388,7 +388,8 @@ fun SettingsScreen(
                             .background(buttonBg)
                             .clickable(enabled = backButtonEnabled) {
                                 backButtonEnabled = false
-                                navController.popBackStack()
+                                // 系统返回后退出动画仍保留旧按钮；只弹出设置页，不能误删已露出的聊天首页。
+                                navController.popBackStack(Screen.SETTINGS_SCREEN, inclusive = true)
                             },
                         contentAlignment = Alignment.Center
                     ) {

@@ -477,7 +477,10 @@ class ComputerRepository(
         val database = AppDatabase.getDatabase(applicationContext)
         database.withTransaction {
             dao.selectComputer(conversationId, computerId)
-            com.android.everytalk.data.sync.SyncSettingsProjector(database).refresh()
+            com.android.everytalk.data.sync.SyncSettingsProjector(database).apply {
+                captureComputerSelection(conversationId, computerId)
+                refresh()
+            }
         }
     }
 
@@ -550,10 +553,16 @@ class ComputerRepository(
         credentialStore.deleteComputerSudoPassword(computerId)
         // 先写云端墓碑再删本地实体。否则下一次 pull 看不到本地记录，
         // 会把云端旧的 computers 记录重新恢复，表现为“已删除的服务器又出现”。
-        com.android.everytalk.data.sync.SyncSettingsProjector(
-            AppDatabase.getDatabase(applicationContext),
-        ).markDeleted("computers", computerId)
-        dao.deleteComputer(computerId)
+        val database = AppDatabase.getDatabase(applicationContext)
+        database.withTransaction {
+            val projector = com.android.everytalk.data.sync.SyncSettingsProjector(database)
+            // CASCADE 会移除选择行，先封存明确的取消，不能和待恢复的选择混为一谈。
+            dao.getAllSelectionsSnapshot().filter { it.selectedComputerId == computerId }.forEach {
+                projector.captureComputerSelection(it.conversationId, null)
+            }
+            projector.markDeleted("computers", computerId)
+            dao.deleteComputer(computerId)
+        }
         return ComputerDeleteResult(remoteKeyRemoved = remoteKeyRemoved)
     }
 
