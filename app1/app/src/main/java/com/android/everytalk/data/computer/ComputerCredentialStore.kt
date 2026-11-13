@@ -218,9 +218,13 @@ internal object ComputerCredentialCodec {
     }
 }
 
-class ComputerCredentialStore(private val context: Context, private val recordSyncChanges: Boolean = true) {
+class ComputerCredentialStore private constructor(private val context: Context, private val recordSyncChanges: Boolean, masterKey: SecretKey?) {
+    constructor(context: Context, recordSyncChanges: Boolean = true) : this(context, recordSyncChanges, null)
+    /** 存储测试只替换设备主密钥；信封、AAD 和原子文件均执行生产逻辑。 */
+    internal constructor(context: Context, masterKey: SecretKey) : this(context, false, masterKey)
+
     private val rootDirectory = File(context.noBackupFilesDir, "computer_credentials")
-    private val envelopeCipher by lazy { ComputerEnvelopeCipher(getOrCreateMasterKey()) }
+    private val envelopeCipher by lazy { ComputerEnvelopeCipher(masterKey ?: getOrCreateMasterKey()) }
 
     suspend fun saveComputerCredential(computerId: String, credential: ComputerCredential) =
         saveCredential("credential:$computerId", credential)
@@ -376,6 +380,55 @@ class ComputerCredentialStore(private val context: Context, private val recordSy
         requireAgentAuthorizationReference(reference)
         cryptoShred(fileForScope("agent-authorization:$reference"))
         recordMutation("agent-authorization:$reference")
+    }
+
+    /**
+     * 云端 POST 结果未知时，重启仍需以完全相同的输入查询/重交同一 Run。
+     * 输入含密钥，只以 Keystore 信封保存；分块避免复用凭据格式的 4 MiB 字段上限，清单最后原子写入。
+     */
+    internal suspend fun saveCloudAgentInput(accountId: String, runId: String, bytes: ByteArray) = withContext(Dispatchers.IO) {
+        requireCloudAgentIdentity(accountId, runId)
+        require(bytes.isNotEmpty() && bytes.size <= 24 * 1024 * 1024) { "云端请求需在 1 字节到 24 MiB 之间，请减少附件" }
+        val scope = "cloud-agent:$accountId:$runId"
+        loadCloudAgentInput(accountId, runId)?.let { saved ->
+            try { check(saved.contentEquals(bytes)) { "同一个云端任务的冻结输入不能改变" } }
+            finally { saved.fill(0) }
+            return@withContext
+        }
+        val count = (bytes.size + 1024 * 1024 - 1) / (1024 * 1024)
+        repeat(count) { index ->
+            val part = bytes.copyOfRange(index * 1024 * 1024, minOf(bytes.size, (index + 1) * 1024 * 1024))
+            try { writeEnvelope(fileForScope("$scope:$index"), envelopeCipher.encrypt("$scope:$index", part)) }
+            finally { part.fill(0) }
+        }
+        writeEnvelope(fileForScope(scope), envelopeCipher.encrypt(scope, count.toString().toByteArray()))
+    }
+
+    internal suspend fun loadCloudAgentInput(accountId: String, runId: String): ByteArray? = withContext(Dispatchers.IO) {
+        requireCloudAgentIdentity(accountId, runId)
+        val scope = "cloud-agent:$accountId:$runId"
+        if (!fileForScope(scope).isFile) return@withContext null
+        val manifest = envelopeCipher.decrypt(scope, readEnvelope(fileForScope(scope)))
+        val count = try { manifest.toString(Charsets.UTF_8).toInt().also { require(it in 1..24) } } finally { manifest.fill(0) }
+        ByteArrayOutputStream().use { output ->
+            repeat(count) { index ->
+                val part = envelopeCipher.decrypt("$scope:$index", readEnvelope(fileForScope("$scope:$index")))
+                try { output.write(part) } finally { part.fill(0) }
+            }
+            output.toByteArray()
+        }
+    }
+
+    internal suspend fun deleteCloudAgentInput(accountId: String, runId: String) = withContext(Dispatchers.IO) {
+        requireCloudAgentIdentity(accountId, runId)
+        val scope = "cloud-agent:$accountId:$runId"
+        // 固定最多 24 块，也覆盖进程在写清单前退出留下的密文碎片。
+        repeat(24) { cryptoShred(fileForScope("$scope:$it")) }
+        cryptoShred(fileForScope(scope))
+    }
+
+    private fun requireCloudAgentIdentity(accountId: String, runId: String) {
+        listOf(accountId, runId).forEach { require(java.util.UUID.fromString(it).toString() == it) }
     }
 
     private suspend fun saveCredential(scope: String, credential: ComputerCredential) = withContext(Dispatchers.IO) {

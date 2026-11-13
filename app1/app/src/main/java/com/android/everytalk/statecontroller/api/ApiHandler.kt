@@ -414,6 +414,9 @@ class ApiHandler(
 
     val agentRunControlSnapshots: StateFlow<Map<String, AgentRunControlSnapshot>>
         get() = agentRunCoordinator.runControlSnapshots
+    internal val cloudRuns get() = agentRunCoordinator.cloudRuns
+
+    internal suspend fun stopCloudRun(runId: String): Boolean = agentRunCoordinator.commandCloudRun(runId, "stop")
     private val pendingAgentStops = ConcurrentHashMap<String, PendingAgentStop>()
     private val messagePersistenceMutex = Mutex()
     private val lastMessagePersistedAt = ConcurrentHashMap<String, Long>()
@@ -468,6 +471,8 @@ class ApiHandler(
         messagePersistenceMutex.withLock {
             val database = AppDatabase.getDatabase(context)
             val run = agentRunStore.getRunByVisibleMessage(messageId)
+            // 后端是云端回复唯一写入者；手机不能把 UI 草稿再次定稿、上传或走旧 live publisher。
+            if (run?.executionOwner == "CLOUD") return@withLock
             val snapshot = withContext(Dispatchers.Main.immediate) {
                 stateHolder.syncStreamingSnapshotToList(messageId)
                 stateHolder.textMessagesForConversation(sessionId).firstOrNull { it.id == messageId }
@@ -716,6 +721,17 @@ class ApiHandler(
             .filter { it.visibleAssistantMessageId in baselines }
             .sortedByDescending { it.updatedAt }
         for (run in runs) {
+            if (run.executionOwner == "CLOUD") {
+                val message = agentRunCoordinator.cloudMessage(run) ?: continue
+                withContext(Dispatchers.Main.immediate) {
+                    if (stateHolder._currentConversationId.value == sessionId) {
+                        val messages = stateHolder.textMessagesForConversation(sessionId)
+                        val index = messages.indexOfFirst { it.id == message.id }
+                        if (index >= 0 && messages[index] == baselines[message.id]) messages[index] = message
+                    }
+                }
+                continue
+            }
             val trace = agentRunStore.executionTrace(run.id).map { event ->
                 // 旧云端账本的 FOLLOW_UP/STEERING 仍携带原设备消息 ID，展示前按相同规则恢复引用。
                 if (run.terminalReason == "SYNC_HISTORY_ONLY" && event is ExecutionTraceEvent.UserMessageBoundary) {

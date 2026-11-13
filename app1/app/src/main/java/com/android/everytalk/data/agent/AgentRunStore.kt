@@ -898,6 +898,12 @@ class AgentRunStore(
             .lastOrNull { request -> request.purpose == AgentRequestPurpose.AGENT_TURN.name }
             ?.takeIf { request -> request.status == AgentRequestStatus.INTERRUPTED.name }
 
+    /** 压缩也持久化 attempt，恢复不能每次重置为第一次而无限重试。 */
+    suspend fun latestInterruptedCompactionRequest(runId: String): AgentRequestEntity? =
+        dao.getRequests(runId).lastOrNull()?.takeIf {
+            it.purpose == AgentRequestPurpose.COMPACTION.name && it.status == AgentRequestStatus.INTERRUPTED.name
+        }
+
     suspend fun appendToolResult(
         runId: String,
         requestId: String,
@@ -2291,7 +2297,7 @@ private fun ChatRequest.toRecoverySnapshot(): AgentRequestSnapshot = AgentReques
     skillSnapshot = localSkillSnapshot,
 )
 
-private fun anyToJsonElement(value: Any?): JsonElement = when (value) {
+internal fun anyToJsonElement(value: Any?): JsonElement = when (value) {
     null -> JsonNull
     is JsonElement -> value
     is String -> JsonPrimitive(value)

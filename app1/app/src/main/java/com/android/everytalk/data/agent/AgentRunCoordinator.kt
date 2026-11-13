@@ -50,6 +50,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.channels.ClosedSendChannelException
 import kotlinx.coroutines.flow.callbackFlow
@@ -62,6 +66,18 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+
+/** 后台仅累积不能从执行账本还原的可见元数据；正文和工具顺序始终以持久账本为准。 */
+internal fun projectBackgroundLiveMetadata(
+    message: com.android.everytalk.data.DataClass.Message,
+    event: AppStreamEvent,
+): com.android.everytalk.data.DataClass.Message = when (event) {
+    is AppStreamEvent.Usage -> com.android.everytalk.statecontroller.applyMessageTokenUsage(message, event)
+    is AppStreamEvent.AgentUsage -> com.android.everytalk.statecontroller.applyMessageTokenUsage(message, event)
+    is AppStreamEvent.WebSearchResults -> message.copy(webSearchResults = event.results)
+    is AppStreamEvent.ExecutionStatusUpdate -> message.copy(executionStatus = event.status)
+    else -> message
+}
 
 /** 消费队列时才读取附件文件并生成多模态消息，Room 永远只保存稳定文件引用。 */
 internal suspend fun materializeAndroidQueuedMessage(
@@ -274,12 +290,94 @@ class AgentRunCoordinator(
 
     /** ApiHandler 收集事件时计数；为 0 表示界面已销毁、只有前台服务在跑，由协调器自己上报实时快照。 */
     val uiEventCollectors = java.util.concurrent.atomic.AtomicInteger(0)
-    private val liveStatuses = ConcurrentHashMap<String, String>()
+    private val liveMessages = ConcurrentHashMap<String, com.android.everytalk.data.DataClass.Message>()
     private val liveJobs = ConcurrentHashMap<String, Job>()
     // 常驻收集器不放进 Run 的 scope，等待 Run 全部结束的地方不能被它们挡住。
     private val liveScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val _cloudRuns = MutableStateFlow<Map<String, com.android.everytalk.data.sync.LiveRemoteRun>>(emptyMap())
+    internal val cloudRuns = _cloudRuns.asStateFlow()
+    @Volatile private var cloudAccountId: String? = null
+    @Volatile private var cloudCoordinator: CloudAgentCoordinator? = null
+    private val cloudViews = ConcurrentHashMap<String, CloudRunView>()
+
+    /** 授权只属于当前账号；账号切换取消的是订阅，不是服务器上的任务。 */
+    private suspend fun cloudPermitted(accountId: String): Boolean {
+        val auth = com.android.everytalk.data.auth.AuthRuntime.get(appContext)
+        val state = com.android.everytalk.data.sync.SyncStateStore(database)
+        return (auth.auth.state.value as? com.android.everytalk.data.auth.AuthState.SignedIn)?.user?.id == accountId &&
+            !auth.account.state.value.sessionExpired && auth.binding.readBoundAccountId() == accountId && state.isEnabled()
+    }
+
+    private suspend fun projectCloudSnapshot(accountId: String, view: CloudRunView, message: com.android.everytalk.data.DataClass.Message) {
+        if (!cloudPermitted(accountId)) return
+        cloudViews[view.id] = view
+        _cloudRuns.update { current -> current + (view.sessionUuid to com.android.everytalk.data.sync.LiveRemoteRun(
+            view.assistantMessageUuid, message, !view.terminal, view.id)) }
+    }
+
+    /** 复用既有认证和账号绑定；发现与重连均在应用级作用域，页面生命周期不拥有执行权。 */
+    private suspend fun observeCloudAccount() {
+        val auth = com.android.everytalk.data.auth.AuthRuntime.get(appContext)
+        auth.auth.startup.first { it.initialized }
+        auth.auth.state.map { (it as? com.android.everytalk.data.auth.AuthState.SignedIn)?.user?.id }
+            .distinctUntilChanged().collectLatest { accountId ->
+                cloudAccountId = null
+                cloudCoordinator = null
+                cloudViews.clear()
+                _cloudRuns.value = emptyMap()
+                if (accountId == null || !com.android.everytalk.data.sync.syncServerConfigured(com.android.everytalk.BuildConfig.EVERYTALK_SYNC_BASE_URL)) return@collectLatest
+                val state = com.android.everytalk.data.sync.SyncStateStore(database)
+                if (!state.prepareAutomaticAccount(accountId, auth.binding) {
+                    (auth.auth.state.value as? com.android.everytalk.data.auth.AuthState.SignedIn)?.user?.id == accountId
+                }) return@collectLatest
+                kotlinx.coroutines.coroutineScope {
+                    val client = CloudAgentClient(com.android.everytalk.BuildConfig.EVERYTALK_SYNC_BASE_URL,
+                        token = { auth.account.accessTokenForOwnedServer(it) }, permitted = { cloudPermitted(accountId) })
+                    val coordinator = CloudAgentCoordinator(accountId, database, client, interventionCredentialStore, this,
+                        permitted = { cloudPermitted(accountId) },
+                        onSnapshot = { view, message -> projectCloudSnapshot(accountId, view, message) })
+                    cloudAccountId = accountId
+                    cloudCoordinator = coordinator
+                    try {
+                        while (isActive) {
+                            if (cloudPermitted(accountId)) {
+                                try { coordinator.discover() }
+                                catch (cancelled: CancellationException) { throw cancelled }
+                                catch (_: Exception) { /* 服务未升级或临时断网：保留持久任务，后续再次发现。 */ }
+                            } else {
+                                cloudViews.clear()
+                                _cloudRuns.value = emptyMap()
+                            }
+                            delay(15_000)
+                        }
+                    } finally {
+                        client.close()
+                        if (cloudCoordinator === coordinator) {
+                            cloudCoordinator = null
+                            cloudAccountId = null
+                            cloudViews.clear()
+                            _cloudRuns.value = emptyMap()
+                        }
+                    }
+                }
+            }
+    }
+
+    internal suspend fun cloudMessage(run: AgentRunEntity): com.android.everytalk.data.DataClass.Message? {
+        val account = cloudAccountId?.takeIf { it == run.cloudAccountId && cloudPermitted(it) } ?: return null
+        val store = CloudAgentStore(database)
+        val view = store.read(run.id) ?: return null
+        return store.project(account, view)
+    }
+
+    internal suspend fun commandCloudRun(runId: String, type: String, fields: kotlinx.serialization.json.JsonObject = kotlinx.serialization.json.JsonObject(emptyMap()), generation: Long? = null): Boolean {
+        val coordinator = cloudCoordinator ?: return false
+        coordinator.command(runId, type, fields, generation)
+        return true
+    }
 
     init {
+        if (databaseOverride == null) liveScope.launch { observeCloudAccount() }
         liveScope.launch {
             events.collect { (messageId, event) -> if (uiEventCollectors.get() == 0) publishLiveFromLedger(messageId, event) }
         }
@@ -297,26 +395,44 @@ class AgentRunCoordinator(
 
     /** 按 Room 账本重建可见回复并上报，500ms 节流；Finish 立即通知结束。 */
     private fun publishLiveFromLedger(messageId: String, event: AppStreamEvent) {
-        if (event is AppStreamEvent.ExecutionStatusUpdate) {
-            event.status?.let { liveStatuses[messageId] = it } ?: liveStatuses.remove(messageId)
-        }
         val terminal = event is AppStreamEvent.Finish
+        // 元数据先于节流判断吸收；否则 500ms 内到达的搜索/用量事件会永久丢失。
+        liveMessages.compute(messageId) { _, previous ->
+            projectBackgroundLiveMetadata(previous ?: com.android.everytalk.data.DataClass.Message(
+                id = messageId, text = "", sender = com.android.everytalk.data.DataClass.Sender.AI), event)
+        }
         if (!terminal && liveJobs[messageId]?.isActive == true) return
+        if (terminal) liveJobs.remove(messageId)?.cancel()
         liveJobs[messageId] = liveScope.launch {
             if (!terminal) delay(500)
             val run = agentRunStore.getRunByVisibleMessage(messageId) ?: return@launch
-            val session = database.chatDao().getStoredSession(run.sessionId)
+            if (run.executionOwner == "CLOUD") return@launch
+            val chat = database.chatDao()
+            val session = chat.getStoredSession(run.sessionId)
                 ?.takeUnless { it.deleted || it.isImageGeneration } ?: return@launch
+            val stored = chat.getMessage(run.sessionId, messageId)
+            val metadata = liveMessages[messageId]
             val trace = agentRunStore.executionTrace(run.id)
-            val message = com.android.everytalk.data.DataClass.Message(
-                id = messageId, sender = com.android.everytalk.data.DataClass.Sender.AI, contentStarted = true,
+            val message = (stored?.toMessage() ?: com.android.everytalk.data.DataClass.Message(
+                id = messageId, text = "", sender = com.android.everytalk.data.DataClass.Sender.AI,
+                timestamp = run.createdAt,
+            )).copy(
+                conversationId = run.sessionId, contentStarted = true,
+                executionFinishedAt = run.updatedAt.takeIf { terminal },
                 text = trace.filterIsInstance<ExecutionTraceEvent.Content>().joinToString("") { it.text },
                 reasoning = trace.filterIsInstance<ExecutionTraceEvent.Reasoning>().joinToString("") { it.text }.ifBlank { null },
-                executionTrace = trace, executionStatus = liveStatuses[messageId].takeUnless { terminal },
+                executionTrace = trace,
+                executionSteps = trace.filterIsInstance<ExecutionTraceEvent.Tool>().map { it.step },
+                executionStatus = metadata?.executionStatus.takeUnless { terminal },
+                webSearchResults = metadata?.webSearchResults ?: stored?.webSearchResults,
+                tokenUsage = metadata?.tokenUsage ?: stored?.tokenUsage,
+                contextUsageSnapshot = metadata?.contextUsageSnapshot ?: stored?.contextUsageSnapshot,
+                isError = run.status == AgentRunStatus.FAILED.name,
+                isIncomplete = terminal && run.status != AgentRunStatus.COMPLETED.name,
             )
-            if (terminal) { liveStatuses.remove(messageId); liveJobs.remove(messageId) }
+            if (terminal) { liveMessages.remove(messageId); liveJobs.remove(messageId) }
             com.android.everytalk.data.sync.LiveSync.publish(appContext, session.uuid,
-                com.android.everytalk.data.database.entities.localSyncUuid("messages", messageId), message, terminal) { isRunActive(run) }
+                stored?.uuid ?: chat.resolveMessageSyncUuid(messageId), message, terminal) { isRunActive(run) }
         }
     }
     private val _lifecycleEvents = MutableSharedFlow<AgentLifecycleEvent>(extraBufferCapacity = 128)
@@ -675,6 +791,7 @@ class AgentRunCoordinator(
         run: AgentRunEntity,
         approvalDecision: AgentApprovalRecord?,
     ): Boolean {
+        if (run.executionOwner != "LOCAL") return false
         val jobKey = "run:${run.id}"
         if (isRunActive(run)) return false
 
@@ -1256,8 +1373,14 @@ class AgentRunCoordinator(
         }
     }
 
-    private fun canAttemptResume(runId: String, now: Long = System.currentTimeMillis()): Boolean =
-        resumeRetryStates[runId]?.nextAttemptAt?.let { now >= it } ?: true
+    private suspend fun canAttemptResume(runId: String, now: Long = System.currentTimeMillis()): Boolean {
+        if (resumeRetryStates[runId]?.nextAttemptAt?.let { now < it } == true) return false
+        // 请求次数和完成时间已落 Room；App 重启也不能跳过 5/10/15 秒等待。
+        val latest = agentDao.getRequests(runId).lastOrNull()
+        return latest?.takeIf { it.status == AgentRequestStatus.INTERRUPTED.name }?.let {
+            now >= (it.finishedAt ?: 0L) + agentResumeRetryDelayMillis(it.attempt)
+        } ?: true
+    }
 
     private fun resumeFailed(runId: String): Boolean {
         recordResumeFailure(runId)
@@ -1277,7 +1400,7 @@ class AgentRunCoordinator(
         }
     }
 
-    /** 恢复失败保留原 Run，按上限 60 秒退避，避免前台服务每三秒重复读取同一份大快照。 */
+    /** 恢复失败保留原 Run，按 5/10/15 秒退避，避免前台服务反复读取同一份大快照。 */
     private fun recordResumeFailure(runId: String) {
         val now = System.currentTimeMillis()
         resumeRetryStates.compute(runId) { _, previous ->
@@ -1357,14 +1480,8 @@ private data class ResumeRetryState(
     val nextAttemptAt: Long,
 )
 
-/** 第一次失败等 2 秒，之后逐步放缓，最长一分钟。 */
-internal fun agentResumeRetryDelayMillis(failures: Int): Long = when (failures.coerceAtLeast(1)) {
-    1 -> 2_000L
-    2 -> 5_000L
-    3 -> 15_000L
-    4 -> 30_000L
-    else -> 60_000L
-}
+/** 初始请求之后最多三次模型重试，分别等待 5、10、15 秒；恢复读取失败也不高频重试。 */
+internal fun agentResumeRetryDelayMillis(failures: Int): Long = failures.coerceIn(1, 3) * 5_000L
 
 /** 只有可恢复的模型中断参与退避，审批等待和终态都不能继承旧失败次数。 */
 internal fun shouldBackoffAgentResume(status: String?): Boolean =
@@ -1431,5 +1548,6 @@ internal fun CoroutineScope.launchTrackedAgentJob(
 
 /** 已停止或 generation 失效的恢复快照绝不能再次调用模型、执行工具。 */
 internal fun canExecuteAgentSnapshot(snapshot: AgentRunEntity, persisted: AgentRunEntity?): Boolean =
-    persisted != null && persisted.runGeneration == snapshot.runGeneration &&
+    persisted != null && snapshot.executionOwner == "LOCAL" && persisted.executionOwner == "LOCAL" &&
+        persisted.runGeneration == snapshot.runGeneration &&
         persisted.status !in setOf(AgentRunStatus.COMPLETED.name, AgentRunStatus.FAILED.name, AgentRunStatus.CANCELLED.name)

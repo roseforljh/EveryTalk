@@ -51,4 +51,6 @@ data class RemoteLiveRun(
     val sessionUuid: String,
     val message: com.android.everytalk.data.DataClass.Message,
     val running: Boolean,
+    /** 非空时由后端执行，停止直接发送持久命令，不再找原手机转发。 */
+    val cloudRunId: String? = null,
 )
