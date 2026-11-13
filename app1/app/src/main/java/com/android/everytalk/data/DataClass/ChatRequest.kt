@@ -130,6 +130,14 @@ data class ChatRequest(
     @Transient
     val localSkillSnapshot: SkillRequestSnapshot? = null,
 
+    /** 发送时冻结的搜索授权，不随设置页后续切换改变；仅进入云任务加密输入。 */
+    @Transient
+    val localExternalWebSearchConfig: com.android.everytalk.data.network.ExternalWebSearchProviderConfig? = null,
+
+    /** 已获本轮授权的 MCP 别名→连接快照；禁止发送给模型或写入普通同步消息。 */
+    @Transient
+    val localCloudMcpBindings: Map<String, kotlinx.serialization.json.JsonObject> = emptyMap(),
+
     /** 临时记忆资料不参与序列化，也不进入 Agent 的恢复消息和压缩摘要。 */
     @Transient
     val localMemorySnapshot: com.android.everytalk.data.memory.MemoryRequestSnapshot? = null,
@@ -141,6 +149,10 @@ data class ChatRequest(
     /** 当前模型可接受的输入类型；Provider Adapter 用它决定是否回放工具图片。 */
     @Transient
     val localInputModalities: Set<String> = setOf("text", "image"),
+
+    /** Pi 的 cacheRetention="none"：压缩摘要这类一次性请求不写提示缓存，Anthropic 写缓存要多收费。 */
+    @Transient
+    val localPromptCacheEnabled: Boolean = true,
 )
 
 @Serializable

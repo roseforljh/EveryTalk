@@ -496,6 +496,28 @@ class AgentContextManagerTest {
     }
 
     @Test
+    fun `自动压缩关闭时只有超出模型窗口才压缩`() {
+        fun history(chars: Int) = (0 until 4).flatMap { index ->
+            listOf(
+                SimpleTextApiMessage(id = "user-$index", role = "user", content = "问".repeat(chars)),
+                SimpleTextApiMessage(id = "assistant-$index", role = "assistant", content = "答".repeat(chars)),
+            )
+        }
+        fun prepare(chars: Int) = manager.prepare(
+            requestId = "request-auto-off-$chars",
+            request = request(history(chars), maxContextTokens = 256_000, compactThresholdTokens = 204_800).let {
+                it.copy(contextManagement = it.contextManagement?.copy(autoCompressionEnabled = false))
+            },
+            limits = ModelTokenLimits(maxOutputTokens = 32_000, maxContextTokens = 256_000),
+        )
+
+        // 约 15 万 token：没超窗口，开关关着就不压。
+        assertNull(prepare(19_300).compactionPlan)
+        // 约 39 万 token：从 1M 模型切到 256k 模型的场景，超窗必须压缩。
+        assertTrue(prepare(49_000).compactionPlan != null)
+    }
+
+    @Test
     fun `单个用户任务产生多轮工具调用时从原子组边界切分`() {
         val messages = buildList {
             add(SimpleTextApiMessage(id = "user-1", role = "user", content = "持续检查服务器"))

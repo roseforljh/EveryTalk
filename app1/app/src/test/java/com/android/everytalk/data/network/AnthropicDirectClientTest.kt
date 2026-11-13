@@ -91,6 +91,10 @@ class AnthropicDirectClientTest {
         val tool = payload.getValue("tools").jsonArray.single().jsonObject
         assertEquals("weather", tool.getValue("name").jsonPrimitive.content)
         assertNotNull(tool["input_schema"])
+
+        // 压缩摘要这类一次性请求不写缓存（Pi cacheRetention="none"）。
+        val oneOff = AnthropicDirectClient.buildAnthropicPayload(request.copy(localPromptCacheEnabled = false))
+        assertTrue(!oneOff.contains("cache_control"))
     }
 
     @Test

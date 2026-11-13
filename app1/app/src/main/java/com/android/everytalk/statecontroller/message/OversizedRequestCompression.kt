@@ -439,6 +439,7 @@ internal suspend fun MessageSender.requestContextCompressionCompletion(
             thinkingConfig = config.modelParameters.toThinkingConfig(config.effectiveModelChannel(), config.model),
         ),
         customModelParameters = customModelParameters,
+        localPromptCacheEnabled = false,
     )
     return runContextCompressionWithRetries {
         collectContextCompressionResponse(

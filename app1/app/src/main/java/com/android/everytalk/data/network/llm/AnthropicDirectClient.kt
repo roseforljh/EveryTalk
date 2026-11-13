@@ -243,7 +243,7 @@ object AnthropicDirectClient {
                 addJsonObject {
                     put("type", "text")
                     put("text", systemText)
-                    putJsonObject("cache_control") { put("type", "ephemeral") }
+                    if (request.localPromptCacheEnabled) putJsonObject("cache_control") { put("type", "ephemeral") }
                 }
             }
             val outgoingMessages = buildList {
@@ -255,7 +255,11 @@ object AnthropicDirectClient {
             val runtimeCount = if (includeRequestMessages && continuationMessages.isEmpty()) {
                 preparedMessages.count(SystemPromptInjector::isRuntimeContext)
             } else 0
-            put("messages", cacheStableHistory(outgoingMessages, runtimeCount))
+            put(
+                "messages",
+                if (request.localPromptCacheEnabled) cacheStableHistory(outgoingMessages, runtimeCount)
+                else JsonArray(outgoingMessages),
+            )
             if (nativeContextManagementEnabled) {
                 putJsonObject("context_management") {
                     putJsonArray("edits") {

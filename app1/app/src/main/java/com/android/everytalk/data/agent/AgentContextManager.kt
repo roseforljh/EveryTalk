@@ -154,13 +154,18 @@ class AgentContextManager(
         val hasNewCompactionSource = acceptedCheckpoint == null || canonical
             .drop(compactedThroughIndex + 1)
             .any { !it.role.equals("system", true) }
-        val needsCompaction = request.contextManagement?.autoCompressionEnabled == true &&
+        val autoCompressionEnabled = request.contextManagement?.autoCompressionEnabled == true
+        // 自动压缩关着也不能把超出模型窗口的上下文原样发出：从大窗口模型切到小窗口模型时，
+        // 网关可能照收不报错，但缓存全部失效、按全文计费。超窗就走和手动压缩同一套摘要。
+        val exceedsContextWindow = activeBeforeTrim > contextWindow
+        val needsCompaction = (autoCompressionEnabled || exceedsContextWindow) &&
             (forceLocalCompaction || !hasActiveNativeCompaction) &&
             hasNewCompactionSource &&
             // Pi 只比较当前上下文与压缩线；最大输出不参与触发，否则大输出模型会过早反复压缩。
             // 但压缩线按窗口百分比计算，可能高于“窗口 - 最大输出”的硬上限。超过硬上限时必须先压缩，
             // 否则只能裁掉旧历史或直接报单轮超窗。
             (forceLocalCompaction ||
+                exceedsContextWindow ||
                 activeBeforeTrim > genericCompactionThreshold ||
                 activeBeforeTrim > inputBudget ||
                 (staleCheckpointRecovery && activeBeforeTrim > recoveryThreshold))
@@ -221,6 +226,27 @@ class AgentContextManager(
             append(message.compactionText()).append("\n\n")
         }
         append("</conversation>")
+    }
+
+    /**
+     * 摘要请求本身也受模型窗口限制。待压缩历史序列化后超过 [maxTokens] 时按原顺序切段，
+     * 由调用方逐段滚动摘要；单条就超限的消息独占一段。
+     */
+    fun compactionChunks(plan: AgentCompactionPlan, maxTokens: Long): List<List<AbstractApiMessage>> {
+        val chunks = mutableListOf<MutableList<AbstractApiMessage>>()
+        var used = 0L
+        plan.messagesToSummarize.forEach { message ->
+            val tokens = RequestTokenEstimator.estimateMessageTokens(
+                SimpleTextApiMessage(role = message.role, content = message.compactionText()),
+            )
+            if (chunks.isEmpty() || (used > 0L && used + tokens > maxTokens)) {
+                chunks += mutableListOf<AbstractApiMessage>()
+                used = 0L
+            }
+            chunks.last() += message
+            used += tokens
+        }
+        return chunks
     }
 
     fun compactionMetadata(plan: AgentCompactionPlan): String = JsonObject(
@@ -679,7 +705,7 @@ private fun AbstractApiMessage.compactionText(): String = when (this) {
         }
     }
     is AgentAssistantApiMessage -> buildString {
-        if (reasoning.isNotBlank()) append("[思考] ").append(reasoning.escapeBoundary()).append('\n')
+        // 同 Pi：思考过程不进摘要。服务商回放的多是思考摘要，带上只会让摘要请求比原上下文还大。
         if (text.isNotBlank()) append(text.escapeBoundary()).append('\n')
         toolCalls.forEach { call ->
             append("[工具调用] ").append(call.name).append(' ')

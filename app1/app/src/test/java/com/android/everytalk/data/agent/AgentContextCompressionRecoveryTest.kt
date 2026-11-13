@@ -701,6 +701,38 @@ class AgentContextCompressionRecoveryTest {
     }
 
     @Test
+    fun `历史超过模型窗口时手动压缩分段滚动摘要且每段都不超窗`() = runBlocking {
+        val sessionId = "manual-compaction-oversized"
+        seedSession(sessionId)
+        val window = 60_000
+        val sent = mutableListOf<ChatRequest>()
+        val loop = AgentLoop(
+            runStore = store,
+            modelTransport = ModelTurnTransport { turn ->
+                sent += turn.request
+                flowOf(AppStreamEvent.Content("摘要${sent.size}"), AppStreamEvent.StreamEnd("summary"))
+            },
+        )
+        val history = (1..40).flatMap { turn ->
+            listOf(
+                SimpleTextApiMessage(id = "u$turn", role = "user", content = "问题$turn " + "需".repeat(3_000)),
+                SimpleTextApiMessage(id = "a$turn", role = "assistant", content = "回答$turn " + "答".repeat(3_000)),
+            )
+        } + SimpleTextApiMessage(id = "latest", role = "user", content = "继续")
+
+        val outcome = loop.compactNow(sessionId, manualCompactionRequest(history), ModelTokenLimits(512, window))
+
+        assertTrue(outcome is ManualCompactionOutcome.Compacted)
+        assertTrue("应切成多段，实际 ${sent.size} 段", sent.size > 1)
+        sent.forEach { request ->
+            assertTrue(RequestTokenEstimator.estimate(request.messages, null).totalInputTokens < window)
+        }
+        // 后一段带上前一段的摘要，最后落库的是最后一段的结果。
+        assertTrue(sent.last().messages.last().let { it as SimpleTextApiMessage }.content.contains("摘要${sent.size - 1}"))
+        assertEquals("摘要${sent.size}", store.latestCompaction(sessionId)?.summary)
+    }
+
+    @Test
     fun `没有可摘要的历史时手动压缩不调模型并返回 NothingToCompress`() = runBlocking {
         val sessionId = "manual-compaction-nothing"
         seedSession(sessionId)

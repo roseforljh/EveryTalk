@@ -2180,22 +2180,19 @@ class AgentLoop(
         limits: ModelTokenLimits,
     ): com.android.everytalk.data.database.entities.AgentCompactionEntryEntity {
         val requestId = UUID.randomUUID().toString()
-        val summaryMessages = listOf(
-            SimpleTextApiMessage(role = "system", content = SystemPromptModules.historySummary),
-            SimpleTextApiMessage(
-                role = "user",
-                content = contextManager.serializeForCompaction(plan),
-            ),
-        )
         val hardSummaryOutput = minOf(
             COMPACTION_OUTPUT_TOKENS,
             limits.maxOutputTokens,
             (limits.maxContextTokens / 8).coerceAtLeast(1),
         )
         val summaryOutput = contextManager.compactionOutputTokenLimit(plan, hardSummaryOutput)
-        val summaryRequest = baseRequest.copy(
-            apiKey = apiKeyProvider(run, baseRequest),
-            messages = summaryMessages,
+        val apiKey = apiKeyProvider(run, baseRequest)
+        fun summaryRequestFor(source: AgentCompactionPlan) = baseRequest.copy(
+            apiKey = apiKey,
+            messages = listOf(
+                SimpleTextApiMessage(role = "system", content = SystemPromptModules.historySummary),
+                SimpleTextApiMessage(role = "user", content = contextManager.serializeForCompaction(source)),
+            ),
             tools = null,
             toolChoice = null,
             useWebSearch = false,
@@ -2206,6 +2203,20 @@ class AgentLoop(
             ),
             localComputerRequestContext = null,
             localProviderContinuation = null,
+            localPromptCacheEnabled = false,
+        )
+        // 待压缩历史比模型窗口还大时，一次摘要请求本身就会超窗。按窗口切段滚动摘要：
+        // 前面各段的摘要依次带进下一段，最后一段走下面完整的记账流程。
+        // 每段只用「窗口 - 输出 - 上一段摘要」的七成，给估算误差留余量。
+        val chunkBudget = ((limits.maxContextTokens.toLong() - 2L * summaryOutput) * 7 / 10).coerceAtLeast(1L)
+        val chunks = contextManager.compactionChunks(plan, chunkBudget)
+        var rollingSummary = plan.previousSummary
+        chunks.dropLast(1).forEach { chunk ->
+            val chunkPlan = plan.copy(messagesToSummarize = chunk, previousSummary = rollingSummary)
+            rollingSummary = summarizeCompactionChunk(run, requestOrdinal, summaryRequestFor(chunkPlan))
+        }
+        val summaryRequest = summaryRequestFor(
+            plan.copy(messagesToSummarize = chunks.last(), previousSummary = rollingSummary),
         )
         val prepared = contextManager.prepare(
             requestId = requestId,
@@ -2319,6 +2330,39 @@ class AgentLoop(
             estimatedTokensAfter = estimatedTokensAfter,
             retainedTailJson = contextManager.compactionMetadata(plan),
         )
+    }
+
+    /** 分段压缩的中间段：只取摘要文本，不单独记 Request，失败直接按压缩失败处理。 */
+    private suspend fun summarizeCompactionChunk(
+        run: AgentRunEntity,
+        requestOrdinal: Int,
+        request: ChatRequest,
+    ): String {
+        val text = StringBuilder()
+        var finalText: String? = null
+        var failure: AppStreamEvent.Error? = null
+        modelTransport.streamTurn(
+            ModelTurnRequest(
+                requestId = UUID.randomUUID().toString(),
+                runId = run.id,
+                ordinal = requestOrdinal,
+                request = request,
+            ),
+        )
+            .withFirstMeaningfulEventTimeout()
+            .collect { event ->
+                when (event) {
+                    is AppStreamEvent.Text -> text.append(event.text)
+                    is AppStreamEvent.Content -> text.append(event.text)
+                    is AppStreamEvent.ContentFinal -> finalText = event.text.takeIf(String::isNotBlank)
+                    is AppStreamEvent.Error -> failure = event
+                    else -> Unit
+                }
+            }
+        failure?.let { throw AgentContextWindowException("上下文压缩失败：${it.message}") }
+        return (finalText ?: text.toString()).trim().ifEmpty {
+            throw AgentContextWindowException("上下文压缩失败：模型未返回摘要")
+        }
     }
 }
 
