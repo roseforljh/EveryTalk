@@ -82,6 +82,31 @@ class AgentContextCompressionRecoveryTest {
     }
 
     @Test
+    fun `压缩网络错误最多三次重试随后安全裁剪继续主请求`() = runBlocking {
+        val sessionId = "compression-retry-limit"
+        seedSession(sessionId)
+        var calls = 0
+        val loop = AgentLoop(runStore = store, modelTransport = ModelTurnTransport {
+            calls++
+            if (calls <= 4) flowOf(AppStreamEvent.Error("网关连接中断", upstreamStatus = 502))
+            else flowOf(AppStreamEvent.Content("主请求完成"), AppStreamEvent.Finish("stop"))
+        })
+        val request = loopRequest(sessionId, compactThresholdTokens = 500)
+        var events = loop.run(request).toList()
+        repeat(3) {
+            val pending = database.agentDao().getRunsForSession(sessionId).single()
+            assertEquals(AgentRunStatus.MODEL_CONTINUATION_PENDING.name, pending.status)
+            events = loop.run(request.copy(existingRun = pending)).toList()
+        }
+        val run = database.agentDao().getRunsForSession(sessionId).single()
+        assertEquals(listOf(1, 2, 3, 4), database.agentDao().getRequests(run.id)
+            .filter { it.purpose == AgentRequestPurpose.COMPACTION.name }.map { it.attempt })
+        assertEquals(AgentRunStatus.COMPLETED.name, run.status)
+        assertEquals(5, calls)
+        assertTrue(events.any { it is AppStreamEvent.Content && it.text == "主请求完成" })
+    }
+
+    @Test
     fun `Provider连续失败在第三次重试后终止Run`() = runBlocking {
         val sessionId = "provider-retry-limit"
         seedSession(sessionId)
@@ -111,6 +136,33 @@ class AgentContextCompressionRecoveryTest {
         assertEquals(listOf(1, 2, 3, 4), requests.map { it.attempt })
         assertEquals(AgentRunStatus.FAILED.name, run.status)
         assertTrue(events.filterIsInstance<AppStreamEvent.Error>().any { it.code == "provider_retry_exhausted" })
+    }
+
+    @Test
+    fun `首事件超时与传输异常均保留原Run且三次重试后停止`() = runBlocking {
+        for ((suffix, transport) in listOf(
+            "timeout" to ModelTurnTransport {
+                flow<AppStreamEvent> { kotlinx.coroutines.delay(100) }.withFirstMeaningfulEventTimeout(1)
+            },
+            "io" to ModelTurnTransport { flow<AppStreamEvent> { throw java.io.IOException("connection reset by peer") } },
+        )) {
+            val sessionId = "network-$suffix"
+            seedSession(sessionId)
+            val loop = AgentLoop(runStore = store, modelTransport = transport)
+            val request = loopRequest(sessionId, compactThresholdTokens = 8_000)
+            var events = loop.run(request).toList()
+            repeat(3) {
+                val pending = database.agentDao().getRunsForSession(sessionId).single()
+                assertEquals(AgentRunStatus.MODEL_CONTINUATION_PENDING.name, pending.status)
+                events = loop.run(request.copy(existingRun = pending)).toList()
+            }
+            val run = database.agentDao().getRunsForSession(sessionId).single()
+            assertEquals(AgentRunStatus.FAILED.name, run.status)
+            assertEquals(listOf(1, 2, 3, 4), database.agentDao().getRequests(run.id).map { it.attempt })
+            val error = events.filterIsInstance<AppStreamEvent.Error>().last()
+            assertEquals("provider_retry_exhausted", error.code)
+            assertTrue(error.message, error.message.contains(if (suffix == "io") "connection reset by peer" else "没有返回有效事件"))
+        }
     }
 
     @Test
@@ -361,7 +413,7 @@ class AgentContextCompressionRecoveryTest {
     }
 
     @Test
-    fun `正常结束但只有空思考时明确失败`() = runBlocking {
+    fun `正常结束但只有空思考时三次重试后明确失败`() = runBlocking {
         val sessionId = "empty-final-response"
         seedSession(sessionId)
         val loop = AgentLoop(
@@ -374,11 +426,20 @@ class AgentContextCompressionRecoveryTest {
             },
         )
 
-        val events = loop.run(loopRequest(sessionId, compactThresholdTokens = 8_000)).toList()
+        val request = loopRequest(sessionId, compactThresholdTokens = 8_000)
+        var events = loop.run(request).toList()
+        repeat(3) {
+            val pending = database.agentDao().getRunsForSession(sessionId).single()
+            assertEquals(AgentRunStatus.MODEL_CONTINUATION_PENDING.name, pending.status)
+            events = loop.run(request.copy(existingRun = pending)).toList()
+        }
         val run = database.agentDao().getRunsForSession(sessionId).single()
 
         assertEquals(AgentRunStatus.FAILED.name, run.status)
-        assertTrue(events.filterIsInstance<AppStreamEvent.Error>().any { it.code == "empty_model_response" })
+        val error = events.filterIsInstance<AppStreamEvent.Error>().last()
+        assertEquals("provider_retry_exhausted", error.code)
+        assertTrue(error.message.contains("未返回正文或工具调用"))
+        assertEquals(listOf(1, 2, 3, 4), database.agentDao().getRequests(run.id).map { it.attempt })
         assertTrue(events.none { it is AppStreamEvent.Finish && it.reason == "stop" })
     }
 

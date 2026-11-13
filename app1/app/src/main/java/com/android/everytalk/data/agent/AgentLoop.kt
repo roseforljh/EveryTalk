@@ -48,6 +48,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.produceIn
@@ -56,7 +57,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.JsonObject
@@ -76,6 +80,7 @@ private const val PARTIAL_ASSISTANT_CHECKPOINT_CHARACTERS = 512
 private class AgentRetryableNetworkException(
     message: String,
     val code: String,
+    val attempt: Int,
 ) : IOException(message)
 
 /**
@@ -133,6 +138,7 @@ class AgentLoop(
     private val codemodeEngine: CodemodeEngine? = null,
 ) {
     fun run(originalInput: AgentLoopRequest): Flow<AppStreamEvent> = flow {
+        check(originalInput.existingRun?.executionOwner != "CLOUD") { "云端任务不能由本机执行" }
         // 统一入口冻结记忆并预留预算，持久化的 messages 仍是原始聊天内容。
         val calibrated = runStore.calibrateRequest(originalInput.sessionId, originalInput.request, originalInput.tokenLimits)
         val readable = calibrated.copy(tools = AgentToolResultReadTool.withTool(calibrated.tools))
@@ -396,7 +402,7 @@ class AgentLoop(
                                 reason = "compaction_error",
                                 message = error.message ?: "压缩失败",
                             )
-                            emit(AppStreamEvent.ExecutionStatusUpdate("上下文压缩失败，正在使用安全上下文继续"))
+                            emit(AppStreamEvent.ExecutionStatusUpdate("上下文压缩失败，按完整上下文继续"))
                             requestId = UUID.randomUUID().toString()
                             prepared = contextManager.prepare(
                                 requestId = requestId,
@@ -626,7 +632,7 @@ class AgentLoop(
                         // 可重试网络中断时，发送等待恢复状态事件，禁止直接 emit 永久性 Failure 导致 UI 标记执行失败
                         emit(
                             AppStreamEvent.Error(
-                                message = "网络中断，正在尝试恢复回复...",
+                                message = "${turnFailure.message}；${agentResumeRetryDelayMillis(requestFact.attempt) / 1_000} 秒后重试（${requestFact.attempt}/$PI_DEFAULT_MAX_PROVIDER_RETRIES）",
                                 code = turnFailure.code ?: "connection_aborted",
                                 type = "retryable_network",
                             )
@@ -871,7 +877,7 @@ class AgentLoop(
             }
             emit(
                 AppStreamEvent.Error(
-                    message = "网络中断，正在尝试恢复回复...",
+                    message = "${error.message}；${agentResumeRetryDelayMillis(error.attempt) / 1_000} 秒后重试（${error.attempt}/$PI_DEFAULT_MAX_PROVIDER_RETRIES）",
                     code = error.code,
                     type = "retryable_network",
                 )
@@ -2132,13 +2138,21 @@ class AgentLoop(
                 failed = false
                 return ManualCompactionOutcome.NothingToCompress
             }
-            val saved = executeCompaction(
-                run = run,
-                requestOrdinal = 1,
-                plan = plan,
-                baseRequest = compactionRequest,
-                limits = limits,
-            )
+            var saved: com.android.everytalk.data.database.entities.AgentCompactionEntryEntity
+            while (true) {
+                try {
+                    saved = executeCompaction(
+                        run = run,
+                        requestOrdinal = 1,
+                        plan = plan,
+                        baseRequest = compactionRequest,
+                        limits = limits,
+                    )
+                    break
+                } catch (error: AgentRetryableNetworkException) {
+                    delay(agentResumeRetryDelayMillis(error.attempt))
+                }
+            }
             failed = false
             return ManualCompactionOutcome.Compacted(
                 tokensBefore = plan.tokensBefore,
@@ -2211,6 +2225,7 @@ class AgentLoop(
             model = summaryRequest.model,
             transcriptFingerprint = prepared.transcriptFingerprint,
             snapshot = prepared.snapshot,
+            retryOfRequest = runStore.latestInterruptedCompactionRequest(run.id),
         )
         val startedAt = System.currentTimeMillis()
         requestFact = runStore.updateRequest(requestFact, AgentRequestStatus.STREAMING, startedAt = startedAt)
@@ -2251,9 +2266,12 @@ class AgentLoop(
             requestOrdinal = requestOrdinal,
         )
         runStore.saveUsage(requestId, measured)
-        val error = failure
+        val finalSummary = (finalText ?: summary.toString()).trim()
+        val error = failure ?: if (finalSummary.isEmpty()) AppStreamEvent.Error(
+            message = "模型未返回摘要", code = "empty_compaction", type = "provider_error",
+        ) else null
         if (error != null) {
-            val retryable = error.isRetryableNetworkError(finishReason)
+            val retryable = error.isRetryableNetworkError(finishReason) && canRetryProviderAttempt(requestFact.attempt)
             runStore.updateRequest(
                 requestFact,
                 if (retryable) AgentRequestStatus.INTERRUPTED else AgentRequestStatus.FAILED,
@@ -2265,20 +2283,10 @@ class AgentLoop(
                 throw AgentRetryableNetworkException(
                     message = error.message,
                     code = error.code ?: "connection_aborted",
+                    attempt = requestFact.attempt,
                 )
             }
             throw AgentContextWindowException("上下文压缩失败：${error.message}")
-        }
-        val finalSummary = (finalText ?: summary.toString()).trim()
-        if (finalSummary.isEmpty()) {
-            runStore.updateRequest(
-                requestFact,
-                AgentRequestStatus.FAILED,
-                finishReason = "empty_compaction",
-                firstEventAt = firstEventAt,
-                finishedAt = finishedAt,
-            )
-            throw AgentContextWindowException("上下文压缩失败：模型未返回摘要")
         }
         val estimatedTokensAfter = contextManager.estimateCompactedContextTokens(
             request = baseRequest,
@@ -2564,12 +2572,26 @@ private fun AppStreamEvent.isMeaningfulModelEvent(): Boolean = when (this) {
 }
 
 /** 压缩请求和普通模型请求共用同一套临时网络错误判定。 */
-private fun AppStreamEvent.Error.isRetryableNetworkError(finishReason: String?): Boolean {
-    val text = listOfNotNull(message, rawMessage, code).joinToString(" ")
-    if (PI_NON_RETRYABLE_LIMIT_ERROR.containsMatchIn(text)) return false
-    return type == "retryable_network" || code == "connection_aborted" || finishReason == "connection_failed" ||
-        PI_RETRYABLE_PROVIDER_ERROR.containsMatchIn(text)
+internal fun AppStreamEvent.Error.isRetryableNetworkError(finishReason: String?): Boolean {
+    val text = listOfNotNull(message, rawMessage, code, type, finishReason).joinToString(" ")
+    if (type == AGENT_INTERNAL_ERROR_TYPE || code == "provider_retry_exhausted" ||
+        PI_NON_RETRYABLE_LIMIT_ERROR.containsMatchIn(text)) return false
+    val category = ContextErrorClassifier.classify(toProviderErrorInfo())
+    if (category in setOf(RequestErrorCategory.AUTHENTICATION, RequestErrorCategory.INPUT_CONTEXT_TOO_LONG,
+            RequestErrorCategory.OUTPUT_LIMIT_TOO_HIGH)) return false
+    if (upstreamStatus in setOf(408, 409, 425, 429) || upstreamStatus?.let { it in 500..599 } == true) return true
+    if (upstreamStatus?.let { it in 400..499 } == true || PERMANENT_PROVIDER_ERROR.containsMatchIn(text)) return false
+    // 没有明确的永久错误就允许三次有界重试，包括空响应、断流和首事件超时。
+    return true
 }
+
+private val PERMANENT_PROVIDER_ERROR = Regex(
+    "(?:http[_ :]*|status[ :=]*)(?:400|401|403|404|405|413|415|422)\\b|" +
+        "bad[_ -]?request|invalid[_ -]?(?:api[_ -]?key|request|argument|parameter)|authentication|unauthorized|forbidden|" +
+        "model[_ -]?(?:not[_ -]?found|does not exist)|unsupported|not supported|thought_signature|" +
+        "content[_ -]?(?:filter|policy)|safety|permission denied|权限|密钥无效|参数无效|不支持",
+    RegexOption.IGNORE_CASE,
+)
 
 /** 同步自 Pi packages/ai/src/utils/retry.ts（v1.5.2）：额度/账单耗尽要几小时才恢复，不重试。 */
 private val PI_NON_RETRYABLE_LIMIT_ERROR = Regex(
@@ -2578,29 +2600,6 @@ private val PI_NON_RETRYABLE_LIMIT_ERROR = Regex(
         "insufficient_quota", "out of budget", "quota exceeded", "billing",
         "subscription_sharing_usage_limit_exceeded", "subscription_sharing_workplace_individual_usage_limit_exceeded",
         "\"code\"\\s*:\\s*\"?1308(?![0-9])",
-    ).joinToString("|"),
-    RegexOption.IGNORE_CASE,
-)
-
-/** 同步自 Pi packages/ai/src/utils/retry.ts（v1.5.2）：流内错误事件只有文字，按文字识别网关与传输层的临时故障。 */
-private val PI_RETRYABLE_PROVIDER_ERROR = Regex(
-    listOf(
-        "overloaded", "server_busy", "servers are currently busy", "currently experiencing high demand",
-        "model is at capacity", "rate.?limit", "too many requests",
-        "(?<![a-z0-9])(?:429|500|502|503|504|520|524)(?![a-z0-9])",
-        "service.?(?:is.?)?(?:temporarily.?)?unavailable", "server.?error", "internal.?error",
-        "provider.?returned.?(?:an.?)?error", "exceeded request buffer limit while retrying upstream",
-        "unable to forward upstream", "upstream.?request.?failed", "upstream_stream_read_error",
-        "stream was interrupted", "http/?2 stream failed",
-        "network.?error", "connection.?error", "connection.?refused", "connection.?lost", "other side closed",
-        "fetch failed", "request to \\S+ failed, reason:", "getaddrinfo", "ENOTFOUND", "EAI_AGAIN",
-        "upstream.?connect", "reset before headers", "socket hang up", "socket connection was closed",
-        "timed? out", "timeout", "terminated", "websocket.?closed", "websocket.?error",
-        "ended without", "stream ended before message_stop", "stream ended before a terminal response event",
-        "http2 request did not get a response", "stream disconnected before completion",
-        "cut short after the reply had begun", "pending stream has been canceled", "retry delay",
-        "you can retry your request", "try your request again", "please retry your request",
-        "ResourceExhausted", "subscription_sharing_usage_unavailable", "subscription_sharing_user_unavailable",
     ).joinToString("|"),
     RegexOption.IGNORE_CASE,
 )
@@ -2627,22 +2626,44 @@ internal fun Flow<AppStreamEvent>.withFirstMeaningfulEventTimeout(
     return flow {
         coroutineScope {
             val events = upstream.produceIn(this)
+            var terminal = false
             try {
-                try {
-                    withTimeout(timeoutMillis) {
-                        while (true) {
-                            val event = events.receiveCatching().getOrNull() ?: return@withTimeout
-                            emit(event)
-                            if (event.isMeaningfulModelEvent()) break
-                        }
+                val received = withTimeoutOrNull(timeoutMillis) {
+                    while (true) {
+                        val result = events.receiveCatching()
+                        // getOrNull 会丢掉关闭原因；必须保留真实断流异常，不能继续等到首事件超时。
+                        result.exceptionOrNull()?.let { throw it }
+                        val event = result.getOrNull() ?: return@withTimeoutOrNull true
+                        terminal = event is AppStreamEvent.Error || event is AppStreamEvent.Finish || event is AppStreamEvent.StreamEnd
+                        emit(event)
+                        if (event.isMeaningfulModelEvent() || terminal) break
                     }
-                } catch (_: TimeoutCancellationException) {
-                    throw IllegalStateException("模型在 ${timeoutMillis / 1_000} 秒内没有返回有效事件")
+                    true
                 }
-                for (event in events) emit(event)
+                if (received == null) {
+                    emit(AppStreamEvent.Error(
+                        message = "模型在 ${timeoutMillis / 1_000} 秒内没有返回有效事件",
+                        code = "first_event_timeout", type = "retryable_network",
+                    ))
+                } else if (!terminal) {
+                    for (event in events) {
+                        emit(event)
+                        if (event is AppStreamEvent.Error || event is AppStreamEvent.Finish || event is AppStreamEvent.StreamEnd) break
+                    }
+                }
             } finally {
                 events.cancel()
             }
+        }
+    }.catch { error ->
+        // 用户停止必须传播；传输层自己的超时仍交给同一请求重试策略。
+        currentCoroutineContext().ensureActive()
+        when (error) {
+            is IOException -> emit(com.android.everytalk.data.network.NetworkUtils.handleConnectionError(error, "模型").error)
+            is TimeoutCancellationException -> emit(AppStreamEvent.Error(
+                message = "模型连接超时", code = "connection_timeout", type = "retryable_network",
+            ))
+            else -> throw error
         }
     }
 }
