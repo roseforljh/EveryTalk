@@ -132,21 +132,30 @@ import java.util.TimeZone
         }
     }
 
-    internal fun AppViewModel.loadConversationFromHistory(index: Int) {
+    internal fun AppViewModel.loadConversationFromHistory(index: Int, targetSessionId: String? = null) {
+        val historyBeforeSave = stateHolder._historicalConversations.value
+        val requestedId = targetSessionId ?: com.android.everytalk.util.ConversationNameHelper
+            .resolveStableId(historyBeforeSave.getOrNull(index)) ?: return
+        val requestedIndex = historyBeforeSave.indexOfFirst {
+            com.android.everytalk.util.ConversationNameHelper.resolveStableId(it) == requestedId
+        }
+        if (requestedIndex < 0) return
         historyController.cancelPendingImageHistoryLoad()
         if (isConversationSearchActive.value) setConversationSearchActive(false)
         if (shouldSkipReloadingLoadedHistory(
-                requestedIndex = index,
-                loadedIndex = stateHolder._loadedHistoryIndex.value,
+                requestedSessionId = requestedId,
+                loadedSessionId = stateHolder._currentConversationId.value,
                 hasLoadedMessages = stateHolder.messages.isNotEmpty(),
             )
         ) {
+            // A→B 尚在读取时重新点 A，用户的最新意图是留在 A。
+            cancelPendingTextHistoryLoad()
+            stateHolder.restoreTextConversationUi()
             return
         }
         restoredMessageDraft.value?.let(::consumeRestoredMessageDraft)
         dismissSourcesDialog()
         apiHandler.detachTextConversationUi()
-        val historyBeforeSave = stateHolder._historicalConversations.value
         val loadGeneration = stateHolder._historyLoadGeneration.value + 1L
         stateHolder._historyLoadGeneration.value = loadGeneration
         stateHolder._isLoadingHistory.value = true
@@ -167,11 +176,11 @@ import java.util.TimeZone
                     Log.e("AppViewModel", "Error saving current chat before history load", e)
                 }
                 val resolvedIndex = resolveHistoryIndexAfterSave(
-                    requestedIndex = index,
+                    requestedIndex = requestedIndex,
                     historyBeforeSave = historyBeforeSave,
                     historyAfterSave = stateHolder._historicalConversations.value,
                 )
-                if (!isCurrentHistoryLoad(loadGeneration, stateHolder._historyLoadGeneration.value)) return@launch
+                if (resolvedIndex < 0 || !isCurrentHistoryLoad(loadGeneration, stateHolder._historyLoadGeneration.value)) return@launch
                 historyController.loadTextHistory(resolvedIndex)
             } catch (e: CancellationException) {
                 throw e
@@ -188,11 +197,15 @@ import java.util.TimeZone
         }
     }
 
-    internal fun AppViewModel.loadImageGenerationConversationFromHistory(index: Int) {
+    internal fun AppViewModel.loadImageGenerationConversationFromHistory(index: Int, targetSessionId: String? = null) {
+        val history = stateHolder._imageGenerationHistoricalConversations.value
+        val requestedId = targetSessionId ?: ConversationNameHelper.resolveStableId(history.getOrNull(index)) ?: return
+        val requestedIndex = history.indexOfFirst { ConversationNameHelper.resolveStableId(it) == requestedId }
+        if (requestedIndex < 0) return
         if (isConversationSearchActive.value) setConversationSearchActive(false)
         if (shouldSkipReloadingLoadedHistory(
-                requestedIndex = index,
-                loadedIndex = stateHolder._loadedImageGenerationHistoryIndex.value,
+                requestedSessionId = requestedId,
+                loadedSessionId = stateHolder._currentImageGenerationConversationId.value,
                 hasLoadedMessages = stateHolder.imageGenerationMessages.isNotEmpty(),
             )
         ) {
@@ -204,7 +217,7 @@ import java.util.TimeZone
         dismissSourcesDialog()
         cancelPendingTextHistoryLoad()
         apiHandler.detachTextConversationUi()
-        historyController.loadImageHistory(index)
+        historyController.loadImageHistory(requestedIndex)
     }
 
     internal fun AppViewModel.deleteConversation(indexToDelete: Int) {

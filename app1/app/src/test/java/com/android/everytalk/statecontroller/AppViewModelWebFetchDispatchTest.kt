@@ -39,7 +39,7 @@ class AppViewModelWebFetchDispatchTest {
     }
 
     @Test
-    fun `history click prefers completed conversation over stale user only duplicate`() {
+    fun `history click keeps distinct conversations with identical user text`() {
         val completedConversation = listOf(
             Message(id = "actual-user-message-id", text = "你好", sender = Sender.User),
             Message(id = "ai-reply", text = "你好！请问有什么我可以帮你的吗？", sender = Sender.AI),
@@ -55,7 +55,7 @@ class AppViewModelWebFetchDispatchTest {
             historyAfterSave = history,
         )
 
-        assertEquals(0, resolvedIndex)
+        assertEquals(1, resolvedIndex)
     }
 
     @Test

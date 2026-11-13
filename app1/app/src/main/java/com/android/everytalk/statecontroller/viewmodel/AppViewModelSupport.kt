@@ -139,12 +139,10 @@ internal fun buildToolStatus(prefix: String, target: String): String {
 }
 
 internal fun shouldSkipReloadingLoadedHistory(
-    requestedIndex: Int,
-    loadedIndex: Int?,
+    requestedSessionId: String?,
+    loadedSessionId: String,
     hasLoadedMessages: Boolean,
-): Boolean {
-    return requestedIndex == loadedIndex && hasLoadedMessages
-}
+): Boolean = !requestedSessionId.isNullOrBlank() && requestedSessionId == loadedSessionId && hasLoadedMessages
 
 internal fun isCurrentHistoryLoad(
     requestGeneration: Long,
@@ -311,39 +309,8 @@ internal fun resolveHistoryIndexAfterSave(
     historyBeforeSave: List<List<Message>>,
     historyAfterSave: List<List<Message>>,
 ): Int {
-    val clickedConversation = historyBeforeSave.getOrNull(requestedIndex)
-    val clickedStableId = ConversationNameHelper.resolveStableId(clickedConversation)
-        ?: return requestedIndex
-    val completedDuplicateIndex = resolveCompletedDuplicateIndex(clickedConversation, historyAfterSave)
-    if (completedDuplicateIndex != null) return completedDuplicateIndex
-    return historyAfterSave.indexOfFirst { conversation ->
-        ConversationNameHelper.resolveStableId(conversation) == clickedStableId
-    }.takeIf { it >= 0 } ?: requestedIndex
-}
-
-internal fun resolveCompletedDuplicateIndex(
-    clickedConversation: List<Message>?,
-    historyAfterSave: List<List<Message>>,
-): Int? {
-    if (clickedConversation.isNullOrEmpty()) return null
-    val clickedFingerprint = conversationDraftFingerprint(clickedConversation)
-    if (clickedFingerprint.isBlank()) return null
-    return historyAfterSave.indexOfFirst { conversation ->
-        conversation.size > clickedConversation.size &&
-            conversationDraftFingerprint(conversation).startsWith("$clickedFingerprint||")
-    }.takeIf { it >= 0 }
-}
-
-internal fun conversationDraftFingerprint(messages: List<Message>): String {
-    return messages
-        .filter { it.sender != Sender.System }
-        .joinToString("||") { message ->
-            val senderTag = when (message.sender) {
-                Sender.User -> "U"
-                Sender.AI -> "A"
-                Sender.System -> "S"
-                else -> "O"
-            }
-            listOf(senderTag, message.text.trim(), message.reasoning.orEmpty().trim()).joinToString("::")
-        }
+    val clickedStableId = ConversationNameHelper.resolveStableId(historyBeforeSave.getOrNull(requestedIndex))
+        ?: return -1
+    // 相同文字不是同一个会话。目标消失就取消，绝不能打开占据旧索引的另一项。
+    return historyAfterSave.indexOfFirst { ConversationNameHelper.resolveStableId(it) == clickedStableId }
 }

@@ -23,36 +23,26 @@ import org.junit.Test
 class AppViewModelHistoryLoadTest {
 
     @Test
-    fun `skips reloading currently loaded history item with messages`() {
-        val result = shouldSkipReloadingLoadedHistory(
-            requestedIndex = 3,
-            loadedIndex = 3,
-            hasLoadedMessages = true,
-        )
-
-        assertTrue(result)
+    fun `列表重排后同一会话仍跳过重复加载`() {
+        assertTrue(shouldSkipReloadingLoadedHistory("session-a", "session-a", true))
     }
 
     @Test
-    fun `does not skip current history item when messages are empty`() {
-        val result = shouldSkipReloadingLoadedHistory(
-            requestedIndex = 3,
-            loadedIndex = 3,
-            hasLoadedMessages = false,
-        )
-
-        assertFalse(result)
+    fun `当前会话没有消息时仍需加载`() {
+        assertFalse(shouldSkipReloadingLoadedHistory("session-a", "session-a", false))
     }
 
     @Test
-    fun `does not skip different history item`() {
-        val result = shouldSkipReloadingLoadedHistory(
-            requestedIndex = 4,
-            loadedIndex = 3,
-            hasLoadedMessages = true,
-        )
+    fun `旧索引相同但身份不同不能跳过加载`() {
+        assertFalse(shouldSkipReloadingLoadedHistory("session-b", "session-a", true))
+        assertFalse(shouldSkipReloadingLoadedHistory(null, "session-a", true))
+    }
 
-        assertFalse(result)
+    @Test
+    fun `保存期间目标被删除时不加载占据旧索引的另一会话`() {
+        val target = listOf(Message(id = "a", text = "相同问题", sender = Sender.User, conversationId = "session-a"))
+        val other = listOf(Message(id = "b", text = "相同问题", sender = Sender.User, conversationId = "session-b"))
+        assertEquals(-1, resolveHistoryIndexAfterSave(0, listOf(target), listOf(other)))
     }
 
     @Test

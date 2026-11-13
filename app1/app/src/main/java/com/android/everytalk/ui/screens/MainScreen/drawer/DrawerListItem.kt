@@ -50,9 +50,9 @@ internal fun DrawerConversationListItem(
     itemData: FilteredConversationItem,
     isSearchActive: Boolean,
     currentSearchQuery: String,
-    loadedHistoryIndex: Int?,
+    currentConversationId: String,
     getPreviewForIndex: (Int) -> String,
-    onConversationClick: (Int) -> Unit,
+    onConversationClick: (Int, String) -> Unit,
     onRenameRequest: (Int) -> Unit,
     onDeleteTriggered: (Int) -> Unit,
     onTogglePin: (Int) -> Unit,
@@ -70,8 +70,8 @@ internal fun DrawerConversationListItem(
     val originalIndex = itemData.originalIndex
     val definitivePreviewText = getPreviewForIndex(originalIndex)
 
-    // 修复: 根据当前模式判断是否激活,避免文本和图像模式历史项状态混淆
-    val isActuallyActive = loadedHistoryIndex == originalIndex
+    // 同步会重排列表，索引只能定位这一帧，不能用来表示当前会话身份。
+    val isActuallyActive = currentConversationId == itemData.stableId
     
     var rippleState by remember { mutableStateOf<CustomRippleState>(CustomRippleState.Idle) }
     var currentPressPosition by remember { mutableStateOf(Offset.Zero) }
@@ -103,7 +103,7 @@ internal fun DrawerConversationListItem(
             .fillMaxWidth()
             .height(LIST_ITEM_MIN_HEIGHT)
             .clipToBounds()
-            .pointerInput(originalIndex) {
+            .pointerInput(originalIndex, itemData.stableId) {
                 detectTapGestures(
                     onPress = { offset ->
                         pressAndHoldJob?.cancel()
@@ -123,7 +123,7 @@ internal fun DrawerConversationListItem(
                             currentOnCollapseMenu()
                         } else {
                             currentOnCollapseMenu()
-                            currentOnConversationClick(originalIndex)
+                            currentOnConversationClick(originalIndex, itemData.stableId)
                         }
                     },
                     onLongPress = { offset ->

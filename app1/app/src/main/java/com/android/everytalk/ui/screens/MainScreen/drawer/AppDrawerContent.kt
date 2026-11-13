@@ -57,9 +57,10 @@ import com.android.everytalk.ui.components.floatingEdgeGradient
 fun AppDrawerContent(
     historicalConversations: List<List<Message>>,
     loadedHistoryIndex: Int?,
+    currentConversationId: String,
     onConversationSearchClick: () -> Unit,
-    onConversationClick: (Int) -> Unit,
-    onImageGenerationConversationClick: (Int) -> Unit, // 新增：图像模式历史点击回调
+    onConversationClick: (Int, String) -> Unit,
+    onImageGenerationConversationClick: (Int, String) -> Unit, // 新增：图像模式历史点击回调
     onNewChatClick: () -> Unit,
     onRenameRequest: (index: Int, newName: String) -> Unit,
     onDeleteRequest: (index: Int) -> Unit,
@@ -155,19 +156,19 @@ fun AppDrawerContent(
         }
     }.value
     // 打开侧栏时把当前会话放到列表中部；历史还在加载时等加载完再定位。
-    val currentLoadedIndex by rememberUpdatedState(loadedHistoryIndex)
+    val currentSessionId by rememberUpdatedState(currentConversationId)
     val currentProcessedItems by rememberUpdatedState(processedItems)
     val currentExpandedGroups by rememberUpdatedState(expandedGroups)
     val density = LocalDensity.current
     LaunchedEffect(sessionKey, isLoadingHistoryData, isImageGenerationMode) {
         if (sessionKey == 0 || isLoadingHistoryData) return@LaunchedEffect
-        val target = currentLoadedIndex ?: return@LaunchedEffect
+        val target = currentSessionId.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
         val items = currentProcessedItems
         val itemHeightPx = with(density) { 64.dp.toPx() } // 与 DrawerConversationListItem 行高一致
         // 与下方 LazyColumn 的 item 顺序一致：操作区、分组标题、分组内容、会话标题、[置顶标题、置顶内容]、未分组会话。
         val pinnedSlots = if (items.pinned.isNotEmpty()) 2 else 0
-        val ungroupedPos = items.ungrouped.indexOfFirst { it.originalIndex == target }
-        val pinnedPos = items.pinned.indexOfFirst { it.originalIndex == target }
+        val ungroupedPos = items.ungrouped.indexOfFirst { it.stableId == target }
+        val pinnedPos = items.pinned.indexOfFirst { it.stableId == target }
         val (listIndex, innerOffsetPx) = when {
             ungroupedPos >= 0 -> (4 + pinnedSlots + ungroupedPos) to 0f
             pinnedPos >= 0 && "pinned" in currentExpandedGroups -> 5 to pinnedPos * itemHeightPx
@@ -196,14 +197,14 @@ fun AppDrawerContent(
                 itemData = itemData,
                 isSearchActive = false,
                 currentSearchQuery = "",
-                loadedHistoryIndex = loadedHistoryIndex,
+                currentConversationId = currentConversationId,
                 getPreviewForIndex = getPreviewForIndex,
-                onConversationClick = { index ->
+                onConversationClick = { index, sessionId ->
                     selectedSet.clear()
                     if (isImageGenerationMode) {
-                        onImageGenerationConversationClick(index)
+                        onImageGenerationConversationClick(index, sessionId)
                     } else {
-                        onConversationClick(index)
+                        onConversationClick(index, sessionId)
                     }
                 },
                 onRenameRequest = { index ->

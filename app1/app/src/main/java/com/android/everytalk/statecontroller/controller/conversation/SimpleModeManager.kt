@@ -328,8 +328,7 @@ class SimpleModeManager(
         }
 
         val previewConversation = conversationList[index]
-        val previewStableId = ConversationNameHelper.resolveStableId(previewConversation)
-            ?: "history_${UUID.randomUUID()}"
+        val previewStableId = ConversationNameHelper.resolveStableId(previewConversation) ?: return
         val conversationToLoad = loadHistorySession(previewStableId) ?: previewConversation
         Log.d(TAG, "🔥 Found conversation to load with ${conversationToLoad.size} messages.")
         // 云端消息 UUID 与会话 UUID 不同，必须沿用会话身份，否则模型、标签和后续刷新都会查错键。
@@ -444,15 +443,16 @@ class SimpleModeManager(
             Log.d(TAG, "🔥 Set reasoning and animation states.")
             
             // 关键修复：在所有状态更新完成后设置索引，确保不会被清空
-            stateHolder._loadedHistoryIndex.value = index
+            stateHolder._loadedHistoryIndex.value = latestIndex
             stateHolder._text.value = ""
-            Log.d(TAG, "🔥 Set loaded history index to $index and cleared text input.")
+            Log.d(TAG, "🔥 Set loaded history index to $latestIndex and cleared text input.")
             // Reset dirty flag after loading history to avoid unnecessary saves
             stateHolder.isTextConversationDirty.value = false
         
-        Log.d(TAG, "🔥 [END] Loaded TEXT history successfully: ${conversationToLoad.size} messages")
+            Log.d(TAG, "🔥 [END] Loaded TEXT history successfully: ${conversationToLoad.size} messages")
+            true
         }
-        onTextHistoryLoaded()
+        if (committed) onTextHistoryLoaded()
     }
     
     /**

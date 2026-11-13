@@ -355,6 +355,7 @@ class MainActivity : AppCompatActivity() {
                                             accountName = accountState.user?.displayName,
                                             historicalConversations = if (isImageGenerationMode) appViewModel.imageGenerationHistoricalConversations.collectAsState().value else appViewModel.historicalConversations.collectAsState().value,
                                             loadedHistoryIndex = if (isImageGenerationMode) appViewModel.loadedImageGenerationHistoryIndex.collectAsState().value else appViewModel.loadedHistoryIndex.collectAsState().value,
+                                            currentConversationId = if (isImageGenerationMode) appViewModel.stateHolder._currentImageGenerationConversationId.collectAsState().value else appViewModel.stateHolder._currentConversationId.collectAsState().value,
                                             onConversationSearchClick = {
                                                 appViewModel.simpleModeManager.setIntendedMode(
                                                     SimpleModeManager.ModeType.TEXT,
@@ -372,7 +373,7 @@ class MainActivity : AppCompatActivity() {
                                                     appViewModel.drawerState.close()
                                                 }
                                             },
-                                            onImageGenerationConversationClick = { index ->
+                                            onImageGenerationConversationClick = { index, targetSessionId ->
                                             // 先声明意图模式，避免因内容/索引造成的误判
                                             // 跨模式点击时显示 Toast 提示
                                             appViewModel.simpleModeManager.setIntendedMode(SimpleModeManager.ModeType.IMAGE, showToast = !isImageGenerationMode)
@@ -390,18 +391,18 @@ class MainActivity : AppCompatActivity() {
                                                     waitForRoute(Screen.IMAGE_GENERATION_SCREEN)
                                                     // 🔥 修复：不清除文本模式索引，保持两个模式独立
                                                     // appViewModel.stateHolder._loadedHistoryIndex.value = null
-                                                    appViewModel.loadImageGenerationConversationFromHistory(index)
+                                                    appViewModel.loadImageGenerationConversationFromHistory(index, targetSessionId)
                                                     appViewModel.drawerState.close()
                                                 }
                                             } else {
                                                 // 同模式内点击，直接加载
                                                 // 🔥 修复：不清除文本模式索引，保持两个模式独立
                                                 // appViewModel.stateHolder._loadedHistoryIndex.value = null
-                                                appViewModel.loadImageGenerationConversationFromHistory(index)
+                                                appViewModel.loadImageGenerationConversationFromHistory(index, targetSessionId)
                                                 coroutineScope.launch { appViewModel.drawerState.close() }
                                             }
                                         },
-                                        onConversationClick = { index ->
+                                        onConversationClick = { index, targetSessionId ->
                                             // 先声明意图模式，避免因内容/索引造成的误判
                                             // 跨模式点击时显示 Toast 提示
                                             appViewModel.simpleModeManager.setIntendedMode(SimpleModeManager.ModeType.TEXT, showToast = isImageGenerationMode)
@@ -419,14 +420,14 @@ class MainActivity : AppCompatActivity() {
                                                     waitForRoute(Screen.CHAT_SCREEN)
                                                     // 🔥 修复：不清除图像模式索引，保持两个模式独立
                                                     // appViewModel.stateHolder._loadedImageGenerationHistoryIndex.value = null
-                                                    appViewModel.loadConversationFromHistory(index)
+                                                    appViewModel.loadConversationFromHistory(index, targetSessionId)
                                                     appViewModel.drawerState.close()
                                                 }
                                             } else {
                                                 // 同模式内点击，直接加载
                                                 // 🔥 修复：不清除图像模式索引，保持两个模式独立
                                                 // appViewModel.stateHolder._loadedImageGenerationHistoryIndex.value = null
-                                                appViewModel.loadConversationFromHistory(index)
+                                                appViewModel.loadConversationFromHistory(index, targetSessionId)
                                                 coroutineScope.launch { appViewModel.drawerState.close() }
                                             }
                                         },
