@@ -294,6 +294,8 @@ class HistoryManager(
         conversationId: String,
         messages: List<Message>,
         isImageGeneration: Boolean,
+        // 重答删掉了旧问题和旧回答，必须完整保存；只追加会把历史里的旧消息并回来，重答一次多一份。
+        appendOnly: Boolean = true,
     ) {
         val streamingId = if (isImageGeneration) stateHolder.imageApiMessageIds[conversationId]
             else stateHolder.textApiMessageIds[conversationId]
@@ -306,7 +308,7 @@ class HistoryManager(
             )
         }
         enqueueAndAwait(HistoryCommand.Save(
-            SaveRequest(true, isImageGeneration, snapshot, conversationId, null, true, appendOnly = true),
+            SaveRequest(true, isImageGeneration, snapshot, conversationId, null, true, appendOnly = appendOnly),
             CompletableDeferred(),
         ))
     }

@@ -428,6 +428,7 @@ internal fun MessageSender.sendMessageInternal(
                                 conversationId = requestConversationId,
                                 messages = requestMessages.toList(),
                                 isImageGeneration = isImageGeneration,
+                                appendOnly = !isFromRegeneration,
                             )
                         }
                     }
@@ -544,6 +545,7 @@ internal fun MessageSender.sendMessageInternal(
                     conversationId = requestConversationId,
                     messages = requestMessages.toList(),
                     isImageGeneration = isImageGeneration,
+                    appendOnly = !isFromRegeneration,
                 )
             }
             requestConversationId = stateHolder.resolveConversationId(requestConversationId)
@@ -1020,6 +1022,12 @@ internal fun MessageSender.sendMessageInternal(
                     ),
                     localComputerRequestContext = (preparedComputerRequest ?: localWorkspaceRequest)?.context,
                     localSkillSnapshot = skillSnapshotForRequest,
+                    localExternalWebSearchConfig = webSearchRouting.externalProvider?.let {
+                        com.android.everytalk.data.network.ExternalWebSearchProviderConfig(it.providerId, selectedExternalProviderApiKey)
+                    },
+                    localCloudMcpBindings = if (com.android.everytalk.data.auth.AuthRuntime.get(application).auth.state.value is com.android.everytalk.data.auth.AuthState.SignedIn) {
+                        freezeCloudMcpBindings(requestTools.orEmpty().mapNotNull(::extractToolName).filter { it.startsWith("mcp_") }.toSet())
+                    } else emptyMap(),
                     imageGenRequest = if (isImageRequest) {
                         // 调试信息：检查发送的配置
                         Log.d("MessageSender", "Image generation config: ${safeApiConfigSummary(currentConfig)}")

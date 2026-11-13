@@ -85,7 +85,8 @@ internal fun resolveComposerPrimaryAction(
 ): ComposerPrimaryAction = when {
     isConvertingLongText -> ComposerPrimaryAction.LOADING
     isRemoteCancellationPending -> ComposerPrimaryAction.LOADING
-    composerMode is ComposerMode.EditingPending -> ComposerPrimaryAction.SEND
+    // 编辑队列消息时清空了内容，按钮回到执行中的图标，不再显示一个点了只会提示"内容为空"的发送。
+    composerMode is ComposerMode.EditingPending && hasDraft -> ComposerPrimaryAction.SEND
     canRestoreMessage && runState == ChatRunState.Idle -> ComposerPrimaryAction.RESTORE
     hasDraft -> ComposerPrimaryAction.SEND
     // ponytail: 复用已有停止流程，不为准备和审批等待另外创建暂停控制器。

@@ -108,10 +108,15 @@ class PendingMessageInteractionTest {
         listOf(ChatRunState.PauseRequested, ChatRunState.Paused).forEach { state ->
             assertEquals(ComposerPrimaryAction.SEND,
                 resolveComposerPrimaryAction(state, ComposerMode.Normal, true, false))
-            assertEquals(ComposerPrimaryAction.SEND,
-                resolveComposerPrimaryAction(state,
-                    ComposerMode.EditingPending("id", "conversation", 1, "old", "old", emptyList(), emptyList()), false, false))
         }
+        // 编辑队列消息时把内容删空，按钮回到执行中的图标。
+        val editing = ComposerMode.EditingPending("id", "conversation", 1, "old", "old", emptyList(), emptyList())
+        assertEquals(ComposerPrimaryAction.PAUSE,
+            resolveComposerPrimaryAction(ChatRunState.Streaming, editing, false, false))
+        assertEquals(ComposerPrimaryAction.FORCE_STOP,
+            resolveComposerPrimaryAction(ChatRunState.PauseRequested, editing, false, false))
+        assertEquals(ComposerPrimaryAction.RESUME,
+            resolveComposerPrimaryAction(ChatRunState.Paused, editing, false, false))
         assertEquals(ComposerPrimaryAction.VOICE,
             resolveComposerPrimaryAction(ChatRunState.Idle, ComposerMode.Normal, false, false))
     }
