@@ -38,6 +38,7 @@ import com.android.everytalk.data.computer.HostKeyProbeResult
 import com.android.everytalk.data.computer.isUnknownExecution
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
+import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.aiContextUsageSummary
 import com.android.everytalk.ui.components.math.MathJaxSvgRenderer
 import com.android.everytalk.ui.screens.viewmodel.ConfigManager
 import com.android.everytalk.ui.screens.viewmodel.DataPersistenceManager
@@ -1074,11 +1075,19 @@ import java.util.UUID
         apiHandler.cancelCurrentApiJob("用户停止准备中或等待确认的任务", isImageGeneration = false, showFeedback = true)
     }
 
-    /** 停止另一台设备上运行的当前会话；那台设备下一次上报时收到请求并走自己的停止流程。 */
+    /** 云端任务直接控制持久运行；旧手机任务仍使用原 live 停止通道。 */
     internal fun AppViewModel.stopRemoteRun() {
         val run = stateHolder._remoteLiveRun.value?.takeIf { it.running } ?: return
-        com.android.everytalk.data.sync.LiveSync.requestRemoteStop(run.sessionUuid)
-        stateHolder.showSnackbar("正在停止另一台设备上的任务")
+        if (run.cloudRunId != null) {
+            viewModelScope.launch {
+                try {
+                    if (!apiHandler.stopCloudRun(run.cloudRunId)) stateHolder.showSnackbar("云端尚未连接，请稍后重试")
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { stateHolder.showSnackbar("停止请求未确认，请重试") }
+            }
+        } else {
+            com.android.everytalk.data.sync.LiveSync.requestRemoteStop(run.sessionUuid)
+        }
     }
 
     /**
@@ -1096,9 +1105,14 @@ import java.util.UUID
                     )
 
                     is ManualCompactionOutcome.Compacted -> {
+                        // 压缩前取圆环同一个数（上次真实发送的占用）。outcome.tokensBefore 是全部历史的估算，
+                        // 历史超窗被裁剪时会远大于圆环，看起来像 400K 被说成 1.4M。
+                        val ringBefore = stateHolder.messages.firstOrNull { it.id == messageId }
+                            ?.let { aiContextUsageSummary(it, 0L)?.currentContextTokens }
+                            ?.takeIf { it > 0L }
                         val text = getApplication<Application>().getString(
                             R.string.context_usage_compress_done,
-                            outcome.tokensBefore,
+                            ringBefore ?: outcome.tokensBefore,
                             outcome.tokensAfter,
                         )
                         // 压缩结果只落进检查点，消息里的用量快照还停在压缩前。

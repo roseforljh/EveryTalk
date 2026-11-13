@@ -16,7 +16,6 @@ import com.android.everytalk.data.network.isOfficialOpenAIResponsesAddress
 import com.android.everytalk.data.network.repairAgentToolHistory
 import com.android.everytalk.statecontroller.RequestTokenEstimator
 import com.android.everytalk.statecontroller.calibratedInputTokens
-import com.android.everytalk.statecontroller.trimMessagesToContextWindow
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -177,25 +176,11 @@ class AgentContextManager(
             null
         }
 
-        // 有可执行压缩计划时先返回完整有效上下文，AgentLoop 会生成并落库摘要后重新 prepare。
-        val fitted = when {
-            plan != null || hasActiveNativeCompaction -> effective
-            else -> {
-                removeOrphanToolResults(
-                    trimMessagesToContextWindow(
-                        messages = effective,
-                        limits = limits,
-                        tools = request.tools,
-                        inputTokenCalibration = calibration,
-                    )
-                )
-            }
-        }
+        // 不在本地裁剪或拦截：超窗时原样发出，由服务商报错，用户据此压缩。
+        // 本地按估算悄悄丢最老的历史，模型会无声失忆，开头每轮都变也让前缀缓存全部失效。
+        val fitted = effective
         val estimate = RequestTokenEstimator.estimate(fitted, request.tools)
         val active = calibratedInputTokens(estimate, calibration)
-        if (plan == null && !hasActiveNativeCompaction && active > inputBudget) {
-            throw AgentContextWindowException("当前请求的单轮内容超过模型上下文窗口")
-        }
         val fingerprint = agentTranscriptFingerprint(fitted.map(::fingerprintPart))
         return PreparedAgentContext(
             messages = fitted,

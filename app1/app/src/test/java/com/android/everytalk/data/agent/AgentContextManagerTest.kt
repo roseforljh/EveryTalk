@@ -20,6 +20,22 @@ class AgentContextManagerTest {
     private val manager = AgentContextManager()
 
     @Test
+    fun `超出窗口时原样发送完整历史，交给服务商报错`() {
+        val history = (1..30).flatMap { turn ->
+            listOf(
+                SimpleTextApiMessage(id = "u$turn", role = "user", content = "问题 $turn " + "x".repeat(600)),
+                SimpleTextApiMessage(id = "a$turn", role = "assistant", content = "回答 $turn " + "y".repeat(600)),
+            )
+        }
+        val prepared = manager.prepare(
+            requestId = "req-full",
+            request = ChatRequest(messages = history, provider = "p", channel = "OpenAI兼容", apiAddress = "https://example.com", apiKey = "k", model = "m"),
+            limits = ModelTokenLimits(maxOutputTokens = 1_000, maxContextTokens = 5_000),
+        )
+        assertEquals(history.map { it.id }, prepared.messages.map { it.id })
+    }
+
+    @Test
     fun `多工具调用缺少一个结果时保留已有事实并补失败结果`() {
         val assistant = assistantWithCalls("call-1", "call-2")
         val messages = listOf(
