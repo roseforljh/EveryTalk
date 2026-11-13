@@ -18,6 +18,16 @@ import org.junit.Test
 import java.io.File
 
 class ChatMessagesListRenderRouteTest {
+    @Test
+    fun `执行区标题离屏时仍收起且完成后手动展开不被下一帧清除`() {
+        val expanded = mutableMapOf("running" to true, "history" to true)
+        collapseFinishedExecutionGroups(setOf("running"), emptySet(), expanded)
+        assertFalse(expanded.containsKey("running"))
+        assertTrue(expanded.getValue("history"))
+        expanded["running"] = true
+        collapseFinishedExecutionGroups(emptySet(), emptySet(), expanded)
+        assertTrue(expanded.getValue("running"))
+    }
 
     @Test
     fun `历史长回复将普通Markdown节点拆为有界小批量懒列表项`() {

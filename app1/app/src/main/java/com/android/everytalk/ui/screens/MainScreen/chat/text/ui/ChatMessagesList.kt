@@ -223,6 +223,15 @@ internal fun shouldUsePreparedStaticAiRender(
     !hasMatchingStreamingRender &&
     itemText == effectiveContent
 
+/** 只处理运行→结束，完成后的手动展开不因滚动离屏或重新组合而丢失。 */
+internal fun collapseFinishedExecutionGroups(
+    previousActive: Set<String>,
+    active: Set<String>,
+    expanded: MutableMap<String, Boolean>,
+) {
+    (previousActive - active).forEach(expanded::remove)
+}
+
 internal fun shouldAddConversationGapAfter(item: ChatListItem): Boolean = when (item) {
     is ChatListItem.AiMessageSources -> false
     // 思考过程和紧随其后的正文属于同一条 AI 回复，不能插入完整会话间距。
@@ -412,6 +421,14 @@ fun ChatMessagesList(
         chatItems.mapNotNull { item ->
             (item as? ChatListItem.AiMessageExecutionGroup)?.takeIf { it.active }?.stableId
         }.toSet()
+    }
+
+    // 在列表层处理终态转移：标题项可能离屏，不能把收起动作放进 LazyColumn 的 item。
+    val previousActiveExecutionGroups = remember(scrollSessionKey) { mutableSetOf<String>() }
+    LaunchedEffect(scrollSessionKey, activeExecutionGroupKeys) {
+        collapseFinishedExecutionGroups(previousActiveExecutionGroups, activeExecutionGroupKeys, expandedExecutionGroups)
+        previousActiveExecutionGroups.clear()
+        previousActiveExecutionGroups.addAll(activeExecutionGroupKeys)
     }
 
     // 引用跳转：按引用原文找到消息里对应的段落，滚到那里并高亮；找不到段落时高亮整条消息。
@@ -933,11 +950,6 @@ fun ChatMessagesList(
                         }
 
                         is ChatListItem.AiMessageExecutionGroup -> {
-                            LaunchedEffect(item.active, item.stableId) {
-                                if (!item.active) {
-                                    expandedExecutionGroups.remove(item.stableId)
-                                }
-                            }
                             val expanded = expandedExecutionGroups[item.stableId] ?: item.active
                             ExecutionGroupToggle(
                                 steps = item.steps,

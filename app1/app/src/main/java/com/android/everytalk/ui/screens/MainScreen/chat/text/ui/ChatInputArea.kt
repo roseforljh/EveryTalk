@@ -1017,10 +1017,12 @@ fun ChatInputArea(
                     )
                 }
 
+                val remoteForChanges = remoteLiveRun?.takeIf { forkTarget == null && it.message.conversationId == runConversationId }
                 FileChangesCapsule(
-                    messages = viewModel.stateHolder.textMessagesForConversation(runConversationId),
-                    activeMessageId = controlledMessageId,
-                    isRunning = chatRunState != ChatRunState.Idle,
+                    messages = com.android.everytalk.statecontroller.facade.overlayRemoteMessage(
+                        viewModel.stateHolder.textMessagesForConversation(runConversationId), remoteForChanges),
+                    activeMessageId = controlledMessageId ?: remoteForChanges?.message?.id,
+                    isRunning = chatRunState != ChatRunState.Idle || remoteForChanges?.running == true,
                 )
 
                 PendingMessageQueue(

@@ -188,8 +188,9 @@ class SyncResourceSynchronizerTest {
         val question = Message(id = "original-question", text = "问题", sender = Sender.User, timestamp = 110)
             .toEntity(session.id).copy(syncStatus = SyncStatus.PENDING)
         a.chatDao().writeMessages(listOf(question))
+        val change = ExecutionFileChange("/workspace/main.kt", false, listOf(ExecutionFileEdit("旧值", "新值")))
         val trace = listOf(ExecutionTraceEvent.UserMessageBoundary(question.id), ExecutionTraceEvent.Content("调用之前"), ExecutionTraceEvent.Tool(
-            ExecutionStep("tool", ExecutionStepType.Tool, "查看服务器", detail = "uname -a", completed = true)),
+            ExecutionStep("tool", ExecutionStepType.Tool, "查看服务器", detail = "uname -a", completed = true, fileChange = change, resultPreview = "结果")),
             ExecutionTraceEvent.Reasoning("完整思考"), ExecutionTraceEvent.Content("调用之后"))
         val message = Message(id = "original", text = body, sender = Sender.AI, timestamp = 120,
             reasoning = "思考".repeat(20000), executionTrace = trace, executionFinishedAt = 150,
@@ -226,7 +227,7 @@ class SyncResourceSynchronizerTest {
         val restoredMarker = "sync_resource_restored:${message.uuid}"
         val revision = b.settingsDao().getValue(restoredMarker)!!
         b.chatDao().writeMessages(listOf(restored.copy(executionTrace = trace)))
-        b.settingsDao().insertSetting(SystemSettingEntity(restoredMarker, revision.removePrefix("2:")))
+        b.settingsDao().insertSetting(SystemSettingEntity(restoredMarker, revision.removePrefix("3:")))
         assetsB.synchronize()
         assertEquals(restoredQuestion.id, (b.chatDao().getMessageByUuid(message.uuid)!!.executionTrace.first()
             as ExecutionTraceEvent.UserMessageBoundary).messageId)
@@ -242,6 +243,69 @@ class SyncResourceSynchronizerTest {
         val uploads = api.fileUploads; val pushes = api.pushes
         assetsB.synchronize(); sync(b, api)
         assertEquals(uploads, api.fileUploads); assertEquals(pushes, api.pushes)
+    }
+
+    @Test fun `只有用户调整边界也上传完整归档并在另一台恢复原顺序`() = runBlocking {
+        val a = database(); val b = database(); val ca = context(); val cb = context(); val api = FakeSyncApi()
+        val session = ChatSessionEntity("boundary-source", 1, 1, false)
+        a.chatDao().writeSession(session)
+        val question = Message(id = "steering-user", text = "调整方向", sender = Sender.User, timestamp = 30).toEntity(session.id)
+        val ai = Message(id = "boundary-ai", text = "之前之后", sender = Sender.AI, timestamp = 20,
+            executionTrace = listOf(ExecutionTraceEvent.Content("之前"), ExecutionTraceEvent.UserMessageBoundary(question.id),
+                ExecutionTraceEvent.Content("之后")), executionFinishedAt = 40).toEntity(session.id)
+        a.chatDao().writeMessages(listOf(ai, question))
+        SyncResourceSynchronizer(ca, a, api, user).use { it.synchronize() }; sync(a, api); sync(b, api)
+        SyncResourceSynchronizer(cb, b, api, user).use { it.synchronize() }
+        val restored = b.chatDao().getMessageByUuid(ai.uuid)!!
+        assertEquals("cloud:${question.uuid}", (restored.executionTrace[1] as ExecutionTraceEvent.UserMessageBoundary).messageId)
+        assertEquals(ai.text, restored.text)
+        assertTrue(RoomSyncStore(b).pendingBatch().isEmpty())
+    }
+
+    @Test fun `云端归档恢复原设备占位但不覆盖本机真实运行且恢复后不回传`() = runBlocking {
+        val source = database(); val target = database(); val protected = database()
+        val cs = context(); val ct = context(); val cp = context(); val api = FakeSyncApi()
+        val session = ChatSessionEntity("archive-source", 1, 1, false)
+        source.chatDao().writeSession(session)
+        val question = Message(id = "archive-user", text = "调整", sender = Sender.User, timestamp = 30).toEntity(session.id)
+        val step = ExecutionStep("write", ExecutionStepType.Tool, "write_file", completed = true,
+            fileChange = ExecutionFileChange("/workspace/app.kt", true, listOf(ExecutionFileEdit("", "内容"))))
+        val ai = Message(id = "archive-ai", text = "之前之后", sender = Sender.AI, timestamp = 20,
+            executionSteps = listOf(step), executionFinishedAt = 40, executionTrace = listOf(
+                ExecutionTraceEvent.Content("之前"), ExecutionTraceEvent.UserMessageBoundary(question.id),
+                ExecutionTraceEvent.Tool(step), ExecutionTraceEvent.Content("之后"))).toEntity(session.id)
+        source.chatDao().writeMessages(listOf(ai, question))
+        SyncResourceSynchronizer(cs, source, api, user).use { it.synchronize() }; sync(source, api)
+        // 复用真实加密归档，仅把来源设置为生产云执行器使用的合同值。
+        api.rows.toMap().forEach { (key, row) ->
+            if (row.entity == "attachments") api.rows[key] = row.copy(payload = JsonObject(row.payload + ("origin" to JsonPrimitive("cloud_agent"))))
+        }
+        for ((db, ctx) in listOf(target to ct, protected to cp)) {
+            val localSession = session.copy(id = "original-device-session")
+            val placeholder = ai.copy(id = "original-device-ai", sessionId = localSession.id, text = "",
+                executionSteps = emptyList(), executionTrace = emptyList(), syncStatus = SyncStatus.SYNCED, everSynced = true)
+            db.chatDao().writeSession(localSession)
+            db.chatDao().writeMessages(listOf(placeholder, question.copy(id = "original-device-user", sessionId = localSession.id)))
+            if (db === protected) db.agentDao().upsertRun(AgentRunEntity("local-run", localSession.id,
+                "original-device-user", placeholder.id, null, null, "RUNNING", 0, null, 1, 1))
+            sync(db, api)
+            val uploads = api.fileUploads
+            SyncResourceSynchronizer(ctx, db, api, user).use { it.synchronize() }
+            val restored = db.chatDao().getMessageByUuid(ai.uuid)!!
+            assertEquals(placeholder.id, restored.id)
+            if (db === protected) {
+                assertEquals("", restored.text)
+                assertEquals("RUNNING", db.agentDao().getRun("local-run")!!.status)
+            } else {
+                assertEquals(ai.text, restored.text)
+                assertEquals(ai.executionSteps, restored.executionSteps)
+                assertEquals("original-device-user", (restored.executionTrace[1] as ExecutionTraceEvent.UserMessageBoundary).messageId)
+                assertEquals("$user:${restored.storageFingerprint}", db.settingsDao().getValue("sync_resource_source:${ai.uuid}"))
+                assertTrue(RoomSyncStore(db).pendingBatch().isEmpty())
+                SyncResourceSynchronizer(ctx, db, api, user).use { it.synchronize() }
+                assertEquals(uploads, api.fileUploads)
+            }
+        }
     }
 
     @Test fun `按服务器限制分块图片并恢复新设备空文件技能和换账号`() = runBlocking {

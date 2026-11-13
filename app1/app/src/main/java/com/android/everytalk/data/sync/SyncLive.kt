@@ -54,6 +54,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -61,10 +62,28 @@ import kotlinx.serialization.json.jsonPrimitive
  * 其他设备正在运行的回复。messageUuid 与该回复定稿后同步过来的消息一致。
  * running=false 表示已结束、定稿消息还在路上：继续显示最后快照，避免回复短暂消失。
  */
-internal data class LiveRemoteRun(val messageUuid: String, val message: Message, val running: Boolean = true)
+internal data class LiveRemoteRun(
+    val messageUuid: String,
+    val message: Message,
+    val running: Boolean = true,
+    val runId: String = messageUuid,
+)
 
 @Serializable
-internal data class LiveSnapshot(val messageUuid: String, val message: Message)
+internal data class LiveSnapshot(
+    val messageUuid: String,
+    val message: Message,
+    val running: Boolean = true,
+)
+
+/** 同步身份在发送端转为 UUID、接收端转为本机 ID；正文、边界和用量卡片使用同一映射。 */
+internal suspend fun mapLiveMessageReferences(message: Message, resolve: suspend (String) -> String): Message = message.copy(
+    id = resolve(message.id),
+    executionTrace = message.executionTrace.map { event ->
+        if (event is ExecutionTraceEvent.UserMessageBoundary) event.copy(messageId = resolve(event.messageId)) else event
+    },
+    contextUsageSnapshot = message.contextUsageSnapshot?.let { it.copy(messageId = resolve(it.messageId)) },
+)
 
 /**
  * 同账号多设备的实时状态：运行端上报回复快照，前台设备通过 SSE 接收其他设备的快照、
@@ -118,10 +137,8 @@ internal object LiveSync {
 
     // ---------- 运行端：上报 ----------
 
-    private class Publisher {
+    private class Publisher(val messageUuid: String) {
         @Volatile var snapshot: LiveSnapshot? = null
-        @Volatile var changed = false
-        @Volatile var terminal = false
         @Volatile var stillRunning: () -> Boolean = { true }
         @Volatile var cancelForwarded = false
         val wake = Channel<Unit>(Channel.CONFLATED)
@@ -143,52 +160,81 @@ internal object LiveSync {
     fun publish(context: Context, sessionUuid: String, messageUuid: String, message: Message, terminal: Boolean, stillRunning: () -> Boolean) {
         app = context.applicationContext
         val publisher = synchronized(publishers) {
-            publishers[sessionUuid]?.takeUnless { it.terminal }
-                ?: Publisher().also { publishers[sessionUuid] = it; scope.launch { publishLoop(sessionUuid, it) } }
+            val existing = publishers[sessionUuid]?.takeIf { it.messageUuid == messageUuid }
+            // 终态可能先于缓冲中的旧增量到达，不能让旧增量重新启动已结束的回复。
+            if (existing?.snapshot?.running == false && !terminal) return
+            val publisher = existing ?: Publisher(messageUuid)
+            val finalMessage = if (terminal) message.copy(
+                executionStatus = null,
+                executionFinishedAt = message.executionFinishedAt ?: System.currentTimeMillis(),
+            ) else message
+            publisher.snapshot = LiveSnapshot(messageUuid, finalMessage, running = !terminal)
+            publisher.stillRunning = stillRunning
+            if (existing == null) {
+                publishers[sessionUuid] = publisher
+                scope.launch { publishLoop(sessionUuid, publisher) }
+            }
+            publisher
         }
         // 后台运行时也保持实时通道，远程停止立即送达。
         ensureListening()
-        if (terminal) publisher.terminal = true
-        else {
-            // 编码放到上报协程里做，调用方可能在主线程。
-            publisher.snapshot = LiveSnapshot(messageUuid, message)
-            publisher.changed = true
-            publisher.stillRunning = stillRunning
-        }
         publisher.wake.trySend(Unit)
     }
 
     private suspend fun publishLoop(session: String, publisher: Publisher) {
         var peers = 0
         var lastSentAt = 0L
+        var lastSent: LiveSnapshot? = null
         try {
-            while (true) {
-                withTimeoutOrNull(if (peers > 0) 1_000L else 5_000L) { publisher.wake.receive() }
-                if (publisher.terminal || !publisher.stillRunning()) break
+            while (publishers[session] === publisher) {
+                val snapshot = publisher.snapshot ?: break
+                if (snapshot.running && !publisher.stillRunning()) break
                 val now = System.currentTimeMillis()
-                if (!publisher.changed && now - lastSentAt < 10_000L) continue
-                if (!allowed()) continue
-                publisher.changed = false
-                lastSentAt = now
-                val body = encode(publisher.snapshot ?: continue)
-                val response = runCatching {
-                    authorized { token ->
+                val interval = if (peers > 0) 1_000L else 5_000L
+                // 唤醒只表示有新内容，不允许高频增量绕过限频；失败保留同一快照重试。
+                if (now - lastSentAt < interval) delay(interval - (now - lastSentAt))
+                if (snapshot === lastSent && now - lastSentAt < 10_000L) {
+                    withTimeoutOrNull(interval) { publisher.wake.receive() }
+                    continue
+                }
+                if (!allowed()) { delay(5_000L); continue }
+                if (publishers[session] !== publisher) break
+                val current = publisher.snapshot ?: break
+                lastSentAt = System.currentTimeMillis()
+                try {
+                    val wireMessage = mapLiveMessageReferences(current.message, AppDatabase.getDatabase(requireNotNull(app)).chatDao()::resolveMessageSyncUuid)
+                    val body = encode(current.copy(message = wireMessage.copy(id = current.messageUuid, conversationId = session)))
+                    val response = authorized { token ->
                         client.put("$base/live/sessions/$session") {
                             bearerAuth(token); header("X-EveryTalk-Device", deviceId)
                             contentType(ContentType.Application.Json)
-                            setBody("""{"body":"$body"}""")
+                            setBody("""{"body":"$body","runId":"${publisher.messageUuid}"}""")
                         }
                     }
-                }.getOrNull()?.takeIf { it.status.isSuccess() } ?: continue
-                val result = runCatching { json.parseToJsonElement(response.bodyAsText()).jsonObject }.getOrNull() ?: continue
-                peers = result["peers"]?.jsonPrimitive?.intOrNull ?: 0
-                if (result["cancel"]?.jsonPrimitive?.booleanOrNull == true) forwardCancel(session)
+                    if (!response.status.isSuccess()) continue
+                    val result = json.parseToJsonElement(response.bodyAsText()).jsonObject
+                    if (result["accepted"]?.jsonPrimitive?.booleanOrNull == false) break
+                    lastSent = current
+                    peers = result["peers"]?.jsonPrimitive?.intOrNull ?: 0
+                    if (result["cancel"]?.jsonPrimitive?.booleanOrNull == true) forwardCancel(session)
+                    // 先确认最后一帧已被接收，才能发 end；发送期间到来的终态留给下一轮。
+                    if (!current.running && publisher.snapshot === current) break
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    // 不清除待发快照，下一个限频周期重试。
+                }
             }
         } finally {
             publishers.remove(session, publisher)
-            // 只要上报过就通知结束；没上报过时服务器也不认识这个会话。
-            if (lastSentAt > 0) scope.launch {
-                runCatching { authorized { token -> client.delete("$base/live/sessions/$session") { bearerAuth(token) } } }
+            // 结束带运行身份，旧任务的 finally 不能结束同会话的新任务。
+            if (lastSent != null) scope.launch {
+                runCatching { authorized { token ->
+                    client.delete("$base/live/sessions/$session") {
+                        bearerAuth(token); header("X-EveryTalk-Device", deviceId)
+                        parameter("runId", publisher.messageUuid)
+                    }
+                } }
             }
         }
     }
@@ -196,15 +242,12 @@ internal object LiveSync {
     /** gzip + base64：长回复的正文、思考和步骤每秒整份上报，压缩后流量约为原文 1/4。 */
     internal fun encode(snapshot: LiveSnapshot): String {
         val message = snapshot.message
+        // 只去掉设备文件路径和可重建的 Markdown 缓存。变更卡片、工具详情、搜索来源和用量均是可见状态。
         val slim = message.copy(
-            parts = emptyList(), attachments = emptyList(), imageUrls = null, webSearchResults = null,
-            executionSteps = message.executionSteps.map { it.copy(resultPreview = null, fileChange = null) },
-            executionTrace = message.executionTrace.map { event ->
-                if (event is ExecutionTraceEvent.Tool) event.copy(step = event.step.copy(resultPreview = null, fileChange = null)) else event
-            },
-            contextUsageSnapshot = null, contextCompressionState = null,
+            parts = emptyList(), attachments = emptyList(), imageUrls = null,
+            contextCompressionState = null,
         )
-        val raw = json.encodeToString(LiveSnapshot.serializer(), LiveSnapshot(snapshot.messageUuid, slim)).toByteArray()
+        val raw = json.encodeToString(LiveSnapshot.serializer(), snapshot.copy(message = slim)).toByteArray()
         val compressed = ByteArrayOutputStream().also { out -> GZIPOutputStream(out).use { it.write(raw) } }.toByteArray()
         return Base64.encodeToString(compressed, Base64.NO_WRAP)
     }
@@ -252,13 +295,20 @@ internal object LiveSync {
             delay(30_000)
             if (!wanted()) connection.cancel()
         }
-        _remote.value = emptyMap()
+        // 暂停订阅不代表任务结束；返回前台后继续展示最后快照，等待服务端对账。
     }
+
+    private var remoteAccountId: String? = null
 
     private suspend fun connectLoop() {
         var backoff = 2_000L
         while (wanted()) {
-            if (!allowed()) { delay(30_000); continue }
+            val accountId = (app?.let { AuthRuntime.get(it).auth.state.value } as? AuthState.SignedIn)?.user?.id
+            if (remoteAccountId != accountId) {
+                _remote.value = emptyMap()
+                remoteAccountId = accountId
+            }
+            if (!allowed()) { _remote.value = emptyMap(); delay(30_000); continue }
             try {
                 val token = AuthRuntime.get(requireNotNull(app)).account.accessTokenForOwnedServer(backoff > 2_000L) ?: error("缺少登录会话")
                 client.prepareGet("$base/live/events") {
@@ -286,7 +336,7 @@ internal object LiveSync {
             } catch (_: Exception) {
                 backoff = (backoff * 2).coerceAtMost(30_000L)
             }
-            _remote.value = emptyMap()
+            // 网络断开只触发重连，不能把运行状态和已收到的内容清空。
             delay(backoff)
         }
     }
@@ -295,23 +345,32 @@ internal object LiveSync {
         runCatching {
             when (event) {
                 "changed" -> SyncScheduler.request(requireNotNull(app))
+                "state" -> {
+                    val sessions = json.parseToJsonElement(data).jsonObject.getValue("sessions").jsonArray
+                        .mapTo(hashSetOf()) { it.jsonPrimitive.content }
+                    // 重连补发的快照先到；集合里缺少的旧运行已结束，不继续显示停止按钮。
+                    _remote.update { current -> current.mapValues { (session, run) ->
+                        if (session in sessions) run else run.copy(running = false)
+                    } }
+                }
                 "cancel" -> forwardCancel(json.parseToJsonElement(data).jsonObject.getValue("session").jsonPrimitive.content)
                 "live" -> {
                     val value = json.parseToJsonElement(data).jsonObject
                     val session = value.getValue("session").jsonPrimitive.content
                     val snapshot = decode(value.getValue("body").jsonPrimitive.content)
-                    _remote.update { it + (session to LiveRemoteRun(snapshot.messageUuid, snapshot.message)) }
+                    val runId = value["runId"]?.jsonPrimitive?.content ?: snapshot.messageUuid
+                    _remote.update { it + (session to LiveRemoteRun(snapshot.messageUuid, snapshot.message, snapshot.running, runId)) }
                 }
                 "end" -> {
-                    val session = json.parseToJsonElement(data).jsonObject.getValue("session").jsonPrimitive.content
+                    val value = json.parseToJsonElement(data).jsonObject
+                    val session = value.getValue("session").jsonPrimitive.content
                     val ended = _remote.value[session] ?: return@runCatching
-                    _remote.update { it + (session to ended.copy(running = false)) }
-                    // 定稿消息随后推送；立即拉取，一分钟后不再保留最后快照。
+                    if (value["runId"]?.jsonPrimitive?.content?.let { it != ended.runId } == true) return@runCatching
+                    val final = ended.copy(running = false)
+                    _remote.update { current -> if (current[session] === ended) current + (session to final) else current }
+                    // 完整归档可能仍在下载；不能按 60 秒定时器删掉唯一完整的正文、边界和变更卡片。
+                    // 消息列表在正式历史追平后采用 Room，新运行和账号切换会替换这份快照。
                     SyncScheduler.request(requireNotNull(app))
-                    scope.launch {
-                        delay(60_000)
-                        _remote.update { current -> if (current[session]?.running == false) current - session else current }
-                    }
                 }
             }
         }

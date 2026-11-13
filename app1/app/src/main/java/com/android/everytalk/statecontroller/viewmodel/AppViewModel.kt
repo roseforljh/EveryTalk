@@ -1121,6 +1121,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
    internal var textHistoryLoadJob: Job? = null
 
    internal fun cancelPendingTextHistoryLoad() {
+       stateHolder._historyLoadGeneration.value++
        textHistoryLoadJob?.cancel()
        textHistoryLoadJob = null
        stateHolder._isLoadingHistory.value = false
@@ -1385,14 +1386,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         // 同账号其他设备运行中的回复：换成本机会话和消息 ID 后交给消息列表叠加显示。
         viewModelScope.launch {
             val chatDao = AppDatabase.getDatabase(getApplication()).chatDao()
-            kotlinx.coroutines.flow.combine(stateHolder._currentConversationId, com.android.everytalk.data.sync.LiveSync.remote) { id, remote -> id to remote }
-                .collectLatest { (currentId, remote) ->
+            kotlinx.coroutines.flow.combine(stateHolder._currentConversationId, com.android.everytalk.data.sync.LiveSync.remote,
+                apiHandler.cloudRuns, com.android.everytalk.data.sync.SyncLocalChanges.revision) { id, remote, cloud, _ -> Triple(id, remote + cloud, cloud) }
+                .collectLatest { (currentId, remote, cloud) ->
                     stateHolder._remoteLiveRun.value = if (remote.isEmpty()) null else withContext(Dispatchers.IO) {
                         val sessionUuid = chatDao.getStoredSession(currentId)?.uuid ?: return@withContext null
                         val run = remote[sessionUuid] ?: return@withContext null
                         val localId = chatDao.getMessageByUuid(run.messageUuid)?.id ?: "cloud:${run.messageUuid}"
-                        com.android.everytalk.statecontroller.RemoteLiveRun(sessionUuid, run.message.copy(id = localId, conversationId = currentId,
-                            executionStatus = run.message.executionStatus.takeIf { run.running }), run.running)
+                        val message = com.android.everytalk.data.sync.mapLiveMessageReferences(run.message, chatDao::resolveLocalMessageReference)
+                        com.android.everytalk.statecontroller.RemoteLiveRun(sessionUuid, message.copy(id = localId, conversationId = currentId,
+                            executionStatus = message.executionStatus.takeIf { run.running || message.isError }), run.running,
+                            cloudRunId = run.runId.takeIf { cloud[sessionUuid]?.runId == it })
                     }
                 }
         }
@@ -1428,6 +1432,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         persistenceManager.loadSelectedExternalWebSearchProviderId()?.let { _selectedExternalWebSearchProviderId.value = it }
                         val history = withContext(Dispatchers.IO) { persistenceManager.roomDataSource.loadChatHistoryPreviewResult() }
                         stateHolder._historicalConversations.value = history.sessions.map { it.messages }
+                        stateHolder._loadedHistoryIndex.value = stateHolder._historicalConversations.value.indexOfFirst {
+                            com.android.everytalk.util.ConversationNameHelper.resolveStableId(it) == stateHolder._currentConversationId.value
+                        }.takeIf { it >= 0 }
                         stateHolder.conversationGroups.value = persistenceManager.loadConversationGroups()
                         stateHolder.pinnedTextConversationIds.value = persistenceManager.loadPinnedIds(false)
                         val currentId = stateHolder._currentConversationId.value

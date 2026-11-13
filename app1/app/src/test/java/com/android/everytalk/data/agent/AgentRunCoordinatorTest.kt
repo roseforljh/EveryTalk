@@ -17,6 +17,23 @@ import org.junit.Test
 
 class AgentRunCoordinatorTest {
     @Test
+    fun `后台快照连续吸收用量和搜索事件且不抹掉已有模型标签`() {
+        val base = com.android.everytalk.data.DataClass.Message(id = "ai", text = "", sender = com.android.everytalk.data.DataClass.Sender.AI,
+            modelName = "model", providerName = "provider")
+        val usage = com.android.everytalk.data.network.TokenUsage(inputTokens = 12, outputTokens = 3,
+            isFinal = true, source = com.android.everytalk.data.network.TokenUsageSource.OPENAI_CHAT)
+        val sources = listOf(com.android.everytalk.data.DataClass.WebSearchResult(1, "来源", "https://example.com", "摘要"))
+        val measured = projectBackgroundLiveMetadata(base, com.android.everytalk.data.network.AppStreamEvent.Usage(usage))
+        val searched = projectBackgroundLiveMetadata(measured, com.android.everytalk.data.network.AppStreamEvent.WebSearchResults(sources))
+        val final = projectBackgroundLiveMetadata(searched, com.android.everytalk.data.network.AppStreamEvent.ExecutionStatusUpdate("正在执行"))
+        assertEquals(usage, final.tokenUsage)
+        assertEquals(sources, final.webSearchResults)
+        assertEquals("model", final.modelName)
+        assertEquals("provider", final.providerName)
+        assertEquals("正在执行", final.executionStatus)
+    }
+
+    @Test
     fun `拒绝续写等待原 Run 收尾后主动唤醒且不等待其他任务`() = runTest {
         val previous = Job()
         val unrelated = Job()
@@ -103,12 +120,11 @@ class AgentRunCoordinatorTest {
     }
 
     @Test
-    fun `恢复失败逐步退避且最长一分钟`() {
-        assertEquals(2_000L, agentResumeRetryDelayMillis(1))
-        assertEquals(5_000L, agentResumeRetryDelayMillis(2))
+    fun `模型三次重试依次等待5秒10秒15秒`() {
+        assertEquals(5_000L, agentResumeRetryDelayMillis(1))
+        assertEquals(10_000L, agentResumeRetryDelayMillis(2))
         assertEquals(15_000L, agentResumeRetryDelayMillis(3))
-        assertEquals(30_000L, agentResumeRetryDelayMillis(4))
-        assertEquals(60_000L, agentResumeRetryDelayMillis(20))
+        assertEquals(15_000L, agentResumeRetryDelayMillis(4))
     }
 
     @Test

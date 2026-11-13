@@ -34,6 +34,97 @@ import org.junit.Test
 
 class MessageItemsControllerStatusTest {
     @Test
+    fun `切换会话时旧远程快照不能叠入新会话`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        val currentId = controller.stateHolder._currentConversationId.value
+        controller.stateHolder.messages.add(Message(id = "current-user", text = "新会话问题", sender = Sender.User, conversationId = currentId))
+        controller.stateHolder._remoteLiveRun.value = com.android.everytalk.statecontroller.RemoteLiveRun(
+            "other-uuid", Message(id = "other-ai", text = "其他会话内容", sender = Sender.AI, conversationId = "other-session"), true)
+        Snapshot.sendApplyNotifications()
+        assertEquals(listOf("新会话问题"), timelineTexts(controller.chatListItemsForTest()))
+    }
+
+    @Test
+    fun `远程草稿按创建时间插入且追加问题位于对应回复之前`() = runBlocking {
+        val controller = MessageItemsControllerTestAccess.newController()
+        val session = controller.stateHolder._currentConversationId.value
+        controller.stateHolder.messages.addAll(listOf(
+            Message(id = "question", text = "初始问题", sender = Sender.User, timestamp = 10, conversationId = session),
+            Message(id = "queued", text = "还没被接收的调整", sender = Sender.User, timestamp = 30, conversationId = session),
+        ))
+        val ai = Message(id = "cloud:ai", text = "第一次回复", sender = Sender.AI, timestamp = 20, conversationId = session,
+            executionTrace = listOf(ExecutionTraceEvent.Content("第一次回复")))
+        controller.stateHolder._remoteLiveRun.value = com.android.everytalk.statecontroller.RemoteLiveRun("uuid", ai, true)
+        Snapshot.sendApplyNotifications()
+        assertEquals(listOf("初始问题", "第一次回复", "还没被接收的调整"), timelineTexts(controller.chatListItemsForTest()))
+        controller.stateHolder._remoteLiveRun.value = com.android.everytalk.statecontroller.RemoteLiveRun("uuid", ai.copy(
+            text = "第一次回复后续回复", executionTrace = ai.executionTrace + listOf(
+                ExecutionTraceEvent.UserMessageBoundary("queued"), ExecutionTraceEvent.Content("后续回复"))), true)
+        Snapshot.sendApplyNotifications()
+        // StateFlow 还持有上一帧；等待新边界对应的正文真正投影后再断言完整顺序。
+        val updated = withTimeout(5_000) { controller.chatListItems.first { items ->
+            items.filterIsInstance<ChatListItem.AiMessageContentSegment>().any { it.text == "后续回复" }
+        } }
+        assertEquals(listOf("初始问题", "第一次回复", "还没被接收的调整", "后续回复"), timelineTexts(updated))
+    }
+
+    @Test
+    fun `远端模型标签和用量单独到达也刷新页脚`() = runBlocking {
+        val controller = MessageItemsControllerTestAccess.newController()
+        val session = controller.stateHolder._currentConversationId.value
+        val ai = Message(id = "metadata", text = "完成", sender = Sender.AI, timestamp = 20,
+            executionFinishedAt = 40, conversationId = session)
+        controller.stateHolder._remoteLiveRun.value = com.android.everytalk.statecontroller.RemoteLiveRun("uuid", ai, false)
+        Snapshot.sendApplyNotifications()
+        controller.chatListItemsForTest()
+        val changed = ai.copy(modelName = "新模型", providerName = "供应商",
+            tokenUsage = com.android.everytalk.data.network.TokenUsage(inputTokens = 11, outputTokens = 22,
+                totalTokens = 33, isFinal = true, source = com.android.everytalk.data.network.TokenUsageSource.OPENAI_CHAT))
+        controller.stateHolder._remoteLiveRun.value = com.android.everytalk.statecontroller.RemoteLiveRun("uuid", changed, false)
+        Snapshot.sendApplyNotifications()
+        val updated = withTimeout(5_000) { controller.chatListItems.first { items ->
+            items.filterIsInstance<ChatListItem.AiMessageFooter>().any { it.message.tokenUsage == changed.tokenUsage }
+        } }
+        val footer = updated.filterIsInstance<ChatListItem.AiMessageFooter>().single().message
+        assertEquals(changed.modelName, footer.modelName)
+        assertEquals(changed.providerName, footer.providerName)
+        assertEquals(changed.tokenUsage, footer.tokenUsage)
+    }
+
+    @Test
+    fun `简版定稿先到仍保留实时最终边界和变更卡片直到完整归档恢复`() {
+        val step = completedToolStep().copy(fileChange = com.android.everytalk.data.DataClass.ExecutionFileChange(
+            "/workspace/config", true, listOf(com.android.everytalk.data.DataClass.ExecutionFileEdit("", "新内容"))))
+        val question = Message(id = "steer", text = "调整", sender = Sender.User, timestamp = 30)
+        val final = Message(id = "ai", text = "之前之后", sender = Sender.AI, timestamp = 20, executionFinishedAt = 40,
+            executionSteps = listOf(step), executionTrace = listOf(ExecutionTraceEvent.Content("之前"),
+                ExecutionTraceEvent.UserMessageBoundary(question.id), ExecutionTraceEvent.Tool(step), ExecutionTraceEvent.Content("之后")))
+        val remote = com.android.everytalk.statecontroller.RemoteLiveRun("uuid", final, false)
+        val thin = final.copy(executionTrace = emptyList(), executionSteps = emptyList())
+        assertEquals(final, overlayRemoteMessage(listOf(thin, question), remote).first())
+        val history = listOf(final, question)
+        assertTrue(history === overlayRemoteMessage(history, remote))
+    }
+
+    @Test
+    fun `仅结束时间变化也刷新执行组和页脚`() = runBlocking {
+        val controller = MessageItemsControllerTestAccess.newController()
+        val id = "finished-only"
+        controller.stateHolder.messages.add(Message(id = id, text = "先执行", sender = Sender.AI,
+            executionTrace = listOf(ExecutionTraceEvent.Content("先执行"), ExecutionTraceEvent.Tool(completedToolStep()))))
+        controller.stateHolder._isTextApiCalling.value = true
+        controller.stateHolder._currentTextStreamingAiMessageId.value = id
+        Snapshot.sendApplyNotifications()
+        val first = withTimeout(5_000) { controller.chatListItems.first { list ->
+            list.filterIsInstance<ChatListItem.AiMessageExecutionGroup>().any { it.active }
+        } }
+        controller.stateHolder.messages[0] = controller.stateHolder.messages[0].copy(executionFinishedAt = 10_000L)
+        Snapshot.sendApplyNotifications()
+        val finished = withTimeout(5_000) { controller.chatListItems.first { it != first } }
+        assertFalse(finished.filterIsInstance<ChatListItem.AiMessageExecutionGroup>().single().active)
+        assertTrue(finished.any { it is ChatListItem.AiMessageFooter })
+    }
+    @Test
     fun `输出正文后失败仍在聊天下方显示原因且不重复正文`() {
         val controller = MessageItemsControllerTestAccess.newController()
         val reason = "任务失败：服务端返回 HTTP 401"

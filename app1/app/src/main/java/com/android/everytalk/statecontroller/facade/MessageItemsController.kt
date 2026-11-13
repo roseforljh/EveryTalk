@@ -93,6 +93,37 @@ internal fun interleaveQueuedUserMessages(
 }
 
 /**
+ * 草稿还没进 Room 时也按创建时间插入；终态交接保留快照中的完整过程，不能被先到的简版正式消息抹掉。
+ * 本地附件路径只来自 Room，不从另一台设备的快照复制。
+ */
+internal fun overlayRemoteMessage(messages: List<Message>, remote: com.android.everytalk.statecontroller.RemoteLiveRun?): List<Message> {
+    if (remote == null) return messages
+    val snapshot = remote.message
+    val index = messages.indexOfFirst { it.id == snapshot.id }
+    if (index >= 0) {
+        val stored = messages[index]
+        val historyReady = !remote.running && stored.executionFinishedAt != null &&
+            stored.text == snapshot.text && stored.reasoning.orEmpty() == snapshot.reasoning.orEmpty() &&
+            stored.executionTrace.containsAll(snapshot.executionTrace) && stored.executionSteps.containsAll(snapshot.executionSteps) &&
+            (snapshot.webSearchResults.isNullOrEmpty() || stored.webSearchResults == snapshot.webSearchResults) &&
+            (snapshot.contextUsageSnapshot == null || stored.contextUsageSnapshot == snapshot.contextUsageSnapshot) &&
+            (snapshot.tokenUsage == null || stored.tokenUsage == snapshot.tokenUsage) &&
+            (snapshot.modelName == null || stored.modelName == snapshot.modelName) &&
+            (snapshot.providerName == null || stored.providerName == snapshot.providerName)
+        if (historyReady) return messages
+        return messages.toMutableList().apply { this[index] = snapshot.copy(
+            attachments = stored.attachments, imageUrls = stored.imageUrls, parts = emptyList(),
+            tokenUsage = snapshot.tokenUsage ?: stored.tokenUsage,
+            contextUsageSnapshot = snapshot.contextUsageSnapshot ?: stored.contextUsageSnapshot,
+        ) }
+    }
+    val position = messages.indexOfFirst {
+        it.timestamp > snapshot.timestamp || (it.timestamp == snapshot.timestamp && it.sender !in setOf(Sender.System, Sender.User))
+    }.takeIf { it >= 0 } ?: messages.size
+    return messages.toMutableList().apply { add(position, snapshot) }
+}
+
+/**
  * 将 AppViewModel 中与“AI气泡状态 + ChatListItem 构建”相关的大段逻辑外置。
  * 仅依赖 ViewModelStateHolder 与提供的 CoroutineScope，不涉及 UI 层组件。
  *
@@ -122,8 +153,16 @@ open class MessageItemsController(
         val currentWebSearchStage: String?,
         val executionSteps: List<ExecutionStep>,
         val executionTrace: List<ExecutionTraceEvent>,
+        val executionFinishedAt: Long?,
+        val isError: Boolean,
+        val isStreaming: Boolean,
+        val reasoningComplete: Boolean,
         /** 用量卡片直接读 message 里的快照；压缩改写快照时必须让缓存失效。 */
         val contextUsageSnapshot: ContextUsageSnapshot?,
+        /** 页脚的模型标签与用量可在正文结束后单独到达，也必须刷新。 */
+        val modelName: String?,
+        val providerName: String?,
+        val tokenUsage: com.android.everytalk.data.network.TokenUsage?,
         val items: List<ChatListItem>
     )
 
@@ -313,20 +352,16 @@ open class MessageItemsController(
     val chatListItems: StateFlow<List<ChatListItem>> =
         combine(
             stateHolder._currentConversationId.flatMapLatest { sessionId ->
-                snapshotFlow { stateHolder.textMessagesForConversation(sessionId).toList() }
+                snapshotFlow { sessionId to stateHolder.textMessagesForConversation(sessionId).toList() }
             },
             stateHolder._isTextApiCalling,
             stateHolder._currentTextStreamingAiMessageId,
             stateHolder._remoteLiveRun,
-        ) { roomMessages, localApiCalling, localStreamingId, remote ->
-            // 本机没在运行时叠加另一台设备的实时回复：同 ID 替换，否则追加；结束后等定稿消息到达再让位。
-            val overlay = remote?.takeIf { !localApiCalling }
-            val messages = when {
-                overlay == null -> roomMessages
-                roomMessages.any { it.id == overlay.message.id } ->
-                    if (overlay.running) roomMessages.map { if (it.id == overlay.message.id) overlay.message else it } else roomMessages
-                else -> roomMessages + overlay.message
-            }
+        ) { source, localApiCalling, localStreamingId, remote ->
+            val (sessionId, roomMessages) = source
+            // 当前会话与 overlay 分别发射；切换期间绝不能把上一会话的最后一帧叠进新列表。
+            val overlay = remote?.takeIf { !localApiCalling && it.message.conversationId == sessionId }
+            val messages = overlayRemoteMessage(roomMessages, overlay)
             val isApiCalling = localApiCalling || overlay?.running == true
             val currentStreamingAiMessageId = if (localApiCalling) localStreamingId else overlay?.takeIf { it.running }?.message?.id
             val renderableMessages = filterRenderableMessages(messages)
@@ -338,7 +373,8 @@ open class MessageItemsController(
                         Sender.AI -> {
                             val cached = chatListItemCache[message.id]
                             val hasReasoning = !message.reasoning.isNullOrBlank()
-                            val isCurrentlyStreaming = isApiCalling && message.id == currentStreamingAiMessageId
+                            val isCurrentlyStreaming = isApiCalling && message.id == currentStreamingAiMessageId &&
+                                message.executionFinishedAt == null && !message.isError
                             if (
                                 isCurrentlyStreaming ||
                                 streamingMessageStateManager.isStreaming(message.id)
@@ -408,7 +444,14 @@ open class MessageItemsController(
                                 cached.currentWebSearchStage == message.currentWebSearchStage &&
                                 cached.executionSteps == message.executionSteps &&
                                 cached.executionTrace == message.executionTrace &&
+                                cached.executionFinishedAt == message.executionFinishedAt &&
+                                cached.isError == message.isError &&
+                                cached.isStreaming == isCurrentlyStreaming &&
+                                cached.reasoningComplete == reasoningComplete &&
                                 cached.contextUsageSnapshot == message.contextUsageSnapshot &&
+                                cached.modelName == message.modelName &&
+                                cached.providerName == message.providerName &&
+                                cached.tokenUsage == message.tokenUsage &&
                                 activityStatusMatches &&
                                 (cached.items.isNotEmpty() || message.text.isBlank()) &&
                                 footerMatches &&
@@ -456,7 +499,14 @@ open class MessageItemsController(
                                     currentWebSearchStage = message.currentWebSearchStage,
                                     executionSteps = message.executionSteps,
                                     executionTrace = message.executionTrace,
+                                    executionFinishedAt = message.executionFinishedAt,
+                                    isError = message.isError,
+                                    isStreaming = isCurrentlyStreaming,
+                                    reasoningComplete = reasoningComplete,
                                     contextUsageSnapshot = message.contextUsageSnapshot,
+                                    modelName = message.modelName,
+                                    providerName = message.providerName,
+                                    tokenUsage = message.tokenUsage,
                                     items = newItems
                                 )
                                 newItems
@@ -493,7 +543,8 @@ open class MessageItemsController(
                         Sender.AI -> {
                             val cached = imageGenerationChatListItemCache[message.id]
                             val hasReasoning = !message.reasoning.isNullOrBlank()
-                            val isCurrentlyStreaming = isApiCalling && message.id == currentStreamingAiMessageId
+                            val isCurrentlyStreaming = isApiCalling && message.id == currentStreamingAiMessageId &&
+                                message.executionFinishedAt == null && !message.isError
                             val effectiveMessage = buildEffectiveMessage(message, isCurrentlyStreaming)
                             val reasoningComplete = stateHolder.imageReasoningCompleteMap[message.id] ?: false
                             val expectedStageText = if (isCurrentlyStreaming) {
@@ -519,7 +570,14 @@ open class MessageItemsController(
                                 cached.currentWebSearchStage == message.currentWebSearchStage &&
                                 cached.executionSteps == message.executionSteps &&
                                 cached.executionTrace == message.executionTrace &&
+                                cached.executionFinishedAt == message.executionFinishedAt &&
+                                cached.isError == message.isError &&
+                                cached.isStreaming == isCurrentlyStreaming &&
+                                cached.reasoningComplete == reasoningComplete &&
                                 cached.contextUsageSnapshot == message.contextUsageSnapshot &&
+                                cached.modelName == message.modelName &&
+                                cached.providerName == message.providerName &&
+                                cached.tokenUsage == message.tokenUsage &&
                                 activityStatusMatches
 
                             if (cacheValid) {
@@ -552,7 +610,14 @@ open class MessageItemsController(
                                     currentWebSearchStage = message.currentWebSearchStage,
                                     executionSteps = message.executionSteps,
                                     executionTrace = message.executionTrace,
+                                    executionFinishedAt = message.executionFinishedAt,
+                                    isError = message.isError,
+                                    isStreaming = isCurrentlyStreaming,
+                                    reasoningComplete = reasoningComplete,
                                     contextUsageSnapshot = message.contextUsageSnapshot,
+                                    modelName = message.modelName,
+                                    providerName = message.providerName,
+                                    tokenUsage = message.tokenUsage,
                                     items = newItems
                                 )
                                 newItems
@@ -580,7 +645,8 @@ open class MessageItemsController(
     ): com.android.everytalk.ui.state.AiBubbleState {
         if (message.isError) return com.android.everytalk.ui.state.AiBubbleState.Error(message.text)
 
-        val isCurrentStreaming = isApiCalling && message.id == currentStreamingAiMessageId
+        val isCurrentStreaming = isApiCalling && message.id == currentStreamingAiMessageId &&
+            message.executionFinishedAt == null && !message.isError
         val effectiveMessage = buildEffectiveMessage(message, isCurrentStreaming)
         val hasReasoning = !message.reasoning.isNullOrBlank()
         val reasoningCompleteMap =

@@ -199,6 +199,14 @@ class ViewModelStateHolderStreamingStateTest {
     }
 
     @Test
+    fun `同步历史只用完整消息而不被摘要账本二次投影覆盖`() {
+        val baseline = prepareRestoration()
+        val archived = run(AgentRunStatus.COMPLETED).copy(terminalReason = "SYNC_HISTORY_ONLY")
+        assertFalse(stateHolder.reconcileAgentRun(archived, fullTrace(), baseline, false))
+        assertEquals(baseline, stateHolder.messages.single())
+    }
+
+    @Test
     fun `后台完成后补齐半截正文并清除停止按钮`() {
         val message = prepareRestoration()
         assertTrue(stateHolder.reconcileAgentRun(run(AgentRunStatus.COMPLETED), fullTrace(), message, false))
@@ -352,6 +360,21 @@ class ViewModelStateHolderStreamingStateTest {
         jobA.cancel()
         jobB.cancel()
         replacement.cancel()
+    }
+
+    @Test
+    fun `未登记消息按实际列表找回且未知消息不回落当前会话`() {
+        stateHolder.setCurrentConversationId("A")
+        val a = stateHolder.messages
+        a.add(Message(id = "a", text = "A", sender = Sender.AI))
+        stateHolder.setCurrentConversationId("B")
+        stateHolder.messages.add(Message(id = "b", text = "B", sender = Sender.AI))
+        assertTrue(stateHolder.textMessagesForMessage("a") === a)
+        assertEquals("A", stateHolder.textMessageConversationIds["a"])
+        assertTrue(stateHolder.textMessagesForMessage("missing").isEmpty())
+        assertEquals(listOf("b"), stateHolder.messages.map { it.id })
+        stateHolder.clearTextConversationCache("A")
+        assertTrue(stateHolder.textMessagesForMessage("a").isEmpty())
     }
 
     @Test

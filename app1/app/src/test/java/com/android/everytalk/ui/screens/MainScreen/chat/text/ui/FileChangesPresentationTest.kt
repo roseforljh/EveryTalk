@@ -55,6 +55,35 @@ class FileChangesPresentationTest {
         rule.onNodeWithText("1 个文件已更改").assertDoesNotExist()
     }
 
+    @Test fun `远端实时变更胶囊结束后切换为卡片且简版历史到达不闪失`() {
+        val original = reply("remote", 2).copy(executionFinishedAt = 40)
+        fun wire(running: Boolean) = com.android.everytalk.data.sync.LiveSync.decode(com.android.everytalk.data.sync.LiveSync.encode(
+            com.android.everytalk.data.sync.LiveSnapshot("uuid", original, running))).let {
+                com.android.everytalk.statecontroller.RemoteLiveRun("session", it.message, it.running)
+            }
+        val remote = mutableStateOf(wire(true))
+        val history = mutableStateOf(emptyList<Message>())
+        rule.setContent { MaterialTheme { Column {
+            val projected = com.android.everytalk.statecontroller.facade.overlayRemoteMessage(history.value, remote.value)
+            FileChangesCapsule(projected, remote.value.message.id, remote.value.running)
+            MessageFileChangesSummary(projected.single(), remote.value.running)
+        } } }
+        rule.onNodeWithText("2 个文件已更改").assertIsDisplayed()
+        rule.onNodeWithText("查看变更").assertDoesNotExist()
+        rule.runOnIdle {
+            remote.value = wire(false)
+            history.value = listOf(original.copy(executionSteps = emptyList()))
+        }
+        rule.onNodeWithText("2 个文件已更改").assertIsDisplayed()
+        rule.onNodeWithText("查看变更").assertIsDisplayed()
+        rule.onNodeWithText("remote-2.kt").assertIsDisplayed()
+        rule.runOnIdle { history.value = listOf(original) }
+        rule.onNodeWithText("查看变更").performClick()
+        // 多文件总览默认收起；点开第二项后检查同步来的完整差异。
+        rule.onNode(hasText("remote-2.kt") and hasText("已编辑")).performClick()
+        rule.onNodeWithText("after-2").assertIsDisplayed()
+    }
+
     @Test fun `多文件总结默认三项展开收起并可打开指定文件差异`() {
         val message = reply("saved", 4)
         rule.setContent { MaterialTheme { MessageFileChangesSummary(message, false) } }

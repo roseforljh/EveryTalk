@@ -198,8 +198,14 @@ val _isStreamingPaused = MutableStateFlow(false)
         }
     }
 
-    fun textMessagesForMessage(messageId: String): SnapshotStateList<Message> =
-        textMessageConversationIds[messageId]?.let(::textMessagesForConversation) ?: messages
+    /** 只按消息实际归属查找；删除/切页后的迟到事件不能回落到当前会话。 */
+    fun textMessagesForMessage(messageId: String): SnapshotStateList<Message> {
+        textMessageConversationIds[messageId]?.let { return textMessagesForConversation(it) }
+        val owner = textConversationMessages.entries.firstOrNull { (_, list) -> list.any { it.id == messageId } }
+            ?: return mutableStateListOf()
+        textMessageConversationIds[messageId] = owner.key
+        return owner.value
+    }
 
     /** 历史装载后优先合并活跃任务的内存快照，不以较旧的 Room 草稿覆盖实时增量。 */
     fun restoreTextConversationUi() {

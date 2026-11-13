@@ -17,6 +17,8 @@ internal fun ViewModelStateHolder.reconcileAgentRun(
     baseline: Message,
     hasActiveJob: Boolean,
 ): Boolean {
+    // 同步归档里的 Run 只供历史审计。完整消息已经恢复，不能用摘要账本再次改写正文、边界或文件变更。
+    if (run.terminalReason == "SYNC_HISTORY_ONLY" || run.executionOwner == "CLOUD") return false
     if (_currentConversationId.value != run.sessionId) return false
     val targetMessages = textMessagesForConversation(run.sessionId)
     val index = targetMessages.indexOfFirst { it.id == run.visibleAssistantMessageId }

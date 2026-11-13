@@ -235,7 +235,7 @@ internal class SyncResourceSynchronizer(
     }
 
     private fun needsArchive(message: MessageEntity): Boolean = message.executionSteps.isNotEmpty() ||
-        message.executionTrace.any { it is ExecutionTraceEvent.Tool } || !message.webSearchResults.isNullOrEmpty() ||
+        message.executionTrace.any { it is ExecutionTraceEvent.Tool || it is ExecutionTraceEvent.UserMessageBoundary } || !message.webSearchResults.isNullOrEmpty() ||
         message.contextCompressionState != null || SyncPayloadMapper.message(message, "00000000-0000-4000-8000-000000000000").payload.toString().toByteArray().size > 64 * 1024
 
     private suspend fun uploadArchive(message: MessageEntity, session: ChatSessionEntity) {
@@ -461,8 +461,8 @@ internal class SyncResourceSynchronizer(
             if (count != null && archives.size == count && archives.map { it.second["resourceDigest"] }.distinct().size == 1) {
                 val digest = archives.first().second.getValue("resourceDigest").jsonPrimitive.content
                 val marker = "sync_resource_restored:$messageId"
-                // 第 2 版重新应用旧归档，修复旧客户端把用户消息引用当成本机消息 ID 的问题。
-                val restoredRevision = "2:$digest"
+                // 第 3 版补应用云端权威归档，原设备占位不再因本机 ID 而被永久跳过。
+                val restoredRevision = "3:$digest"
                 if (settings.getValue(marker) != restoredRevision) {
                     val history = readArchive(archives, messageId, digest)
                     val restored = history.message
@@ -478,14 +478,19 @@ internal class SyncResourceSynchronizer(
                     }
                     db.withTransaction {
                         val current = chat.getMessageByUuid(messageId)?.takeUnless { it.deleted } ?: return@withTransaction
-                        // 本机原件不被另一个设备的归档覆盖；新设备只恢复完整原件，保留当前下载的附件路径。
-                        if (current.id.startsWith("cloud:")) {
+                        // 手机生成的本机原件不被覆盖；云端执行的权威归档可恢复原设备占位，但绝不覆盖本机活跃 Run。
+                        val localRun = db.agentDao().getRunByVisibleMessage(current.id)
+                        val cloudOwned = archives.all { it.second["origin"]?.jsonPrimitive?.contentOrNull == "cloud_agent" } &&
+                            (localRun == null || localRun.terminalReason == "SYNC_HISTORY_ONLY")
+                        if (current.id.startsWith("cloud:") || cloudOwned) {
                             val next = restored.copy(id = current.id, conversationId = current.sessionId, attachments = current.attachments,
                                 contextUsageSnapshot = restored.contextUsageSnapshot?.copy(messageId = current.id),
                                 executionTrace = restored.executionTrace.map { event -> if (event is ExecutionTraceEvent.UserMessageBoundary)
                                     event.copy(messageId = chat.resolveLocalMessageReference(event.messageId)) else event })
-                            chat.writeMessages(listOf(next.toEntity(current.sessionId).copy(uuid = current.uuid, updatedAt = current.updatedAt,
-                                everSynced = true, syncStatus = SyncStatus.SYNCED)))
+                            val entity = next.toEntity(current.sessionId).copy(uuid = current.uuid, updatedAt = current.updatedAt,
+                                everSynced = true, syncStatus = SyncStatus.SYNCED)
+                            chat.writeMessages(listOf(entity))
+                            if (cloudOwned) settings.insertSetting(SystemSettingEntity("sync_resource_source:$messageId", "$user:${entity.storageFingerprint}"))
                             history.run?.let { archivedRun ->
                                 val run = archivedRun.copy(sessionId = current.sessionId, visibleAssistantMessageId = current.id,
                                     userMessageId = chat.resolveLocalMessageReference(archivedRun.userMessageId),

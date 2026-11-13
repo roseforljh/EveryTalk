@@ -445,6 +445,8 @@ fun AiMessageFooterItem(
     val compactingContext by viewModel.isCompactingContext.collectAsState()
     val activeMessageId by viewModel.currentTextStreamingAiMessageId.collectAsState()
     val chatRunState by viewModel.chatRunState.collectAsState()
+    val remoteLiveRun by viewModel.stateHolder._remoteLiveRun.collectAsState()
+    val remoteRunning = remoteLiveRun?.let { it.running && it.message.id == message.id && it.message.conversationId == message.conversationId } == true
     val liveContextWindowTokens = remember(
         message.contextUsageSnapshot?.configId,
         message.modelName,
@@ -494,7 +496,7 @@ fun AiMessageFooterItem(
         }
         // Footer 在有搜索结果时可能提前出现，必须按当前回复状态控制总结，避免运行中重复展示。
         MessageFileChangesSummary(message = message,
-            isRunning = activeMessageId == message.id && chatRunState != com.android.everytalk.statecontroller.ChatRunState.Idle,
+            isRunning = remoteRunning || (activeMessageId == message.id && chatRunState != com.android.everytalk.statecontroller.ChatRunState.Idle),
             modifier = Modifier.padding(end = ChatDimensions.HORIZONTAL_PADDING))
         Row(
             modifier = Modifier.padding(top = 2.dp),
