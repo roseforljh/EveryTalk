@@ -65,6 +65,7 @@ import androidx.compose.foundation.text.contextmenu.data.TextContextMenuKeys
 import androidx.compose.foundation.text.contextmenu.modifier.appendTextContextMenuComponents
 import androidx.compose.foundation.text.contextmenu.modifier.filterTextContextMenuComponents
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -113,6 +114,7 @@ fun AskEveryTalkSelectionArea(
         return
     }
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
     val latestOnAsk by rememberUpdatedState(onAsk)
     val copyItem = remember { arrayOfNulls<TextContextMenuItem>(1) }
     val menuModifier = Modifier
@@ -126,6 +128,9 @@ fun AskEveryTalkSelectionArea(
             item(key = AskEveryTalkMenuKey, label = ASK_EVERYTALK_MENU_TITLE) {
                 val copy = copyItem[0]
                 val text = copy?.let(::readSelectedText) ?: copy?.let { copyViaClipboard(context, it, this) }.orEmpty()
+                // 关工具栏不会释放选区；失焦才会触发 SelectionContainer 的 onRelease。
+                // 必须先取文本再释放，三个引用目标共用此入口。
+                focusManager.clearFocus(force = true)
                 close()
                 if (text.isNotBlank()) latestOnAsk(text)
             }
