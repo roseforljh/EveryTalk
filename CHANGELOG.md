@@ -1,5 +1,92 @@
 # Changelog
 
+## [1.30.0](https://github.com/roseforljh/EveryTalk/compare/v1.29.0...v1.30.0) (2026-11-13)
+
+
+### Features
+
+* add local mode and unified commercial login gate ([8ba1447](https://github.com/roseforljh/EveryTalk/commit/8ba144713928aabc81b1d4d9de8d63c678f2f922))
+* **agent:** codemode 工具、工具结果归档回读与流式耗时统计 ([7861112](https://github.com/roseforljh/EveryTalk/commit/78611123c9526cbeeaad01ddeb91d6294e8e1d5b))
+* **agent:** enhance intervention lifecycle, steering and dialog interaction ([91fbcee](https://github.com/roseforljh/EveryTalk/commit/91fbcee32ab6ed25de0ba972eeede41ec71f81cd))
+* **agent:** 完善 MCP 工具发现与账号接入，统一分段系统提示词 ([746ee40](https://github.com/roseforljh/EveryTalk/commit/746ee40601f73e4be8a35e7542d532dc1f8a9824))
+* **agent:** 支持多服务器任务面板并完善上下文与执行状态恢复 ([57b03c7](https://github.com/roseforljh/EveryTalk/commit/57b03c79b1db03e6938d7cf8c607aca4bde18402))
+* **android:** 为记忆工具增加历史会话检索与上下文续读 ([6c31823](https://github.com/roseforljh/EveryTalk/commit/6c318237525ef034efc6a6af77ec05288e6ec054))
+* **android:** 使用 TextMate 语法和主题增强代码高亮 ([dcb9415](https://github.com/roseforljh/EveryTalk/commit/dcb94150a1cbae370126216aa141654d29ed99d5))
+* **android:** 增加消息附件与外部浏览器网页预览 ([5f3f60b](https://github.com/roseforljh/EveryTalk/commit/5f3f60b19ec9d717ba4cefba48b02a6f9415b451))
+* **android:** 完善执行流程、记忆管理与图片会话同步 ([aa84c25](https://github.com/roseforljh/EveryTalk/commit/aa84c250667d0888091ac284b12c76305fa778f0))
+* **android:** 登录用户模型请求走后端可续接任务，生图保活前台服务 ([491f083](https://github.com/roseforljh/EveryTalk/commit/491f083619c5f7bd79abcc447005b5d9b19e2354))
+* **android:** 统一内置网站图标与链接输入展示 ([8b4e05e](https://github.com/roseforljh/EveryTalk/commit/8b4e05ede528a68e15e94632020d571a3a9334f7))
+* **android:** 统一模型会话配置并更新聊天与语音界面 ([4ae1bdd](https://github.com/roseforljh/EveryTalk/commit/4ae1bdd9f967432cc5139a4dc59e4d4b73370fc5))
+* **appinfo:** 个人信息页按 ChatGPT 设置页重做，设置/侧栏/管理页字体对齐 ([344c378](https://github.com/roseforljh/EveryTalk/commit/344c3780a5d685ac67593defb9f50d9caf790253))
+* **chat:** 输入框重构，用户气泡收起渐隐，Agent 任务入口改为边缘竖条 ([c435c7b](https://github.com/roseforljh/EveryTalk/commit/c435c7b8e14f4d643e87390ed96767aab7ed5d70))
+* **database:** upgrade Room to schema 44 with sync attachments and conversation settings ([df6e344](https://github.com/roseforljh/EveryTalk/commit/df6e3447fb9c2cb65e9474a2923d55c63bd3871a))
+* implement immutable message persistence and streaming draft recovery ([14f22d4](https://github.com/roseforljh/EveryTalk/commit/14f22d4edb90902e57a7156314fa6f5e5f651280))
+* **mcp:** 重做 MCP 设置页与服务器表单 ([9d482be](https://github.com/roseforljh/EveryTalk/commit/9d482be843170516920435e29ea68efdca460ffc))
+* **memory:** 引入分层会话记忆、全文索引与跨设备同步 ([b6fa9d6](https://github.com/roseforljh/EveryTalk/commit/b6fa9d632512e625659b0bf5c7d8652191037928))
+* **sync:** complete stage 2 data migration ([dfc9c14](https://github.com/roseforljh/EveryTalk/commit/dfc9c14c1d9f3dbe3c399d86d2901444e40e8b0c))
+* **sync:** implement cloud sync engine ([6029bc9](https://github.com/roseforljh/EveryTalk/commit/6029bc9c6d2411c34e2f8eab6a40e5e9a1930382))
+* **sync:** implement end-to-end cloud sync with sanitization, crypto and worker recovery ([66b97f7](https://github.com/roseforljh/EveryTalk/commit/66b97f767cea90a8184c44b4c4030455e3d4a3d7))
+* **sync:** 多设备实时同步运行状态与远程停止 ([ace97b0](https://github.com/roseforljh/EveryTalk/commit/ace97b09359fd3fa3780a87403c81ff7ee37b5e0))
+* **theme:** 字体与文字颜色对齐 ChatGPT，强调色改变用户气泡底色 ([402af3d](https://github.com/roseforljh/EveryTalk/commit/402af3d295d25a4b9eb1a2813701785db7569fb8))
+* **ui:** 悬浮卡片统一 ChatGPT 投影，Material 下拉菜单改为统一菜单 ([431316e](https://github.com/roseforljh/EveryTalk/commit/431316e4e30d928f2457abd60749af1c78ec7965))
+* **web:** 以安卓端为准对齐模型参数、生图合同、内建工具和内容安全 ([3a424a2](https://github.com/roseforljh/EveryTalk/commit/3a424a27e00f1349b2fbb8db36ed9ccac2842567))
+* **web:** 在官网提供登录与进入对话入口 ([b432955](https://github.com/roseforljh/EveryTalk/commit/b43295584385a1704ff1a8686f480d7685fd0e2e))
+* **web:** 完善模型能力、会话记忆检索和附件预览 ([3da8901](https://github.com/roseforljh/EveryTalk/commit/3da8901526870c7eae907cad38e14e62ca1b73f9))
+* **web:** 新增官网与登录同步聊天工作区 ([f739690](https://github.com/roseforljh/EveryTalk/commit/f7396909dd4169e371a89534c760aac28cf1fe6f))
+* **web:** 网页改为纯前端，服务端接口迁至独立后端，新增监控面板 ([807d628](https://github.com/roseforljh/EveryTalk/commit/807d628c255e254276d7980e233e7775aa8a42c6))
+* **web:** 网页改版与免登录预览；修复删除配置卡片先消失后重现 ([17544cf](https://github.com/roseforljh/EveryTalk/commit/17544cf52fa8ede45dcc0fb4daeb5c19c2706406))
+* 增加应用管理与订阅方案页面 ([882b456](https://github.com/roseforljh/EveryTalk/commit/882b456c02e275fb9216e2c7c92d79489e95d6b0))
+* 完善账号登录与管理界面 ([03f5f38](https://github.com/roseforljh/EveryTalk/commit/03f5f38ec06e8cefe4d6e46c2c71038035865568))
+* 接入账号登录认证体系与账户管理页面 ([bf36cd2](https://github.com/roseforljh/EveryTalk/commit/bf36cd270a4fc7d07ea8b25c24df4dc6c93c35c0))
+* 搜索与引用跳转正文闪亮高亮，并合入记忆、同步、Computer 等界面改进 ([324175f](https://github.com/roseforljh/EveryTalk/commit/324175f799fdced192f77cdf1d522f1aaf7bc07a))
+
+
+### Bug Fixes
+
+* **agent:** preserve compacted context and calibrate request usage ([5b51724](https://github.com/roseforljh/EveryTalk/commit/5b51724145fe474021e409a6d52242840119171c))
+* **agent:** recover legacy protected server secrets ([d0395da](https://github.com/roseforljh/EveryTalk/commit/d0395dab5aef4ff496a92f82496a93f151e64cec))
+* **agent:** 移除任务 50 轮硬上限 ([725c6c8](https://github.com/roseforljh/EveryTalk/commit/725c6c8e7f0c8ec3b2bec326ecd1aa7bc53383c9))
+* **android:** 云同步完整同步敏感配置与会话内容，支持多会话并行生成 ([140b1a8](https://github.com/roseforljh/EveryTalk/commit/140b1a8ad3961b485af2694e637abcdc14c38d44))
+* **android:** 保持底部弹层吸附动画期间的连续拖动 ([d4ac0cb](https://github.com/roseforljh/EveryTalk/commit/d4ac0cb5bafa13a57cc3df0ff2c57635a53c9b30))
+* **android:** 保留 Agent 失败原因并修复审批与执行区展示 ([379b49f](https://github.com/roseforljh/EveryTalk/commit/379b49f55cede5f5a045123966baa143f00fb1bb))
+* **android:** 修复原始附件发送与 SFTP 上传兼容性 ([450650a](https://github.com/roseforljh/EveryTalk/commit/450650a7e339a72739ac4b10ec1d008006880e4f))
+* **android:** 修复增量构建遗漏 Room 实现导致的启动闪退 ([763dab3](https://github.com/roseforljh/EveryTalk/commit/763dab31b9bf475c68f0c62cfb9afe136b33bbe6))
+* **android:** 切换会话时保留侧栏列表滚动位置 ([ae90345](https://github.com/roseforljh/EveryTalk/commit/ae9034551d971b2778f60ef8a7371bbcdb1a1d65))
+* **android:** 恢复服务器自动重连并保留手动断开状态 ([07b332b](https://github.com/roseforljh/EveryTalk/commit/07b332b95769bd1b650412cd8ee21d892fc37266))
+* **android:** 统一模型图片编码并分块保存 Agent 附件快照 ([ea1fc18](https://github.com/roseforljh/EveryTalk/commit/ea1fc18cff40023812bd7d1cae25d2f0a40be5b4))
+* **chat:** 中断或报错后保留执行过程，会话标题即时刷新，合并重复模型配置 ([863db2b](https://github.com/roseforljh/EveryTalk/commit/863db2b6d91ad9404dbe627fa8f1f83efa9e28c9))
+* **mcp:** 停止重复刷新失效授权并正确提示重新登录 ([a36ef31](https://github.com/roseforljh/EveryTalk/commit/a36ef3143d8ac78d46a4fd06121e487a1ca3f000))
+* **navigation:** 统一设置页层级动画与预测式返回交互 ([ef7c858](https://github.com/roseforljh/EveryTalk/commit/ef7c8587744e4439bea9b013f821985d28e1800b))
+* **sync:** prevent stale resources and computer resurrection ([62351cb](https://github.com/roseforljh/EveryTalk/commit/62351cb824bd5e9201852d4c9883c67b218ab97a))
+* **sync:** restore account credentials, resources and conversation state ([6fa26b0](https://github.com/roseforljh/EveryTalk/commit/6fa26b0c8a5928bd71ae63e8ab95339687526cdf))
+* **sync:** sanitize endpoints, canonicalize keys and optimize setting projection ([8f4c6d0](https://github.com/roseforljh/EveryTalk/commit/8f4c6d061395fe88bb7f2268bded473de2b0a63f))
+* **sync:** 修复配置同步冲突、附件墓碑与内置模型重复 ([cce947c](https://github.com/roseforljh/EveryTalk/commit/cce947c5761bef4641ad5330048c83c3514c4ac7))
+* **sync:** 恢复归档不挤占同步额度，删除会话不再等 SSH，修正已同步消息误判改写 ([0ce596e](https://github.com/roseforljh/EveryTalk/commit/0ce596e853833400515dc47d38c3e420047eb96e))
+* **theme:** 强调色选择立即刷新并提升暗色代码块对比度 ([2b03544](https://github.com/roseforljh/EveryTalk/commit/2b0354493bdf7f9d013aa368a8e0272374b2bb37))
+* **ui:** keep the conversation top bar transparent ([502fcf6](https://github.com/roseforljh/EveryTalk/commit/502fcf6327e4b2508dcd7a2e11fe74165f0887d1))
+* **ui:** refine top bar fade gradient and implement stepped back navigation for bottom sheet ([5d24065](https://github.com/roseforljh/EveryTalk/commit/5d240658e111e97e84eecdf16ad945793c05ea72))
+* **ui:** 代码块滚动、文件操作文案国际化与背景粒子静止 ([f49dd00](https://github.com/roseforljh/EveryTalk/commit/f49dd007fa782b7a5b3c843897f997a1968ec2b4))
+* **ui:** 优化工具执行时间线与底部面板拖拽交互 ([562a042](https://github.com/roseforljh/EveryTalk/commit/562a04256d1bd1440985f20a6047608b9582008f))
+* **ui:** 完善图片附件预览、长图缩略图与网站图标加载 ([5467a6b](https://github.com/roseforljh/EveryTalk/commit/5467a6b765f7361246e8e637335ce8590363431e))
+* **ui:** 背景星空恢复持续动画并每次随机分布 ([3c78dc9](https://github.com/roseforljh/EveryTalk/commit/3c78dc99c485c70c542bd7b9ee634ad863d7c5a2))
+* **web:** Responses 协议经后端模型代理时按 openai 鉴权转发 ([8a9002b](https://github.com/roseforljh/EveryTalk/commit/8a9002bbd8c9a9de14a94e640a2e53039fde18b2))
+* **web:** 同步客户端调用 fetch 时保持 window 上下文，修复 Illegal invocation ([7181373](https://github.com/roseforljh/EveryTalk/commit/71813735d9f90c80b15fe63425c9895b46e5d187))
+* **web:** 支持 Docker 自托管并修正反代后的同源校验 ([8223edc](https://github.com/roseforljh/EveryTalk/commit/8223edc60f8ad38adc92fdc7450b8d7dc2999d45))
+* **web:** 无选中会话时不再读取空的生成状态导致页面崩溃 ([789100a](https://github.com/roseforljh/EveryTalk/commit/789100af416b816963c1111300427bd56ed952f8))
+* **web:** 监控面板迁回私有后端，移除网页 /admin ([e5472ec](https://github.com/roseforljh/EveryTalk/commit/e5472ec07e529342bfcfdaae32679d039cb5f883))
+* **web:** 配置按服务端合同同步，补全工具多轮正文与长消息显示 ([73cef09](https://github.com/roseforljh/EveryTalk/commit/73cef095ec84cf1910b7402199eb73fe38e8924c))
+* 修复安卓和网页长文本输入的末尾光标跟随 ([9caac17](https://github.com/roseforljh/EveryTalk/commit/9caac17816c25938e7af35459887546f203af14a))
+* 同步资源引用确认、Agent 工具限制与若干稳定性修复 ([3525e89](https://github.com/roseforljh/EveryTalk/commit/3525e8918ab0ade3a7e2844e8fced025313f59ed))
+* 完善多语言国际化文案适配与本地化提示解析机制 ([b58af3c](https://github.com/roseforljh/EveryTalk/commit/b58af3cea612c4f9433828d6d36cfece0e70047c))
+
+
+### Performance Improvements
+
+* **code-block:** 代码卡片只排版和高亮可见窗口 ([084722b](https://github.com/roseforljh/EveryTalk/commit/084722b7396b78343702ef8e9a61341208b4690e))
+* **drawer:** 侧栏常驻组合并在打开时把当前会话滚到中部 ([36b67a2](https://github.com/roseforljh/EveryTalk/commit/36b67a20aae52c4ef54a67747539cf3394d6536a))
+* **startup:** 添加应用代码与 Markdown 渲染的 Baseline Profile ([10f52ad](https://github.com/roseforljh/EveryTalk/commit/10f52ad98e669016fa4b2209335b3248f1a56692))
+* **streaming:** 思考分片批量提交并把流式 Markdown 解析移出主线程 ([43486f8](https://github.com/roseforljh/EveryTalk/commit/43486f818b12e67be06db57312def43c29942777))
+
 ## [1.29.0](https://github.com/roseforljh/EveryTalk/compare/v1.28.1...v1.29.0) (2026-10-04)
 
 
