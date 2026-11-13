@@ -82,6 +82,36 @@ object AttachmentToolExecutor {
         }
     }
 
+    /**
+     * 云任务提交前一次性提取完整文本；不创建文件，超过输入配额不能静默封存半截内容。
+     * 读不出文字的附件抛错：云端还不能发原文件，调用方据此把请求留在本机原样上传。
+     */
+    internal suspend fun cloudSnapshot(context: Context, attachments: List<SelectedMediaItem.GenericFile>): JsonObject {
+        val files = linkedMapOf<String, kotlinx.serialization.json.JsonElement>()
+        var totalBytes = 0L
+        for (attachment in attachments.distinctBy { it.id }) {
+            val file = resolveAttachmentFile(context, attachment) ?: kotlin.error("附件文件不可访问")
+            val maxChars = 24 * 1024 * 1024
+            val page = if (DocumentProcessor.isTextMime(attachment.mimeType)) {
+                require(file.length() <= maxChars) { "云任务附件内容超过 24MB" }
+                FileInputStream(file).use { DocumentProcessor.extractPlainTextPage(it, 0, file.length(), maxChars) }
+            } else {
+                val uri = FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
+                DocumentProcessor.extractTextPage(context, uri, attachment.mimeType, 0, maxChars)
+                    ?: kotlin.error("附件未提取到可读文本")
+            }
+            check(!page.truncated) { "云任务附件内容超过 24MB" }
+            totalBytes += page.content.toByteArray(Charsets.UTF_8).size
+            require(totalBytes <= maxChars) { "云任务附件总内容超过 24MB" }
+            files[attachment.id] = buildJsonObject {
+                put("name", JsonPrimitive(attachment.displayName))
+                put("mimeType", JsonPrimitive(attachment.mimeType))
+                put("content", JsonPrimitive(page.content))
+            }
+        }
+        return JsonObject(files)
+    }
+
     private fun resolveAttachmentFile(
         context: Context,
         attachment: SelectedMediaItem.GenericFile,

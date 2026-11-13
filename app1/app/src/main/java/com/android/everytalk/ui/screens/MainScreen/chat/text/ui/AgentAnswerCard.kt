@@ -58,7 +58,9 @@ internal fun AgentAnswerCard(
     var submitting by remember(intervention.suspensionId) { mutableStateOf(false) }
     var submitError by remember(intervention.suspensionId) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    val canSubmit = !submitting && (answer.isNotBlank() || attachments.isNotEmpty())
+    // 云端任务的回答只收文字：不提供附件入口，必须填写内容才能提交。
+    val textOnly = intervention.suspensionId.startsWith("cloud:")
+    val canSubmit = !submitting && (answer.isNotBlank() || !textOnly && attachments.isNotEmpty())
     val shape = RoundedCornerShape(24.dp)
 
     Surface(
@@ -104,7 +106,7 @@ internal fun AgentAnswerCard(
                 placeholder = { Text(stringResource(R.string.agent_answer_input_hint)) },
                 shape = AppInputFieldShape,
                 colors = appDialogTextFieldColors(),
-                leadingIcon = {
+                leadingIcon = if (textOnly) null else ({
                     IconButton(
                         onClick = onOpenAttachmentPicker,
                         enabled = !submitting,
@@ -114,7 +116,7 @@ internal fun AgentAnswerCard(
                             contentDescription = stringResource(R.string.agent_answer_add_attachment),
                         )
                     }
-                },
+                }),
                 trailingIcon = {
                     FilledIconButton(
                         onClick = {
@@ -123,7 +125,7 @@ internal fun AgentAnswerCard(
                             submitError = false
                             scope.launch {
                                 try {
-                                    if (onSubmit(answer, attachments)) answer = "" else submitError = true
+                                    if (onSubmit(answer, if (textOnly) emptyList() else attachments)) answer = "" else submitError = true
                                 } catch (error: CancellationException) {
                                     throw error
                                 } catch (_: Exception) {

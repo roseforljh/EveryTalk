@@ -59,6 +59,22 @@ internal data class CloudRunSnapshot(
     val finishedAt: Long? = null,
     val error: String? = null,
     val waiting: CloudRunWaiting? = null,
+    val modelName: String? = null,
+    val providerName: String? = null,
+    val usage: CloudRunUsage? = null,
+    /** 首发设备冻结的上下文用量；其他设备没有本机快照时用它建立圆环。 */
+    val contextUsage: com.android.everytalk.data.DataClass.ContextUsageSnapshot? = null,
+)
+
+/** 最近一次模型请求的真实用量；input 不含缓存，和 Pi 的计数口径一致。 */
+@Serializable
+internal data class CloudRunUsage(
+    val api: String,
+    val input: Long,
+    val output: Long,
+    val cacheRead: Long,
+    val cacheWrite: Long,
+    val totalTokens: Long,
 )
 
 @Serializable

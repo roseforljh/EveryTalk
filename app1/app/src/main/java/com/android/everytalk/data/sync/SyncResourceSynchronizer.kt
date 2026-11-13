@@ -461,8 +461,8 @@ internal class SyncResourceSynchronizer(
             if (count != null && archives.size == count && archives.map { it.second["resourceDigest"] }.distinct().size == 1) {
                 val digest = archives.first().second.getValue("resourceDigest").jsonPrimitive.content
                 val marker = "sync_resource_restored:$messageId"
-                // 第 3 版补应用云端权威归档，原设备占位不再因本机 ID 而被永久跳过。
-                val restoredRevision = "3:$digest"
+                // 第 4 版允许真实 CLOUD Run 交接，并保留其账号、游标和 generation。
+                val restoredRevision = "4:$digest"
                 if (settings.getValue(marker) != restoredRevision) {
                     val history = readArchive(archives, messageId, digest)
                     val restored = history.message
@@ -480,9 +480,17 @@ internal class SyncResourceSynchronizer(
                         val current = chat.getMessageByUuid(messageId)?.takeUnless { it.deleted } ?: return@withTransaction
                         // 手机生成的本机原件不被覆盖；云端执行的权威归档可恢复原设备占位，但绝不覆盖本机活跃 Run。
                         val localRun = db.agentDao().getRunByVisibleMessage(current.id)
-                        val cloudOwned = archives.all { it.second["origin"]?.jsonPrimitive?.contentOrNull == "cloud_agent" } &&
+                        val cloudOrigin = archives.all { it.second["origin"]?.jsonPrimitive?.contentOrNull == "cloud_agent" }
+                        val cloudOwned = cloudOrigin && when {
+                            localRun == null -> true
+                            localRun.executionOwner == "CLOUD" -> localRun.cloudAccountId == user &&
+                                localRun.cloudRunId == history.run?.id && localRun.id == history.run?.id
+                            else -> localRun.terminalReason == "SYNC_HISTORY_ONLY"
+                        }
+                        // cloud: 只是本机占位命名，不能绕过云任务的账号/run 校验或覆盖真实本机 Run。
+                        val canRestore = cloudOwned || !cloudOrigin && current.id.startsWith("cloud:") &&
                             (localRun == null || localRun.terminalReason == "SYNC_HISTORY_ONLY")
-                        if (current.id.startsWith("cloud:") || cloudOwned) {
+                        if (canRestore) {
                             val next = restored.copy(id = current.id, conversationId = current.sessionId, attachments = current.attachments,
                                 contextUsageSnapshot = restored.contextUsageSnapshot?.copy(messageId = current.id),
                                 executionTrace = restored.executionTrace.map { event -> if (event is ExecutionTraceEvent.UserMessageBoundary)
@@ -492,16 +500,29 @@ internal class SyncResourceSynchronizer(
                             chat.writeMessages(listOf(entity))
                             if (cloudOwned) settings.insertSetting(SystemSettingEntity("sync_resource_source:$messageId", "$user:${entity.storageFingerprint}"))
                             history.run?.let { archivedRun ->
-                                val run = archivedRun.copy(sessionId = current.sessionId, visibleAssistantMessageId = current.id,
+                                if (cloudOrigin) require(archivedRun.status in setOf("COMPLETED", "FAILED", "CANCELLED"))
+                                val mapped = archivedRun.copy(sessionId = current.sessionId, visibleAssistantMessageId = current.id,
                                     userMessageId = chat.resolveLocalMessageReference(archivedRun.userMessageId),
                                     requestSnapshotJson = null, status = if (archivedRun.status in setOf("COMPLETED", "FAILED", "CANCELLED")) archivedRun.status else "CANCELLED",
                                     terminalReason = "SYNC_HISTORY_ONLY", loopState = "COMPLETED")
+                                val run = if (cloudOwned && localRun?.executionOwner == "CLOUD") localRun.copy(
+                                    status = mapped.status, updatedAt = mapped.updatedAt, userMessageId = mapped.userMessageId,
+                                    terminalReason = "SYNC_HISTORY_ONLY", loopState = mapped.status,
+                                ) else mapped
                                 db.agentDao().upsertRun(run)
                                 history.entries.forEach { entry -> require(entry.runId == run.id); db.agentDao().upsertEntry(entry) }
+                                if (run.executionOwner == "CLOUD") db.agentDao().deleteRunSnapshotChunks(run.id)
                             }
+                            chat.deleteDrafts(current.sessionId, listOf(current.id))
+                            settings.insertSetting(SystemSettingEntity(marker, restoredRevision))
                         }
-                        settings.insertSetting(SystemSettingEntity(marker, restoredRevision))
                     }
+                }
+                // 先提交完整历史再清密文。重启可重复清理，绝不在仅收到 terminal/简版消息时回收。
+                val archived = db.agentDao().getRunByVisibleMessage(message.id)
+                if (archived?.executionOwner == "CLOUD" && archived.cloudAccountId == user &&
+                    archived.terminalReason == "SYNC_HISTORY_ONLY" && settings.getValue(marker) == restoredRevision) {
+                    com.android.everytalk.data.computer.ComputerCredentialStore(context).deleteCloudAgentInput(user, archived.id)
                 }
             }
             val media = entries.filter { it.second["role"]?.jsonPrimitive?.contentOrNull in setOf(null, "media") && it.first.fileId != null }

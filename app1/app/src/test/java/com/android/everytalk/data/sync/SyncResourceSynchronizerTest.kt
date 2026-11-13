@@ -7,6 +7,11 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.android.everytalk.data.DataClass.*
+import com.android.everytalk.data.agent.CloudAgentStore
+import com.android.everytalk.data.agent.CloudRunSnapshot
+import com.android.everytalk.data.agent.CloudRunView
+import com.android.everytalk.data.computer.ComputerCredentialStore
+import javax.crypto.spec.SecretKeySpec
 import com.android.everytalk.data.database.AppDatabase
 import com.android.everytalk.data.database.entities.*
 import com.android.everytalk.data.skill.SkillPackageValidator
@@ -37,6 +42,7 @@ class SyncResourceSynchronizerTest {
         return object : ContextWrapper(application) {
             override fun getApplicationContext(): Context = this
             override fun getFilesDir(): File = directory
+            override fun getNoBackupFilesDir(): File = File(directory, "no-backup").apply { mkdirs() }
         }
     }
     private suspend fun database(): AppDatabase = Room.inMemoryDatabaseBuilder(application, AppDatabase::class.java).build().also {
@@ -227,7 +233,7 @@ class SyncResourceSynchronizerTest {
         val restoredMarker = "sync_resource_restored:${message.uuid}"
         val revision = b.settingsDao().getValue(restoredMarker)!!
         b.chatDao().writeMessages(listOf(restored.copy(executionTrace = trace)))
-        b.settingsDao().insertSetting(SystemSettingEntity(restoredMarker, revision.removePrefix("3:")))
+        b.settingsDao().insertSetting(SystemSettingEntity(restoredMarker, revision.removePrefix("4:")))
         assetsB.synchronize()
         assertEquals(restoredQuestion.id, (b.chatDao().getMessageByUuid(message.uuid)!!.executionTrace.first()
             as ExecutionTraceEvent.UserMessageBoundary).messageId)
@@ -306,6 +312,71 @@ class SyncResourceSynchronizerTest {
                 assertEquals(uploads, api.fileUploads)
             }
         }
+    }
+
+    @Test fun `云端原设备完整归档提交后保留身份游标并回收快照密文且拒绝晚事件`() = runBlocking {
+        val source = database(); val target = database(); val second = database()
+        val cs = context(); val ct = context(); val cb = context(); val api = FakeSyncApi()
+        val session = ChatSessionEntity("cloud-origin", 1, 1, false)
+        val question = Message(id = "cloud-question", text = "修改文件", sender = Sender.User, timestamp = 10)
+            .toEntity(session.id).copy(syncStatus = SyncStatus.PENDING)
+        val placeholder = Message(id = "cloud-answer", text = "", sender = Sender.AI, timestamp = 20).toEntity(session.id)
+        target.chatDao().writeSession(session); target.chatDao().writeMessages(listOf(question))
+        target.chatDao().writeDrafts(listOf(MessageDraftEntity(placeholder)))
+        val store = CloudAgentStore(target)
+        val run = store.prepare(user, session.id, question.id, placeholder.id, "original-config")
+        val final = CloudRunView(1, run.id, session.uuid, question.uuid, placeholder.uuid, "COMPLETED", 8, 27,
+            CloudRunSnapshot("最后快照", "", emptyList(), null, 20, 40))
+        store.apply(user, final)
+        val credentials = ComputerCredentialStore(ct, SecretKeySpec(ByteArray(32) { 9 }, "AES"))
+        val frozen = "{\"id\":\"${run.id}\",\"apiKey\":\"test-only\"}".toByteArray()
+        credentials.saveCloudAgentInput(user, run.id, frozen)
+        val step = ExecutionStep("write", ExecutionStepType.Tool, "write_file", completed = true,
+            fileChange = ExecutionFileChange("/workspace/a.kt", true, listOf(ExecutionFileEdit("", "完整内容"))))
+        val ai = placeholder.toMessage().copy(text = "完整正文".repeat(12000), reasoning = "完整思考", executionFinishedAt = 40,
+            executionSteps = listOf(step), executionTrace = listOf(ExecutionTraceEvent.UserMessageBoundary(question.id),
+                ExecutionTraceEvent.Tool(step), ExecutionTraceEvent.Content("完整总结"))).toEntity(session.id)
+        source.chatDao().writeSession(session); source.chatDao().writeMessages(listOf(question, ai))
+        source.agentDao().upsertRun(run.copy(status = "COMPLETED", updatedAt = 40, executionOwner = "LOCAL"))
+        val entry = AgentEntryEntity("cloud-entry", run.id, 1, "TOOL_RESULT", null, step.id, "{}", "COMPLETED", 20, 30)
+        source.agentDao().upsertEntry(entry)
+        SyncResourceSynchronizer(cs, source, api, user).use { it.synchronize() }; sync(source, api)
+        api.rows.toMap().forEach { (key, row) ->
+            if (row.entity == "attachments") api.rows[key] = row.copy(payload = JsonObject(row.payload + ("origin" to JsonPrimitive("cloud_agent"))))
+        }
+        sync(target, api); sync(second, api)
+        val unavailable = object : SyncApi by api {
+            override suspend fun downloadFile(info: SyncFileInfo, target: File) =
+                throw SyncHttpException(503, serverCode = "TEMPORARILY_UNAVAILABLE", message = "模拟归档未下载")
+        }
+        try { SyncResourceSynchronizer(ct, target, unavailable, user).use { it.synchronize() }; fail("归档未取得前不能清理") }
+        catch (error: SyncHttpException) { assertEquals(503, error.statusCode) }
+        assertEquals(final, store.read(run.id))
+        assertArrayEquals(frozen, credentials.loadCloudAgentInput(user, run.id))
+        assertNull(target.settingsDao().getValue("sync_resource_restored:${ai.uuid}"))
+        val uploads = api.fileUploads
+        for ((db, ctx) in listOf(target to ct, second to cb)) {
+            SyncResourceSynchronizer(ctx, db, api, user).use { it.synchronize() }
+            val restored = db.chatDao().getMessageByUuid(ai.uuid)!!
+            assertEquals(ai.text, restored.text); assertEquals(ai.reasoning, restored.reasoning)
+            assertEquals(ai.executionSteps, restored.executionSteps)
+            val localQuestion = db.chatDao().getMessageByUuid(question.uuid)!!
+            assertEquals(localQuestion.id, (restored.executionTrace.first() as ExecutionTraceEvent.UserMessageBoundary).messageId)
+            assertTrue(RoomSyncStore(db).pendingBatch().isEmpty())
+        }
+        val archived = target.agentDao().getRun(run.id)!!
+        assertEquals("CLOUD", archived.executionOwner); assertEquals(user, archived.cloudAccountId)
+        assertEquals(run.id, archived.cloudRunId); assertEquals("original-config", archived.configIdSnapshot)
+        assertEquals(27L, archived.cloudCursor); assertEquals(8L, archived.cloudGeneration)
+        assertEquals("COMPLETED", archived.status); assertEquals("SYNC_HISTORY_ONLY", archived.terminalReason)
+        assertEquals(listOf(entry), target.agentDao().getEntries(run.id))
+        assertNull(store.read(run.id)); assertNull(credentials.loadCloudAgentInput(user, run.id))
+        assertNull(target.chatDao().getDraft(session.id, placeholder.id))
+        assertNull(store.project(user, final))
+        assertNull(store.apply(user, final.copy(cursor = 28)))
+        SyncResourceSynchronizer(ct, target, api, user).use { it.synchronize() }
+        assertEquals(ai.text, target.chatDao().getMessageByUuid(ai.uuid)!!.text)
+        assertEquals(uploads, api.fileUploads)
     }
 
     @Test fun `按服务器限制分块图片并恢复新设备空文件技能和换账号`() = runBlocking {

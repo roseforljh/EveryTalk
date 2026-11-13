@@ -82,6 +82,61 @@ class CloudAgentCoordinatorTest {
         } finally { scope.cancel(); scope.coroutineContext[Job]!!.join(); credentials.deleteCloudAgentInput(account, initial.id); http.close(); db.close() }
     }
 
+    @Test fun `永久请求错误不被发现轮询重新提交且换号后不应用旧响应`() = runBlocking {
+        val db = database(); val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val initial = prepare(db); val rejected = CompletableDeferred<Unit>()
+        var gets = 0; var posts = 0; var permitted = true; var projections = 0
+        val http = HttpClient(MockEngine { request ->
+            when {
+                request.url.parameters["active"] == "true" -> respond("{\"runs\":[]}")
+                request.method.value == "POST" -> { posts++; respond("{}", HttpStatusCode.UnprocessableEntity) }
+                else -> { gets++; respond("{}", HttpStatusCode.Forbidden) }
+            }
+        })
+        try {
+            val coordinator = CloudAgentCoordinator(account, db,
+                CloudAgentClient("https://example.com", { "access" }, { permitted }, http), credentials(), scope,
+                { permitted }, { _, _ -> projections++ }, onConnection = { _, _ -> rejected.complete(Unit) }, wait = { fail("永久错误不能退避重试") })
+            coordinator.track(initial.id)
+            withTimeout(10_000) { rejected.await() }
+            coordinator.discover(); coordinator.discover()
+            assertEquals(1, gets); assertEquals(0, posts)
+            permitted = false
+            coordinator.accept(initial)
+            assertEquals(0, projections)
+            assertNull(CloudAgentStore(db).read(initial.id))
+        } finally { scope.cancel(); scope.coroutineContext[Job]!!.join(); http.close(); db.close() }
+    }
+
+    @Test fun `服务器确认创建前停止留下墓碑作废冻结输入且之后不会补发`() = runBlocking {
+        val db = database(); val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val credentials = credentials(); val initial = prepare(db)
+        var posts = 0; var stops = 0
+        val http = HttpClient(MockEngine { request ->
+            when {
+                request.url.parameters["active"] == "true" -> respond("{\"runs\":[]}")
+                request.url.encodedPath.endsWith("/commands") -> { stops++; respond("{\"error\":\"AGENT_STOPPED_BEFORE_CREATE\"}", HttpStatusCode.NotFound) }
+                request.method.value == "POST" -> { posts++; respond(raw(initial)) }
+                else -> respond("{\"error\":\"AGENT_NOT_FOUND\"}", HttpStatusCode.NotFound)
+            }
+        })
+        try {
+            credentials.saveCloudAgentInput(account, initial.id, buildJsonObject { put("id", initial.id) }.toString().toByteArray())
+            val coordinator = CloudAgentCoordinator(account, db,
+                CloudAgentClient("https://example.com", { "access" }, { true }, http), credentials, scope, { true }, { _, _ -> }, wait = {})
+            assertEquals(false, coordinator.serverSupported)
+            coordinator.abandonUnsubmitted(db.agentDao().getRun(initial.id)!!)
+            assertEquals(1, stops)
+            assertEquals(AgentRunStatus.CANCELLED.name, db.agentDao().getRun(initial.id)!!.status)
+            assertNull(credentials.loadCloudAgentInput(account, initial.id))
+            coordinator.discover()
+            coordinator.track(initial.id)
+            kotlinx.coroutines.delay(300)
+            assertEquals(true, coordinator.serverSupported)
+            assertEquals(0, posts)
+        } finally { scope.cancel(); scope.coroutineContext[Job]!!.join(); http.close(); db.close() }
+    }
+
     @Test fun `重建协调器只读取冻结输入控制重试保留命令身份且取消订阅不发停止`() = runBlocking {
         val db = database(); val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val credentials = credentials(); val initial = prepare(db)

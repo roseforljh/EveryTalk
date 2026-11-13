@@ -1,6 +1,7 @@
 /** 远端终态必须先持久化 appendToolResult，再恢复模型 continueRun */
 package com.android.everytalk.statecontroller
 
+import kotlinx.coroutines.flow.stateIn
 import com.android.everytalk.data.agent.AgentTerminalReasons
 
 import android.content.Context
@@ -395,7 +396,11 @@ class ApiHandler(
         com.android.everytalk.data.skill.SkillRepository(context, AppDatabase.getDatabase(context).skillDao())
     }
     private val _pendingAgentApprovals = MutableStateFlow<List<PendingComputerToolApproval>>(emptyList())
-    val pendingAgentApprovals: StateFlow<List<PendingComputerToolApproval>> = _pendingAgentApprovals.asStateFlow()
+    /** 本机 AgentLoop 的审批与云端任务的文件写入确认用同一种卡片显示。 */
+    val pendingAgentApprovals: StateFlow<List<PendingComputerToolApproval>> by lazy {
+        kotlinx.coroutines.flow.combine(_pendingAgentApprovals, agentRunCoordinator.cloudToolApprovals) { local, cloud -> local + cloud }
+            .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, emptyList())
+    }
     private val _pendingAgentEnableApprovals = MutableStateFlow<List<PendingAgentEnableApproval>>(emptyList())
     val pendingAgentEnableApprovals: StateFlow<List<PendingAgentEnableApproval>> = _pendingAgentEnableApprovals.asStateFlow()
     private val _pendingMcpEnableApprovals = MutableStateFlow<List<PendingMcpEnableApproval>>(emptyList())
@@ -416,7 +421,7 @@ class ApiHandler(
         get() = agentRunCoordinator.runControlSnapshots
     internal val cloudRuns get() = agentRunCoordinator.cloudRuns
 
-    internal suspend fun stopCloudRun(runId: String): Boolean = agentRunCoordinator.commandCloudRun(runId, "stop")
+    internal suspend fun stopCloudRun(runId: String): Boolean = agentRunCoordinator.stopCloudRunById(runId)
     private val pendingAgentStops = ConcurrentHashMap<String, PendingAgentStop>()
     private val messagePersistenceMutex = Mutex()
     private val lastMessagePersistedAt = ConcurrentHashMap<String, Long>()
@@ -451,8 +456,8 @@ class ApiHandler(
         }
     }
 
-    suspend fun stopAllTextRuns() {
-        agentRunCoordinator.cancelAllActiveRuns()
+    suspend fun stopAllTextRuns(includeCloud: Boolean = true) {
+        agentRunCoordinator.cancelAllActiveRuns(includeCloud = includeCloud)
         val jobs = stateHolder.textApiJobs.values.toList()
         jobs.forEach { it.cancel() }
         jobs.forEach { it.join() }
@@ -520,10 +525,15 @@ class ApiHandler(
      */
     suspend fun compressContextNow(
         visibleAssistantMessageId: String,
-    ): com.android.everytalk.data.agent.ManualCompactionOutcome =
-        withContext(Dispatchers.IO) {
-            agentRunCoordinator.compressContextNow(visibleAssistantMessageId)
+    ): com.android.everytalk.data.agent.ManualCompactionOutcome {
+        val (sessionId, configId) = withContext(Dispatchers.Main.immediate) {
+            (stateHolder.textMessageConversationIds[visibleAssistantMessageId]
+                ?: stateHolder._currentConversationId.value) to stateHolder._selectedApiConfig.value?.id
         }
+        return withContext(Dispatchers.IO) {
+            agentRunCoordinator.compressContextNow(visibleAssistantMessageId, sessionId, configId)
+        }
+    }
 
     fun resolveIntervention(suspensionId: String, expectedVersion: Long, resolutionNonce: String) {
         viewModelScope.launch(Dispatchers.IO) {
@@ -894,6 +904,11 @@ class ApiHandler(
         decision: AgentApprovalDecision,
         onHandled: () -> Unit = {},
     ) {
+        if (approvalRequestId.startsWith("cloud:")) {
+            agentRunCoordinator.respondCloudApproval(runId, approvalRequestId, decision == AgentApprovalDecision.APPROVED)
+            onHandled()
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             var decisionSaved = false
             try {
@@ -1784,6 +1799,11 @@ class ApiHandler(
             var finalSyncDone = false
             suspend fun ensureFinalStreamingSync(source: String) {
                 if (finalSyncDone) return
+                // 云端已直接投影完整快照；本机没有 delta，空缓冲不能在 finally/取消时覆盖回复。
+                if (!isImageGeneration && AppDatabase.getDatabase(context).chatDao().hasCloudRunForMessage(aiMessageId)) {
+                    finalSyncDone = true
+                    return
+                }
                 try {
                     stateHolder.syncStreamingMessageToList(aiMessageId, isImageGeneration)
                     finalSyncDone = true
@@ -1998,6 +2018,9 @@ class ApiHandler(
         contentParts = contentParts,
         attachments = attachments,
     )
+
+    internal suspend fun isCloudSteerConsumed(conversationId: String, steeringId: String): Boolean =
+        withContext(Dispatchers.IO) { agentRunCoordinator.isCloudSteerConsumed(conversationId, steeringId) }
 
     /** 手动停止属于本次回复的终点；远端取消结果只更新提示，不再延长气泡耗时。 */
     private fun finishMessageExecutionForUserStop(messageId: String) {

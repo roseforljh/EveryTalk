@@ -326,11 +326,15 @@ interface ChatDao {
         return true
     }
 
-    /** 启动加载历史前调用一次：有内容的残留草稿定稿为未完成回复，空占位清理，不留孤儿。 */
+    @Query("SELECT EXISTS(SELECT 1 FROM agent_runs WHERE visibleAssistantMessageId = :messageId AND executionOwner = 'CLOUD')")
+    suspend fun hasCloudRunForMessage(messageId: String): Boolean
+
+    /** 只收尾本机残留草稿；云端即使没有本机 Job 仍在服务器执行，必须保留到后端定稿。 */
     @Transaction
     suspend fun recoverInterruptedDrafts() {
         getAllDrafts().forEach { draft ->
             val message = draft.message
+            if (hasCloudRunForMessage(message.id)) return@forEach
             val session = getStoredSession(message.sessionId)
             val hasContent = message.text.isNotBlank() || !message.reasoning.isNullOrBlank() ||
                 message.attachments.isNotEmpty() || !message.imageUrls.isNullOrEmpty()
@@ -493,6 +497,9 @@ interface ChatDao {
 
     @Query("UPDATE pending_messages SET status = 'PENDING' WHERE id = :id AND status = 'EDITING'")
     suspend fun cancelPendingMessageEdit(id: String): Int
+
+    @Query("SELECT COUNT(*) FROM pending_messages WHERE id = :id")
+    suspend fun countPendingMessage(id: String): Int
 
     @Query("DELETE FROM pending_messages WHERE id = :id AND status IN ('PENDING', 'EDITING')")
     suspend fun deletePendingMessage(id: String): Int

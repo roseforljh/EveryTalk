@@ -307,7 +307,11 @@ fun ChatInputArea(
     val chatRunState by queueController.runState.collectAsState()
     val controlSnapshots by viewModel.apiHandler.agentRunControlSnapshots.collectAsState()
     val pageControlledMessageId by viewModel.stateHolder._currentTextStreamingAiMessageId.collectAsState()
-    val controlledMessageId = if (forkTarget == null) pageControlledMessageId else forkTarget.runningMessageId
+    // 当前会话在另一台设备上运行、本机空闲且没有草稿时，主按钮用来远程停止；云端任务按同一套暂停/继续控制。
+    val remoteLiveRun by viewModel.stateHolder._remoteLiveRun.collectAsState()
+    val controlledMessageId = if (forkTarget == null) {
+        pageControlledMessageId ?: remoteLiveRun?.takeIf { it.running && it.cloudRunId != null }?.message?.id
+    } else forkTarget.runningMessageId
     val runControlState = controlledMessageId?.let { controlSnapshots[it]?.state }
     val conversationFunctionStates by viewModel.stateHolder.conversationFunctionToggleStates.collectAsState()
     val currentAgentResourceState = conversationFunctionStates[currentConversationId]?.agentResourceState
@@ -827,8 +831,6 @@ fun ChatInputArea(
     val canRestoreMessage = messageEditSession?.takeIf {
         it.belongsTo(currentConversationId, false)
     }?.matchesDraft(displaySkillEditorText(localText, skillReferences), selectedMediaItems, currentDraftParts) == true
-    // 当前会话在另一台设备上运行、本机空闲且没有草稿时，主按钮用来远程停止。
-    val remoteLiveRun by viewModel.stateHolder._remoteLiveRun.collectAsState()
     val remoteRunning = forkTarget == null && remoteLiveRun?.running == true && chatRunState == ChatRunState.Idle && !hasContent
     val primaryAction = if (remoteRunning) ComposerPrimaryAction.STOP else resolveComposerPrimaryAction(
         runState = chatRunState,

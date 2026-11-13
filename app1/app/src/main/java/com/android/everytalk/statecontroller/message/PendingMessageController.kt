@@ -70,6 +70,8 @@ internal class PendingMessageController(
     private val resumeStreaming: () -> Unit,
     private val steerCurrentRun: suspend (PendingMessageEntity) -> Boolean,
     private val recordSteeredMessage: suspend (PendingMessageEntity) -> Unit,
+    /** 这条排队消息是否已作为方向调整被云端那一轮消费（结果未知的调整重启后也要能认出来）。 */
+    private val isAlreadySteered: suspend (PendingMessageEntity) -> Boolean = { false },
     private val showMessage: (String) -> Unit,
     private val dispatch: (
         message: PendingMessageEntity,
@@ -319,7 +321,17 @@ internal class PendingMessageController(
                 activeDispatchIds[conversationId] = id
                 dispatchingPendingByConversation[conversationId] = true
                 syncDispatchingState(conversationId)
-                val steered = runCatching { steerCurrentRun(pending) }.getOrDefault(false)
+                val steered = try { steerCurrentRun(pending) }
+                catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                catch (rejected: com.android.everytalk.data.agent.CloudSteerNotAccepted) {
+                    // 云端任务还在运行，只是这条调整没被确认收下：留在队列，不另开一轮撞上运行中的任务。
+                    withContext(Dispatchers.IO) { chatDao.restorePendingDispatch(id) }
+                    clearDispatch(pending.conversationId, id)
+                    // 结果未知的调整可能已被云端消费：自动派发前会先对账正式轨迹，用过的不再重发。
+                    showMessage(rejected.message.orEmpty())
+                    return@withLock
+                }
+                catch (_: Exception) { false }
                 if (steered) {
                     val recorded = runCatching { recordSteeredMessage(pending) }.isSuccess
                     if (!recorded) showMessage("调整方向已发送，但消息气泡显示失败")
@@ -382,6 +394,21 @@ internal class PendingMessageController(
                 dispatchingPendingByConversation[next.conversationId] = true
                 syncDispatchingState(next.conversationId)
                 if (agentRunControlState.value == AgentRunControlState.PAUSED) resumeStreaming()
+                // 之前结果未知的调整若已被云端那一轮用掉，这里只补气泡并出队，不能再当新消息发一遍。
+                // 对账失败（断网、云端未连上、任务仍在运行）不是“没用过”：放回队列，等下次再核对。
+                val alreadySteered = try { isAlreadySteered(next) }
+                catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                catch (failure: Exception) {
+                    withContext(Dispatchers.IO) { chatDao.restorePendingDispatch(next.id) }
+                    clearDispatch(next.conversationId, next.id)
+                    return@withLock
+                }
+                if (alreadySteered) {
+                    runCatching { recordSteeredMessage(next) }
+                    withContext(Dispatchers.IO) { chatDao.finishPendingDispatch(next.id) }
+                    clearDispatch(next.conversationId, next.id)
+                    return@withLock
+                }
                 dispatchClaimed(next)
             }
         }

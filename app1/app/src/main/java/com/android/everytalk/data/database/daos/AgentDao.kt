@@ -608,7 +608,7 @@ interface AgentDao {
         UPDATE agent_runs
         SET status = :status, currentRequestOrdinal = :requestOrdinal,
             terminalReason = :terminalReason, updatedAt = :updatedAt
-        WHERE id = :runId AND runGeneration = :expectedGeneration
+        WHERE id = :runId AND executionOwner = 'LOCAL' AND runGeneration = :expectedGeneration
           AND status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')
         """,
     )
@@ -630,7 +630,7 @@ interface AgentDao {
         UPDATE agent_runs
         SET status = 'CANCELLED', terminalReason = :reason, updatedAt = :updatedAt,
             runGeneration = runGeneration + 1
-        WHERE visibleAssistantMessageId = :messageId
+        WHERE visibleAssistantMessageId = :messageId AND executionOwner = 'LOCAL'
           AND status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED')
         """
     )
@@ -645,7 +645,7 @@ interface AgentDao {
         UPDATE agent_runs
         SET status = 'CANCELLED', terminalReason = :reason, updatedAt = :updatedAt,
             runGeneration = runGeneration + 1
-        WHERE id = :runId
+        WHERE id = :runId AND executionOwner = 'LOCAL'
           AND status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED')
         """,
     )
@@ -903,8 +903,17 @@ interface AgentDao {
     )
     fun observeServiceRuns(): Flow<List<AgentRunEntity>>
 
-    /** 多条历史脏记录并存时先展示当前最新申请，禁止旧卡片抢走用户点击。 */
-    @Query("SELECT * FROM agent_runs WHERE status = 'WAITING_APPROVAL' ORDER BY updatedAt DESC")
+    /** 恢复器只接管 LOCAL；抽屉和云端发现继续使用上面的全归属查询。 */
+    @Query("""
+        SELECT * FROM agent_runs WHERE executionOwner = 'LOCAL' AND (
+            status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED')
+            OR (status = 'INTERRUPTED' AND terminalReason IN ('APP_PROCESS_RESTARTED', 'APPROVAL_DECIDED_PENDING_RESUME'))
+        ) ORDER BY updatedAt ASC
+    """)
+    suspend fun getLocalActiveRuns(): List<AgentRunEntity>
+
+    /** 多条历史脏记录并存时先展示当前最新申请；云端审批由后端 waiting 合同处理。 */
+    @Query("SELECT * FROM agent_runs WHERE executionOwner = 'LOCAL' AND status = 'WAITING_APPROVAL' ORDER BY updatedAt DESC")
     suspend fun getWaitingApprovalRuns(): List<AgentRunEntity>
 
     @Query(
@@ -912,7 +921,7 @@ interface AgentDao {
         UPDATE agent_runs
         SET status = 'CANCELLED', terminalReason = :reason, updatedAt = :updatedAt,
             runGeneration = runGeneration + 1
-        WHERE sessionId = :sessionId
+        WHERE sessionId = :sessionId AND executionOwner = 'LOCAL'
           AND (
               status = 'WAITING_APPROVAL'
               OR (status = 'INTERRUPTED' AND terminalReason = 'APPROVAL_DECIDED_PENDING_RESUME')
@@ -925,10 +934,10 @@ interface AgentDao {
         updatedAt: Long,
     )
 
-    @Query("SELECT * FROM agent_runs WHERE status = 'MODEL_CONTINUATION_PENDING' ORDER BY updatedAt ASC")
+    @Query("SELECT * FROM agent_runs WHERE executionOwner = 'LOCAL' AND status = 'MODEL_CONTINUATION_PENDING' ORDER BY updatedAt ASC")
     suspend fun getPendingModelContinuationRuns(): List<AgentRunEntity>
 
-    @Query("SELECT * FROM agent_runs WHERE status = 'INTERRUPTED' ORDER BY updatedAt ASC")
+    @Query("SELECT * FROM agent_runs WHERE executionOwner = 'LOCAL' AND status = 'INTERRUPTED' ORDER BY updatedAt ASC")
     suspend fun getInterruptedRuns(): List<AgentRunEntity>
 
     /** 模型流随进程消失后可以从已保存快照续写，不能永久停在旧中间态。 */

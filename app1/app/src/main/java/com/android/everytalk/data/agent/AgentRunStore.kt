@@ -430,6 +430,8 @@ class AgentRunStore(
         }
 
     suspend fun decodeRequestSnapshot(run: AgentRunEntity): AgentRequestSnapshot? {
+        // 同一分块表也存云端 RunView；它不是本机请求，不能解码、恢复或输出解码异常。
+        if (run.executionOwner != "LOCAL") return null
         snapshotCache[run.id]?.let { return it }
         return snapshotReadLock.withLock {
             snapshotCache[run.id]?.let { return@withLock it }
@@ -643,6 +645,8 @@ class AgentRunStore(
         requestOrdinal: Int = run.currentRequestOrdinal,
         terminalReason: String? = run.terminalReason,
     ): AgentRunEntity {
+        // 云端状态和快照只由 CloudAgentStore 应用。即使旧调用方漏分流，也不能封存后端仍活跃的任务。
+        if (run.executionOwner != "LOCAL") return dao.getRun(run.id) ?: run
         val now = System.currentTimeMillis()
         if (status == AgentRunStatus.CANCELLED) {
             dao.cancelActiveRunById(run.id, terminalReason ?: AgentTerminalReasons.USER_STOP, now)
@@ -700,7 +704,7 @@ class AgentRunStore(
             dao.deleteRunSnapshotChunks(run.id)
             dao.deleteContinuationStates(run.sessionId)
         }
-        return run
+        return run?.takeIf { it.executionOwner == "LOCAL" }
     }
 
     suspend fun createRequest(

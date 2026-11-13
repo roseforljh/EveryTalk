@@ -1034,7 +1034,7 @@ import java.util.UUID
      */
     internal fun AppViewModel.pauseStreaming(expectedMessageId: String?) {
         if (expectedMessageId == null ||
-            stateHolder._currentTextStreamingAiMessageId.value != expectedMessageId ||
+            (stateHolder._currentTextStreamingAiMessageId.value ?: cloudControlledMessageId()) != expectedMessageId ||
             stateHolder._isRemoteCancellationPending.value
         ) return
         when (apiHandler.agentRunControlSnapshots.value[expectedMessageId]?.state) {
@@ -1052,11 +1052,12 @@ import java.util.UUID
     /** 强停意图不因刚到达安全边界而失效；已暂停任务仍可终止，但旧页面不能误停新 Run。 */
     internal fun AppViewModel.forceStopPendingPause(expectedMessageId: String?) {
         if (expectedMessageId == null ||
-            stateHolder._currentTextStreamingAiMessageId.value != expectedMessageId ||
+            (stateHolder._currentTextStreamingAiMessageId.value ?: cloudControlledMessageId()) != expectedMessageId ||
             stateHolder._isRemoteCancellationPending.value ||
             apiHandler.agentRunControlSnapshots.value[expectedMessageId]?.state !in
                 setOf(AgentRunControlState.PAUSE_REQUESTED, AgentRunControlState.PAUSED)
         ) return
+        if (stateHolder._currentTextStreamingAiMessageId.value == null) return stopRemoteRun()
         apiHandler.cancelCurrentApiJob("等待安全暂停时用户再次点击停止", isImageGeneration = false, showFeedback = true)
     }
 
@@ -1256,7 +1257,7 @@ import java.util.UUID
     internal fun AppViewModel.ensureForkConversation(): String {
         val parentId = stateHolder._currentConversationId.value
         stateHolder._forkConversationIds.value[parentId]?.let { return it }
-        val forkId = "new_chat_fork_${UUID.randomUUID()}"
+        val forkId = "${com.android.everytalk.data.agent.FORK_CONVERSATION_PREFIX}${UUID.randomUUID()}"
         stateHolder._forkConversationIds.update { it + (parentId to forkId) }
         stateHolder.systemPrompts[parentId]?.let { stateHolder.systemPrompts[forkId] = it }
         stateHolder.systemPromptEngagedState[parentId]?.let { stateHolder.systemPromptEngagedState[forkId] = it }

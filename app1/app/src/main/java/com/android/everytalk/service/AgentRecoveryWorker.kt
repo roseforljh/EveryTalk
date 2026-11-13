@@ -36,7 +36,7 @@ class AgentRecoveryWorker(
                 AgentTerminalReasons.VISIBLE_MESSAGE_TERMINAL,
                 System.currentTimeMillis(),
             )
-            val interruptedRuns = agentDao.getActiveRuns()
+            val interruptedRuns = agentDao.getLocalActiveRuns()
             agentDao.recoverInterruptedAgentRuns()
             interruptedRuns.forEach { run ->
                 AgentRecoveryDiagnostics.record(
@@ -48,7 +48,7 @@ class AgentRecoveryWorker(
             }
         }
 
-        val hasRecoverableWork = agentDao.getActiveRuns().isNotEmpty()
+        val hasRecoverableWork = agentDao.getLocalActiveRuns().isNotEmpty()
         if (!hasRecoverableWork) return Result.success()
 
         return runCatching {

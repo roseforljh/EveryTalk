@@ -217,6 +217,34 @@ class McpManager(private val context: Context) {
     }
 
     /**
+     * 只封存本轮实际声明的工具别名，不从哈希猜服务器，也不把未启用服务的凭据带走。
+     * OAuth 先走原有刷新与固定来源校验；结果只用于加密云任务输入，不进入模型工具 schema。
+     */
+    internal suspend fun cloudBindings(toolNames: Set<String>): Map<String, JsonObject> {
+        val bindings = mutableMapOf<String, JsonObject>()
+        for (state in serverStates.value.values) {
+            val config = state.config
+            if (!config.enabled || state.status !is McpStatus.Connected) continue
+            val tools = state.tools.filter { it.enable && buildMcpToolAlias(config.id, it.name) in toolNames }
+            if (tools.isEmpty()) continue
+            val headers = config.headers.toMutableMap()
+            (mail.accessTokenFor(config) ?: oauth.accessTokenFor(config))?.let { token ->
+                headers.keys.filter { it.equals("Authorization", true) }.forEach(headers::remove)
+                headers["Authorization"] = "Bearer $token"
+            }
+            for (tool in tools) bindings[buildMcpToolAlias(config.id, tool.name)] = kotlinx.serialization.json.buildJsonObject {
+                put("kind", kotlinx.serialization.json.JsonPrimitive("mcp"))
+                put("url", kotlinx.serialization.json.JsonPrimitive(config.url))
+                put("transport", kotlinx.serialization.json.JsonPrimitive(if (config is McpServerConfig.SseTransportServer) "sse" else "streamable_http"))
+                put("headers", JsonObject(headers.mapValues { kotlinx.serialization.json.JsonPrimitive(it.value) }))
+                put("remoteName", kotlinx.serialization.json.JsonPrimitive(tool.name))
+            }
+        }
+        check(toolNames.all { it in bindings }) { "本轮 MCP 工具连接已变化，请重新发送" }
+        return bindings
+    }
+
+    /**
      * 为已经获得用户批准的当前请求准备 MCP 工具。
      *
      * 输入框的会话开关与设置页的服务器开关是两层状态：只连接用户在设置中启用的服务，

@@ -19,6 +19,7 @@ internal fun cloudAgentInput(
     timestamp: Long,
     timezone: String,
     tools: JsonArray,
+    contextUsage: ContextUsageSnapshot? = null,
 ): JsonObject {
     listOf(runId, sessionUuid, userUuid, assistantUuid).forEach(::requireCloudUuid)
     require(epoch >= 0 && secretsEpoch >= 0)
@@ -70,6 +71,7 @@ internal fun cloudAgentInput(
         })
         put("messages", JsonArray(transformed.map { cloudPiMessage(it, request, api, timestamp) }))
         put("tools", tools); put("thinkingLevel", level)
+        contextUsage?.let { put("contextUsage", cloudAgentJson.encodeToJsonElement(ContextUsageSnapshot.serializer(), it)) }
         thinking?.thinkingBudget?.takeIf { it > 0 && !disabled }?.let { budget ->
             put("thinkingBudgets", buildJsonObject { listOf("minimal", "low", "medium", "high").forEach { put(it, budget) } })
         }

@@ -16,6 +16,9 @@ import com.android.everytalk.data.database.entities.SystemSettingEntity
 import com.android.everytalk.data.database.entities.toEntity
 import com.android.everytalk.data.database.entities.toMessage
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import com.android.everytalk.data.DataClass.WebSearchResult
 import java.util.UUID
 
 /** 云端快照直接投影既有 Message，所有引用先换成本机 ID，不复刻一套 UI 状态。 */
@@ -44,7 +47,33 @@ internal suspend fun CloudRunView.toMessage(base: Message, resolve: suspend (Str
             else -> error("云端任务轨迹类型无效")
         }
     }
+    val usage = snapshot.usage?.let {
+        com.android.everytalk.data.network.TokenUsage(
+            // 本地口径的输入包含缓存读写；Pi 的 input 只算未命中缓存的部分。
+            inputTokens = it.input + it.cacheRead + it.cacheWrite, outputTokens = it.output,
+            cachedInputTokens = it.cacheRead, cacheWriteTokens = it.cacheWrite, totalTokens = it.totalTokens,
+            isFinal = terminal, source = when (it.api) {
+                "openai-responses" -> com.android.everytalk.data.network.TokenUsageSource.OPENAI_RESPONSES
+                "anthropic-messages" -> com.android.everytalk.data.network.TokenUsageSource.ANTHROPIC
+                "google-generative-ai" -> com.android.everytalk.data.network.TokenUsageSource.GEMINI
+                else -> com.android.everytalk.data.network.TokenUsageSource.OPENAI_CHAT
+            },
+        )
+    }
+    // 搜索来源与本机一致取自 web_search 的工具结果，按出现顺序编号。
+    val sources = snapshot.trace.filter { it.kind == "tool" && it.name == "web_search" && !it.isError }
+        .flatMap { part -> cloudSearchResults(part.result) }
+        .distinctBy { it.second }
+        .mapIndexed { index, (title, href, snippet) -> WebSearchResult(index + 1, title, href, snippet) }
     return base.copy(
+        modelName = snapshot.modelName ?: base.modelName,
+        providerName = snapshot.providerName ?: base.providerName,
+        tokenUsage = usage ?: base.tokenUsage,
+        contextUsageSnapshot = (base.contextUsageSnapshot ?: snapshot.contextUsage?.copy(messageId = base.id))?.let { context ->
+            usage?.let { context.copy(measuredInputTokens = it.inputTokens, measuredOutputTokens = it.outputTokens,
+                measuredTotalTokens = it.totalTokens, measuredUsageSource = it.source) } ?: context
+        },
+        webSearchResults = sources.ifEmpty { base.webSearchResults },
         text = snapshot.text,
         reasoning = snapshot.reasoning.takeIf(String::isNotEmpty),
         parts = emptyList(),
@@ -58,12 +87,25 @@ internal suspend fun CloudRunView.toMessage(base: Message, resolve: suspend (Str
     )
 }
 
+/** 工具结果形如 {content:[{type:"text",text:"{\"results\":[...]}"}]}；解析失败按没有来源处理。 */
+private fun cloudSearchResults(result: kotlinx.serialization.json.JsonElement?): List<Triple<String, String, String>> = runCatching {
+    val text = (result as kotlinx.serialization.json.JsonObject).getValue("content").jsonArray
+        .joinToString("") { it.jsonObject["text"]?.jsonPrimitive?.content.orEmpty() }
+    cloudAgentJson.parseToJsonElement(text).jsonObject.getValue("results").jsonArray.mapNotNull { item ->
+        val value = item.jsonObject
+        val href = value["url"]?.jsonPrimitive?.content?.takeIf(String::isNotBlank) ?: return@mapNotNull null
+        Triple(value["title"]?.jsonPrimitive?.content ?: href, href, value["snippet"]?.jsonPrimitive?.content.orEmpty())
+    }
+}.getOrDefault(emptyList())
+
 /**
  * 云端任务在第一次 POST 前登记固定身份。快照分块复用已有表，避免大回复超出 CursorWindow；
  * 快照、消息和游标在一个事务提交。调用方只在返回非空后更新页面。
  */
 internal class CloudAgentStore(private val db: AppDatabase) {
-    suspend fun prepare(accountId: String, sessionId: String, userId: String, assistantId: String, configId: String?): AgentRunEntity = db.withTransaction {
+    suspend fun prepare(accountId: String, sessionId: String, userId: String, assistantId: String, configId: String?,
+        beforePersist: suspend (AgentRunEntity) -> Unit = {},
+    ): AgentRunEntity = db.withTransaction {
         requireCloudUuid(accountId)
         val dao = db.agentDao()
         dao.getRunByVisibleMessage(assistantId)?.let { existing ->
@@ -72,12 +114,13 @@ internal class CloudAgentStore(private val db: AppDatabase) {
         }
         val session = checkNotNull(db.chatDao().getSession(sessionId)) { "会话不存在" }
         check(!session.isImageGeneration) { "图像任务不使用文字执行器" }
-        checkNotNull(db.chatDao().getMessage(sessionId, userId)) { "用户消息尚未保存" }
+        val user = checkNotNull(db.chatDao().getMessage(sessionId, userId)) { "用户消息尚未保存" }
+        check(!user.deleted && user.sender == Sender.User && user.sessionId == sessionId) { "云端任务父问题无效" }
         val now = System.currentTimeMillis()
         val id = UUID.randomUUID().toString()
         AgentRunEntity(id, sessionId, userId, assistantId, configId, null, AgentRunStatus.CREATED.name,
             0, null, now, now, executionOwner = "CLOUD", cloudAccountId = accountId, cloudRunId = id,
-            loopState = "SUBMITTING").also { dao.upsertRun(it) }
+            loopState = "SUBMITTING").also { beforePersist(it); dao.upsertRun(it) }
     }
 
     suspend fun read(runId: String): CloudRunView? = db.withTransaction {
@@ -101,6 +144,7 @@ internal class CloudAgentStore(private val db: AppDatabase) {
         val run = db.agentDao().getRun(view.id)?.takeIf {
             it.executionOwner == "CLOUD" && it.cloudAccountId == accountId && it.cloudRunId == view.id
         } ?: return@withTransaction null
+        if (run.terminalReason == "SYNC_HISTORY_ONLY") return@withTransaction null
         val chat = db.chatDao()
         val session = chat.getSessionByUuid(view.sessionUuid)?.takeUnless { it.deleted || it.isImageGeneration }
             ?: return@withTransaction null

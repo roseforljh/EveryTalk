@@ -460,6 +460,7 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
     internal val triggerScrollToBottom: () -> Unit,
     internal val uriToBase64Encoder: com.android.everytalk.data.DataClass.ModelImageEncoder,
     internal val getMcpDispatchCandidates: () -> List<McpToolCandidate> = { emptyList() },
+    internal val freezeCloudMcpBindings: suspend (Set<String>) -> Map<String, JsonObject> = { emptyMap() },
     internal val getSelectedExternalWebSearchProvider: () -> ExternalWebSearchProvider? = { null },
     internal val getSelectedExternalWebSearchProviderApiKey: () -> String = { "" },
     internal val prepareComputerRequest: suspend (String, Boolean) -> PreparedComputerRequest? = { _, _ -> null },
@@ -836,6 +837,8 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
             modelName = currentConfig?.model,
             providerName = currentConfig?.provider,
         )
+        // 调整命令可能等网络很久，期间用户可能已切走：只认排队消息所属的会话，不读点击后的当前页。
+        var isCurrent = false
         val added = withContext(Dispatchers.Main.immediate) {
             if (messages.any { it.id == messageId }) {
                 false
@@ -843,7 +846,8 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
                 stateHolder.textMessageAnimationStates[messageId] = true
                 stateHolder.textMessageConversationIds[messageId] = conversationId
                 messages.add(message)
-                if (targetConversationId == null) {
+                isCurrent = stateHolder._currentConversationId.value == conversationId
+                if (isCurrent) {
                     stateHolder._lastSentUserMessageId.value = messageId
                     triggerScrollToBottom()
                 }
@@ -853,16 +857,14 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
         if (!added) return
 
         val persisted = runCatching {
+            // 固定按所属会话的快照保存；“保存当前页”会在切页后读到新页面。
+            val snapshot = withContext(Dispatchers.Main.immediate) { messages.toList() }
             withContext(Dispatchers.IO) {
-                if (targetConversationId == null) {
-                    historyManager.saveCurrentChatToHistoryNow(forceSave = true, isImageGeneration = false)
-                } else {
-                    historyManager.saveConversationSnapshotNow(
-                        conversationId = conversationId,
-                        messages = messages.toList(),
-                        isImageGeneration = false,
-                    )
-                }
+                historyManager.saveConversationSnapshotNow(
+                    conversationId = conversationId,
+                    messages = snapshot,
+                    isImageGeneration = false,
+                )
             }
         }.isSuccess
         if (!persisted) {

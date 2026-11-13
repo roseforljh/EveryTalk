@@ -163,7 +163,7 @@ object ComputerConnectionServiceController {
                 AgentTerminalReasons.VISIBLE_MESSAGE_TERMINAL,
                 System.currentTimeMillis(),
             )
-            database.agentDao().getActiveRuns().isNotEmpty()
+            database.agentDao().getLocalActiveRuns().isNotEmpty()
         }
     }
 
@@ -284,7 +284,7 @@ class ComputerConnectionService : Service() {
                     AgentTerminalReasons.VISIBLE_MESSAGE_TERMINAL,
                     System.currentTimeMillis(),
                 )
-                val interruptedRuns = agentDao.getActiveRuns()
+                val interruptedRuns = agentDao.getLocalActiveRuns()
                 agentDao.recoverInterruptedAgentRuns()
                 interruptedRuns.forEach { run ->
                     AgentRecoveryDiagnostics.record(
@@ -347,7 +347,7 @@ class ComputerConnectionService : Service() {
             while (isActive) {
                 try {
                     agentDao.observeServiceRuns()
-                        .collect { activeRuns -> reconcileTaskSnapshot(activeRuns = activeRuns, source = "room_change") }
+                        .collect { activeRuns -> reconcileTaskSnapshot(activeRuns = activeRuns.filter { it.executionOwner == "LOCAL" }, source = "room_change") }
                 } catch (error: CancellationException) {
                     throw error
                 } catch (error: Exception) {
@@ -377,7 +377,7 @@ class ComputerConnectionService : Service() {
                 System.currentTimeMillis(),
             )
         }
-        reconcileTaskSnapshot(activeRuns = agentDao.getActiveRuns(), source = source)
+        reconcileTaskSnapshot(activeRuns = agentDao.getLocalActiveRuns(), source = source)
     }
 
     /** Room、网络回调和安全检查共用同一入口，避免并发启动重复 Watch 或重复续写。 */

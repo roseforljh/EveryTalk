@@ -151,7 +151,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     internal val syncController: com.android.everytalk.data.sync.SyncController = com.android.everytalk.data.sync.SyncController(
         application, authRepository.state, syncAccountBindingStore, viewModelScope,
         beforeClearLocal = {
-            apiHandler.stopAllTextRuns()
+            apiHandler.stopAllTextRuns(includeCloud = false)
             stateHolder.clearTextConversationCache()
             stateHolder._currentConversationId.value = ""
             stateHolder.isTextConversationDirty.value = false
@@ -570,6 +570,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 triggerScrollToBottom = { triggerScrollToBottom() },
                 uriToBase64Encoder = { uri -> com.android.everytalk.util.image.encodeImageForModel(getApplication(), uri) },
                 getMcpDispatchCandidates = { mcpManager.getDispatchCandidates() },
+                freezeCloudMcpBindings = mcpManager::cloudBindings,
                 getSelectedExternalWebSearchProvider = { selectedExternalWebSearchProvider },
                 getSelectedExternalWebSearchProviderApiKey = { selectedExternalWebSearchProviderApiKey },
                 prepareComputerRequest = computerManager::prepareRequest,
@@ -617,10 +618,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     internal val currentAgentRunControlState: StateFlow<AgentRunControlState?> =
         kotlinx.coroutines.flow.combine(
             stateHolder._currentTextStreamingAiMessageId,
+            stateHolder._remoteLiveRun,
             apiHandler.agentRunControlSnapshots,
-        ) { messageId, snapshots ->
-            messageId?.let(snapshots::get)?.state
+        ) { messageId, remote, snapshots ->
+            (messageId ?: remote?.takeIf { it.running && it.cloudRunId != null }?.message?.id)?.let(snapshots::get)?.state
         }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /** 当前页面由云端执行的回复：本机没有流式 Job，暂停/停止/队列按它定位。 */
+    internal fun cloudControlledMessageId(): String? =
+        stateHolder._remoteLiveRun.value?.takeIf { it.running && it.cloudRunId != null }?.message?.id
 
     /** Pending 复用现有 Room、Composer 状态和 MessageSender，不建立第二套发送链路。 */
     internal val pendingMessageController: PendingMessageController by lazy { createPendingMessageController(false) }
@@ -637,8 +643,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             conversation, stateHolder.textApiRunVersion,
         ) { id, _ -> stateHolder.textApiMessageIds[id] }
             .stateIn(viewModelScope, SharingStarted.Eagerly, null) else stateHolder._currentTextStreamingAiMessageId
+        // 云端任务在本机没有流式 Job，但会话同样在运行：新输入进队列，不能另开一轮。
         val running = if (fork) activeMessage.map { it != null }
-            .stateIn(viewModelScope, SharingStarted.Eagerly, false) else stateHolder._isTextApiCalling
+            .stateIn(viewModelScope, SharingStarted.Eagerly, false) else kotlinx.coroutines.flow.combine(
+                stateHolder._isTextApiCalling, stateHolder._remoteLiveRun,
+            ) { calling, remote -> calling || remote?.running == true && remote.cloudRunId != null }
+                .stateIn(viewModelScope, SharingStarted.Eagerly, false)
         val control = if (fork) kotlinx.coroutines.flow.combine(
             activeMessage, apiHandler.agentRunControlSnapshots,
         ) { id, snapshots -> id?.let(snapshots::get)?.state }
@@ -652,11 +662,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             agentRunControlState = control,
             recoverDispatches = !fork,
             isConversationRunning = { id ->
-                stateHolder.textApiMessageIds.containsKey(id) || id in stateHolder.preparingTextConversationIds.value
+                stateHolder.textApiMessageIds.containsKey(id) || id in stateHolder.preparingTextConversationIds.value ||
+                    stateHolder._remoteLiveRun.value?.let { it.running && it.cloudRunId != null && it.message.conversationId == id } == true
             },
             conversationRunVersion = kotlinx.coroutines.flow.combine(
-                stateHolder.textApiRunVersion, stateHolder.preparingTextConversationIds,
-            ) { version, preparing -> version * 31 + preparing.hashCode() }
+                stateHolder.textApiRunVersion, stateHolder.preparingTextConversationIds, stateHolder._remoteLiveRun,
+            ) { version, preparing, remote -> (version * 31 + preparing.hashCode()) * 31 + (remote?.running?.hashCode() ?: 0) }
                 .stateIn(viewModelScope, SharingStarted.Eagerly, 0L),
             hasComposerContent = {
                 if (fork) stateHolder._forkComposerText.value.isNotBlank() ||
@@ -693,13 +704,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     attachments = pending.attachments,
                 )
             },
+            isAlreadySteered = { pending -> apiHandler.isCloudSteerConsumed(pending.conversationId, pending.id) },
             recordSteeredMessage = { pending ->
                 messageSender.recordSteeredUserMessage(
                     messageId = pending.id,
                     text = pending.content,
                     contentParts = pending.contentParts,
                     attachments = pending.attachments,
-                    targetConversationId = pending.conversationId.takeIf { fork },
+                    targetConversationId = pending.conversationId,
                 )
             },
             showMessage = ::showSnackbar,
@@ -1187,12 +1199,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
        scope = viewModelScope,
        agentRunControlState = currentAgentRunControlState,
        requestPause = {
-           stateHolder._currentTextStreamingAiMessageId.value
+           (stateHolder._currentTextStreamingAiMessageId.value ?: cloudControlledMessageId())
                ?.let(apiHandler::requestPauseCurrentAgent)
                ?: false
        },
        resumeAgent = {
-           stateHolder._currentTextStreamingAiMessageId.value
+           (stateHolder._currentTextStreamingAiMessageId.value ?: cloudControlledMessageId())
                ?.let(apiHandler::resumePausedAgent)
                ?: false
        },
@@ -1392,11 +1404,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     stateHolder._remoteLiveRun.value = if (remote.isEmpty()) null else withContext(Dispatchers.IO) {
                         val sessionUuid = chatDao.getStoredSession(currentId)?.uuid ?: return@withContext null
                         val run = remote[sessionUuid] ?: return@withContext null
-                        val localId = chatDao.getMessageByUuid(run.messageUuid)?.id ?: "cloud:${run.messageUuid}"
+                        val cloudRunId = run.runId.takeIf { cloud[sessionUuid]?.runId == it }
+                        // 云端投影已按持久 Run 的 visibleAssistantMessageId 定位；运行中的占位只在草稿表，
+                        // 再按 messages 表查 UUID 会把首发设备的回复改成 cloud:ID，和运行控制的 key 对不上。
+                        val localId = if (cloudRunId != null) run.message.id
+                            else chatDao.getMessageByUuid(run.messageUuid)?.id ?: "cloud:${run.messageUuid}"
                         val message = com.android.everytalk.data.sync.mapLiveMessageReferences(run.message, chatDao::resolveLocalMessageReference)
                         com.android.everytalk.statecontroller.RemoteLiveRun(sessionUuid, message.copy(id = localId, conversationId = currentId,
                             executionStatus = message.executionStatus.takeIf { run.running || message.isError }), run.running,
-                            cloudRunId = run.runId.takeIf { cloud[sessionUuid]?.runId == it })
+                            cloudRunId = cloudRunId)
                     }
                 }
         }
