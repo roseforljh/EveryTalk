@@ -1,6 +1,7 @@
 import { authConfig, apiBaseUrl } from "./auth";
 import { isObject, isPermanentSyncFailure } from "./sync-core";
 import { SyncStore } from "./sync-store";
+import { liveDevice } from "./live";
 import type { DownloadPreferences } from './file-downloads';
 import { syncKey, type AuthSession, type JsonObject, type PendingChange, type PullResponse, type PushResponse, type StoredRecord, type SyncEntity } from "./types";
 
@@ -222,7 +223,7 @@ export class SyncClient {
       const secretsEpoch = (await this.requireStore().snapshot()).state.secretsEpoch ?? 0;
       const response = await this.fetcher(`${this.baseUrl}${path}`, { ...init, redirect: "error", cache: "no-store",
         signal: AbortSignal.any([this.abort.signal, AbortSignal.timeout(30_000)]),
-        headers: { Authorization: `Bearer ${current.access_token}`, "X-EveryTalk-Sync-Version": VERSION,
+        headers: { Authorization: `Bearer ${current.access_token}`, "X-EveryTalk-Sync-Version": VERSION, "X-EveryTalk-Device": liveDevice,
           "X-EveryTalk-Secrets-Epoch": String(secretsEpoch), ...(init.body ? { "Content-Type": "application/json" } : {}), ...Object.fromEntries(new Headers(init.headers)) },
       });
       if (response.status === 401 && refreshSession && !refreshed) {

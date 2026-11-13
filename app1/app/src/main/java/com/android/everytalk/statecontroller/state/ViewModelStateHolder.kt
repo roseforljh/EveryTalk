@@ -124,6 +124,8 @@ import java.util.concurrent.ConcurrentHashMap
     // 分离的流式消息ID
     val _currentTextStreamingAiMessageId = MutableStateFlow<String?>(null)
     val _currentImageStreamingAiMessageId = MutableStateFlow<String?>(null)
+    /** 当前会话在同账号另一台设备上运行中的回复（消息 ID 已换成本机 ID），本机没在运行时才显示。 */
+    val _remoteLiveRun = MutableStateFlow<RemoteLiveRun?>(null)
 
 // 仅用于冻结渲染的镜像；AgentRunPauseController 才是 Safe Pause 的运行事实。
 val _isStreamingPaused = MutableStateFlow(false)

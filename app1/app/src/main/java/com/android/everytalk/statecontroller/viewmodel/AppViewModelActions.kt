@@ -1074,6 +1074,13 @@ import java.util.UUID
         apiHandler.cancelCurrentApiJob("用户停止准备中或等待确认的任务", isImageGeneration = false, showFeedback = true)
     }
 
+    /** 停止另一台设备上运行的当前会话；那台设备下一次上报时收到请求并走自己的停止流程。 */
+    internal fun AppViewModel.stopRemoteRun() {
+        val run = stateHolder._remoteLiveRun.value?.takeIf { it.running } ?: return
+        com.android.everytalk.data.sync.LiveSync.requestRemoteStop(run.sessionUuid)
+        stateHolder.showSnackbar("正在停止另一台设备上的任务")
+    }
+
     /**
      * 手动「立即压缩」：不看阈值，直接给当前会话压出一条新检查点。
      * 要真发一次模型请求，置位期间按钮转圈并禁用，避免连点发出两次压缩。

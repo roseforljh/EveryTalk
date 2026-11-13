@@ -53,6 +53,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -1381,6 +1382,34 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         persistenceManager.refreshSyncedConfigurations(simpleModeManager::isInImageMode)
                         _externalWebSearchConfigs.value = persistenceManager.loadExternalWebSearchConfigs().associateBy { it.providerId }
                         persistenceManager.loadSelectedExternalWebSearchProviderId()?.let { _selectedExternalWebSearchProviderId.value = it }
+        // 同账号其他设备运行中的回复：换成本机会话和消息 ID 后交给消息列表叠加显示。
+        viewModelScope.launch {
+            val chatDao = AppDatabase.getDatabase(getApplication()).chatDao()
+            kotlinx.coroutines.flow.combine(stateHolder._currentConversationId, com.android.everytalk.data.sync.LiveSync.remote) { id, remote -> id to remote }
+                .collectLatest { (currentId, remote) ->
+                    stateHolder._remoteLiveRun.value = if (remote.isEmpty()) null else withContext(Dispatchers.IO) {
+                        val sessionUuid = chatDao.getStoredSession(currentId)?.uuid ?: return@withContext null
+                        val run = remote[sessionUuid] ?: return@withContext null
+                        val localId = chatDao.getMessageByUuid(run.messageUuid)?.id ?: "cloud:${run.messageUuid}"
+                        com.android.everytalk.statecontroller.RemoteLiveRun(sessionUuid, run.message.copy(id = localId, conversationId = currentId,
+                            executionStatus = run.message.executionStatus.takeIf { run.running }), run.running)
+                    }
+                }
+        }
+        // 另一台设备点了停止：当前页面的任务走停止按钮同一流程，后台会话直接结束。
+        viewModelScope.launch {
+            com.android.everytalk.data.sync.LiveSync.cancelRequests.collect { sessionUuid ->
+                val sessionId = withContext(Dispatchers.IO) {
+                    AppDatabase.getDatabase(getApplication()).chatDao().getSessionByUuid(sessionUuid)?.id
+                } ?: return@collect
+                if (stateHolder._currentConversationId.value == sessionId && stateHolder._isTextApiCalling.value) {
+                    apiHandler.cancelCurrentApiJob("另一台设备请求停止", isImageGeneration = false, showFeedback = true)
+                } else {
+                    apiHandler.stopConversationRuns(sessionId)
+                }
+            }
+        }
+
                         val history = withContext(Dispatchers.IO) { persistenceManager.roomDataSource.loadChatHistoryPreviewResult() }
                         stateHolder._historicalConversations.value = history.sessions.map { it.messages }
                         stateHolder.conversationGroups.value = persistenceManager.loadConversationGroups()

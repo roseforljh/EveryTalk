@@ -45,3 +45,10 @@ data class ConversationFunctionToggleState(
     val detachedComputerName: String? = null,
     val detachedWorkspacePath: String? = null,
 )
+
+/** 另一台设备正在生成的回复。sessionUuid 用于远程停止；message.id 是本机定稿后会用的 ID。 */
+data class RemoteLiveRun(
+    val sessionUuid: String,
+    val message: com.android.everytalk.data.DataClass.Message,
+    val running: Boolean,
+)

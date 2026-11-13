@@ -178,6 +178,8 @@ internal class KtorSyncApi(
                                 while (true) { val count = input.read(buffer); if (count < 0) break; channel.writeFully(buffer, 0, count) }
                             }
                         }
+                // 服务器据此只通知其他设备拉取，不把本机的推送再推回本机。
+                header("X-EveryTalk-Device", LiveSync.deviceId)
                     })
                 } else if (body != null) {
                     contentType(ContentType.Application.Json)

@@ -475,6 +475,7 @@ class ApiHandler(
             // Agent 的 callbackFlow 有缓冲：Room 的 Run 可能早已完成，当前消费的却仍是正文增量。
             // 只有这条消息自己已经处理终态事件/错误/停止，才允许离开草稿边界。
             val terminal = snapshot.sender != Sender.AI || snapshot.isError || snapshot.executionFinishedAt != null
+            var liveTarget: Pair<String, String>? = null
             withContext(Dispatchers.IO) {
                 database.withTransaction {
                     val dao = database.chatDao()
@@ -484,6 +485,7 @@ class ApiHandler(
                     val entity = snapshot.copy(isStreamingDraft = !terminal).toEntity(sessionId)
                     val stored = dao.getStoredMessage(entity.id, entity.uuid)
                     if (stored?.deleted == true) return@withTransaction
+                    if (snapshot.sender == Sender.AI && !session.isImageGeneration) liveTarget = session.uuid to entity.uuid
                     // 正式消息不可改写；运行内容只进草稿，终态才定稿一次。
                     if (stored != null) return@withTransaction
                     if (terminal) dao.upsertMessages(listOf(entity))
@@ -494,6 +496,12 @@ class ApiHandler(
                 }
             }
             lastMessagePersistedAt[messageId] = now
+            // 同账号其他设备实时看到这条回复；运行登记消失即视为结束，兜住没走到终态的退出。
+            liveTarget?.let { (sessionUuid, messageUuid) ->
+                com.android.everytalk.data.sync.LiveSync.publish(context, sessionUuid, messageUuid, snapshot, terminal) {
+                    stateHolder.textApiMessageIds.containsValue(messageId)
+                }
+            }
         }
     }
 
@@ -618,6 +626,9 @@ class ApiHandler(
     init {
         // 页面 Collector 离开后，应用级 Agent 继续运行；回到进程后仍把事件写回原消息。
         viewModelScope.launch {
+          // 计数让协调器知道界面在处理事件并负责实时上报；ViewModel 销毁后由协调器接手。
+          agentRunCoordinator.uiEventCollectors.incrementAndGet()
+          try {
             agentRunCoordinator.events.collect { (messageId, event) ->
                 if (!stateHolder.textMessageConversationIds.containsKey(messageId)) {
                     agentRunStore.getRunByVisibleMessage(messageId)?.let { run ->
@@ -660,6 +671,9 @@ class ApiHandler(
                     }
                 }
             }
+          } finally {
+            agentRunCoordinator.uiEventCollectors.decrementAndGet()
+          }
         }
     }
     

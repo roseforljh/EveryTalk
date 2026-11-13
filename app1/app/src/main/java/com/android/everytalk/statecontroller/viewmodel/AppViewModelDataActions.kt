@@ -131,6 +131,7 @@ import java.util.TimeZone
 
     internal fun AppViewModel.getMessageById(id: String): Message? {
         return messages.find { it.id == id } ?: imageGenerationMessages.find { it.id == id }
+            ?: stateHolder._remoteLiveRun.value?.message?.takeIf { it.id == id }
     }
 
     internal fun AppViewModel.getStreamingReasoning(messageId: String) = stateHolder.getStreamingReasoning(messageId)

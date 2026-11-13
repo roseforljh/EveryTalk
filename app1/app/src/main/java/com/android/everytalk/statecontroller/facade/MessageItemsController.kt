@@ -317,7 +317,18 @@ open class MessageItemsController(
             },
             stateHolder._isTextApiCalling,
             stateHolder._currentTextStreamingAiMessageId,
-        ) { messages, isApiCalling, currentStreamingAiMessageId ->
+            stateHolder._remoteLiveRun,
+        ) { roomMessages, localApiCalling, localStreamingId, remote ->
+            // 本机没在运行时叠加另一台设备的实时回复：同 ID 替换，否则追加；结束后等定稿消息到达再让位。
+            val overlay = remote?.takeIf { !localApiCalling }
+            val messages = when {
+                overlay == null -> roomMessages
+                roomMessages.any { it.id == overlay.message.id } ->
+                    if (overlay.running) roomMessages.map { if (it.id == overlay.message.id) overlay.message else it } else roomMessages
+                else -> roomMessages + overlay.message
+            }
+            val isApiCalling = localApiCalling || overlay?.running == true
+            val currentStreamingAiMessageId = if (localApiCalling) localStreamingId else overlay?.takeIf { it.running }?.message?.id
             val renderableMessages = filterRenderableMessages(messages)
             retainCurrentMessageState(renderableMessages, chatListItemCache)
             liveTextMessageIds.retainAll(renderableMessages.mapTo(HashSet()) { it.id })

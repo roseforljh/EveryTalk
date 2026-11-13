@@ -596,6 +596,7 @@ import { builtinTools } from './builtin-tools'
 import { combineTools } from './model-tools'
 import { blockedInputMessage, stableSystemPrompt } from './system-prompt'
 import { reportCategories } from './report'
+import { connectLive, livePublisher, requestLiveStop, type LiveRemote } from './live'
 
 const str = (value: unknown, fallback = ''): string => (typeof value === 'string' ? value : fallback)
 const valueOf = (record?: StoredRecord): JsonObject => (record && isObject(record.payload.value) ? record.payload.value : {})
@@ -1205,6 +1206,8 @@ export function Workspace({ session, onSignOut }: { session: AuthSession; onSign
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
   const [streaming, setStreaming] = useState<ModelResult & { sessionId: string; startedAt: number }>()
+  // 同账号其他设备正在生成的回复，key 是会话 ID。
+  const [remoteRuns, setRemoteRuns] = useState<Record<string, LiveRemote>>({})
   const [elapsedSeconds, setElapsedSeconds] = useState(0)
   const [listening, setListening] = useState(false)
   const [speakingMessage, setSpeakingMessage] = useState('')
@@ -1308,8 +1311,17 @@ export function Workspace({ session, onSignOut }: { session: AuthSession; onSign
     str(session.user.user_metadata?.everytalk_name, str(session.user.user_metadata?.full_name, session.user.email?.split('@')[0] ?? 'EveryTalk 用户'))
   )
 
+  const remoteRun = activeId ? remoteRuns[activeId] : undefined
+  const remoteShown = remoteRun && !messages.some(message => message.id === remoteRun.messageUuid) ? remoteRun : undefined
+  const remoteRunning = Boolean(remoteShown?.running) && !(streaming && streaming.sessionId === activeId)
+  const liveView = streaming && streaming.sessionId === activeId
+    ? streaming
+    : remoteShown
+      ? { ...remoteShown.result, ...(remoteShown.running ? {} : { activeStatus: undefined }), sessionId: activeId!, startedAt: remoteShown.startedAt }
+      : undefined
+
   // 实时更新思考与工具执行秒表（与安卓端 LoadingStageIndicator / ExecutionChainHeader 对齐）
-  const streamingStartedAt = streaming?.startedAt
+  const streamingStartedAt = remoteRunning ? remoteShown?.startedAt : streaming?.startedAt
   useEffect(() => {
     if (!streamingStartedAt) {
       setElapsedSeconds(0)
@@ -1401,6 +1413,36 @@ export function Workspace({ session, onSignOut }: { session: AuthSession; onSign
     return renewed
   }, [sessionRef])
   const downloads = useFileDownloads(ready ? imageClient : undefined, records, session, refreshSession)
+
+  // 其他设备的运行快照、结束和云端变更：变更立即同步，结束后保留最后画面直到定稿消息到达。
+  useEffect(() => {
+    if (!ready || session.user.id === 'local-preview-user') return
+    const timers = new Set<number>()
+    const close = connectLive({ session: () => sessionRef.current, refresh: refreshSession }, {
+      onChanged: () => void refresh(),
+      onLive: (id, remote) => setRemoteRuns(runs => ({ ...runs, [id]: remote })),
+      onEnd: id => {
+        setRemoteRuns(runs => (runs[id] ? { ...runs, [id]: { ...runs[id], running: false } } : runs))
+        void refresh()
+        const timer = window.setTimeout(() => {
+          timers.delete(timer)
+          setRemoteRuns(runs => {
+            if (runs[id]?.running !== false) return runs
+            const next = { ...runs }
+            delete next[id]
+            return next
+          })
+        }, 60_000)
+        timers.add(timer)
+      },
+      onReset: () => setRemoteRuns({}),
+    })
+    return () => {
+      close()
+      timers.forEach(timer => window.clearTimeout(timer))
+      setRemoteRuns({})
+    }
+  }, [ready, session.user.id, sessionRef, refreshSession, refresh])
 
   // 消息超过服务端上限时，完整正文只存在于 message_archive 附件里。
   // 打开会话时下载并解密回填到显示层，只影响显示，不写回同步队列。
@@ -1714,7 +1756,12 @@ export function Workspace({ session, onSignOut }: { session: AuthSession; onSign
     controller.current = new AbortController()
     const abort = controller.current
     const startedAt = Date.now()
+    // 回复 ID 先定下来：实时快照和定稿消息用同一个 ID，其他设备才能无缝换成正式消息。
+    const replyId = crypto.randomUUID()
+    const live = session.user.id === 'local-preview-user' ? undefined
+      : livePublisher({ session: () => sessionRef.current, refresh: refreshSession }, chat.id, replyId, () => abort.abort())
     setStreaming({ text: '', reasoning: '', sessionId: chat.id, startedAt })
+    live?.update({ text: '', reasoning: '', activeStatus: '正在连接模型' })
     try {
       // 本地免登录预览模式下，若选用内置演示模型，则执行实时流式思考、工具调用与回复演示，无需云端令牌即可完整体验动态效果。
       if (session.user.id === 'local-preview-user' && isBuiltinModel(valueOf(chosen), str(chosen.payload.key))) {
@@ -1814,7 +1861,7 @@ export function Workspace({ session, onSignOut }: { session: AuthSession; onSign
           storedChat = fresh.records.find(r => r.entity === 'sessions' && r.id === chat.id)
         if (storedChat?.deleted || context.some(m => fresh.records.some(r => r.id === m.id && r.entity === 'messages' && r.deleted))) throw new Error('这段对话已在另一端删除，图片未保存')
         const now = updated(storedChat ?? chat),
-          id = crypto.randomUUID(),
+          id = replyId,
           resources: StoredRecord[] = []
         for (const [index, dataUrl] of result.images.entries()) resources.push(...(await uploadResource(current.client, sessionRef.current, dataUrlFile(dataUrl, index), chat.id, id, refreshSession)))
         const text = result.text || '已生成图片'
@@ -1863,6 +1910,7 @@ export function Workspace({ session, onSignOut }: { session: AuthSession; onSign
         nativeSearch ? withNativeWebSearch(request, config) : request,
         abort.signal,
         partial => {
+          live?.update(partial)
           if (current.alive) setStreaming({ ...partial, sessionId: chat.id, startedAt })
         },
         refreshSession,
@@ -1873,7 +1921,7 @@ export function Workspace({ session, onSignOut }: { session: AuthSession; onSign
       const storedChat = fresh.records.find(r => r.entity === 'sessions' && r.id === chat.id)
       if (storedChat?.deleted || context.some(m => fresh.records.some(r => r.id === m.id && r.entity === 'messages' && r.deleted))) throw new Error('这段对话已在另一端删除，回复未保存')
       const now = updated(storedChat ?? chat),
-        id = crypto.randomUUID()
+        id = replyId
       await current.client.saveRecords([
         recordOf('messages', id, {
           sessionId: chat.id,
@@ -1895,6 +1943,7 @@ export function Workspace({ session, onSignOut }: { session: AuthSession; onSign
       ])
       await changed()
     } finally {
+      live?.finish()
       if (controller.current === abort) controller.current = undefined
       if (current.alive) setStreaming(undefined)
     }
@@ -3347,22 +3396,22 @@ export function Workspace({ session, onSignOut }: { session: AuthSession; onSign
               )
             })}
 
-            {streaming && streaming.sessionId === activeId && (
+            {liveView && (
               <article className="et-message from-assistant" aria-live="polite">
                 <div className="et-assistant-body">
-                  {Boolean(streaming.reasoning) || Boolean(streaming.executionSteps?.length) ? (
+                  {Boolean(liveView.reasoning) || Boolean(liveView.executionSteps?.length) ? (
                     <ThinkingExecutionBlock
-                      reasoning={streaming.reasoning}
-                      steps={streaming.executionSteps ?? []}
+                      reasoning={liveView.reasoning}
+                      steps={liveView.executionSteps ?? []}
                       searchResults={[]}
-                      isStreaming={true}
-                      hasMainText={Boolean(streaming.text.trim())}
-                      activeStatus={streaming.activeStatus}
+                      isStreaming={liveView === streaming || remoteRunning}
+                      hasMainText={Boolean(liveView.text.trim())}
+                      activeStatus={liveView.activeStatus}
                       durationSeconds={elapsedSeconds}
                       onOpenTimeline={() =>
                         setTimelineModal({
-                          reasoning: streaming.reasoning,
-                          steps: streaming.executionSteps ?? [],
+                          reasoning: liveView.reasoning,
+                          steps: liveView.executionSteps ?? [],
                           searchResults: [],
                           durationSeconds: elapsedSeconds,
                           isStreaming: true,
@@ -3370,19 +3419,19 @@ export function Workspace({ session, onSignOut }: { session: AuthSession; onSign
                       }
                     />
                   ) : (
-                    !streaming.text && (
+                    !liveView.text && (
                       <div className="et-loading-stage">
                         <AndroidLoadingRing size={16} strokeWidth={2.2} />
                         <span className="et-shimmer-text">
-                          {imageMode ? '正在生成图片' : streaming.activeStatus || '正在连接模型'}
+                          {imageMode ? '正在生成图片' : liveView.activeStatus || '正在连接模型'}
                         </span>
                         <span>· {elapsedSeconds}s</span>
                       </div>
                     )
                   )}
-                  {streaming.text && (
+                  {liveView.text && (
                     <div className="et-message-text">
-                      {renderFormattedMessageText(streaming.text, [], () => null)}
+                      {renderFormattedMessageText(liveView.text, [], () => null)}
                     </div>
                   )}
                 </div>
@@ -3876,6 +3925,18 @@ export function Workspace({ session, onSignOut }: { session: AuthSession; onSign
 
                     {busy ? (
                       <button type="button" className="et-send" aria-label="停止生成" onClick={() => controller.current?.abort()}>
+                        <Square size={14} fill="currentColor" />
+                      </button>
+                    ) : remoteRunning && !draft.trim() && !files.length ? (
+                      <button
+                        type="button"
+                        className="et-send"
+                        aria-label="停止另一台设备上的生成"
+                        title="停止另一台设备上的生成"
+                        onClick={() => {
+                          if (activeId) void requestLiveStop({ session: () => sessionRef.current, refresh: refreshSession }, activeId)
+                        }}
+                      >
                         <Square size={14} fill="currentColor" />
                       </button>
                     ) : draft.trim() || files.length > 0 ? (

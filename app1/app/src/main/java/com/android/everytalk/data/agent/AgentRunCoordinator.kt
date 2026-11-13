@@ -38,6 +38,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
@@ -269,6 +271,54 @@ class AgentRunCoordinator(
 
     private val _events = MutableSharedFlow<Pair<String, AppStreamEvent>>(extraBufferCapacity = 128)
     val events = _events.asSharedFlow()
+
+    /** ApiHandler 收集事件时计数；为 0 表示界面已销毁、只有前台服务在跑，由协调器自己上报实时快照。 */
+    val uiEventCollectors = java.util.concurrent.atomic.AtomicInteger(0)
+    private val liveStatuses = ConcurrentHashMap<String, String>()
+    private val liveJobs = ConcurrentHashMap<String, Job>()
+    // 常驻收集器不放进 Run 的 scope，等待 Run 全部结束的地方不能被它们挡住。
+    private val liveScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    init {
+        liveScope.launch {
+            events.collect { (messageId, event) -> if (uiEventCollectors.get() == 0) publishLiveFromLedger(messageId, event) }
+        }
+        // 界面不在时，另一台设备的停止请求由这里执行。
+        liveScope.launch {
+            com.android.everytalk.data.sync.LiveSync.cancelRequests.collect { sessionUuid ->
+                if (uiEventCollectors.get() > 0) return@collect
+                val session = database.chatDao().getSessionByUuid(sessionUuid) ?: return@collect
+                agentRunStore.getRunsForSession(session.id)
+                    .filter { it.status !in setOf("COMPLETED", "FAILED", "CANCELLED") }
+                    .forEach { cancelVisibleRun(it.visibleAssistantMessageId) }
+            }
+        }
+    }
+
+    /** 按 Room 账本重建可见回复并上报，500ms 节流；Finish 立即通知结束。 */
+    private fun publishLiveFromLedger(messageId: String, event: AppStreamEvent) {
+        if (event is AppStreamEvent.ExecutionStatusUpdate) {
+            event.status?.let { liveStatuses[messageId] = it } ?: liveStatuses.remove(messageId)
+        }
+        val terminal = event is AppStreamEvent.Finish
+        if (!terminal && liveJobs[messageId]?.isActive == true) return
+        liveJobs[messageId] = liveScope.launch {
+            if (!terminal) delay(500)
+            val run = agentRunStore.getRunByVisibleMessage(messageId) ?: return@launch
+            val session = database.chatDao().getStoredSession(run.sessionId)
+                ?.takeUnless { it.deleted || it.isImageGeneration } ?: return@launch
+            val trace = agentRunStore.executionTrace(run.id)
+            val message = com.android.everytalk.data.DataClass.Message(
+                id = messageId, sender = com.android.everytalk.data.DataClass.Sender.AI, contentStarted = true,
+                text = trace.filterIsInstance<ExecutionTraceEvent.Content>().joinToString("") { it.text },
+                reasoning = trace.filterIsInstance<ExecutionTraceEvent.Reasoning>().joinToString("") { it.text }.ifBlank { null },
+                executionTrace = trace, executionStatus = liveStatuses[messageId].takeUnless { terminal },
+            )
+            if (terminal) { liveStatuses.remove(messageId); liveJobs.remove(messageId) }
+            com.android.everytalk.data.sync.LiveSync.publish(appContext, session.uuid,
+                com.android.everytalk.data.database.entities.localSyncUuid("messages", messageId), message, terminal) { isRunActive(run) }
+        }
+    }
     private val _lifecycleEvents = MutableSharedFlow<AgentLifecycleEvent>(extraBufferCapacity = 128)
     val lifecycleEvents = _lifecycleEvents.asSharedFlow()
     private val _pendingInterventions = MutableStateFlow<List<PendingIntervention>>(emptyList())

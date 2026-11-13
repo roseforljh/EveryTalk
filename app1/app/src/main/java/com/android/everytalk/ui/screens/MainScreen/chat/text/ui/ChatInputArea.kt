@@ -827,7 +827,10 @@ fun ChatInputArea(
     val canRestoreMessage = messageEditSession?.takeIf {
         it.belongsTo(currentConversationId, false)
     }?.matchesDraft(displaySkillEditorText(localText, skillReferences), selectedMediaItems, currentDraftParts) == true
-    val primaryAction = resolveComposerPrimaryAction(
+    // 当前会话在另一台设备上运行、本机空闲且没有草稿时，主按钮用来远程停止。
+    val remoteLiveRun by viewModel.stateHolder._remoteLiveRun.collectAsState()
+    val remoteRunning = forkTarget == null && remoteLiveRun?.running == true && chatRunState == ChatRunState.Idle && !hasContent
+    val primaryAction = if (remoteRunning) ComposerPrimaryAction.STOP else resolveComposerPrimaryAction(
         runState = chatRunState,
         composerMode = composerMode,
         hasDraft = hasContent,
@@ -857,6 +860,8 @@ fun ChatInputArea(
                 controlledMessageId?.let(viewModel.apiHandler::requestPauseCurrentAgent)
             } else if (forkTarget != null && primaryAction == ComposerPrimaryAction.RESUME) {
                 controlledMessageId?.let(viewModel.apiHandler::resumePausedAgent)
+            } else if (remoteRunning) {
+                viewModel.stopRemoteRun()
             } else if (primaryAction == ComposerPrimaryAction.STOP) {
                 viewModel.stopUncontrolledRun(controlledMessageId)
             } else if (primaryAction == ComposerPrimaryAction.FORCE_STOP) {

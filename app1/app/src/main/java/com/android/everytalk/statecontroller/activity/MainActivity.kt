@@ -1065,6 +1065,8 @@ class MainActivity : AppCompatActivity() {
        super.onStart()
        // 回到前台时也拉取其他设备的数据，不必等待后台的 15 分钟周期任务。
        com.android.everytalk.service.SyncScheduler.request(applicationContext)
+       // 前台时接收其他设备的运行状态和云端变更通知。
+       com.android.everytalk.data.sync.LiveSync.setForeground(applicationContext, true)
        // 先立即禁止新的事件通知，再在后台清理通知栏。
        // 系统通知查询属于跨进程调用，放在主线程会让回前台动画和整个聊天页面一起卡住。
        AgentNotificationManager.markAppForeground()
@@ -1084,6 +1086,7 @@ class MainActivity : AppCompatActivity() {
            appViewModel.onAppStop()
        }
        com.android.everytalk.service.SyncScheduler.requestNow(applicationContext)
+       com.android.everytalk.data.sync.LiveSync.setForeground(applicationContext, false)
    }
    
    /**
