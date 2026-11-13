@@ -92,6 +92,10 @@ object ComputerToolNames {
 
 /** 八个稳定的 Computer Tool Schema，服务器身份由 Android 请求快照注入，模型参数中不出现。 */
 object ComputerToolCatalog {
+    /** 保留文件交付能力，但不能把“能保存”误当成每轮都应生成手机文件。 */
+    const val PHONE_FILE_POLICY = "Do not create, save, download or export files on the phone unless the user explicitly requests it. " +
+        "Answer in chat by default; generating code, reports or server files is not permission to save them on the phone. " +
+        "Do not proactively offer phone files or request save approval for ordinary answers. "
     /** Cloudflare 工具单独声明，避免把 VPS exec schema 暴露给云端目标。 */
     fun cloudflareDefinitions(
         workerWriteEnabled: Boolean = true,
@@ -281,7 +285,7 @@ object ComputerToolCatalog {
         ),
         function(
             name = ComputerToolNames.DOWNLOAD,
-            description = "Send a deliverable file from the server to the client: it is saved to the phone under Download/App/AppTalk and attached to the chat. Call this after creating any file the user needs instead of only returning a server path; after success, link it where you describe it as [file name](returned file_link). For server-to-server transfer, pass the returned attachment_id to the other server's upload.",
+            description = PHONE_FILE_POLICY + "Download a server file to the phone under Download/App/AppTalk and attach it to chat only when explicitly requested. After success, link it as [file name](returned file_link). For an explicitly requested server-to-server transfer, pass the returned attachment_id to the other server's upload.",
             properties = mapOf(
                 "source_path" to string("Absolute source path, or a path relative to the SSH user's home."),
                 "suggested_name" to string("Optional local file name."),

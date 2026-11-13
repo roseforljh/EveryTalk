@@ -12,6 +12,21 @@ import org.junit.Test
 
 class MessageSenderComputerToolTest {
     @Test
+    fun `手机文件能力保留但所有入口只在用户明确要求时使用`() {
+        val policy = com.android.everytalk.data.computer.ComputerToolCatalog.PHONE_FILE_POLICY
+        val local = com.android.everytalk.statecontroller.viewmodel.prepareLocalComputerRequest("chat")
+        assertTrue(local.environmentPrompt.contains(policy))
+        val tools = appendLocalBashTool(emptyList(), enabled = true)
+        assertEquals(setOf("local_bash", ComputerToolNames.LOCAL_FILE_SAVE), tools.mapNotNull(::extractToolName).toSet())
+        tools.forEach { tool ->
+            assertTrue((tool["function"] as Map<*, *>)["description"].toString().contains(policy))
+        }
+        val download = com.android.everytalk.data.computer.ComputerToolCatalog.definitions()
+            .first { extractToolName(it) == ComputerToolNames.DOWNLOAD }
+        assertTrue((download["function"] as Map<*, *>)["description"].toString().contains(policy))
+    }
+
+    @Test
     fun `agent toggle adds all seven tools and message snapshot marker`() {
         val tools = appendComputerTools(emptyList(), enabled = true)
         val names = tools.mapNotNull(::extractToolName).toSet()

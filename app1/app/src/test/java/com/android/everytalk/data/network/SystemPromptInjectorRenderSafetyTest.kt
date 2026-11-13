@@ -45,6 +45,7 @@ class SystemPromptInjectorRenderSafetyTest {
         val prompt = SystemPromptInjector.getSystemPrompt()
         listOf(
             "Related calls may proceed together", "Reuse existing authorization",
+            "Save, download or export phone files only when explicitly requested", "Do not proactively offer phone files",
             "load_skill", "read_skill_file", "A Skill catalog is an index", "Skills grant no permissions",
             "request_agent", "request_user_input", "# AI content safety", "non-consensual intimate",
             "one row per line", "escaped `\\|`", "code fences on separate lines", "do not backtick or split URLs",

@@ -356,7 +356,7 @@ internal fun appendLocalBashTool(
             "type" to "function",
             "function" to mapOf(
                 "name" to "local_bash",
-                "description" to "Run a restricted Bash command in a temporary in-memory snapshot of the app's private Workspace, without system files or network. File changes are not saved automatically; use local_file_save to keep them.",
+                "description" to "Run a restricted Bash command in a temporary in-memory snapshot of the app's private Workspace, without system files or network. File changes are discarded after execution. " + ComputerToolCatalog.PHONE_FILE_POLICY,
                 "parameters" to mapOf(
                     "type" to "object",
                     "properties" to mapOf(
@@ -373,7 +373,7 @@ internal fun appendLocalBashTool(
             "type" to "function",
             "function" to mapOf(
                 "name" to ComputerToolNames.LOCAL_FILE_SAVE,
-                "description" to "Save a text file to the current local Workspace after user confirmation and return an openable file reference.",
+                "description" to ComputerToolCatalog.PHONE_FILE_POLICY + "Save a text file to the current local Workspace only for an explicit user request, after user confirmation, and return an openable file reference.",
                 "parameters" to mapOf("type" to "object", "properties" to mapOf(
                     "path" to mapOf("type" to "string"), "content" to mapOf("type" to "string")),
                     "required" to listOf("path", "content")),

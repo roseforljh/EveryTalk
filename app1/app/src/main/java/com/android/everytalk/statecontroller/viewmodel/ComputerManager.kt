@@ -32,6 +32,7 @@ import com.android.everytalk.data.database.entities.toModel
 import com.android.everytalk.data.computer.ComputerStatus
 import com.android.everytalk.data.computer.canAutoReconnect
 import com.android.everytalk.data.computer.ComputerToolExecutor
+import com.android.everytalk.data.computer.ComputerToolCatalog
 import com.android.everytalk.data.computer.ComputerToolNames
 import com.android.everytalk.data.computer.ComputerWorkspace
 import com.android.everytalk.data.computer.ComputerWorkspaceManager
@@ -1127,11 +1128,11 @@ internal fun buildComputerEnvironmentPrompt(computer: Computer, workspace: Compu
         ComputerPermissionMode.FULL -> "All valid Agent operations execute directly without a user approval prompt."
     }
     if (computer.provider == ComputerProvider.CLOUDFLARE) return "The target is a Cloudflare Computer; tools operate resources in the current account. " +
-        "Local just-bash uses a private in-memory Workspace snapshot; local_file_save saves a file and returns an attachment. Link files where you describe them as [file name](returned file_link). $permissionInstruction"
+        ComputerToolCatalog.PHONE_FILE_POLICY + "Local just-bash uses a private in-memory Workspace snapshot. Only after an explicitly requested local_file_save succeeds, link it as [file name](returned file_link). $permissionInstruction"
     return "Agent server tools operate the selected VPS directly over SSH, like a person logged in to it. " +
         "There is no sandbox or app-specific directory; these facts supersede any container or /workspace rules in earlier conversation history. " +
         "For long-running services use the server's own tools (systemd, tmux, nohup). " +
-        "After creating a file the user needs, call download instead of only returning a server path. " +
+        ComputerToolCatalog.PHONE_FILE_POLICY +
         "download saves it to the phone under Download/App/AppTalk and returns saved_path, attachment_id and file_link; only tell the user it is saved after success. " +
         "Link each deliverable where you describe it as a Markdown link [file name](actual file_link), not as a bare path or a pile of links at the end. " +
         "$permissionInstruction " +
@@ -1147,7 +1148,7 @@ internal fun prepareLocalComputerRequest(conversationId: String): PreparedComput
         workspaceId = localWorkspaceId(conversationId),
         permissionMode = ComputerPermissionMode.MANUAL,
     ),
-    environmentPrompt = "You are using the EveryTalk built-in local Workspace on the phone. local_bash runs restricted Bash commands in a temporary in-memory snapshot; it has no Python, Node.js, system files or network. Use codemode for JavaScript computation. File changes are not saved automatically: use local_file_save to save a file after user confirmation, then link it as [file name](returned file_link). If the task needs a real server, use request_agent; local tools do not require server access.",
+    environmentPrompt = ComputerToolCatalog.PHONE_FILE_POLICY + "You are using the EveryTalk built-in local Workspace on the phone. local_bash runs restricted Bash commands in a temporary in-memory snapshot; it has no Python, Node.js, system files or network. Use codemode for JavaScript computation. File changes are discarded by default. Only when the user explicitly requests a phone file, use local_file_save after confirmation, then link it as [file name](returned file_link). If the task needs a real server, use request_agent; local tools do not require server access.",
     permissionMode = ComputerPermissionMode.MANUAL,
     localOnly = true,
 )
