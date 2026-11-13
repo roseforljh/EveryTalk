@@ -194,6 +194,7 @@ class MemoryRepositoryTest {
                 AppDatabase.MIGRATION_43_44,
                 AppDatabase.MIGRATION_44_45,
                 AppDatabase.MIGRATION_45_46,
+                AppDatabase.MIGRATION_46_47,
             ).build()
         try {
             assertEquals("preserved", migrated.settingsDao().getValue("existing-test"))

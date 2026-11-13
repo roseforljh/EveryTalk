@@ -834,7 +834,7 @@ interface AgentDao {
         UPDATE agent_runs
         SET status = 'CANCELLED', terminalReason = :reason, updatedAt = :updatedAt,
             runGeneration = runGeneration + 1
-        WHERE (
+        WHERE executionOwner = 'LOCAL' AND (
             (
                 status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED', 'WAITING_APPROVAL')
             )
@@ -867,7 +867,7 @@ interface AgentDao {
         DELETE FROM agent_run_snapshot_chunks
         WHERE runId IN (
             SELECT id FROM agent_runs
-            WHERE status IN ('COMPLETED', 'FAILED', 'CANCELLED')
+            WHERE executionOwner = 'LOCAL' AND status IN ('COMPLETED', 'FAILED', 'CANCELLED')
         )
         """
     )
@@ -936,7 +936,7 @@ interface AgentDao {
         """
         UPDATE agent_runs
         SET status = 'MODEL_CONTINUATION_PENDING', terminalReason = 'MODEL_CONTINUATION_PENDING', updatedAt = :updatedAt
-        WHERE status IN ('CREATED', 'PREPARING_CONTEXT', 'COMPACTING_CONTEXT', 'WAITING_MODEL', 'STREAMING_MODEL', 'RETRYING')
+        WHERE executionOwner = 'LOCAL' AND status IN ('CREATED', 'PREPARING_CONTEXT', 'COMPACTING_CONTEXT', 'WAITING_MODEL', 'STREAMING_MODEL', 'RETRYING')
         """
     )
     suspend fun markModelRunsPendingContinuation(updatedAt: Long)
@@ -946,7 +946,7 @@ interface AgentDao {
         """
         UPDATE agent_runs
         SET status = 'INTERRUPTED', terminalReason = :reason, updatedAt = :updatedAt
-        WHERE status IN ('CHECKING_PERMISSION', 'EXECUTING_TOOL', 'PERSISTING_RESULT', 'WAITING_REMOTE_EXECUTION')
+        WHERE executionOwner = 'LOCAL' AND status IN ('CHECKING_PERMISSION', 'EXECUTING_TOOL', 'PERSISTING_RESULT', 'WAITING_REMOTE_EXECUTION')
         """
     )
     suspend fun markToolRunsInterrupted(reason: String, updatedAt: Long)

@@ -38,6 +38,13 @@ data class AgentRunEntity(
     val runGeneration: Long = 0,
     /** 模型循环投影，与既有 status 兼容并逐步迁移。 */
     val loopState: String = "RUNNING",
+    /** 老任务始终归本机；只有明确登记为 CLOUD 的任务才允许订阅后端，禁止双执行。 */
+    @androidx.room.ColumnInfo(defaultValue = "'LOCAL'") val executionOwner: String = "LOCAL",
+    val cloudAccountId: String? = null,
+    val cloudRunId: String? = null,
+    /** 与云端快照同一事务推进；重连从最后落盘位置继续。 */
+    @androidx.room.ColumnInfo(defaultValue = "0") val cloudCursor: Long = 0,
+    @androidx.room.ColumnInfo(defaultValue = "0") val cloudGeneration: Long = 0,
 )
 
 /**

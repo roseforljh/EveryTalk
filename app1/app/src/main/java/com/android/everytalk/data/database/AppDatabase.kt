@@ -115,7 +115,7 @@ import com.android.everytalk.data.database.entities.SyncAttachmentEntity
         com.android.everytalk.data.database.entities.MessageSearchEntity::class,
         com.android.everytalk.data.database.entities.MessageSearchMapEntity::class,
     ],
-    version = 46,
+    version = 47,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -170,6 +170,16 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL("CREATE VIRTUAL TABLE IF NOT EXISTS `message_search` USING FTS4(`body` TEXT NOT NULL)")
                 db.execSQL("CREATE TABLE IF NOT EXISTS `message_search_map` (`messageId` TEXT NOT NULL, `docid` INTEGER NOT NULL, `fingerprint` TEXT NOT NULL, PRIMARY KEY(`messageId`))")
                 db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_message_search_map_docid` ON `message_search_map` (`docid`)")
+            }
+        }
+        /** 云端执行只补归属和续接游标；旧任务保持 LOCAL，不迁移或重跑执行。 */
+        val MIGRATION_46_47: Migration = object : Migration(46, 47) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE agent_runs ADD COLUMN executionOwner TEXT NOT NULL DEFAULT 'LOCAL'")
+                db.execSQL("ALTER TABLE agent_runs ADD COLUMN cloudAccountId TEXT")
+                db.execSQL("ALTER TABLE agent_runs ADD COLUMN cloudRunId TEXT")
+                db.execSQL("ALTER TABLE agent_runs ADD COLUMN cloudCursor INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE agent_runs ADD COLUMN cloudGeneration INTEGER NOT NULL DEFAULT 0")
             }
         }
         /** 仅新增表，不重建或清空已有会话、设置和凭据。 */
@@ -237,6 +247,7 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_43_44,
                     MIGRATION_44_45,
                     MIGRATION_45_46,
+                    MIGRATION_46_47,
                 )
                 .addCallback(DATABASE_MAINTENANCE_CALLBACK)
                 .build()

@@ -35,6 +35,28 @@ class AppDatabaseMigrationTest {
     }
 
     @Test
+    fun `migration 46 to 47 preserves local owner and adds cloud cursor without credentials`() {
+        val createHelper = openHelper(version = 46, onCreate = { db ->
+            db.execSQL("CREATE TABLE agent_runs (id TEXT NOT NULL PRIMARY KEY, status TEXT NOT NULL)")
+            db.execSQL("INSERT INTO agent_runs VALUES ('legacy', 'STREAMING_MODEL')")
+        })
+        createHelper.writableDatabase.close()
+        createHelper.close()
+        val migrateHelper = openHelper(version = 47, onUpgrade = { db, _, _ -> AppDatabase.MIGRATION_46_47.migrate(db) })
+        val db = migrateHelper.writableDatabase
+        db.query("SELECT status, executionOwner, cloudAccountId, cloudRunId, cloudCursor, cloudGeneration FROM agent_runs WHERE id = 'legacy'").use {
+            assertTrue(it.moveToFirst())
+            assertEquals("STREAMING_MODEL", it.getString(0))
+            assertEquals("LOCAL", it.getString(1))
+            assertTrue(it.isNull(2)); assertTrue(it.isNull(3))
+            assertEquals(0L, it.getLong(4)); assertEquals(0L, it.getLong(5))
+        }
+        assertFalse(columns(db, "agent_runs").any { it.contains("apiKey", true) || it.contains("password", true) })
+        db.close()
+        migrateHelper.close()
+    }
+
+    @Test
     fun `migration 38 to 39 adds nullable Cloudflare identity without changing authorization`() {
         val createHelper = openHelper(
             version = 38,

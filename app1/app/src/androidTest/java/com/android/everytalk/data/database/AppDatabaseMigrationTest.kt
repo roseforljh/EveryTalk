@@ -38,12 +38,13 @@ class AppDatabaseMigrationTest {
         val startedAt = System.nanoTime()
         val migrated = helper.runMigrationsAndValidate(
             DATABASE_NAME,
-            46,
+            47,
             true,
             AppDatabase.MIGRATION_42_43,
             AppDatabase.MIGRATION_43_44,
             AppDatabase.MIGRATION_44_45,
             AppDatabase.MIGRATION_45_46,
+            AppDatabase.MIGRATION_46_47,
         )
         val elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt)
 
