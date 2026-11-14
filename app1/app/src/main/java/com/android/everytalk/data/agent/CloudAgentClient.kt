@@ -40,6 +40,8 @@ internal data class CloudRunView(
     val snapshot: CloudRunSnapshot,
 ) {
     val terminal: Boolean get() = status in setOf("COMPLETED", "FAILED", "CANCELLED")
+    /** 模型已经答完、只剩后台存档：界面按已完成显示，不再转圈。 */
+    val answered: Boolean get() = terminal || (snapshot.finishedAt != null && snapshot.waiting == null)
 
     fun validate(): CloudRunView = apply {
         require(version == 1 && generation >= 0 && cursor >= 0) { "云端任务版本或游标无效" }
@@ -64,7 +66,12 @@ internal data class CloudRunSnapshot(
     val usage: CloudRunUsage? = null,
     /** 首发设备冻结的上下文用量；其他设备没有本机快照时用它建立圆环。 */
     val contextUsage: com.android.everytalk.data.DataClass.ContextUsageSnapshot? = null,
+    /** Gemini 原生搜索（grounding）的来源。 */
+    val sources: List<CloudRunSource> = emptyList(),
 )
+
+@kotlinx.serialization.Serializable
+internal data class CloudRunSource(val title: String, val url: String, val snippet: String = "")
 
 /** 最近一次模型请求的真实用量；input 不含缓存，和 Pi 的计数口径一致。 */
 @Serializable
@@ -216,7 +223,8 @@ internal class CloudAgentClient(
 
     private fun decode(raw: String): CloudRunView = cloudAgentJson.decodeFromString<CloudRunView>(raw).validate()
     private fun httpError(status: Int, raw: String): CloudAgentHttpException {
-        val code = runCatching { cloudAgentJson.parseToJsonElement(raw).jsonObject["error"]?.jsonPrimitive?.content }
+        // 后端错误体是 {"error":{"code":"..."}}；读不到 code 会把“未创建”误判成其它 404，任务永远提交不上去。
+        val code = runCatching { cloudAgentJson.parseToJsonElement(raw).jsonObject["error"]?.jsonObject?.get("code")?.jsonPrimitive?.content }
             .getOrNull()?.takeIf { it.matches(Regex("[A-Z_]{1,64}")) }
         return CloudAgentHttpException(status, code)
     }

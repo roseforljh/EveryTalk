@@ -319,7 +319,7 @@ class AgentRunCoordinator(
         message.conversationId?.let { projectCloudWaiting(view, it) }
         if (view.terminal || view.status == "PAUSED") cloudPauseRequested.update { it - view.id }
         _cloudRuns.update { current -> current + (view.sessionUuid to com.android.everytalk.data.sync.LiveRemoteRun(
-            view.assistantMessageUuid, message, !view.terminal, view.id)) }
+            view.assistantMessageUuid, message, !view.answered, view.id)) }
     }
 
     /** 复用既有认证和账号绑定；发现与重连均在应用级作用域，页面生命周期不拥有执行权。 */
@@ -477,11 +477,267 @@ class AgentRunCoordinator(
     private fun clearCloudWaiting() {
         cloudInterventions.value = emptyMap()
         _cloudToolApprovals.value = emptyMap()
+        _cloudMcpEnables.value = emptyMap()
+        _cloudAgentEnables.value = emptyMap()
+        _cloudSkillSecrets.value = emptyMap()
     }
 
-    /** 只在提交任务的手机上记住本地 Workspace；保存文件只能写进这台手机，其他设备不接这类等待。 */
-    private fun saveCloudRunContext(runId: String, context: ComputerRequestContext) {
-        cloudRunContexts.edit().putString(runId, cloudAgentJson.encodeToString(ComputerRequestContext.serializer(), context)).apply()
+    /**
+     * 只在提交任务的手机上记住本地 Workspace 与记忆快照；手机上的工具只能在这台手机执行，其他设备不接这类等待。
+     * owner 标记与上下文同步落盘，进程被杀后重开也能继续执行等待中的手机工具。
+     */
+    private fun saveCloudRunContext(runId: String, context: ComputerRequestContext?, memory: com.android.everytalk.data.memory.MemoryRequestSnapshot?) {
+        cloudRunContexts.edit().apply {
+            putString(ownerKey(runId), "1")
+            context?.let { putString(runId, cloudAgentJson.encodeToString(ComputerRequestContext.serializer(), it)) }
+            memory?.let { putString(memoryKey(runId), cloudAgentJson.encodeToString(com.android.everytalk.data.memory.MemoryRequestSnapshot.serializer(), it)) }
+        }.commit()
+    }
+
+    private fun ownsCloudRun(runId: String) = cloudRunContexts.contains(ownerKey(runId)) || cloudRunContexts.contains(runId)
+    private fun ownerKey(runId: String) = "owner:$runId"
+    private fun memoryKey(runId: String) = "memory:$runId"
+    private fun approvedToolKey(runId: String, toolCallId: String) = "approved_tool:$runId:$toolCallId"
+
+    /** 手机工具复用本机同一个执行入口（含 Computer 审批策略、结果截断与归档）。 */
+    private val cloudToolRuntime by lazy {
+        AgentToolRuntime(executorProvider = AgentToolExecutorRegistry::current, resultStore = agentToolResultStore, skillRuntimeTools = skillRuntimeTools)
+    }
+
+    private fun approvedContext(context: ComputerRequestContext?, runId: String, toolCallId: String,
+        request: com.android.everytalk.data.computer.ComputerToolApprovalRequest?) = context?.copy(
+        runId = runId,
+        approvedToolCallId = toolCallId.takeIf { request != null },
+        approvedCloudflareCronChange = request as? com.android.everytalk.data.computer.ComputerToolApprovalRequest.CloudflareCronChange,
+        approvedCloudflareWrite = request as? com.android.everytalk.data.computer.ComputerToolApprovalRequest.CloudflareWrite,
+        approvedLocalFileWrite = (request as? com.android.everytalk.data.computer.ComputerToolApprovalRequest.LocalFileWrite)
+            ?.let { it.copy(context = it.context.copy(runId = runId)) },
+    )
+
+    /** 在本机执行云端交来的一个工具，返回给模型的文本与是否失败。 */
+    private suspend fun executeCloudDeviceTool(runId: String, call: AgentContentBlock.ToolCall,
+        approval: com.android.everytalk.data.computer.ComputerToolApprovalRequest?): Pair<String, Boolean> {
+        val context = approvedContext(cloudRunContext(runId), runId, call.id, approval)
+        if (call.name == com.android.everytalk.data.memory.MemoryTool.NAME) {
+            val snapshot = cloudRunContexts.getString(memoryKey(runId), null)?.let {
+                runCatching { cloudAgentJson.decodeFromString(com.android.everytalk.data.memory.MemoryRequestSnapshot.serializer(), it) }.getOrNull()
+            }
+            memoryCoordinator.bind(runId, snapshot)
+            val content = memoryCoordinator.execute(runId, call.arguments)
+            val ok = ((content as? kotlinx.serialization.json.JsonObject)?.get("ok") as? kotlinx.serialization.json.JsonPrimitive)?.content
+            return content.toString() to (ok == "false")
+        }
+        val result = cloudToolRuntime.execute(call, context, runId = runId) { }
+        val text = (result.content as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content ?: result.content.toString()
+        return text to result.isError
+    }
+
+    private fun sendCloudDeviceResult(runId: String, toolCallId: String, text: String, isError: Boolean,
+        tools: kotlinx.serialization.json.JsonArray? = null, onFailure: () -> Unit = {}) =
+        launchCloudCommand(runId, "device-result", "工具结果回传失败，请重试", kotlinx.serialization.json.buildJsonObject {
+            put("toolCallId", kotlinx.serialization.json.JsonPrimitive(toolCallId))
+            put("result", kotlinx.serialization.json.JsonPrimitive(text))
+            put("isError", kotlinx.serialization.json.JsonPrimitive(isError))
+            tools?.let { put("tools", it) }
+        }, onFailure)
+
+    private val _cloudMcpEnables = MutableStateFlow<Map<String, PendingMcpEnableApproval>>(emptyMap())
+    private val _cloudAgentEnables = MutableStateFlow<Map<String, PendingAgentEnableApproval>>(emptyMap())
+    val cloudMcpEnableApprovals: StateFlow<List<PendingMcpEnableApproval>> =
+        _cloudMcpEnables.map { it.values.toList() }.stateIn(liveScope, SharingStarted.Eagerly, emptyList())
+    val cloudAgentEnableApprovals: StateFlow<List<PendingAgentEnableApproval>> =
+        _cloudAgentEnables.map { it.values.toList() }.stateIn(liveScope, SharingStarted.Eagerly, emptyList())
+
+    /**
+     * 云端任务里开启 MCP/Agent 的决定。批准后用本机同一套准备流程（连接 MCP、选服务器、同步 Skill），
+     * 只把新增工具冻结成云端绑定交给任务；环境说明随工具结果交给模型。
+     */
+    internal fun respondCloudEnable(runId: String, approvalRequestId: String, approved: Boolean,
+        prepare: suspend (String, Boolean, com.android.everytalk.data.DataClass.ChatRequest, List<String>) -> com.android.everytalk.data.DataClass.ChatRequest) {
+        val toolCallId = approvalRequestId.removePrefix("cloud:enable:")
+        val mcp = _cloudMcpEnables.value[runId]?.takeIf { it.approvalRequestId == approvalRequestId }
+        val agent = _cloudAgentEnables.value[runId]?.takeIf { it.approvalRequestId == approvalRequestId }
+        _cloudMcpEnables.update { it - runId }; _cloudAgentEnables.update { it - runId }
+        val sessionId = mcp?.conversationId ?: agent?.conversationId ?: return
+        scope.launch {
+            if (!approved) { sendCloudDeviceResult(runId, toolCallId, "用户拒绝开启", true); return@launch }
+            try {
+                val base = com.android.everytalk.data.DataClass.ChatRequest(
+                    messages = listOf(com.android.everytalk.data.DataClass.SimpleTextApiMessage(role = "system", content = "")),
+                    provider = "", channel = "", apiAddress = "", apiKey = "", model = "",
+                    localComputerRequestContext = cloudRunContext(runId))
+                val next = prepare(sessionId, mcp != null, base, agent?.requiredSkillIds.orEmpty())
+                val added = next.tools.orEmpty().filter { tool ->
+                    McpToolDiscovery.name(tool).let { it.isNotEmpty() && it !in AgentControlToolNames.all && it !in com.android.everytalk.data.skill.SkillToolNames.all }
+                }
+                next.localComputerRequestContext?.let { saveCloudRunContext(runId, it, null) }
+                val tools = cloudAgentTools(appContext, next.copy(tools = added), emptyList(), skillRepository)
+                val prompt = (next.messages.firstOrNull { it.role == "system" } as? com.android.everytalk.data.DataClass.SimpleTextApiMessage)?.content?.trim().orEmpty()
+                val text = if (mcp != null) "用户已允许开启 MCP，请使用本轮提供的 MCP 工具继续任务"
+                    else "用户已允许开启当前会话 Agent，可以继续调用 Agent 服务器工具" + prompt.takeIf(String::isNotEmpty)?.let { "\n\n$it" }.orEmpty()
+                sendCloudDeviceResult(runId, toolCallId, text, false, tools)
+            } catch (cancelled: CancellationException) { throw cancelled
+            } catch (error: Exception) { sendCloudDeviceResult(runId, toolCallId, error.message ?: "开启失败", true) }
+        }
+    }
+
+    /**
+     * 停在“等设备执行”的申请：
+     * - 补充 Skill 密钥：与本机同一张密钥卡，密钥只存手机，然后交给云端与本机相同的工具结果；
+     * - 服务器受保护变量、其他能力：在这条任务的本地记录上建同一个接力（Broker），
+     *   用户在接力卡里完成后由本机 Adapter 履行（写服务器 .env 等），结果交回云端而不是本机续跑。
+     */
+    private suspend fun requestCloudSecret(runId: String, call: AgentContentBlock.ToolCall, sessionId: String, key: String) {
+        fun fail(message: String) = sendCloudDeviceResult(runId, call.id, message, true) { cloudDeviceHandled.remove(key) }
+        try {
+            val skillId = (call.arguments["skill_id"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.trim().orEmpty()
+            val allowedSkills = setOfNotNull(skillId.takeIf { it.isNotEmpty() && skillRepository.get(it) != null })
+            val request = agentPauseRequest(call, allowedSkills) ?: return fail("申请参数无效")
+            if (request is AgentPauseRequest.SkillSecret) {
+                _cloudSkillSecrets.update { it + (runId to PendingSkillSecretApproval(runId, "cloud:secret:${call.id}", sessionId,
+                    request.skillId, skillRepository.get(request.skillId)?.name ?: request.skillId, request.name, request.reason)) }
+                return
+            }
+            val context = cloudRunContext(runId)?.copy(runId = runId)
+            val target = if (request is AgentPauseRequest.ProtectedSecret) {
+                val targets = context?.targetContexts().orEmpty()
+                targets.singleOrNull { request.targetId == null || request.targetId == it.computerId || request.targetId == it.workspaceId }
+                    ?: return fail(if (targets.isEmpty()) "当前运行没有可用的服务器 Workspace 上下文，无法安全写入 Secret；请先选择服务器和 Workspace。"
+                        else "Secret 目标不匹配。允许的 target_id：${targets.joinToString { "computer_id=${it.computerId} 或 workspace_id=${it.workspaceId}" }}；请明确指定其中一个。")
+            } else context
+            val capabilityRequest = when (request) {
+                is AgentPauseRequest.Capability -> request.request
+                is AgentPauseRequest.ProtectedSecret -> CapabilityRequest("server.env.secret", request.reason, "目标服务器的受保护环境变量",
+                    mapOf("scope" to request.scope.name, "name" to request.name, "path" to request.path.orEmpty(), "target_id" to request.targetId.orEmpty()))
+                else -> return fail("申请参数无效")
+            }
+            val run = agentDao.getRun(runId) ?: return
+            interventionBroker.suspend(run, capabilityRequest, turnId = call.id, requestId = call.id, toolCallId = call.id,
+                executionSlot = call.id, requestHash = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest("${call.name}|${call.arguments}".toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) },
+                requestSource = "MODEL_HINT", bindingGeneration = 0, executionGeneration = 0,
+                targetBindingRef = target?.let { "computer:${it.computerId}:workspace:${it.workspaceId}" } ?: "current-run-resource")
+        } catch (cancelled: CancellationException) { throw cancelled
+        } catch (error: Exception) { fail(error.message ?: "申请参数无效") }
+    }
+
+    private val _cloudSkillSecrets = MutableStateFlow<Map<String, PendingSkillSecretApproval>>(emptyMap())
+    val cloudSkillSecretApprovals: StateFlow<List<PendingSkillSecretApproval>> =
+        _cloudSkillSecrets.map { it.values.toList() }.stateIn(liveScope, SharingStarted.Eagerly, emptyList())
+    private val cloudSkillSecretStore by lazy { com.android.everytalk.data.skill.SkillSecretStore(appContext) }
+
+    /** 云端任务的 Skill 密钥卡：保存方式与本机一致，交回云端的只有“已授权”，不含密钥正文。 */
+    internal fun respondCloudSecret(runId: String, approvalRequestId: String, value: CharArray?, remember: Boolean) {
+        val current = _cloudSkillSecrets.value[runId]?.takeIf { it.approvalRequestId == approvalRequestId }
+            ?: run { value?.fill('\u0000'); return }
+        _cloudSkillSecrets.update { it - runId }
+        val toolCallId = approvalRequestId.removePrefix("cloud:secret:")
+        scope.launch {
+            if (value == null || value.isEmpty()) {
+                value?.fill('\u0000')
+                return@launch saveAndSendCloudDeviceResult(runId, toolCallId, "用户拒绝了本次操作", true)
+            }
+            try {
+                if (remember) cloudSkillSecretStore.save(current.skillId, current.name, value)
+                com.android.everytalk.data.skill.SkillSecretSessionStore.put(runId, current.name, value)
+            } finally { value.fill('\u0000') }
+            saveAndSendCloudDeviceResult(runId, toolCallId, kotlinx.serialization.json.buildJsonObject {
+                put("available", kotlinx.serialization.json.JsonPrimitive(true))
+                put("name", kotlinx.serialization.json.JsonPrimitive(current.name))
+                put("message", kotlinx.serialization.json.JsonPrimitive("用户已完成授权；正文不会返回，后续只能由已注册的语义 capability Adapter 使用"))
+            }.toString(), false)
+        }
+    }
+
+    /** 先落盘再发：送达失败或重启后，同一等待点直接重发这份结果，不重复要用户输入。 */
+    private fun saveAndSendCloudDeviceResult(runId: String, toolCallId: String, text: String, isError: Boolean) {
+        cloudRunContexts.edit().putString(deviceResultKey(runId, toolCallId), (if (isError) "1" else "0") + text).commit()
+        sendCloudDeviceResult(runId, toolCallId, text, isError) { cloudDeviceHandled.removeIf { it.startsWith("$runId:$toolCallId:") } }
+    }
+
+    private fun deviceResultKey(runId: String, toolCallId: String) = "device_result:$runId:$toolCallId"
+
+    /**
+     * 云端停在“等设备执行”：本机按同一审批策略判断，需要确认就出确认卡，否则直接执行并回传。
+     * 批准记录先落盘再执行，进程被杀后重开不会重复弹卡，也不会绕过已作出的决定。
+     */
+    private fun handleCloudDeviceTool(view: CloudRunView, waiting: CloudRunWaiting, args: kotlinx.serialization.json.JsonObject, sessionId: String) {
+        val key = "${view.id}:${waiting.toolCallId}:${view.generation}"
+        if (!cloudDeviceHandled.add(key)) return
+        // 开启 MCP/Agent：与本机同一张确认卡，批准后在 respondCloudEnable 里准备新工具。
+        if (waiting.toolName == AgentControlToolNames.REQUEST_MCP || waiting.toolName == AgentControlToolNames.REQUEST_AGENT) {
+            val id = "cloud:enable:${waiting.toolCallId}"
+            val reason = (args["reason"] as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty()
+            if (waiting.toolName == AgentControlToolNames.REQUEST_MCP) _cloudMcpEnables.update { it + (view.id to PendingMcpEnableApproval(view.id, id, sessionId, reason)) }
+            else _cloudAgentEnables.update { it + (view.id to PendingAgentEnableApproval(view.id, id, sessionId, reason,
+                (args["required_skill_ids"] as? kotlinx.serialization.json.JsonArray)?.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }.orEmpty())) }
+            return
+        }
+        // 已在本机完成但没送达云端的结果（密钥卡提交后断网、重启）：直接重发，不再弹卡。
+        cloudRunContexts.getString(deviceResultKey(view.id, waiting.toolCallId), null)?.let { saved ->
+            sendCloudDeviceResult(view.id, waiting.toolCallId, saved.drop(1), saved.startsWith("1")) { cloudDeviceHandled.remove(key) }
+            return
+        }
+        if (waiting.toolName in setOf(AgentControlToolNames.REQUEST_SKILL_SECRET, AgentControlToolNames.REQUEST_PROTECTED_SECRET,
+                AgentControlToolNames.REQUEST_CAPABILITY)) {
+            scope.launch { requestCloudSecret(view.id, AgentContentBlock.ToolCall(waiting.toolCallId, waiting.toolName, args), sessionId, key) }
+            return
+        }
+        scope.launch {
+            val call = AgentContentBlock.ToolCall(waiting.toolCallId, waiting.toolName, args)
+            val (text, isError) = try {
+                val approved = cloudRunContexts.getString(approvedToolKey(view.id, call.id), null)?.let {
+                    cloudAgentJson.decodeFromString(com.android.everytalk.data.computer.ComputerToolApprovalRequest.serializer(), it)
+                }
+                val approval = approved ?: if (call.name == com.android.everytalk.data.memory.MemoryTool.NAME) null
+                    else cloudToolRuntime.approvalRequest(call, cloudRunContext(view.id)?.copy(runId = view.id))
+                if (approval != null && approved == null) {
+                    _cloudToolApprovals.update { it + (view.id to com.android.everytalk.data.computer.PendingComputerToolApproval(
+                        view.id, "cloud:device:${call.id}", approval)) }
+                    return@launch
+                }
+                executeCloudDeviceTool(view.id, call, approval)
+            } catch (cancelled: CancellationException) { throw cancelled
+            } catch (error: Exception) { (error.message ?: "工具执行失败") to true }
+            sendCloudDeviceResult(view.id, call.id, text, isError) { cloudDeviceHandled.remove(key) }
+        }
+    }
+
+    /** 云端自带执行器的工具（服务器 exec）停在审批或结果未知：本机按同一策略判断，不需要确认就直接放行。 */
+    private fun handleCloudToolApproval(view: CloudRunView, waiting: CloudRunWaiting, args: kotlinx.serialization.json.JsonObject) {
+        val key = "${view.id}:${waiting.toolCallId}:${view.generation}:${waiting.kind}"
+        if (!cloudDeviceHandled.add(key)) return
+        scope.launch {
+            val context = cloudRunContext(view.id)?.copy(runId = view.id)
+            val call = AgentContentBlock.ToolCall(waiting.toolCallId, waiting.toolName, args)
+            val request = try {
+                if (waiting.kind == "unknown") com.android.everytalk.data.computer.ComputerToolApprovalRequest.UnknownExecution(
+                    toolCallId = call.id, context = context ?: ComputerRequestContext("", "", ""),
+                    computerName = (args["computer_id"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: "云端任务",
+                    toolName = call.name, detail = (args["command"] ?: args["path"] ?: args).toString().take(500),
+                    isWriteOperation = call.name != com.android.everytalk.data.computer.ComputerToolNames.READ_FILE,
+                ) else cloudToolRuntime.approvalRequest(call, context)
+            } catch (cancelled: CancellationException) { throw cancelled
+            } catch (_: Exception) {
+                // 本机核对不了（服务器记录被删、参数解析失败）时不能当作免确认放行，改由用户确认。
+                com.android.everytalk.data.computer.ComputerToolApprovalRequest.HostCommand(call.id,
+                    com.android.everytalk.data.computer.ComputerHostCommandConfirmationRequest(
+                        requestId = call.id, context = context ?: ComputerRequestContext("", "", ""), computerName = "云端任务",
+                        command = (args["command"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: args.toString().take(500),
+                        cwd = (args["cwd"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: "~",
+                        requestsPrivilege = false, reason = "本机无法核对这条命令的风险，请确认后再执行", risks = emptySet()))
+            }
+            if (request == null) {
+                // 本机策略判定不需要确认。
+                if (waiting.kind == "approval") launchCloudCommand(view.id, "approval", "确认结果未送达，请重试", kotlinx.serialization.json.buildJsonObject {
+                    put("toolCallId", kotlinx.serialization.json.JsonPrimitive(call.id))
+                    put("approved", kotlinx.serialization.json.JsonPrimitive(true))
+                }) { cloudDeviceHandled.remove(key) }
+                return@launch
+            }
+            _cloudToolApprovals.update { it + (view.id to com.android.everytalk.data.computer.PendingComputerToolApproval(
+                view.id, "cloud:${if (waiting.kind == "unknown") "unknown:" else ""}${call.id}", request)) }
+        }
     }
 
     private fun cloudRunContext(runId: String): ComputerRequestContext? = cloudRunContexts.getString(runId, null)?.let {
@@ -496,9 +752,10 @@ class AgentRunCoordinator(
         val waiting = view.snapshot.waiting?.takeUnless { view.terminal }
         // 批准记录要留到任务结束：写入成功但结果未送达时重新执行仍需它（写入对相同内容幂等）。
         if (view.terminal) {
-            val prefix = "approved:${view.id}:"
-            cloudRunContexts.edit().apply { cloudRunContexts.all.keys.filter { it.startsWith(prefix) }.forEach(::remove) }
-                .remove(view.id).apply()
+            val prefixes = listOf("approved:${view.id}:", "approved_tool:${view.id}:", "device_result:${view.id}:")
+            cloudRunContexts.edit().apply { cloudRunContexts.all.keys.filter { key -> prefixes.any(key::startsWith) }.forEach(::remove) }
+                .remove(view.id).remove(ownerKey(view.id)).remove(memoryKey(view.id)).apply()
+            memoryCoordinator.bind(view.id, null)
             // 指向这一轮的调整标记：对应排队消息已经出队的才清，仍在队列里的留给派发前核对。
             val steerKeys = cloudRunContexts.all.filter { (key, value) -> key.startsWith("steer_unknown:") && value == view.id }.keys
             if (steerKeys.isNotEmpty()) scope.launch {
@@ -507,7 +764,16 @@ class AgentRunCoordinator(
             }
         }
         cloudInterventions.update { it - view.id }
-        _cloudToolApprovals.update { it - view.id }
+        // 同一个等待点重复投影（重连、对账）时保留已弹出的确认卡；换了等待点或任务结束才撤掉。
+        _cloudToolApprovals.update { current ->
+            current[view.id]?.takeIf { waiting == null || !it.approvalRequestId.endsWith(":${waiting.toolCallId}") }?.let { current - view.id } ?: current
+        }
+        val enableId = waiting?.let { "cloud:enable:${it.toolCallId}" }
+        _cloudMcpEnables.update { current -> if (current[view.id]?.approvalRequestId == enableId) current else current - view.id }
+        _cloudAgentEnables.update { current -> if (current[view.id]?.approvalRequestId == enableId) current else current - view.id }
+        _cloudSkillSecrets.update { current -> if (current[view.id]?.approvalRequestId == waiting?.let { "cloud:secret:${it.toolCallId}" }) current else current - view.id }
+        // 云端任务的本地接力卡（受保护变量、能力申请）：云端不再等它时撤掉。
+        if (waiting == null) _pendingInterventions.update { items -> items.filterNot { it.runId == view.id } }
         if (waiting == null) return
         val args = waiting.arguments as? kotlinx.serialization.json.JsonObject ?: kotlinx.serialization.json.JsonObject(emptyMap())
         fun text(name: String) = (args[name] as? kotlinx.serialization.json.JsonPrimitive)?.content?.trim()
@@ -569,6 +835,9 @@ class AgentRunCoordinator(
                     }
                 }
             }
+            !ownsCloudRun(view.id) -> Unit
+            waiting.kind == "device" -> handleCloudDeviceTool(view, waiting, args, sessionId)
+            waiting.kind == "approval" || waiting.kind == "unknown" -> handleCloudToolApproval(view, waiting, args)
         }
     }
 
@@ -582,6 +851,33 @@ class AgentRunCoordinator(
 
     /** 文件写入确认卡对云端任务的决定；批准时先在本机冻结这份审批，设备执行只认它。 */
     internal fun respondCloudApproval(runId: String, approvalRequestId: String, approved: Boolean) {
+        if (approvalRequestId.startsWith("cloud:device:")) {
+            val toolCallId = approvalRequestId.removePrefix("cloud:device:")
+            val pending = _cloudToolApprovals.value.values.firstOrNull { it.approvalRequestId == approvalRequestId }?.request
+            _cloudToolApprovals.update { current -> current.filterValues { it.approvalRequestId != approvalRequestId } }
+            scope.launch {
+                val (text, isError) = if (!approved || pending == null) "用户拒绝执行本次工具" to true else try {
+                    cloudRunContexts.edit().putString(approvedToolKey(runId, toolCallId), cloudAgentJson.encodeToString(
+                        com.android.everytalk.data.computer.ComputerToolApprovalRequest.serializer(), pending)).commit()
+                    val waiting = CloudAgentStore(database).read(runId)?.snapshot?.waiting?.takeIf { it.toolCallId == toolCallId }
+                        ?: error("等待点已变化，请重试")
+                    executeCloudDeviceTool(runId, AgentContentBlock.ToolCall(toolCallId, waiting.toolName,
+                        waiting.arguments as? kotlinx.serialization.json.JsonObject ?: kotlinx.serialization.json.JsonObject(emptyMap())), pending)
+                } catch (cancelled: CancellationException) { throw cancelled
+                } catch (error: Exception) { (error.message ?: "工具执行失败") to true }
+                sendCloudDeviceResult(runId, toolCallId, text, isError)
+            }
+            return
+        }
+        if (approvalRequestId.startsWith("cloud:unknown:")) {
+            _cloudToolApprovals.update { current -> current.filterValues { it.approvalRequestId != approvalRequestId } }
+            launchCloudCommand(runId, "approval", "确认结果未送达，请重试", kotlinx.serialization.json.buildJsonObject {
+                put("toolCallId", kotlinx.serialization.json.JsonPrimitive(approvalRequestId.removePrefix("cloud:unknown:")))
+                put("approved", kotlinx.serialization.json.JsonPrimitive(approved))
+                if (approved) put("retryUnknown", kotlinx.serialization.json.JsonPrimitive(true))
+            })
+            return
+        }
         val request = _cloudToolApprovals.value.values.firstOrNull { it.approvalRequestId == approvalRequestId }?.request
             as? com.android.everytalk.data.computer.ComputerToolApprovalRequest.LocalFileWrite
         if (approved && request != null) cloudRunContexts.edit().putString(approvedWriteKey(runId, request.toolCallId),
@@ -648,6 +944,9 @@ class AgentRunCoordinator(
         cloudPauseRequested.update { it - finished }
         cloudInterventions.update { it - finished }
         _cloudToolApprovals.update { it - finished }
+        _cloudMcpEnables.update { it - finished }
+        _cloudAgentEnables.update { it - finished }
+        _cloudSkillSecrets.update { it - finished }
     }
 
     private fun cloudRunIdFor(visibleAssistantMessageId: String): String? =
@@ -730,9 +1029,10 @@ class AgentRunCoordinator(
 
     /**
      * 只做同步确认和冻结提交；模型、工具及后续轮次全部由云端执行。
-     * 写下云端 Run 之前的任何失败都抛 [CloudAgentIneligible]，由调用方改走本机；写下之后只认云端。
+     * 写下云端 Run 之前的任何失败都抛 [CloudAgentIneligible]，原因报给用户，不改走本机；写下之后只认云端。
      */
-    private suspend fun submitCloudRequest(input: AgentLoopRequest, accountId: String) {
+    private suspend fun submitCloudRequest(input: AgentLoopRequest, accountId: String, status: suspend (String) -> Unit) {
+        status("正在连接云端")
         val auth = com.android.everytalk.data.auth.AuthRuntime.get(appContext)
         val state = com.android.everytalk.data.sync.SyncStateStore(database)
         suspend fun permitted() = cloudPermitted(accountId) &&
@@ -746,9 +1046,15 @@ class AgentRunCoordinator(
             coordinator.retry(previous.id)
             return
         }
-        val coordinator = cloudReady.value?.takeIf { it.first == accountId }?.second
-            ?.takeIf { it.serverSupported && permitted() }
-            ?: throw CloudAgentIneligible("云端任务服务不可用")
+        if (!com.android.everytalk.data.sync.syncServerConfigured(com.android.everytalk.BuildConfig.EVERYTALK_SYNC_BASE_URL))
+            throw CloudAgentIneligible("这个安装包没有配置后端地址，无法执行云端任务")
+        // 云端清空后暂停、换号待选数据时同步被挂起：要用户先处理提示，不能悄悄改在手机上跑。
+        if (!state.isEnabled()) throw CloudAgentIneligible("账号数据同步已暂停，请先处理同步提示后重发")
+        // 刚启动或刚重连时云端连接还没就绪：等它连上，不因为早点了一下发送就改在手机上跑。
+        val coordinator = kotlinx.coroutines.withTimeoutOrNull(30_000) { cloudReady.first { it?.first == accountId }?.second }
+            ?: throw CloudAgentIneligible("云端暂时连不上，请稍后重发")
+        if (!coordinator.serverSupported) throw CloudAgentIneligible("后端不支持云端任务，请检查后端版本")
+        if (!permitted()) throw CloudAgentIneligible("账号登录状态已变化，请重新登录后重发")
         try {
             check(state.prepareAutomaticAccount(accountId, auth.binding) {
                 (auth.auth.state.value as? com.android.everytalk.data.auth.AuthState.SignedIn)?.user?.id == accountId
@@ -760,6 +1066,7 @@ class AgentRunCoordinator(
             auth.account, isLocalOnly = { auth.auth.state.value !is com.android.everytalk.data.auth.AuthState.SignedIn },
             canRequest = { permitted() }, readSecretsEpoch = { state.readSecretsEpoch().coerceAtLeast(0) })
         try {
+            status("正在核对云端同步")
             val credentials = com.android.everytalk.data.sync.SyncCredentialSynchronizer(appContext, database, api, secrets, accountId)
             val epochs = try {
                 synchronizeCloudAgentParents(database, api,
@@ -768,20 +1075,28 @@ class AgentRunCoordinator(
                     beforePull = { credentials.captureLocal() }, afterPull = { credentials.recover() },
                     onSecretsEpochChanged = { secrets.clearCachedDek() })
             } catch (cancelled: CancellationException) { throw cancelled
-            } catch (error: Exception) { throw CloudAgentIneligible(error.message.orEmpty(), error) }
+            } catch (error: Exception) {
+                // 会话设为仅本机：本来就不上云。其余（断网、服务重启）是暂时的，报错让用户重发。
+                throw CloudAgentIneligible(error.message.orEmpty(), error)
+            }
+            status("正在准备上下文与工具")
             prepareCloudAgentSubmission(appContext, database, agentRunStore, skillRepository, memoryCoordinator,
                 input, accountId, epochs, computerSessionStateProvider(input.request.localComputerRequestContext), ::permitted,
+                compact = { sessionId, request, limits, plan ->
+                    status("正在压缩上下文")
+                    agentLoop.compactForSubmission(sessionId, request, limits, plan)
+                },
                 beforePersist = { run, frozen ->
                     val bytes = frozen.toString().toByteArray(Charsets.UTF_8)
                     try { interventionCredentialStore.saveCloudAgentInput(accountId, run.id, bytes) }
                     finally { bytes.fill(0) }
-                }) { run, frozen ->
+                }) { run, frozen, request ->
                 check(permitted()) { "云端任务账号授权已变更" }
                 // 提交后立刻交接到与其它设备相同的 overlay；不等待首个模型事件才能显示停止按钮。
                 val chat = database.chatDao()
                 val session = checkNotNull(chat.getSession(run.sessionId))
                 val assistant = checkNotNull(chat.getMessage(run.sessionId, run.visibleAssistantMessageId))
-                input.request.localComputerRequestContext?.let { saveCloudRunContext(run.id, it) }
+                saveCloudRunContext(run.id, request.localComputerRequestContext, request.localMemorySnapshot)
                 _cloudRuns.update { it + (session.uuid to com.android.everytalk.data.sync.LiveRemoteRun(
                     assistant.uuid, assistant.toMessage().copy(executionStatus = "正在提交云端任务"), true, run.id)) }
                 coordinator.submit(run, frozen)
@@ -799,11 +1114,8 @@ class AgentRunCoordinator(
             auth.auth.startup.first { it.initialized }
             (auth.auth.state.value as? com.android.everytalk.data.auth.AuthState.SignedIn)?.user?.id
         } else null
-        // 旧 Run 维持原执行者；新请求登录后先尝试云端，提交前发现云端做不了就留在本机。
-        // 分支对话依附父页面显示，云端投影和恢复只接了主会话页面，分支始终在本机执行。
-        val cloudOwned = persisted?.executionOwner?.let { it == "CLOUD" }
-            ?: (accountId != null && !request.sessionId.startsWith(FORK_CONVERSATION_PREFIX))
-        val cloudOptional = persisted == null
+        // 旧 Run 维持原执行者；新请求登录后先尝试云端（含分支对话），提交前发现云端做不了就留在本机。
+        val cloudOwned = persisted?.executionOwner?.let { it == "CLOUD" } ?: (accountId != null)
         val jobKey = request.existingRun?.id?.let { "run:$it" }
             ?: "message:${request.visibleAssistantMessageId}"
         val uiAttached = AtomicBoolean(true)
@@ -815,14 +1127,9 @@ class AgentRunCoordinator(
             try {
                 if (cloudOwned) {
                     val owner = checkNotNull(accountId) { "请登录原账号以恢复云端任务" }
-                    try {
-                        submitCloudRequest(request, owner)
-                        return@launchTrackedAgentJob
-                    } catch (skip: CloudAgentIneligible) {
-                        // 提交前用户点了停止：既不提交也不改跑本机。
-                        if (!cloudOptional || visibleRunCancellationReasons.containsKey(request.visibleAssistantMessageId)) throw skip
-                        android.util.Log.i("AgentRunCoordinator", "cloud_skipped: ${skip.message}")
-                    }
+                    // 登录即云端执行，提交不了就把原因报给用户，绝不悄悄改在手机上跑（否则看不出后端出了问题）。
+                    submitCloudRequest(request, owner) { trySend(AppStreamEvent.ExecutionStatusUpdate(it)) }
+                    return@launchTrackedAgentJob
                 }
                 request.existingRun?.let { snapshot ->
                     if (!canExecuteAgentSnapshot(snapshot, agentDao.getRun(snapshot.id))) return@launchTrackedAgentJob
@@ -1352,10 +1659,7 @@ class AgentRunCoordinator(
                         run.id, suspension.id, suspension.rowVersion, currentBinding,
                     )) failed = true
             }
-            agentRunStore.appendToolResult(
-                runId = suspension.runId,
-                requestId = suspension.requestId,
-                result = AgentContentBlock.ToolResult(
+            val toolResult = AgentContentBlock.ToolResult(
                     toolCallId = suspension.toolCallId,
                     toolName = originalToolName,
                     content = if (cloudflareReauthorization) kotlinx.serialization.json.buildJsonObject {
@@ -1388,11 +1692,17 @@ class AgentRunCoordinator(
                      * “可重试的授权状态”，不能把重新授权误报成 Worker/D1 已完成。
                      */
                     isError = cloudflareReauthorization || resourceSelection || failed,
-                ),
-            )
+                )
+            // 云端任务的接力：结果交回云端同一个等待点，由云端续跑；本机不写工具结果也不续跑。
+            if (run.executionOwner == "CLOUD") {
+                val text = (toolResult.content as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content
+                    ?: toolResult.content.toString()
+                saveAndSendCloudDeviceResult(run.id, suspension.toolCallId, text, toolResult.isError)
+            } else agentRunStore.appendToolResult(runId = suspension.runId, requestId = suspension.requestId, result = toolResult)
             if (!interventionStore.finishResume(suspension.id, suspension.rowVersion)) return false
             suspension = interventionStore.get(suspension.id) ?: return false
         }
+        if (run.executionOwner == "CLOUD") return false
         if (suspension.status != SuspensionState.RESUMED.name) return false
         if (run.runGeneration != suspension.runGeneration || run.status in setOf(
                 AgentRunStatus.COMPLETED.name,

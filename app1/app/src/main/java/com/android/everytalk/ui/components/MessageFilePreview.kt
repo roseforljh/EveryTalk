@@ -263,7 +263,7 @@ internal fun MessageFilePreview(file: SelectedMediaItem.GenericFile, onDismiss: 
                         kind == AttachmentPreviewKind.PDF && pdfPage != null -> Column(Modifier.fillMaxSize()) {
                             Image(
                                 bitmap = pdfPage!!.first.asImageBitmap(),
-                                contentDescription = "PDF 第 ${pageIndex + 1} 页",
+                                contentDescription = stringResource(R.string.attachment_pdf_page, pageIndex + 1),
                                 modifier = Modifier.weight(1f).fillMaxWidth(),
                             )
                             Row(

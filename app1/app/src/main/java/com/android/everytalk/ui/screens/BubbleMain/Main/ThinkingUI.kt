@@ -981,7 +981,7 @@ private fun InlineExecutionStep(
 ) {
     val step = entry.step
     val title = localizedExecutionStatusText(step.title) ?: step.title
-    val label = step.labels.firstOrNull()?.trim().orEmpty()
+    val label = com.android.everytalk.data.mcp.McpToolLabels.display(step.labels.firstOrNull()?.trim().orEmpty())
     val text = buildString {
         append(title)
         if (label.isNotEmpty()) append(" · ").append(label)

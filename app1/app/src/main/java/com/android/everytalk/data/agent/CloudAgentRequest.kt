@@ -54,14 +54,33 @@ internal fun cloudAgentInput(
     val level = if (disabled || (thinking == null && effort == null)) "off"
         else effort?.takeIf { it in setOf("minimal", "low", "medium", "high", "xhigh", "max") } ?: "medium"
     val transformed = PiMessageTransformer.transform(request.messages, request)
+    // 读不出文字的附件原样交给模型：消息里放占位文本块，后端按协议换成文件块，与本机直连发出的一致。
+    val files = linkedMapOf<String, JsonObject>()
+    val fileRef: (ApiContentPart.InlineData) -> String = { part ->
+        val id = java.util.UUID.nameUUIDFromBytes("${part.mimeType}\u0000${part.fileName}\u0000${part.base64Data}".toByteArray()).toString()
+        files.getOrPut(id) { buildJsonObject {
+            put("name", part.fileName ?: "attachment"); put("mimeType", part.mimeType); put("data", part.base64Data)
+        } }
+        "[[everytalk-file:$id]]"
+    }
+    val messages = transformed.map { cloudPiMessage(it, request, api, timestamp, fileRef) }
+    // Gemini 原生搜索/代码执行与本机直连同一判定；代码执行与思考配置互斥，开着时不发思考参数。
+    val codeExecution = protocol == ModelParameterProtocol.GEMINI &&
+        com.android.everytalk.data.network.GeminiDirectClient.shouldEnableCodeExecution(request)
+    val nativeTools = buildList {
+        if (protocol == ModelParameterProtocol.GEMINI && request.useWebSearch == true) add(buildJsonObject { put("googleSearch", JsonObject(emptyMap())) })
+        if (codeExecution) add(buildJsonObject { put("codeExecution", JsonObject(emptyMap())) })
+    }
     return buildJsonObject {
         put("version", 1); put("id", runId); put("sessionUuid", sessionUuid)
         put("userMessageUuid", userUuid); put("assistantMessageUuid", assistantUuid)
         put("epoch", epoch); put("secretsEpoch", secretsEpoch); put("timestamp", timestamp); put("timezone", timezone)
         put("apiKey", request.apiKey); put("endpoint", endpoint); put("providerName", request.provider)
+        // 与本机请求记录同一来源字段：云端归档后下一轮按同源回放思考签名，历史与云端这轮请求一致。
+        request.apiAddress?.let { put("sourceAddress", it) }
         put("model", buildJsonObject {
             put("id", request.model); put("api", api); put("provider", "everytalk"); put("baseUrl", base)
-            put("reasoning", thinking != null || level != "off"); put("contextWindow", request.contextManagement?.maxContextTokens ?: DEFAULT_MAX_CONTEXT_TOKENS)
+            put("reasoning", !codeExecution && (thinking != null || level != "off")); put("contextWindow", request.contextManagement?.maxContextTokens ?: DEFAULT_MAX_CONTEXT_TOKENS)
             put("maxTokens", config?.maxOutputTokens ?: DEFAULT_MAX_OUTPUT_TOKENS)
             put("input", JsonArray(request.localInputModalities.sorted().map(::JsonPrimitive)))
             if (protocol == ModelParameterProtocol.ANTHROPIC) put("compat", buildJsonObject {
@@ -69,8 +88,10 @@ internal fun cloudAgentInput(
                 put("forceAdaptiveThinking", thinking?.reasoningMode == ReasoningMode.EFFORT && !disabled)
             })
         })
-        put("messages", JsonArray(transformed.map { cloudPiMessage(it, request, api, timestamp) }))
-        put("tools", tools); put("thinkingLevel", level)
+        put("messages", JsonArray(messages))
+        if (files.isNotEmpty()) put("files", JsonObject(files))
+        if (nativeTools.isNotEmpty()) put("nativeTools", JsonArray(nativeTools))
+        put("tools", tools); put("thinkingLevel", if (codeExecution) "off" else level)
         contextUsage?.let { put("contextUsage", cloudAgentJson.encodeToJsonElement(ContextUsageSnapshot.serializer(), it)) }
         thinking?.thinkingBudget?.takeIf { it > 0 && !disabled }?.let { budget ->
             put("thinkingBudgets", buildJsonObject { listOf("minimal", "low", "medium", "high").forEach { put(it, budget) } })
@@ -82,7 +103,7 @@ internal fun cloudAgentInput(
         if (protocol == ModelParameterProtocol.GEMINI) {
             val generation = buildJsonObject {
                 config?.topP?.let { put("topP", it) }
-                thinking?.let { put("thinkingConfig", buildJsonObject {
+                thinking?.takeUnless { codeExecution }?.let { put("thinkingConfig", buildJsonObject {
                     it.includeThoughts?.let { put("includeThoughts", it) }
                     it.thinkingBudget?.let { put("thinkingBudget", it) }
                     it.thinkingLevel?.let { put("thinkingLevel", it) }
@@ -90,12 +111,17 @@ internal fun cloudAgentInput(
             }
             if (generation.isNotEmpty()) extra["generationConfig"] = generation
         } else config?.topP?.let { extra["top_p"] = it }
+        if (request.qwenEnableSearch == true) {
+            val search = mapOf("enable_search" to true, "search_options" to mapOf("forced_search" to true, "search_strategy" to "max"))
+            extra.putAll(search); extra["extra_body"] = search
+        }
         extra.putAll(custom)
         if (extra.isNotEmpty()) put("extraBody", anyToJsonElement(extra))
     }
 }
 
-private fun cloudPiMessage(message: AbstractApiMessage, request: ChatRequest, api: String, timestamp: Long): JsonObject = buildJsonObject {
+private fun cloudPiMessage(message: AbstractApiMessage, request: ChatRequest, api: String, timestamp: Long,
+    fileRef: (ApiContentPart.InlineData) -> String): JsonObject = buildJsonObject {
     put("role", if (message is AgentToolResultApiMessage) "toolResult" else message.role)
     put("timestamp", timestamp)
     fun text(value: String) = buildJsonObject { put("type", "text"); put("text", value) }
@@ -109,7 +135,7 @@ private fun cloudPiMessage(message: AbstractApiMessage, request: ChatRequest, ap
         is SimpleTextApiMessage -> put("content", if (message.role == "assistant") JsonArray(listOf(text(message.content))) else JsonPrimitive(message.content))
         is PartsApiMessage -> put("content", JsonArray(message.parts.map { part -> when (part) {
             is ApiContentPart.Text -> text(part.text)
-            is ApiContentPart.InlineData -> { require(part.mimeType.startsWith("image/")) { "附件需先转换为可读取的文本或图片" }; image(part.base64Data, part.mimeType) }
+            is ApiContentPart.InlineData -> if (part.mimeType.startsWith("image/")) image(part.base64Data, part.mimeType) else text(fileRef(part))
             is ApiContentPart.FileUri -> error("附件尚未准备好，不能把手机文件地址交给云端")
         } }))
         is AgentAssistantApiMessage -> put("content", JsonArray(message.contentParts.map { part -> when (part) {

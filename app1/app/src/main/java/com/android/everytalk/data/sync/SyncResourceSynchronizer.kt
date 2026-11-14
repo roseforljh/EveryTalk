@@ -24,7 +24,9 @@ import kotlinx.serialization.json.*
 
 @kotlinx.serialization.Serializable
 internal data class SyncHistoryArchive(val message: Message, val run: AgentRunEntity? = null,
-    val entries: List<AgentEntryEntity> = emptyList(), val resultFiles: Map<String, String> = emptyMap())
+    val entries: List<AgentEntryEntity> = emptyList(), val resultFiles: Map<String, String> = emptyMap(),
+    /** 云端任务每轮模型返回的来源记录；本机据此判定同源回放，旧归档没有。 */
+    val requests: List<com.android.everytalk.data.database.entities.AgentRequestEntity> = emptyList())
 
 @kotlinx.serialization.Serializable
 private data class SyncUploadedFile(val info: SyncFileInfo, val uploadedAt: Long)
@@ -510,6 +512,7 @@ internal class SyncResourceSynchronizer(
                                     terminalReason = "SYNC_HISTORY_ONLY", loopState = mapped.status,
                                 ) else mapped
                                 db.agentDao().upsertRun(run)
+                                history.requests.forEach { request -> require(request.runId == run.id); db.agentDao().upsertRequest(request) }
                                 history.entries.forEach { entry -> require(entry.runId == run.id); db.agentDao().upsertEntry(entry) }
                                 if (run.executionOwner == "CLOUD") db.agentDao().deleteRunSnapshotChunks(run.id)
                             }

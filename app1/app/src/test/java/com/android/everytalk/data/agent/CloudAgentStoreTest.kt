@@ -10,6 +10,8 @@ import com.android.everytalk.data.database.entities.*
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -43,8 +45,11 @@ class CloudAgentStoreTest {
             assertTrue(mcp.all { value(McpToolDiscovery.name(it))["deferred"].toString() == "true" })
             assertEquals("\"search-only\"", (value("web_search")["binding"] as kotlinx.serialization.json.JsonObject)["apiKey"].toString())
             assertFalse(value("mcp_example_1")["parameters"].toString().contains("test-only"))
-            assertTrue(runCatching { cloudAgentTools(context, request.copy(tools = listOf(tool("unknown"))), emptyList(), skills) }.isFailure)
-            // 提问进入云端等待，保存到手机等设备执行，其他控制工具立即返回说明；原生供应商工具和记忆工具让请求留在本机。
+            // 未知工具交给发起设备执行（与本机同一个执行入口），不能静默丢掉。
+            fun only(name: String, tools: kotlinx.serialization.json.JsonArray) = (tools.single { it.jsonObject["name"].toString() == "\"$name\"" }
+                .jsonObject.getValue("binding").jsonObject)["kind"].toString()
+            assertEquals("\"device\"", only("unknown", cloudAgentTools(context, request.copy(tools = listOf(tool("unknown"))), emptyList(), skills)))
+            // 提问进入云端等待；保存到手机、开启 Agent、补充密钥、记忆交给发起设备；原生供应商工具不进函数工具表。
             val controls = AgentControlToolNames.all.map { tool(it) } + tool(com.android.everytalk.data.computer.ComputerToolNames.LOCAL_FILE_SAVE)
             val withControls = cloudAgentTools(context, request.copy(tools = request.tools!! + controls), emptyList(), skills)
                 .map { it as kotlinx.serialization.json.JsonObject }
@@ -52,10 +57,60 @@ class CloudAgentStoreTest {
             assertEquals(28 + controls.size, withControls.size)
             assertEquals("\"question\"", kind(AgentControlToolNames.REQUEST_USER_INPUT))
             assertEquals("\"device\"", kind(com.android.everytalk.data.computer.ComputerToolNames.LOCAL_FILE_SAVE))
-            assertEquals("\"unsupported\"", kind(AgentControlToolNames.REQUEST_AGENT))
-            assertTrue(runCatching { cloudAgentTools(context, request.copy(tools = listOf(mapOf("googleSearch" to emptyMap<String, Any>()))), emptyList(), skills) }.isFailure)
-            assertTrue(runCatching { cloudAgentTools(context, request.copy(tools = listOf(tool("everytalk_memory"))), emptyList(), skills) }.isFailure)
+            assertEquals("\"device\"", kind(AgentControlToolNames.REQUEST_AGENT))
+            assertEquals("\"device\"", kind(AgentControlToolNames.REQUEST_SKILL_SECRET))
+            assertEquals(listOf("\"${AgentToolResultReadTool.NAME}\""), cloudAgentTools(context,
+                request.copy(tools = listOf(mapOf("googleSearch" to emptyMap<String, Any>()))), emptyList(), skills).map { it.jsonObject["name"].toString() })
+            assertEquals("\"device\"", only("everytalk_memory", cloudAgentTools(context, request.copy(tools = listOf(tool("everytalk_memory"))), emptyList(), skills)))
         } finally { db.close() }
+    }
+
+    @Test fun `未落盘回复补写固定草稿后立即提交且不用等待整账号同步`() = runBlocking {
+        val db = database()
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        try {
+            val context = ApplicationProvider.getApplicationContext<Context>()
+            val chat = db.chatDao()
+            val session = ChatSessionEntity("new-cloud", 1, 1, false).copy(syncStatus = SyncStatus.PENDING)
+            val user = Message(id = "question", text = "问题", sender = Sender.User).toEntity(session.id).copy(syncStatus = SyncStatus.PENDING)
+            chat.writeSession(session); chat.writeMessages(listOf(user))
+            val state = com.android.everytalk.data.sync.SyncStateStore(db)
+            state.saveCursor(0, 2); state.recordSecretsEpoch(3)
+            val api = io.mockk.mockk<com.android.everytalk.data.sync.SyncApi>()
+            val epochs = synchronizeCloudAgentParents(db, api, io.mockk.mockk(), state, session.id, user.id, { true })
+            assertEquals(2L to 3L, epochs)
+            io.mockk.coVerify(exactly = 0) { api.pull(any(), any()) }
+            val request = ChatRequest(listOf(SimpleTextApiMessage(id = user.id, role = "user", content = "问题")),
+                "OpenAI", "OpenAI兼容", "https://example.com/v1", "test-only", "test-model", conversationId = session.id)
+            val input = AgentLoopRequest(request, session.id, user.id, "missing-ai", ModelTokenLimits(512, 8_000))
+            var submitted = false
+            val run = prepareCloudAgentSubmission(context, db, AgentRunStore(db.agentDao()),
+                com.android.everytalk.data.skill.SkillRepository(context, db.skillDao()),
+                com.android.everytalk.data.memory.MemoryCoordinator(db, scope), input, account, epochs, null, { true },
+                compact = { _, _, _, _ -> fail("小请求不需要压缩") }, beforePersist = { _, _ -> }) { pending, frozen, _ ->
+                submitted = true
+                val draft = checkNotNull(chat.getDraft(session.id, input.visibleAssistantMessageId)).message
+                assertEquals(draft.uuid, frozen["assistantMessageUuid"]?.jsonPrimitive?.content)
+                assertEquals(pending.id, frozen["id"]?.jsonPrimitive?.content)
+                assertEquals(SyncStatus.LOCAL_ONLY, draft.syncStatus)
+            }
+            assertTrue(submitted)
+            assertEquals("missing-ai", run.visibleAssistantMessageId)
+        } finally { scope.coroutineContext[kotlinx.coroutines.Job]?.cancel(); db.close() }
+    }
+
+    @Test fun `云端MCP展示真实名称且不同服务器保留原始身份`() = runBlocking {
+        val alias = "mcp_023f9c37061675de7081f3bb9e208d05_firecrawl_scrape"
+        val view = CloudRunView(1, account, account, account, account, "RUNNING", 1, 1,
+            CloudRunSnapshot("", "", listOf(CloudRunTrace("tool", 1, id = "mcp", name = alias,
+                arguments = buildJsonObject { put("url", "https://example.com") })), null, 1))
+        val message = view.toMessage(Message(id = "ai", text = "", sender = Sender.AI)) { it }
+        assertEquals("调用MCP", message.executionSteps.single().title)
+        assertEquals(listOf("firecrawl_scrape"), message.executionSteps.single().labels)
+        assertEquals(alias, message.executionSteps.single().toolName)
+        assertEquals(alias, view.snapshot.trace.single().name)
+        com.android.everytalk.data.mcp.McpToolLabels.update(emptyList())
+        assertEquals("firecrawl_scrape", com.android.everytalk.data.mcp.McpToolLabels.display(alias))
     }
 
     @Test fun `云端快照带出模型名真实用量和搜索来源`() = runBlocking {

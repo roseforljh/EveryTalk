@@ -488,7 +488,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         persistenceManager.saveConversationFunctionToggleStates(stateHolder.conversationFunctionToggleStates.value)
-        return resumed
+        // 云端任务里批准开启时，连接信息一并冻结，MCP 由后端直接调用；本机 Run 不读这个字段。
+        val names = tools.map(com.android.everytalk.data.agent.McpToolDiscovery::name).filter { it.startsWith("mcp_") }.toSet()
+        val bindings = try { mcpManager.cloudBindings(names) } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { emptyMap() }
+        return resumed.copy(localCloudMcpBindings = resumed.localCloudMcpBindings + bindings)
     }
 
     /** request_agent 获批后，为原 Run 补齐服务器快照、环境说明和 Agent 工具。 */
@@ -640,8 +643,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         ) { parent, forks -> forks[parent].orEmpty() }
             .stateIn(viewModelScope, SharingStarted.Eagerly, "") else stateHolder._currentConversationId
         val activeMessage = if (fork) kotlinx.coroutines.flow.combine(
-            conversation, stateHolder.textApiRunVersion,
-        ) { id, _ -> stateHolder.textApiMessageIds[id] }
+            conversation, stateHolder.textApiRunVersion, stateHolder._forkCloudRuns,
+        ) { id, _, cloud -> stateHolder.textApiMessageIds[id] ?: cloud[id] }
             .stateIn(viewModelScope, SharingStarted.Eagerly, null) else stateHolder._currentTextStreamingAiMessageId
         // 云端任务在本机没有流式 Job，但会话同样在运行：新输入进队列，不能另开一轮。
         val running = if (fork) activeMessage.map { it != null }
@@ -663,11 +666,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             recoverDispatches = !fork,
             isConversationRunning = { id ->
                 stateHolder.textApiMessageIds.containsKey(id) || id in stateHolder.preparingTextConversationIds.value ||
+                    id in stateHolder._forkCloudRuns.value ||
                     stateHolder._remoteLiveRun.value?.let { it.running && it.cloudRunId != null && it.message.conversationId == id } == true
             },
             conversationRunVersion = kotlinx.coroutines.flow.combine(
-                stateHolder.textApiRunVersion, stateHolder.preparingTextConversationIds, stateHolder._remoteLiveRun,
-            ) { version, preparing, remote -> (version * 31 + preparing.hashCode()) * 31 + (remote?.running?.hashCode() ?: 0) }
+                stateHolder.textApiRunVersion, stateHolder.preparingTextConversationIds, stateHolder._remoteLiveRun, stateHolder._forkCloudRuns,
+            ) { version, preparing, remote, forks -> ((version * 31 + preparing.hashCode()) * 31 + (remote?.running?.hashCode() ?: 0)) * 31 + forks.hashCode() }
                 .stateIn(viewModelScope, SharingStarted.Eagerly, 0L),
             hasComposerContent = {
                 if (fork) stateHolder._forkComposerText.value.isNotBlank() ||
@@ -1405,16 +1409,32 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         val sessionUuid = chatDao.getStoredSession(currentId)?.uuid ?: return@withContext null
                         val run = remote[sessionUuid] ?: return@withContext null
                         val cloudRunId = run.runId.takeIf { cloud[sessionUuid]?.runId == it }
-                        // 云端投影已按持久 Run 的 visibleAssistantMessageId 定位；运行中的占位只在草稿表，
-                        // 再按 messages 表查 UUID 会把首发设备的回复改成 cloud:ID，和运行控制的 key 对不上。
-                        val localId = if (cloudRunId != null) run.message.id
-                            else chatDao.getMessageByUuid(run.messageUuid)?.id ?: "cloud:${run.messageUuid}"
+                        // 正式消息已有时以其 ID 为准，兼容旧版同步曾把草稿换成 cloud:UUID 的情况；
+                        // 尚未定稿则沿用云端 Run 的草稿 ID，不能在首个快照到达前另造气泡。
+                        val localId = chatDao.getMessageByUuid(run.messageUuid)?.id
+                            ?: if (cloudRunId != null) run.message.id else "cloud:${run.messageUuid}"
                         val message = com.android.everytalk.data.sync.mapLiveMessageReferences(run.message, chatDao::resolveLocalMessageReference)
                         com.android.everytalk.statecontroller.RemoteLiveRun(sessionUuid, message.copy(id = localId, conversationId = currentId,
                             executionStatus = message.executionStatus.takeIf { run.running || message.isError }), run.running,
                             cloudRunId = cloudRunId)
                     }
                 }
+        }
+        // 分支对话由云端执行时没有本机流式 Job：把云端快照直接写进分支消息列表，运行态单独记一份。
+        viewModelScope.launch {
+            kotlinx.coroutines.flow.combine(apiHandler.cloudRuns, stateHolder._forkConversationIds) { cloud, forks ->
+                val ids = forks.values.toSet()
+                cloud.values.filter { it.message.conversationId in ids }
+            }.collect { runs ->
+                withContext(Dispatchers.Main.immediate) {
+                    stateHolder._forkCloudRuns.value = runs.filter { it.running }.associate { checkNotNull(it.message.conversationId) to it.message.id }
+                    for (run in runs) {
+                        val list = stateHolder.textMessagesForConversation(checkNotNull(run.message.conversationId))
+                        val index = list.indexOfFirst { it.id == run.message.id }
+                        if (index >= 0 && list[index] != run.message) list[index] = run.message
+                    }
+                }
+            }
         }
         // 另一台设备点了停止：当前页面的任务走停止按钮同一流程，后台会话直接结束。
         viewModelScope.launch {

@@ -1,7 +1,13 @@
 package com.android.everytalk
 
 import android.app.Application
+import android.content.Context
 import android.content.res.Configuration
+import coil3.ImageLoader
+import coil3.SingletonImageLoader
+import coil3.annotation.ExperimentalCoilApi
+import coil3.network.DeDupeConcurrentRequestStrategy
+import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import com.android.everytalk.data.network.ApiClient
 import com.android.everytalk.di.allModules
 import com.android.everytalk.util.DynamicIconSwitcher
@@ -15,8 +21,18 @@ import org.koin.android.ext.koin.androidLogger
 import org.koin.core.context.startKoin
 import org.koin.core.logger.Level
 
-class EveryTalkApplication : Application() {
+class EveryTalkApplication : Application(), SingletonImageLoader.Factory {
     private val startupScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /** 同一图片的并发加载共用下载结果；保留默认缓存与解码器，取消等待者不会挂住其余请求。 */
+    @OptIn(ExperimentalCoilApi::class)
+    override fun newImageLoader(context: Context): ImageLoader = ImageLoader.Builder(context)
+        .components {
+            add(OkHttpNetworkFetcherFactory(
+                concurrentRequestStrategy = { DeDupeConcurrentRequestStrategy() },
+            ))
+        }
+        .build()
 
     override fun onCreate() {
         super.onCreate()

@@ -30,7 +30,7 @@ class MarkdownLinkLogoTest {
             flavour = EveryTalkMarkdownFlavourDescriptor,
             annotatorSettings = DefaultAnnotatorSettings(
                 linkTextSpanStyle = TextLinkStyles(style = SpanStyle()),
-                codeSpanStyle = SpanStyle(),
+                codeSpanStyle = SpanStyle(), highlightSpanStyle = SpanStyle(),
                 annotator = createPreparedMessageMarkdownAnnotator(
                     PreparedMessage(content, emptyMap(), false, 1L),
                     linkLogoHosts = index.requests.map { it.host }.toSet(),
@@ -124,7 +124,7 @@ class MarkdownLinkLogoTest {
             style = TextStyle.Default,
             annotatorSettings = DefaultAnnotatorSettings(
                 linkTextSpanStyle = TextLinkStyles(style = SpanStyle()),
-                codeSpanStyle = SpanStyle(),
+                codeSpanStyle = SpanStyle(), highlightSpanStyle = SpanStyle(),
                 annotator = createPreparedMessageMarkdownAnnotator(
                     preparedMessage = com.android.everytalk.ui.components.streaming.PreparedMessage(
                         markdown = content,
@@ -149,7 +149,7 @@ class MarkdownLinkLogoTest {
             style = TextStyle.Default,
             annotatorSettings = DefaultAnnotatorSettings(
                 linkTextSpanStyle = TextLinkStyles(style = SpanStyle()),
-                codeSpanStyle = SpanStyle(),
+                codeSpanStyle = SpanStyle(), highlightSpanStyle = SpanStyle(),
                 annotator = createPreparedMessageMarkdownAnnotator(
                     preparedMessage = com.android.everytalk.ui.components.streaming.PreparedMessage(
                         markdown = content,

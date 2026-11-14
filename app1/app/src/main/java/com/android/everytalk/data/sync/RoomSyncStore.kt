@@ -717,14 +717,17 @@ internal class RoomSyncStore(
         require(sender in setOf(Sender.User, Sender.AI, Sender.System, Sender.Tool))
         fun <T> optional(name: String, serializer: kotlinx.serialization.KSerializer<T>): T? =
             record.payload[name]?.let { runCatching { syncJson.decodeFromJsonElement(serializer, it) }.getOrNull() }
+        val draft = chat.getDraftByUuid(record.id)?.message
+        if (draft != null) check(draft.sessionId == session.id && draft.sender == sender) { "SYNC_MESSAGE_IDENTITY_CONFLICT" }
+        val localId = draft?.id ?: "cloud:${record.id}"
         val message = Message(
-            id = "cloud:${record.id}", text = SyncPayloadMapper.string(record.payload, "text").orEmpty(), sender = sender,
+            id = localId, text = SyncPayloadMapper.string(record.payload, "text").orEmpty(), sender = sender,
             reasoning = SyncPayloadMapper.string(record.payload, "reasoning"), contentStarted = true,
             isError = SyncPayloadMapper.boolean(record.payload, "isError"), name = SyncPayloadMapper.string(record.payload, "name"),
             timestamp = timestamp, outputType = SyncPayloadMapper.string(record.payload, "outputType") ?: "general",
             modelName = SyncPayloadMapper.string(record.payload, "modelName"), providerName = SyncPayloadMapper.string(record.payload, "providerName"),
             tokenUsage = optional("tokenUsage", TokenUsage.serializer()),
-            contextUsageSnapshot = optional("contextUsageSnapshot", ContextUsageSnapshot.serializer())?.copy(messageId = "cloud:${record.id}"),
+            contextUsageSnapshot = optional("contextUsageSnapshot", ContextUsageSnapshot.serializer())?.copy(messageId = localId),
             executionFinishedAt = record.payload["executionFinishedAt"]?.jsonPrimitive?.longOrNull,
             enabledToolIds = record.payload["enabledToolIds"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }.orEmpty(),
             contentParts = (record.payload["bodySegments"] as? JsonArray)?.mapNotNull { part ->
@@ -778,6 +781,8 @@ internal class RoomSyncStore(
         if (old == null) {
             chat.insertRemoteMessage(message)
             check(chat.getSyncMessageByUuid(record.id) != null) { "SYNC_MESSAGE_IDENTITY_CONFLICT" }
+            // 正式记录已继承同一身份，草稿不能再被 UNION 当作第二条回复读出。
+            if (draft != null) chat.deleteDrafts(session.id, listOf(draft.id))
         } else {
             // 补充合并只填缺失字段。旧版留下的云端空白占位允许用服务器正文补齐，
             // 但不能覆盖本机原件、待上传编辑或已恢复的完整归档。

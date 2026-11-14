@@ -119,7 +119,6 @@ class AgentContextManager(
         val activeBeforeTrim = calibratedInputTokens(estimateBeforeTrim, calibration)
         val reservedOutput = limits.maxOutputTokens.toLong()
         val contextWindow = limits.maxContextTokens.toLong()
-        val inputBudget = contextWindow - reservedOutput
         val budget = contextBudget(
             request = request,
             limits = limits,
@@ -167,7 +166,6 @@ class AgentContextManager(
             (forceLocalCompaction ||
                 exceedsContextWindow ||
                 activeBeforeTrim > genericCompactionThreshold ||
-                activeBeforeTrim > inputBudget ||
                 (staleCheckpointRecovery && activeBeforeTrim > recoveryThreshold))
         val plan = if (needsCompaction) {
             planCompaction(
@@ -339,8 +337,9 @@ class AgentContextManager(
             ?.coerceAtMost(contextWindow)
         val triggerThreshold = maxOf(configuredTrigger, checkpointRetrigger ?: 1L)
             .coerceAtMost(contextWindow)
-        // 压缩线可能高于硬输入上限，压缩目标必须同时低于硬上限，否则压完仍然超窗。
-        val targetAfterCompaction = (minOf(triggerThreshold, contextWindow - reserveTokens) - hysteresisGap)
+        // 最大输出不再挤占压缩线：发请求时按剩余空间收小本次的输出上限（见 AgentLoop），
+        // 否则 272k 窗口配 128k 输出，140k 就被迫压缩，用户设的 80% 形同虚设。
+        val targetAfterCompaction = (triggerThreshold - hysteresisGap)
             .coerceAtLeast(1L)
         val fixedOverhead = estimate.systemPromptTokens + estimate.toolSchemaTokens +
             estimate.protocolOverheadTokens

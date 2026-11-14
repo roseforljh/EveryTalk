@@ -349,7 +349,8 @@ private suspend fun MessageSender.requestAutoContextCompressionSummary(
                 append("请压缩第 ${chunk.index}/${chunk.total} 个会话片段，行 ${chunk.startLine}-${chunk.endLine}。\n")
                 append(chunk.text)
             },
-            maxOutputTokens = maxOutputTokens,
+            // 推理模型的思考也算输出：只给摘要长度的额度会被思考用光、返回空摘要，这里留出思考空间。
+            maxOutputTokens = minOf(limits.maxOutputTokens, maxOf(maxOutputTokens * 4, 16_384)).coerceAtLeast(maxOutputTokens),
             customModelParameters = customModelParameters,
         )
     }

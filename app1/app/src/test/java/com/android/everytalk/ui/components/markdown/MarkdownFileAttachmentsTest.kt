@@ -106,7 +106,7 @@ class MarkdownFileAttachmentsTest {
         style = TextStyle.Default,
         flavour = EveryTalkMarkdownFlavourDescriptor,
         annotatorSettings = DefaultAnnotatorSettings(
-            linkTextSpanStyle = TextLinkStyles(SpanStyle()), codeSpanStyle = SpanStyle(),
+            linkTextSpanStyle = TextLinkStyles(SpanStyle()), codeSpanStyle = SpanStyle(), highlightSpanStyle = SpanStyle(),
             annotator = createPreparedMessageMarkdownAnnotator(PreparedMessage(content, emptyMap(), false, 1L),
                 linkLogoDefinitions = markdownLinkLogoIndex(content).definitions, messageFiles = files),
         ).withRegularMarkdownStrongWeight(),

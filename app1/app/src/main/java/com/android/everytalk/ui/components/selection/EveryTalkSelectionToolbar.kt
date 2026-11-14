@@ -1,5 +1,7 @@
 package com.android.everytalk.ui.components.selection
 
+import androidx.compose.ui.res.stringResource
+import com.android.everytalk.R
 import com.android.everytalk.ui.components.dialog.AppOutlinedButton
 import android.content.ClipboardManager
 import android.content.Context
@@ -83,8 +85,6 @@ import com.android.everytalk.ui.components.dialog.appDialogContainerColor
 import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.components.dialog.appDialogSubtextColor
 
-internal const val ASK_EVERYTALK_MENU_TITLE = "询问Everytalk"
-
 /**
  * 询问 EveryTalk 弹窗的三个目标路由选项。
  */
@@ -114,6 +114,7 @@ fun AskEveryTalkSelectionArea(
         return
     }
     val context = LocalContext.current
+    val askLabel = stringResource(R.string.selection_ask_everytalk)
     val focusManager = LocalFocusManager.current
     val latestOnAsk by rememberUpdatedState(onAsk)
     val copyItem = remember { arrayOfNulls<TextContextMenuItem>(1) }
@@ -125,7 +126,7 @@ fun AskEveryTalkSelectionArea(
             true
         }
         .appendTextContextMenuComponents {
-            item(key = AskEveryTalkMenuKey, label = ASK_EVERYTALK_MENU_TITLE) {
+            item(key = AskEveryTalkMenuKey, label = askLabel) {
                 val copy = copyItem[0]
                 val text = copy?.let(::readSelectedText) ?: copy?.let { copyViaClipboard(context, it, this) }.orEmpty()
                 // 关工具栏不会释放选区；失焦才会触发 SelectionContainer 的 onRelease。
@@ -280,7 +281,7 @@ fun AskEveryTalkOptionDialog(
         textContentColor = contentColor,
         title = {
             Text(
-                text = "询问 EveryTalk",
+                text = stringResource(R.string.selection_ask_everytalk),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
             )
@@ -310,10 +311,10 @@ fun AskEveryTalkOptionDialog(
                     )
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    AskOptionTile(Icons.Outlined.AddComment, "新会话", "ask-everytalk-option-new") {
+                    AskOptionTile(Icons.Outlined.AddComment, stringResource(R.string.selection_new_conversation), "ask-everytalk-option-new") {
                         onSelectOption(EveryTalkAskOption.NEW_CONVERSATION)
                     }
-                    AskOptionTile(Icons.Outlined.ChatBubbleOutline, "本会话", "ask-everytalk-option-current") {
+                    AskOptionTile(Icons.Outlined.ChatBubbleOutline, stringResource(R.string.selection_current_conversation), "ask-everytalk-option-current") {
                         onSelectOption(EveryTalkAskOption.CURRENT_CONVERSATION)
                     }
                     AskOptionTile(Icons.AutoMirrored.Outlined.CallSplit, "Fork", "ask-everytalk-option-fork") {
@@ -325,7 +326,7 @@ fun AskEveryTalkOptionDialog(
         confirmButton = {},
         dismissButton = {
             AppOutlinedButton(onClick = onDismiss) {
-                Text(text = "取消", color = subtextColor)
+                Text(text = stringResource(R.string.action_cancel), color = subtextColor)
             }
         },
     )
@@ -465,7 +466,7 @@ fun QuoteReferenceTagPill(
                 ) {
                     Icon(
                         imageVector = Icons.Outlined.Close,
-                        contentDescription = "移除引用",
+                        contentDescription = stringResource(R.string.selection_remove_quote),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(12.dp),
                     )

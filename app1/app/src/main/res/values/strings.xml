@@ -769,6 +769,9 @@
     <string name="agent_unknown_keep">Do not retry</string>
     <string name="agent_unknown_retry">Run again</string>
     <string name="agent_unknown_title">Operation status unknown</string>
+    <string name="thinking_cloud_connecting">Connecting to cloud</string>
+    <string name="thinking_cloud_sync">Checking cloud sync</string>
+    <string name="thinking_cloud_preparing">Preparing context and tools</string>
     <string name="thinking_preparing_server">Preparing server</string>
     <string name="thinking_restoring_remote_task">Restoring remote task</string>
     <string name="thinking_waiting_server_reconnect">Waiting for server reconnection</string>
@@ -2150,4 +2153,9 @@
     <string name="ui_model_capability_thinking_budget_description">Thinking budget tokens</string>
     <string name="ui_settings_config_text_model">Text model</string>
     <string name="ui_settings_config_image_model">Image model</string>
+    <string name="attachment_pdf_page">PDF page %1$d</string>
+    <string name="selection_ask_everytalk">Ask EveryTalk</string>
+    <string name="selection_new_conversation">New chat</string>
+    <string name="selection_current_conversation">This chat</string>
+    <string name="selection_remove_quote">Remove quote</string>
 </resources>

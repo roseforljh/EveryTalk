@@ -19,6 +19,8 @@ import com.android.everytalk.data.agent.AgentRunStore
 import com.android.everytalk.data.database.AppDatabase
 import com.android.everytalk.data.database.entities.ChatSessionEntity
 import com.android.everytalk.data.network.AppStreamEvent
+import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkObject
@@ -30,6 +32,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.withTimeout
@@ -51,6 +56,16 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = Application::class)
 class ApiHandlerQuietCleanupTest {
+    /** mock 只提供事件与状态，不启动真实应用级协调器或恢复任务。 */
+    private fun mockCoordinator(): AgentRunCoordinator = mockk<AgentRunCoordinator>(relaxed = true).also { coordinator ->
+        every { coordinator.events } returns MutableSharedFlow<Pair<String, AppStreamEvent>>()
+        every { coordinator.uiEventCollectors } returns AtomicInteger()
+        every { coordinator.cloudToolApprovals } returns MutableStateFlow(emptyList())
+        every { coordinator.cloudAgentEnableApprovals } returns MutableStateFlow(emptyList())
+        every { coordinator.cloudMcpEnableApprovals } returns MutableStateFlow(emptyList())
+        every { coordinator.cloudSkillSecretApprovals } returns MutableStateFlow(emptyList())
+    }
+
     /** 真实点击审批入口：即使恢复暂时排队，获批标签也应立即出现，且不能影响别的会话。 */
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Test
@@ -64,8 +79,7 @@ class ApiHandlerQuietCleanupTest {
         mockkObject(AppDatabase.Companion, AgentRunCoordinator.Companion)
         try {
             every { AppDatabase.getDatabase(any()) } returns database
-            val coordinator = mockk<AgentRunCoordinator>()
-            every { coordinator.events } returns MutableSharedFlow<Pair<String, AppStreamEvent>>()
+            val coordinator = mockCoordinator()
             every { AgentRunCoordinator.shared(any(), any()) } returns coordinator
             val store = AgentRunStore(database.agentDao())
             val state = ViewModelStateHolder()
@@ -125,8 +139,7 @@ class ApiHandlerQuietCleanupTest {
         mockkObject(AppDatabase.Companion, AgentRunCoordinator.Companion)
         try {
             every { AppDatabase.getDatabase(any()) } returns database
-            val coordinator = mockk<AgentRunCoordinator>(relaxed = true)
-            every { coordinator.events } returns MutableSharedFlow<Pair<String, AppStreamEvent>>()
+            val coordinator = mockCoordinator()
             every { AgentRunCoordinator.shared(any(), any()) } returns coordinator
             val state = ViewModelStateHolder().also { it.initializeBufferScope(liveScope) }
             val liveHandler = ApiHandler(context, state, liveScope, mockk(relaxed = true), { _, _ -> }, {})
@@ -227,8 +240,7 @@ class ApiHandlerQuietCleanupTest {
         mockkObject(AppDatabase.Companion, AgentRunCoordinator.Companion)
         try {
             every { AppDatabase.getDatabase(any()) } returns database
-            val coordinator = mockk<AgentRunCoordinator>(relaxed = true)
-            every { coordinator.events } returns MutableSharedFlow<Pair<String, AppStreamEvent>>()
+            val coordinator = mockCoordinator()
             every { AgentRunCoordinator.shared(any(), any()) } returns coordinator
             val state = ViewModelStateHolder()
             state.setCurrentConversationId("stop-session")
@@ -290,12 +302,17 @@ class ApiHandlerQuietCleanupTest {
         val context = ApplicationProvider.getApplicationContext<Application>()
         val database = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
             .allowMainThreadQueries().build()
+        val parent = SupervisorJob()
+        val liveScope = CoroutineScope(parent + Dispatchers.Unconfined)
         Dispatchers.setMain(UnconfinedTestDispatcher())
         mockkObject(AppDatabase.Companion, AgentRunCoordinator.Companion)
         try {
             every { AppDatabase.getDatabase(any()) } returns database
-            // 旧实现会在投影卡片前访问恢复协调器，本测试在该边界明确失败。
-            every { AgentRunCoordinator.shared(any(), any()) } throws IllegalStateException("无关恢复不可用")
+            val coordinator = mockCoordinator()
+            every { AgentRunCoordinator.shared(any(), any()) } returns coordinator
+            // 合并云端卡片需要协调器的状态，但本机审批显示不能触发全局恢复扫描。
+            coEvery { coordinator.recoverInterventions() } throws IllegalStateException("无关恢复不可用")
+            val liveHandler = ApiHandler(context, ViewModelStateHolder(), liveScope, mockk(relaxed = true), { _, _ -> }, {})
             val store = AgentRunStore(database.agentDao())
             val requests = listOf(
                 AgentPauseRequest.EnableMcp("读取 Notion 页面"),
@@ -318,18 +335,22 @@ class ApiHandlerQuietCleanupTest {
                     approvalRequestId = "approval-$index", requestId = "request-$index",
                     toolCall = call, pendingToolCalls = listOf(call), agentRequest = request,
                 ))
-                handler.processStreamEvent(
+                liveHandler.processStreamEvent(
                     AppStreamEvent.AgentApprovalRequired(run.id, "approval-$index"),
                     run.visibleAssistantMessageId,
                 )
             }
-            assertEquals("approval-0", handler.pendingMcpEnableApprovals.value.single().approvalRequestId)
-            assertEquals("approval-session-0", handler.pendingMcpEnableApprovals.value.single().conversationId)
-            assertEquals("读取 Notion 页面", handler.pendingMcpEnableApprovals.value.single().reason)
-            assertEquals("approval-1", handler.pendingAgentEnableApprovals.value.single().approvalRequestId)
-            assertEquals("TOKEN", handler.pendingSkillSecretApprovals.value.single().name)
-            verify(exactly = 0) { AgentRunCoordinator.shared(any(), any()) }
+            withTimeout(5_000) {
+                val mcp = liveHandler.pendingMcpEnableApprovals.first { it.isNotEmpty() }.single()
+                assertEquals("approval-0", mcp.approvalRequestId)
+                assertEquals("approval-session-0", mcp.conversationId)
+                assertEquals("读取 Notion 页面", mcp.reason)
+                assertEquals("approval-1", liveHandler.pendingAgentEnableApprovals.first { it.isNotEmpty() }.single().approvalRequestId)
+                assertEquals("TOKEN", liveHandler.pendingSkillSecretApprovals.first { it.isNotEmpty() }.single().name)
+            }
+            coVerify(exactly = 0) { coordinator.recoverInterventions() }
         } finally {
+            parent.cancelAndJoin()
             unmockkObject(AppDatabase.Companion, AgentRunCoordinator.Companion)
             Dispatchers.resetMain()
             database.close()

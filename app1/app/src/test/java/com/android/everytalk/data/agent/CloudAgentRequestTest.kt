@@ -59,4 +59,18 @@ class CloudAgentRequestTest {
         val image = PartsApiMessage(role = "user", parts = listOf(ApiContentPart.InlineData("aGVsbG8=", "image/png")))
         assertEquals("image", convert(request.copy(messages = listOf(image))).getValue("messages").jsonArray.single().jsonObject.getValue("content").jsonArray.single().jsonObject.getValue("type").jsonPrimitive.content)
     }
+
+    @Test fun `读不出文字的附件原样随消息交给云端，Gemini原生搜索与千问联网照本机判定`() {
+        val raw = PartsApiMessage(role = "user", parts = listOf(ApiContentPart.Text("看看"), ApiContentPart.InlineData("H4sI", "application/gzip", "a.tar.gz")))
+        val input = convert(request("Gemini").copy(messages = listOf(raw), useWebSearch = true, enableCodeExecution = true))
+        val marker = input.getValue("messages").jsonArray.single().jsonObject.getValue("content").jsonArray[1].jsonObject.getValue("text").jsonPrimitive.content
+        val id = Regex("^\\[\\[everytalk-file:([0-9a-f-]{36})]]$").find(marker)!!.groupValues[1]
+        val file = input.getValue("files").jsonObject.getValue(id).jsonObject
+        assertEquals(listOf("a.tar.gz", "application/gzip", "H4sI"), listOf("name", "mimeType", "data").map { file.getValue(it).jsonPrimitive.content })
+        assertEquals(listOf("googleSearch", "codeExecution"), input.getValue("nativeTools").jsonArray.map { it.jsonObject.keys.single() })
+        assertEquals("off", input.getValue("thinkingLevel").jsonPrimitive.content)
+        val qwen = convert(request("OpenAI兼容").copy(qwenEnableSearch = true)).getValue("extraBody").jsonObject
+        assertTrue(qwen.getValue("enable_search").jsonPrimitive.boolean)
+        assertTrue(qwen.getValue("extra_body").jsonObject.getValue("enable_search").jsonPrimitive.boolean)
+    }
 }

@@ -800,7 +800,7 @@ private fun TaskReasoningCard(text: String, index: Int = 0) {
                         modifier = Modifier.size(15.dp),
                     )
                     Text(
-                        text = "思考过程",
+                        text = stringResource(R.string.thinking_process),
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -867,7 +867,7 @@ private fun TaskAiContentCard(text: String, index: Int = 0) {
                     modifier = Modifier.size(14.dp),
                 )
                 Text(
-                    text = "AI 回复",
+                    text = stringResource(R.string.ai_reply_message),
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.primary,
@@ -884,7 +884,7 @@ private fun TaskToolCard(
     expanded: Boolean,
     onToggle: () -> Unit,
 ) {
-    val summary = step.detail?.takeIf { it.isNotBlank() } ?: step.labels.joinToString(" · ")
+    val summary = step.detail?.takeIf { it.isNotBlank() } ?: step.labels.joinToString(" · ", transform = com.android.everytalk.data.mcp.McpToolLabels::display)
     val hasDetails = summary.isNotBlank() || !step.resultPreview.isNullOrBlank()
     val statusColor = when {
         step.isError -> MaterialTheme.colorScheme.error
@@ -932,7 +932,7 @@ private fun TaskToolCard(
                         modifier = Modifier.size(16.dp),
                     )
                     Text(
-                        text = step.title,
+                        text = com.android.everytalk.ui.screens.BubbleMain.Main.localizedExecutionStatusText(step.title) ?: step.title,
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,

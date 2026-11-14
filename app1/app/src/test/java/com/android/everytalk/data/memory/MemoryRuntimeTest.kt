@@ -341,6 +341,21 @@ class MemoryRuntimeTest {
         catch (_: IllegalStateException) { }
     }
 
+    @Test fun `memory sent with a question is replayed unchanged on later turns so the prompt prefix stays cacheable`() = runBlocking {
+        repository.save("用户喜欢中文回答", MemoryCategory.USER_PREFERENCE)
+        repository.setSettings(true)
+        val coordinator = MemoryCoordinator(database, scope) { MemoryModelReply("""{"memories":[]}""") }
+        val first = coordinator.prepare(input("OpenAI兼容", "第一问"))
+        val sent = MemoryPromptRenderer.inject(first.request.messages, checkNotNull(first.request.localMemorySnapshot).prompt)
+            .first { it.id == first.userMessageId }
+        val second = first.copy(userMessageId = "user-next", request = first.request.copy(messages = first.request.messages +
+            SimpleTextApiMessage(role = "assistant", content = "已回答") + SimpleTextApiMessage(id = "user-next", role = "user", content = "第二问")))
+        val replayed = coordinator.prepare(second).request.messages.first { it.id == first.userMessageId }
+        assertEquals(sent, replayed)
+        joinBackground()
+        Unit
+    }
+
     private suspend fun input(channel: String, text: String): AgentLoopRequest {
         val id = java.util.UUID.randomUUID().toString()
         database.chatDao().insertSession(ChatSessionEntity(id, 1, 1, false))

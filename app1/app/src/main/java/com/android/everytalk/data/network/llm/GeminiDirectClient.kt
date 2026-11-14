@@ -252,7 +252,7 @@ object GeminiDirectClient {
     /**
      * 判断是否应该启用代码执行工具
      */
-    private fun shouldEnableCodeExecution(request: ChatRequest): Boolean {
+    internal fun shouldEnableCodeExecution(request: ChatRequest): Boolean {
         // 如果显式启用，返回 true
         if (request.enableCodeExecution == true) return true
         // 如果显式禁用，返回 false

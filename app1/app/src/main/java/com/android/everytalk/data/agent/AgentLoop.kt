@@ -483,6 +483,9 @@ class AgentLoop(
                     apiKey = apiKeyProvider(checkNotNull(run), input.request),
                     messages = prepared.messages,
                     localProviderContinuation = providerContinuation,
+                    generationConfig = modelRequest.generationConfig?.fitOutputToWindow(
+                        input.tokenLimits.maxContextTokens.toLong(), prepared.snapshot.activeContextTokens,
+                    ),
                 )
                 val retryOfRequest = if (modelTurnOrdinal == firstModelTurnOrdinal) {
                     interruptedModelRequest
@@ -2169,6 +2172,45 @@ class AgentLoop(
     }
 
     /**
+     * 云端提交前的压缩：后端只执行整轮任务，超窗或到阈值时先在本机按运行中同一套摘要压好，
+     * 检查点落库后再冻结输入，下一轮云端和本机都复用它。挂在隐藏 Run 上，跑完立刻置终态。
+     */
+    suspend fun compactForSubmission(
+        sessionId: String,
+        request: ChatRequest,
+        limits: ModelTokenLimits,
+        plan: AgentCompactionPlan,
+    ) {
+        val run = runStore.createRun(
+            sessionId = sessionId,
+            userMessageId = "agent-manual-compaction",
+            visibleAssistantMessageId = "agent-manual-compaction-${UUID.randomUUID()}",
+            configIdSnapshot = request.contextManagement?.configId,
+            request = request,
+        )
+        var failed = true
+        try {
+            while (true) {
+                try {
+                    executeCompaction(run = run, requestOrdinal = 1, plan = plan, baseRequest = request, limits = limits)
+                    break
+                } catch (error: AgentRetryableNetworkException) {
+                    if (error.attempt > 3) throw error
+                    delay(agentResumeRetryDelayMillis(error.attempt))
+                }
+            }
+            failed = false
+        } finally {
+            runStore.updateRunStatus(
+                run = run,
+                status = if (failed) AgentRunStatus.FAILED else AgentRunStatus.COMPLETED,
+                requestOrdinal = 1,
+                terminalReason = AgentTerminalReasons.MANUAL_COMPACTION,
+            )
+        }
+    }
+
+    /**
      * 压缩请求走同一个单次 Provider Transport，并独立保存 Request、Usage 和耗时。
      * 其输出不进入可见 AI 消息，也不携带业务工具，防止摘要模型调用工具。
      */
@@ -2186,6 +2228,10 @@ class AgentLoop(
             (limits.maxContextTokens / 8).coerceAtLeast(1),
         )
         val summaryOutput = contextManager.compactionOutputTokenLimit(plan, hardSummaryOutput)
+        // 摘要长度靠提示词控制；请求的输出上限要给推理留空间。推理模型的思考也算输出，
+        // 只给摘要长度那点额度时思考就把它用光，返回 length 且没有正文，压缩反复失败重试（实测连发 4 次）。
+        // 参照 Pi 给到约 16k，不超过模型自己的最大输出。
+        val requestOutput = minOf(limits.maxOutputTokens, maxOf(summaryOutput * 4, 16_384)).coerceAtLeast(summaryOutput)
         val apiKey = apiKeyProvider(run, baseRequest)
         fun summaryRequestFor(source: AgentCompactionPlan) = baseRequest.copy(
             apiKey = apiKey,
@@ -2199,7 +2245,7 @@ class AgentLoop(
             qwenEnableSearch = false,
             enableCodeExecution = false,
             generationConfig = (baseRequest.generationConfig ?: GenerationConfig()).copy(
-                maxOutputTokens = summaryOutput,
+                maxOutputTokens = requestOutput,
             ),
             localComputerRequestContext = null,
             localProviderContinuation = null,
@@ -2208,7 +2254,7 @@ class AgentLoop(
         // 待压缩历史比模型窗口还大时，一次摘要请求本身就会超窗。按窗口切段滚动摘要：
         // 前面各段的摘要依次带进下一段，最后一段走下面完整的记账流程。
         // 每段只用「窗口 - 输出 - 上一段摘要」的七成，给估算误差留余量。
-        val chunkBudget = ((limits.maxContextTokens.toLong() - 2L * summaryOutput) * 7 / 10).coerceAtLeast(1L)
+        val chunkBudget = ((limits.maxContextTokens.toLong() - summaryOutput - requestOutput) * 7 / 10).coerceAtLeast(1L)
         val chunks = contextManager.compactionChunks(plan, chunkBudget)
         var rollingSummary = plan.previousSummary
         chunks.dropLast(1).forEach { chunk ->
@@ -2222,7 +2268,7 @@ class AgentLoop(
             requestId = requestId,
             request = summaryRequest.copy(contextManagement = null),
             limits = ModelTokenLimits(
-                maxOutputTokens = summaryOutput,
+                maxOutputTokens = requestOutput,
                 maxContextTokens = limits.maxContextTokens,
             ),
         )
@@ -2724,3 +2770,17 @@ private fun mergeTurnUsage(current: TokenUsage?, incoming: TokenUsage): TokenUsa
     source = incoming.source,
     requestOrdinal = incoming.requestOrdinal ?: current?.requestOrdinal,
 )
+
+
+/**
+ * 输入 + 最大输出不能超过窗口（OpenAI 等会直接拒收）。输入涨到“窗口 - 最大输出”之后，
+ * 只把这一次的输出上限收小到剩余空间，不提前压缩；最少留 4096，真超窗由压缩线或服务商报错处理。
+ */
+internal fun com.android.everytalk.data.DataClass.GenerationConfig.fitOutputToWindow(
+    contextWindow: Long,
+    inputTokens: Long,
+): com.android.everytalk.data.DataClass.GenerationConfig {
+    val configured = maxOutputTokens ?: return this
+    val room = (contextWindow - inputTokens).coerceAtLeast(4096L)
+    return if (configured <= room) this else copy(maxOutputTokens = room.toInt())
+}

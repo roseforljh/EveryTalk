@@ -520,7 +520,7 @@ class AgentContextCompressionRecoveryTest {
     }
 
     @Test
-    fun `压缩摘要预算随待压缩内容收紧`() = runBlocking {
+    fun `压缩摘要请求给推理留出输出空间`() = runBlocking {
         seedSession("compression-budget")
         val compressionBudgets = mutableListOf<Int?>()
         var requestCount = 0
@@ -539,7 +539,8 @@ class AgentContextCompressionRecoveryTest {
 
         val events = loop.run(loopRequest("compression-budget", compactThresholdTokens = 500)).toList()
 
-        assertTrue(checkNotNull(compressionBudgets.single()) <= 256)
+        // 摘要目标很短（约 256），但请求上限要留给推理模型的思考，否则思考用光额度返回空摘要。
+        assertTrue(checkNotNull(compressionBudgets.single()) > 256)
         assertTrue(events.any { it is AppStreamEvent.Content && it.text == "已继续处理" })
     }
 

@@ -46,6 +46,7 @@ import androidx.compose.ui.zIndex
 import androidx.compose.foundation.border
 import androidx.compose.ui.draw.shadow
 import androidx.navigation.NavController
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.Message
@@ -95,27 +96,27 @@ fun ChatScreen(
 ) {
     val context = LocalContext.current
     val messages: List<Message> = viewModel.messages
-    val text by viewModel.text.collectAsState()
-    val isConversationSearchActive by viewModel.isConversationSearchActive.collectAsState()
-    val conversationSearchQuery by viewModel.conversationSearchQuery.collectAsState()
-    val historicalConversations by viewModel.historicalConversations.collectAsState()
+    val text by viewModel.text.collectAsStateWithLifecycle()
+    val isConversationSearchActive by viewModel.isConversationSearchActive.collectAsStateWithLifecycle()
+    val conversationSearchQuery by viewModel.conversationSearchQuery.collectAsStateWithLifecycle()
+    val historicalConversations by viewModel.historicalConversations.collectAsStateWithLifecycle()
 
     // 模型类型只决定下一次请求；页面、消息和会话 ID 始终保持同一份状态。
-    val selectedApiConfig by viewModel.selectedApiConfig.collectAsState()
+    val selectedApiConfig by viewModel.selectedApiConfig.collectAsStateWithLifecycle()
 
-    val isRemoteCancellationPending by viewModel.isRemoteCancellationPending.collectAsState()
-    val currentStreamingAiMessageId by viewModel.currentTextStreamingAiMessageId.collectAsState()
-    val isCodeExecutionEnabled by viewModel.isCodeExecutionEnabled.collectAsState()
+    val isRemoteCancellationPending by viewModel.isRemoteCancellationPending.collectAsStateWithLifecycle()
+    val currentStreamingAiMessageId by viewModel.currentTextStreamingAiMessageId.collectAsStateWithLifecycle()
+    val isCodeExecutionEnabled by viewModel.isCodeExecutionEnabled.collectAsStateWithLifecycle()
     val selectedMediaItems = viewModel.selectedMediaItems
-    val isLoadingHistory by viewModel.isLoadingHistory.collectAsState()
-    val historyLoadGeneration by viewModel.historyLoadGeneration.collectAsState()
-    val isMcpEnabled by viewModel.stateHolder._isMcpEnabledForNextRequest.collectAsState()
-    val isLoadingHistoryData by viewModel.isLoadingHistoryData.collectAsState()
-    val conversationId by viewModel.currentConversationId.collectAsState()
-    val observedTaskRun by viewModel.currentTaskRun.collectAsState()
+    val isLoadingHistory by viewModel.isLoadingHistory.collectAsStateWithLifecycle()
+    val historyLoadGeneration by viewModel.historyLoadGeneration.collectAsStateWithLifecycle()
+    val isMcpEnabled by viewModel.stateHolder._isMcpEnabledForNextRequest.collectAsStateWithLifecycle()
+    val isLoadingHistoryData by viewModel.isLoadingHistoryData.collectAsStateWithLifecycle()
+    val conversationId by viewModel.currentConversationId.collectAsStateWithLifecycle()
+    val observedTaskRun by viewModel.currentTaskRun.collectAsStateWithLifecycle()
     val taskRun = observedTaskRun?.takeIf { it.sessionId == conversationId }
-    val taskApprovals by viewModel.pendingComputerAgentApprovals.collectAsState()
-    val taskInterventions by viewModel.pendingInterventions.collectAsState()
+    val taskApprovals by viewModel.pendingComputerAgentApprovals.collectAsStateWithLifecycle()
+    val taskInterventions by viewModel.pendingInterventions.collectAsStateWithLifecycle()
     // 展示记录只在 Run 切换时读取；已结束任务不再依赖完整请求快照。
     val taskTargetsSnapshot by produceState<Pair<String, List<com.android.everytalk.data.agent.AgentTaskTarget>>?>(null, taskRun?.id) {
         value = null
@@ -183,30 +184,31 @@ fun ChatScreen(
         }.mapNotNull { it.parameters["computer_id"] }.toSet(),
     ).map { it.copy(userMessages = userMessagesMap) }
     // Fork 分支是一条真实会话；抽屉按它的消息实时生成时间线。
-    val forkConversationIds by viewModel.forkConversationIds.collectAsState()
-    val forkComposerText by viewModel.forkComposerText.collectAsState()
-    val forkDrawerOpenRequestVersion by viewModel.forkDrawerOpenRequestVersion.collectAsState()
-    val textApiRunVersion by viewModel.textApiRunVersion.collectAsState()
+    val forkConversationIds by viewModel.forkConversationIds.collectAsStateWithLifecycle()
+    val forkComposerText by viewModel.forkComposerText.collectAsStateWithLifecycle()
+    val forkDrawerOpenRequestVersion by viewModel.forkDrawerOpenRequestVersion.collectAsStateWithLifecycle()
+    val textApiRunVersion by viewModel.textApiRunVersion.collectAsStateWithLifecycle()
     val forkConversationId = forkConversationIds[conversationId]
     LaunchedEffect(forkConversationId) {
         forkConversationId?.let { viewModel.loadForkConversationIfNeeded(it) }
     }
-    val forkRunningMessageId = remember(forkConversationId, textApiRunVersion) {
-        forkConversationId?.let { viewModel.stateHolder.textApiMessageIds[it] }
+    val forkCloudRuns by viewModel.stateHolder._forkCloudRuns.collectAsStateWithLifecycle()
+    val forkRunningMessageId = remember(forkConversationId, textApiRunVersion, forkCloudRuns) {
+        forkConversationId?.let { viewModel.stateHolder.textApiMessageIds[it] ?: forkCloudRuns[it] }
     }
     val forkMessages = forkConversationId?.let { viewModel.stateHolder.textMessagesForConversation(it) }
     val currentForkTask = forkMessages?.let { buildForkTaskItem(it.toList(), forkRunningMessageId) }
     val allDrawerTasks = taskItems + listOfNotNull(currentForkTask)
     val taskPanelApprovals = taskApprovalsForDisplay(taskItems, currentTaskApprovals)
-    val pendingHostCommand by viewModel.pendingComputerHostCommand.collectAsState()
-    val pendingAgentEnableApproval by viewModel.pendingAgentEnableApproval.collectAsState()
-    val pendingMcpEnableApproval by viewModel.pendingMcpEnableApproval.collectAsState()
-    val pendingSkillSecretApproval by viewModel.pendingSkillSecretApproval.collectAsState()
+    val pendingHostCommand by viewModel.pendingComputerHostCommand.collectAsStateWithLifecycle()
+    val pendingAgentEnableApproval by viewModel.pendingAgentEnableApproval.collectAsStateWithLifecycle()
+    val pendingMcpEnableApproval by viewModel.pendingMcpEnableApproval.collectAsStateWithLifecycle()
+    val pendingSkillSecretApproval by viewModel.pendingSkillSecretApproval.collectAsStateWithLifecycle()
     val currentHostCommand = pendingHostCommand?.takeIf { request ->
         request.context.conversationId == conversationId
     }
-    val systemPrompt by viewModel.systemPrompt.collectAsState()
-    val isSystemPromptEngaged by viewModel.isSystemPromptEngaged.collectAsState()
+    val systemPrompt by viewModel.systemPrompt.collectAsStateWithLifecycle()
+    val isSystemPromptEngaged by viewModel.isSystemPromptEngaged.collectAsStateWithLifecycle()
     val isSystemPromptExpanded by remember(conversationId) {
         derivedStateOf {
             viewModel.systemPromptExpandedState[conversationId] ?: false
@@ -214,8 +216,8 @@ fun ChatScreen(
     }
 
      val coroutineScope = rememberCoroutineScope()
-     val loadedHistoryIndex by viewModel.loadedHistoryIndex.collectAsState()
-    val chatListItems by viewModel.chatListItems.collectAsState()
+     val loadedHistoryIndex by viewModel.loadedHistoryIndex.collectAsStateWithLifecycle()
+    val chatListItems by viewModel.chatListItems.collectAsStateWithLifecycle()
     var observedHistoryLoadGeneration by remember {
         mutableLongStateOf(historyLoadGeneration)
     }
@@ -260,7 +262,7 @@ fun ChatScreen(
 
     // 获取抽屉相关状态
     val isDrawerOpen = !viewModel.drawerState.isClosed
-    val expandedDrawerItemIndex by viewModel.expandedDrawerItemIndex.collectAsState()
+    val expandedDrawerItemIndex by viewModel.expandedDrawerItemIndex.collectAsStateWithLifecycle()
 
     // 处理返回键逻辑 - 优先处理抽屉相关操作，再处理页面导航
     BackHandler(enabled = isDrawerOpen && expandedDrawerItemIndex != null) {
@@ -528,8 +530,8 @@ fun ChatScreen(
     var showEditConfigDialog by remember { mutableStateOf(false) }
     var modelParametersTarget by remember { mutableStateOf<com.android.everytalk.data.DataClass.ApiConfig?>(null) }
 
-    val textModels by viewModel.apiConfigs.collectAsState()
-    val imageModels by viewModel.imageGenApiConfigs.collectAsState()
+    val textModels by viewModel.apiConfigs.collectAsStateWithLifecycle()
+    val imageModels by viewModel.imageGenApiConfigs.collectAsStateWithLifecycle()
 
     val availableModels = remember(textModels, imageModels) { textModels + imageModels }
 
@@ -548,8 +550,8 @@ fun ChatScreen(
 
 
 
-    val showSourcesDialog by viewModel.showSourcesDialog.collectAsState()
-    val sourcesForDialog by viewModel.sourcesForDialog.collectAsState()
+    val showSourcesDialog by viewModel.showSourcesDialog.collectAsStateWithLifecycle()
+    val sourcesForDialog by viewModel.sourcesForDialog.collectAsStateWithLifecycle()
     val imeInsets = WindowInsets.ime
 
     // 获取输入法高度用于整体布局偏移
@@ -1008,7 +1010,7 @@ fun ChatScreen(
         }
     }
 
-    val showAboutDialog by viewModel.showAboutDialog.collectAsState()
+    val showAboutDialog by viewModel.showAboutDialog.collectAsStateWithLifecycle()
 
     if (showAboutDialog) {
         AboutDialog(
@@ -1017,9 +1019,9 @@ fun ChatScreen(
     }
 
     // 图片查看器
-    val showImageViewer by viewModel.showImageViewer.collectAsState()
-    val imageViewerUrls by viewModel.imageViewerUrls.collectAsState()
-    val imageViewerIndex by viewModel.imageViewerIndex.collectAsState()
+    val showImageViewer by viewModel.showImageViewer.collectAsStateWithLifecycle()
+    val imageViewerUrls by viewModel.imageViewerUrls.collectAsStateWithLifecycle()
+    val imageViewerIndex by viewModel.imageViewerIndex.collectAsStateWithLifecycle()
 
     if (showImageViewer && imageViewerUrls.isNotEmpty()) {
         ImagePreviewDialog(
@@ -1029,7 +1031,7 @@ fun ChatScreen(
         )
     }
 
-   val showSystemPromptDialog by viewModel.showSystemPromptDialog.collectAsState()
+   val showSystemPromptDialog by viewModel.showSystemPromptDialog.collectAsStateWithLifecycle()
 
    if (showSystemPromptDialog) {
        SystemPromptDialog(

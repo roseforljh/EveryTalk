@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Bundle
 import androidx.profileinstaller.ProfileInstaller
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.Lifecycle
 import kotlinx.coroutines.Dispatchers
@@ -244,16 +245,16 @@ class MainActivity : AppCompatActivity() {
                             application
                         )
                     )
-                    val currentAccent by appViewModel.accentColor.collectAsState()
+                    val currentAccent by appViewModel.accentColor.collectAsStateWithLifecycle()
                     SideEffect { accentState.value = currentAccent }
-                    val downloadPermission by appViewModel.computerManager.downloadPermissionRequest.collectAsState()
+                    val downloadPermission by appViewModel.computerManager.downloadPermissionRequest.collectAsStateWithLifecycle()
                     val downloadPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
                         appViewModel.computerManager.downloadPermissionRequest.value?.complete(granted)
                     }
                     LaunchedEffect(downloadPermission) {
                         if (downloadPermission != null) downloadPermissionLauncher.launch(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
                     }
-                    val authState by appViewModel.authRepository.state.collectAsState()
+                    val authState by appViewModel.authRepository.state.collectAsStateWithLifecycle()
                     val subscriptionLocked = remember(authState) {
                         appViewModel.featureGate.isLocked(Feature.MEMBERSHIP)
                     }
@@ -269,8 +270,8 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
 
-                    val expandedDrawerItemIndex by appViewModel.expandedDrawerItemIndex.collectAsState()
-                    val isLoadingHistoryData by appViewModel.isLoadingHistoryData.collectAsState()
+                    val expandedDrawerItemIndex by appViewModel.expandedDrawerItemIndex.collectAsStateWithLifecycle()
+                    val isLoadingHistoryData by appViewModel.isLoadingHistoryData.collectAsStateWithLifecycle()
 
                     LaunchedEffect(appViewModel.snackbarMessage) {
                         appViewModel.snackbarMessage.collectLatest { message ->
@@ -305,7 +306,7 @@ class MainActivity : AppCompatActivity() {
                         }
 
                         // 🎯 根据代码块滚动状态动态控制抽屉手势
-                        val isCodeBlockScrolling by appViewModel.gestureManager.isCodeBlockScrolling.collectAsState()
+                        val isCodeBlockScrolling by appViewModel.gestureManager.isCodeBlockScrolling.collectAsStateWithLifecycle()
                         val drawerSessionKey = rememberDrawerSessionKey(appViewModel.drawerState)
 
                         DismissibleNavigationDrawer(
@@ -336,9 +337,9 @@ class MainActivity : AppCompatActivity() {
 
                                     // 置顶集合状态
                                     val pinnedIds = if (isImageGenerationMode) {
-                                        appViewModel.stateHolder.pinnedImageConversationIds.collectAsState().value
+                                        appViewModel.stateHolder.pinnedImageConversationIds.collectAsStateWithLifecycle().value
                                     } else {
-                                        appViewModel.stateHolder.pinnedTextConversationIds.collectAsState().value
+                                        appViewModel.stateHolder.pinnedTextConversationIds.collectAsStateWithLifecycle().value
                                     }
 
                                     // 侧栏内容常驻组合，不再每次打开整棵重建；临时状态由 sessionKey 在内部重置，
@@ -346,16 +347,16 @@ class MainActivity : AppCompatActivity() {
                                     val drawerListState = rememberLazyListState()
                                     key(isImageGenerationMode) {
                                         // 监听同一个账户状态，修改头像或昵称后侧栏立即更新，无需重启。
-                                        val accountState by appViewModel.accountManager.state.collectAsState()
+                                        val accountState by appViewModel.accountManager.state.collectAsStateWithLifecycle()
                                         AppDrawerContent(
                                             listState = drawerListState,
                                             sessionKey = drawerSessionKey,
-                                            runningConversationIds = appViewModel.runningConversationIds.collectAsState().value,
+                                            runningConversationIds = appViewModel.runningConversationIds.collectAsStateWithLifecycle().value,
                                             accountAvatarUrl = accountState.user?.avatarUrl,
                                             accountName = accountState.user?.displayName,
-                                            historicalConversations = if (isImageGenerationMode) appViewModel.imageGenerationHistoricalConversations.collectAsState().value else appViewModel.historicalConversations.collectAsState().value,
-                                            loadedHistoryIndex = if (isImageGenerationMode) appViewModel.loadedImageGenerationHistoryIndex.collectAsState().value else appViewModel.loadedHistoryIndex.collectAsState().value,
-                                            currentConversationId = if (isImageGenerationMode) appViewModel.stateHolder._currentImageGenerationConversationId.collectAsState().value else appViewModel.stateHolder._currentConversationId.collectAsState().value,
+                                            historicalConversations = if (isImageGenerationMode) appViewModel.imageGenerationHistoricalConversations.collectAsStateWithLifecycle().value else appViewModel.historicalConversations.collectAsStateWithLifecycle().value,
+                                            loadedHistoryIndex = if (isImageGenerationMode) appViewModel.loadedImageGenerationHistoryIndex.collectAsStateWithLifecycle().value else appViewModel.loadedHistoryIndex.collectAsStateWithLifecycle().value,
+                                            currentConversationId = if (isImageGenerationMode) appViewModel.stateHolder._currentImageGenerationConversationId.collectAsStateWithLifecycle().value else appViewModel.stateHolder._currentConversationId.collectAsStateWithLifecycle().value,
                                             onConversationSearchClick = {
                                                 appViewModel.simpleModeManager.setIntendedMode(
                                                     SimpleModeManager.ModeType.TEXT,
@@ -486,7 +487,7 @@ class MainActivity : AppCompatActivity() {
                                         },
                                         onClearAllConversationsRequest = appViewModel::clearAllConversations,
                                         onClearAllImageGenerationConversationsRequest = appViewModel::clearAllImageGenerationConversations,
-                                        showClearImageHistoryDialog = appViewModel.showClearImageHistoryDialog.collectAsState().value,
+                                        showClearImageHistoryDialog = appViewModel.showClearImageHistoryDialog.collectAsStateWithLifecycle().value,
                                         onShowClearImageHistoryDialog = appViewModel::showClearImageHistoryDialog,
                                         onDismissClearImageHistoryDialog = appViewModel::dismissClearImageHistoryDialog,
                                         getPreviewForIndex = { index ->
@@ -532,17 +533,17 @@ class MainActivity : AppCompatActivity() {
                                         onTogglePin = { index ->
                                             appViewModel.togglePinForConversation(index, isImageGenerationMode)
                                         },
-                                        conversationGroups = appViewModel.stateHolder.conversationGroups.collectAsState().value,
+                                        conversationGroups = appViewModel.stateHolder.conversationGroups.collectAsStateWithLifecycle().value,
                                         onCreateGroup = { groupName -> appViewModel.createGroup(groupName) },
                                         onRenameGroup = { oldName, newName -> appViewModel.renameGroup(oldName, newName) },
                                         onDeleteGroup = { groupName -> appViewModel.deleteGroup(groupName) },
                                         onMoveConversationToGroup = { index, groupName, isImageGen -> appViewModel.moveConversationToGroup(index, groupName, isImageGen) },
-                                        expandedGroups = appViewModel.stateHolder.expandedGroups.collectAsState().value,
+                                        expandedGroups = appViewModel.stateHolder.expandedGroups.collectAsStateWithLifecycle().value,
                                         onToggleGroup = { groupKey -> appViewModel.toggleGroupExpanded(groupKey) },
-                                        isGroupSectionExpanded = appViewModel.stateHolder.isGroupSectionExpanded.collectAsState().value,
+                                        isGroupSectionExpanded = appViewModel.stateHolder.isGroupSectionExpanded.collectAsStateWithLifecycle().value,
                                         onToggleGroupSection = { appViewModel.toggleGroupSectionExpanded() },
-                                        computers = appViewModel.computers.collectAsState().value,
-                                        groupComputerIds = appViewModel.stateHolder.conversationGroupComputerIds.collectAsState().value,
+                                        computers = appViewModel.computers.collectAsStateWithLifecycle().value,
+                                        groupComputerIds = appViewModel.stateHolder.conversationGroupComputerIds.collectAsStateWithLifecycle().value,
                                         onSelectGroupComputer = { groupName, computerId ->
                                             appViewModel.setConversationGroupComputer(groupName, computerId)
                                         },
@@ -788,8 +789,8 @@ class MainActivity : AppCompatActivity() {
                                     popEnterTransition = { hierarchicalPopEnterTransition() },
                                     popExitTransition = { hierarchicalPopExitTransition() },
                                 ) {
-                                    val accentColor by appViewModel.accentColor.collectAsState()
-                                    val accountState by appViewModel.accountManager.state.collectAsState()
+                                    val accentColor by appViewModel.accentColor.collectAsStateWithLifecycle()
+                                    val accountState by appViewModel.accountManager.state.collectAsStateWithLifecycle()
                                     val avatarPicker = rememberLauncherForActivityResult(
                                         ActivityResultContracts.PickVisualMedia(),
                                     ) { uri ->
@@ -933,7 +934,7 @@ class MainActivity : AppCompatActivity() {
                                    popEnterTransition = { hierarchicalPopEnterTransition() },
                                    popExitTransition = { hierarchicalPopExitTransition() },
                                ) {
-                                   val selectedApiConfig by appViewModel.selectedApiConfig.collectAsState()
+                                   val selectedApiConfig by appViewModel.selectedApiConfig.collectAsStateWithLifecycle()
                                    com.android.everytalk.ui.screens.MainScreen.chat.voice.ui.VoiceInputScreen(
                                       onClose = { navController.popBackStack() },
                                       selectedApiConfig = selectedApiConfig,

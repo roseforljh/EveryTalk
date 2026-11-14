@@ -27,6 +27,8 @@ import com.android.everytalk.data.account.AccountUser
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
+import androidx.compose.ui.platform.LocalView
+import com.android.everytalk.ui.components.ParticlesBackground
 import com.android.everytalk.ui.theme.App1Theme
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -41,6 +43,52 @@ import org.robolectric.annotation.GraphicsMode
 @Config(sdk = [34], application = Application::class, qualifiers = "en")
 class AccountEntryGateTest {
     @get:Rule val composeRule = createComposeRule()
+
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    @Test fun `粒子背景在入场结束后仍无限运动且每次进入随机分布`() {
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        val resolver = context.contentResolver
+        val previousScale = android.provider.Settings.Global.getFloat(resolver,
+            android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
+        android.provider.Settings.Global.putFloat(resolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
+        composeRule.mainClock.autoAdvance = false
+        val generation = mutableStateOf(0)
+        lateinit var view: android.view.View
+        try {
+            composeRule.setContent {
+                view = LocalView.current
+                androidx.compose.runtime.key(generation.value) {
+                    ParticlesBackground(Modifier.size(200.dp), color = Color.Black)
+                }
+            }
+            // Robolectric 不使用设备的 PixelCopy；直接绘制真实 Compose View，避免截图 API 等待系统重绘超时。
+            fun frame(): Bitmap {
+                composeRule.waitForIdle()
+                return composeRule.runOnUiThread {
+                    Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888).also {
+                        view.draw(android.graphics.Canvas(it))
+                    }
+                }
+            }
+            // 入场已结束后仍连续取帧，防止只保留入场动画、随后变成静态背景。
+            composeRule.mainClock.advanceTimeBy(3_000)
+            val first = frame()
+            composeRule.mainClock.advanceTimeBy(1_000)
+            val second = frame()
+            assertFalse(first.sameAs(second))
+            composeRule.mainClock.advanceTimeBy(1_000)
+            val third = frame()
+            assertFalse(second.sameAs(third))
+            composeRule.runOnIdle { generation.value++ }
+            composeRule.mainClock.advanceTimeBy(3_000)
+            val reentered = frame()
+            assertFalse(first.sameAs(reentered))
+            listOf(first, second, third, reentered).forEach { it.recycle() }
+        } finally {
+            android.provider.Settings.Global.putFloat(resolver,
+                android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, previousScale)
+        }
+    }
 
     @GraphicsMode(GraphicsMode.Mode.NATIVE)
     @Test fun `恢复页为黑底白圈且两套主题的操作色保持灰阶`() {

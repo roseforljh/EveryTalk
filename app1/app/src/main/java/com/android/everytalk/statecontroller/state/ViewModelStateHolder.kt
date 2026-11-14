@@ -445,6 +445,8 @@ val _isStreamingPaused = MutableStateFlow(false)
     val _forkDrawerOpenRequestVersion = MutableStateFlow(0)
     /** 父会话 ID → Fork 分支会话 ID。分支是一条真实会话，走主会话的完整发送链路。 */
     val _forkConversationIds = MutableStateFlow<Map<String, String>>(emptyMap())
+    /** 分支里正由云端执行的回复：分支 ID → 回复消息 ID。分支没有本机流式 Job，运行态和停止按它判断。 */
+    val _forkCloudRuns = MutableStateFlow<Map<String, String>>(emptyMap())
     /** 正在从数据库装回内存的 Fork 分支；发送前要等它完成，否则分支旧上下文进不了请求。 */
     internal val forkLoadJobs: MutableMap<String, Job> = ConcurrentHashMap()
     /** 点击引用标签时要跳到的消息和引用原文，3 秒后清空，用于定位到具体段落并高亮。 */

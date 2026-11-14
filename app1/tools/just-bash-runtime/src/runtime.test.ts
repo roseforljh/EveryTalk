@@ -53,6 +53,18 @@ describe("just-bash 隔离协议", () => {
     expect(result.stdout).toBe("world\nHELLO\n");
   });
 
+  test("新版 diff 支持普通差异与补丁且不改变文件", async () => {
+    const files = { "before.txt": "old\n", "after.txt": "new\n" };
+    const normal = await run("diff before.txt after.txt", files);
+    expect(normal.exitCode).toBe(1);
+    expect(normal.stdout).toBe("1c1\n< old\n---\n> new\n");
+    const unified = await run("diff -u before.txt after.txt", files);
+    expect(unified.stdout).toContain("@@ -1 +1 @@");
+    expect(unified.stdout).toContain("-old\n+new\n");
+    expect(unified.files).toEqual(files);
+    expect((await run("diff before.txt before.txt", files)).exitCode).toBe(0);
+  });
+
   test("网络及真实系统运行时不在命令集合中", async () => {
     for (const command of ["curl https://example.com", "python --version", "node --version"]) {
       const result = await run(command);

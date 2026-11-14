@@ -26,7 +26,7 @@ type Response = {
  * 文件内容通过消息传入，just-bash 不获得 Android 真实文件路径或网络能力。
  */
 
-const COMMANDS: CommandName[] = ["cat", "head", "tail", "grep", "find", "sed", "awk", "jq", "sort", "wc", "cut", "tr", "echo", "printf", "pwd", "mkdir", "cp", "mv", "rm"];
+const COMMANDS: CommandName[] = ["cat", "head", "tail", "grep", "find", "sed", "awk", "jq", "sort", "wc", "cut", "tr", "echo", "printf", "pwd", "mkdir", "cp", "mv", "rm", "diff"];
 const MAX_OUTPUT_CHARS = 200_000;
 function bounded(value: string, limit: number): [string, boolean] {
   return value.length <= limit ? [value, false] : [value.slice(0, limit), true];

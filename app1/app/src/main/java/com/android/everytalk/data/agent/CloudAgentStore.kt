@@ -1,8 +1,6 @@
 package com.android.everytalk.data.agent
 
 import androidx.room.withTransaction
-import com.android.everytalk.data.DataClass.ExecutionStep
-import com.android.everytalk.data.DataClass.ExecutionStepType
 import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
@@ -33,10 +31,14 @@ internal suspend fun CloudRunView.toMessage(base: Message, resolve: suspend (Str
             }
             "tool" -> {
                 val completed = part.finishedAt != null && part.result != null
-                val step = ExecutionStep(
-                    id = part.id, type = ExecutionStepType.Tool, title = part.name, labels = listOf(part.name),
-                    detail = part.arguments?.toString(), completed = completed, started = true,
-                    reasoningBefore = "", isError = part.isError,
+                val step = com.android.everytalk.statecontroller.executionStepForToolCall(
+                    com.android.everytalk.data.network.AppStreamEvent.ToolCall(part.id, part.name,
+                        part.arguments ?: kotlinx.serialization.json.JsonObject(emptyMap())),
+                    reasoningBefore = "",
+                ).copy(
+                    completed = completed, started = true,
+                    detail = part.arguments?.toString(),
+                    isError = part.isError,
                     fileChange = if (part.isError) null else part.arguments?.let { executionFileChange(part.name, it) },
                     computerId = part.arguments?.get("computer_id")?.jsonPrimitive?.content,
                     resultPreview = part.result?.toString()?.take(4_000),
@@ -63,6 +65,7 @@ internal suspend fun CloudRunView.toMessage(base: Message, resolve: suspend (Str
     // 搜索来源与本机一致取自 web_search 的工具结果，按出现顺序编号。
     val sources = snapshot.trace.filter { it.kind == "tool" && it.name == "web_search" && !it.isError }
         .flatMap { part -> cloudSearchResults(part.result) }
+        .plus(snapshot.sources.map { Triple(it.title, it.url, it.snippet) })
         .distinctBy { it.second }
         .mapIndexed { index, (title, href, snippet) -> WebSearchResult(index + 1, title, href, snippet) }
     return base.copy(
@@ -81,7 +84,7 @@ internal suspend fun CloudRunView.toMessage(base: Message, resolve: suspend (Str
         executionTrace = trace,
         executionSteps = trace.filterIsInstance<ExecutionTraceEvent.Tool>().map { it.step },
         executionStatus = if (status == "FAILED") snapshot.error else snapshot.executionStatus,
-        executionFinishedAt = snapshot.finishedAt.takeIf { terminal },
+        executionFinishedAt = snapshot.finishedAt.takeIf { answered },
         isError = status == "FAILED",
         isIncomplete = terminal && status != "COMPLETED",
     )

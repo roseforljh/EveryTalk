@@ -36,6 +36,8 @@ object OpenAIDirectClient {
     )
     private const val MAX_QWEN_UPLOAD_FILE_BYTES = 10L * 1024L * 1024L
     private val unsupportedStreamUsage = ConcurrentHashMap.newKeySet<String>()
+    /** 发了缓存键被拒（400/422）的地址+模型：本进程内之后不再发。 */
+    private val unsupportedPromptCacheKey = ConcurrentHashMap.newKeySet<String>()
 
     private fun streamUsageCapabilityKey(request: ChatRequest): String =
         "${resolvedOpenAIApiAddress(request).trimEnd('/')}|${request.model}"
@@ -83,6 +85,19 @@ object OpenAIDirectClient {
                         send(AppStreamEvent.Error(
                             message = "服务端不支持流式用量参数，正在关闭该参数后重试",
                             code = "stream_usage_unsupported",
+                            type = "retryable_network",
+                        ))
+                        send(AppStreamEvent.Finish("connection_failed"))
+                        return@streamModel
+                    }
+                    // 发了缓存键被拒：记下这个上游不收，交给 Agent 不带缓存键原样重发一次。
+                    if (response.status.value in setOf(400, 422) && effectiveRequest.conversationId?.isNotBlank() == true &&
+                        !PromptCachePolicy.isOfficialOpenAIEndpoint(resolvedOpenAIApiAddress(effectiveRequest)) &&
+                        unsupportedPromptCacheKey.add(streamUsageCapabilityKey(effectiveRequest))) {
+                        terminalSent = true
+                        send(AppStreamEvent.Error(
+                            message = "服务端不接受缓存键参数，正在去掉该参数后重试",
+                            code = "prompt_cache_key_unsupported",
                             type = "retryable_network",
                         ))
                         send(AppStreamEvent.Finish("connection_failed"))
@@ -137,13 +152,14 @@ object OpenAIDirectClient {
             }
         val normalizedTools = PromptCachePolicy.normalizeTools(request.tools)
         val officialOpenAIEndpoint = PromptCachePolicy.isOfficialOpenAIEndpoint(resolvedOpenAIApiAddress(request))
-        // 只对官方地址发 prompt_cache_key（与 pi 默认一致，部分兼容代理会拒绝未知字段），键按会话生成。
-        val promptCacheKey = PromptCachePolicy.buildOpenAICacheKey(
+        // 中转也按会话发 prompt_cache_key，据此把同一会话固定到同一上游；上游拒收这个字段时去掉重发，之后不再发。
+        val promptCacheKey = if (streamUsageCapabilityKey(request) in unsupportedPromptCacheKey) null
+        else PromptCachePolicy.sessionCacheKey(request.conversationId) ?: PromptCachePolicy.buildOpenAICacheKey(
             apiAddress = resolvedOpenAIApiAddress(request),
             model = request.model,
             messages = messagesWithSystemPrompt,
             tools = normalizedTools,
-        )?.let { PromptCachePolicy.sessionCacheKey(request.conversationId) ?: it }
+        )
         runCatching {
             Log.d(
                 TAG,

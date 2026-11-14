@@ -34,6 +34,7 @@ data class MemoryState(val settings: MemorySettings, val entries: List<MemoryEnt
 }
 
 /** 来源由请求运行时绑定，模型不能伪造会话和用户消息 ID。 */
+@kotlinx.serialization.Serializable
 data class MemoryWriteContext(
     val version: Long,
     val conversationId: String,

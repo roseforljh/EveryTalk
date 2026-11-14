@@ -476,7 +476,7 @@ class AgentContextManagerTest {
     }
 
     @Test
-    fun `超过窗口减最大输出的硬上限时即使未到压缩线也先压缩`() {
+    fun `没到压缩线不因最大输出提前压缩而是收小本次输出上限`() {
         val messages = buildList {
             repeat(4) { index ->
                 add(SimpleTextApiMessage(id = "user-$index", role = "user", content = "问".repeat(19_300)))
@@ -484,15 +484,17 @@ class AgentContextManagerTest {
             }
         }
 
-        // 约 15.4 万 token：高于 25.6 万 - 12.8 万的硬上限，低于 20.48 万压缩线。
+        // 约 15.4 万 token：高于 25.6 万 - 12.8 万，低于 20.48 万压缩线，不压缩。
         val prepared = manager.prepare(
             requestId = "request-between-budget-and-threshold",
             request = request(messages, maxContextTokens = 256_000, compactThresholdTokens = 204_800),
             limits = ModelTokenLimits(maxOutputTokens = 128_000, maxContextTokens = 256_000),
         )
 
-        val plan = checkNotNull(prepared.compactionPlan)
-        assertTrue(plan.targetAfterCompaction < 128_000)
+        assertNull(prepared.compactionPlan)
+        val fitted = com.android.everytalk.data.DataClass.GenerationConfig(maxOutputTokens = 128_000)
+            .fitOutputToWindow(256_000, prepared.snapshot.activeContextTokens)
+        assertEquals((256_000 - prepared.snapshot.activeContextTokens).toInt(), fitted.maxOutputTokens)
     }
 
     @Test

@@ -84,7 +84,7 @@ object AttachmentToolExecutor {
 
     /**
      * 云任务提交前一次性提取完整文本；不创建文件，超过输入配额不能静默封存半截内容。
-     * 读不出文字的附件抛错：云端还不能发原文件，调用方据此把请求留在本机原样上传。
+     * 读不出文字的附件记下与本机相同的错误，原文件本身随消息原样交给模型。
      */
     internal suspend fun cloudSnapshot(context: Context, attachments: List<SelectedMediaItem.GenericFile>): JsonObject {
         val files = linkedMapOf<String, kotlinx.serialization.json.JsonElement>()
@@ -92,13 +92,24 @@ object AttachmentToolExecutor {
         for (attachment in attachments.distinctBy { it.id }) {
             val file = resolveAttachmentFile(context, attachment) ?: kotlin.error("附件文件不可访问")
             val maxChars = 24 * 1024 * 1024
-            val page = if (DocumentProcessor.isTextMime(attachment.mimeType)) {
-                require(file.length() <= maxChars) { "云任务附件内容超过 24MB" }
-                FileInputStream(file).use { DocumentProcessor.extractPlainTextPage(it, 0, file.length(), maxChars) }
-            } else {
-                val uri = FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
-                DocumentProcessor.extractTextPage(context, uri, attachment.mimeType, 0, maxChars)
-                    ?: kotlin.error("附件未提取到可读文本")
+            // 读不出文字的附件（压缩包、未知二进制）原文件已随消息交给模型；read_attachment 如实返回与本机相同的错误。
+            val page = try {
+                if (DocumentProcessor.isTextMime(attachment.mimeType)) {
+                    require(file.length() <= maxChars) { "云任务附件内容超过 24MB" }
+                    FileInputStream(file).use { DocumentProcessor.extractPlainTextPage(it, 0, file.length(), maxChars) }
+                } else {
+                    val uri = FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
+                    DocumentProcessor.extractTextPage(context, uri, attachment.mimeType, 0, maxChars)
+                        ?: kotlin.error("附件未提取到可读文本")
+                }
+            } catch (cancelled: CancellationException) { throw cancelled
+            } catch (unreadable: Exception) {
+                files[attachment.id] = buildJsonObject {
+                    put("name", JsonPrimitive(attachment.displayName))
+                    put("mimeType", JsonPrimitive(attachment.mimeType))
+                    put("error", JsonPrimitive((unreadable.message ?: "附件读取失败").take(2000)))
+                }
+                continue
             }
             check(!page.truncated) { "云任务附件内容超过 24MB" }
             totalBytes += page.content.toByteArray(Charsets.UTF_8).size

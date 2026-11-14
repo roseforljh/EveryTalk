@@ -920,6 +920,7 @@ open class MessageItemsController(
             trace = message.executionTrace,
             narrativeSegments = narrativeSegments,
             toolCallWriting = toolCallWriting,
+            streaming = replyIsStreaming,
         ).toMutableList()
         // 编写阶段还没有完整工具记录。追加临时过程段，后续真实工具沿用同一列表位置；
         // 不把未执行的操作写入历史，停止或失败后也不会残留“正在编写”。

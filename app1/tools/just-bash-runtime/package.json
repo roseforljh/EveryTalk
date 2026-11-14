@@ -8,10 +8,10 @@
   },
   "dependencies": {
     "abort-controller": "3.0.0",
-    "just-bash": "3.4.2",
+    "just-bash": "3.6.0",
     "text-encoding": "0.7.0"
   },
   "devDependencies": {
-    "esbuild": "0.25.12"
+    "esbuild": "0.28.2"
   }
 }

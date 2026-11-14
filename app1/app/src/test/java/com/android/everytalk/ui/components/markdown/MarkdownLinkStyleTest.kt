@@ -34,7 +34,7 @@ class MarkdownLinkStyleTest {
 
     private fun settings(listener: LinkInteractionListener? = null) = DefaultAnnotatorSettings(
         linkTextSpanStyle = TextLinkStyles(SpanStyle(color = Color.Black)),
-        codeSpanStyle = SpanStyle(),
+        codeSpanStyle = SpanStyle(), highlightSpanStyle = SpanStyle(),
         annotator = markdownAnnotator(),
         linkInteractionListener = listener,
     ).withRegularMarkdownStrongWeight()

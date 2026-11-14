@@ -6,6 +6,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -69,6 +70,25 @@ class ThinkingExecutionTimelineGroupingTest {
         )
         composeRule.onNodeWithText("read_attachment").fetchSemanticsNode("")
         composeRule.onNodeWithText("x 9").fetchSemanticsNode("")
+    }
+
+    @Test
+    fun `旧MCP记录离线也隐藏哈希且不同服务器不会合并`() {
+        val alias = "mcp_023f9c37061675de7081f3bb9e208d05_firecrawl_scrape"
+        val legacy = toolStep("legacy", alias).copy(title = alias)
+        val current = toolStep("new", "firecrawl_scrape").copy(title = "调用MCP", toolName = alias)
+        val other = current.copy(id = "other", toolName = "mcp_123f9c37061675de7081f3bb9e208d05_firecrawl_scrape")
+        assertEquals(2, executionTimelineEntries(listOf(current, other)).size)
+        composeRule.setContent {
+            MaterialTheme {
+                ThinkingExecutionTimeline(executionSteps = listOf(legacy), webSearchResults = emptyList(),
+                    activityStatusText = null, reasoningText = "", isReasoningActive = false,
+                    messageIsError = false, reasoningContent = { _, _ -> })
+            }
+        }
+        composeRule.onNodeWithText("firecrawl_scrape").fetchSemanticsNode("")
+        assertTrue(composeRule.onAllNodesWithText(alias).fetchSemanticsNodes().isEmpty())
+        assertEquals(alias, legacy.labels.single())
     }
 
     @Test

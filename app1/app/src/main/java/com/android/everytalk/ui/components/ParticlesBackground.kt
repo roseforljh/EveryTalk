@@ -8,7 +8,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.withFrameNanos
+import androidx.compose.animation.core.withInfiniteAnimationFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -52,7 +52,8 @@ fun ParticlesBackground(
         // 持续动画；页面离开组合或应用进入后台时帧时钟暂停，不会空耗。
         var last = 0L
         while (true) {
-            withFrameNanos { now ->
+            // 声明这是无限动画，让 Compose 测试的帧策略能够暂停它，正常页面仍持续绘制。
+            withInfiniteAnimationFrameNanos { now ->
                 val dt = if (last == 0L) 1f / 60f else ((now - last) / 1e9f).coerceIn(0.0005f, 0.05f)
                 last = now
                 clock.floatValue += dt * SPEED

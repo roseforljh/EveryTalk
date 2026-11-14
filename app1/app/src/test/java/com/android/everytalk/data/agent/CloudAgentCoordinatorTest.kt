@@ -63,7 +63,7 @@ class CloudAgentCoordinatorTest {
                     else respond("event: snapshot\ndata: ${raw(final)}\n\n", headers = headersOf("Content-Type", "text/event-stream"))
                 }
                 exists -> respond(raw(initial))
-                else -> respond("{\"error\":\"AGENT_NOT_FOUND\"}", HttpStatusCode.NotFound)
+                else -> respond("{\"error\":{\"code\":\"AGENT_NOT_FOUND\"}}", HttpStatusCode.NotFound)
             }
         })
         try {
@@ -115,9 +115,9 @@ class CloudAgentCoordinatorTest {
         val http = HttpClient(MockEngine { request ->
             when {
                 request.url.parameters["active"] == "true" -> respond("{\"runs\":[]}")
-                request.url.encodedPath.endsWith("/commands") -> { stops++; respond("{\"error\":\"AGENT_STOPPED_BEFORE_CREATE\"}", HttpStatusCode.NotFound) }
+                request.url.encodedPath.endsWith("/commands") -> { stops++; respond("{\"error\":{\"code\":\"AGENT_STOPPED_BEFORE_CREATE\"}}", HttpStatusCode.NotFound) }
                 request.method.value == "POST" -> { posts++; respond(raw(initial)) }
-                else -> respond("{\"error\":\"AGENT_NOT_FOUND\"}", HttpStatusCode.NotFound)
+                else -> respond("{\"error\":{\"code\":\"AGENT_NOT_FOUND\"}}", HttpStatusCode.NotFound)
             }
         })
         try {
@@ -154,7 +154,7 @@ class CloudAgentCoordinatorTest {
                 request.method.value == "POST" -> { exists = true; posted += (request.body as io.ktor.http.content.TextContent).text; respond(raw(initial)) }
                 request.url.encodedPath.endsWith("/events") -> { done.complete(Unit); awaitCancellation() }
                 exists -> respond(raw(initial))
-                else -> respond("{\"error\":\"AGENT_NOT_FOUND\"}", HttpStatusCode.NotFound)
+                else -> respond("{\"error\":{\"code\":\"AGENT_NOT_FOUND\"}}", HttpStatusCode.NotFound)
             }
         })
         try {

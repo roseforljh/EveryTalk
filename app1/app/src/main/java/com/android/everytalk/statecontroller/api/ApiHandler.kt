@@ -402,11 +402,21 @@ class ApiHandler(
             .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, emptyList())
     }
     private val _pendingAgentEnableApprovals = MutableStateFlow<List<PendingAgentEnableApproval>>(emptyList())
-    val pendingAgentEnableApprovals: StateFlow<List<PendingAgentEnableApproval>> = _pendingAgentEnableApprovals.asStateFlow()
+    /** 本机 Run 与云端任务的开启确认卡共用同一组界面。 */
+    val pendingAgentEnableApprovals: StateFlow<List<PendingAgentEnableApproval>> by lazy {
+        kotlinx.coroutines.flow.combine(_pendingAgentEnableApprovals, agentRunCoordinator.cloudAgentEnableApprovals) { local, cloud -> local + cloud }
+            .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, emptyList())
+    }
     private val _pendingMcpEnableApprovals = MutableStateFlow<List<PendingMcpEnableApproval>>(emptyList())
-    val pendingMcpEnableApprovals = _pendingMcpEnableApprovals.asStateFlow()
+    val pendingMcpEnableApprovals: StateFlow<List<PendingMcpEnableApproval>> by lazy {
+        kotlinx.coroutines.flow.combine(_pendingMcpEnableApprovals, agentRunCoordinator.cloudMcpEnableApprovals) { local, cloud -> local + cloud }
+            .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, emptyList())
+    }
     private val _pendingSkillSecretApprovals = MutableStateFlow<List<PendingSkillSecretApproval>>(emptyList())
-    val pendingSkillSecretApprovals: StateFlow<List<PendingSkillSecretApproval>> = _pendingSkillSecretApprovals.asStateFlow()
+    val pendingSkillSecretApprovals: StateFlow<List<PendingSkillSecretApproval>> by lazy {
+        kotlinx.coroutines.flow.combine(_pendingSkillSecretApprovals, agentRunCoordinator.cloudSkillSecretApprovals) { local, cloud -> local + cloud }
+            .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, emptyList())
+    }
     private val skillSecretStore by lazy { com.android.everytalk.data.skill.SkillSecretStore(context) }
     private val agentResumeMutex = Mutex()
     private val resumingAgentRunIds = ConcurrentHashMap.newKeySet<String>()
@@ -904,6 +914,13 @@ class ApiHandler(
         decision: AgentApprovalDecision,
         onHandled: () -> Unit = {},
     ) {
+        if (approvalRequestId.startsWith("cloud:enable:")) {
+            agentRunCoordinator.respondCloudEnable(runId, approvalRequestId, decision == AgentApprovalDecision.APPROVED) { sessionId, mcp, base, skills ->
+                if (mcp) prepareMcpResumeRequest(sessionId, base) else prepareAgentResumeRequest(sessionId, base, skills)
+            }
+            onHandled()
+            return
+        }
         if (approvalRequestId.startsWith("cloud:")) {
             agentRunCoordinator.respondCloudApproval(runId, approvalRequestId, decision == AgentApprovalDecision.APPROVED)
             onHandled()
@@ -998,6 +1015,10 @@ class ApiHandler(
         value: CharArray?,
         remember: Boolean,
     ) {
+        if (approvalRequestId.startsWith("cloud:secret:")) {
+            agentRunCoordinator.respondCloudSecret(runId, approvalRequestId, value, remember)
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             val current = _pendingSkillSecretApprovals.value.firstOrNull {
                 it.runId == runId && it.approvalRequestId == approvalRequestId

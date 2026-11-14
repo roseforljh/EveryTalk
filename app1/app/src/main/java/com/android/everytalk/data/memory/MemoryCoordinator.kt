@@ -76,6 +76,13 @@ class MemoryCoordinator(
             listOf(SimpleTextApiMessage(role = "system", content = prompt)), tools = null,
         ).totalInputTokens.toInt()
         val snapshot = MemoryRequestSnapshot(context, user, prompt)
+        // 记忆按发送时的原样固定在那条问题上，以后每轮原样重放：上一条问题不变，前缀缓存才接得上。只存本机。
+        val settings = database.settingsDao()
+        if (prompt.isNotEmpty()) settings.insertSetting(com.android.everytalk.data.database.entities.SystemSettingEntity("memory_prompt:${input.userMessageId}", prompt))
+        val pinned = history.map { message ->
+            if (message.id == input.userMessageId || message.role != "user" || message !is SimpleTextApiMessage && message !is PartsApiMessage) message
+            else settings.getValue("memory_prompt:${message.id}")?.let { MemoryPromptRenderer.inject(listOf(message), it).single() } ?: message
+        }
         // 后台整理其他闲置会话，不阻塞本次发送。
         scope.launch { consolidator.runOnce(input.request, input.sessionId, state.settings.version) }
         scope.launch {
@@ -83,7 +90,7 @@ class MemoryCoordinator(
             try { historySearch.warmUp() } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { android.util.Log.w("Memory", "history_index_skipped") }
         }
         return input.copy(
-            request = input.request.copy(messages = history, tools = tools + MemoryTool.definition(), localMemorySnapshot = snapshot),
+            request = input.request.copy(messages = pinned, tools = tools + MemoryTool.definition(), localMemorySnapshot = snapshot),
             tokenLimits = input.tokenLimits.copy(maxContextTokens = (input.tokenLimits.maxContextTokens - reserve).coerceAtLeast(input.tokenLimits.maxOutputTokens + 1)),
         )
     }

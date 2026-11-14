@@ -102,9 +102,11 @@ if (accountPublicKey.isNotBlank()) {
 android {
     namespace = "com.android.everytalk"
     compileSdk = 37
+    buildToolsVersion = "37.0.0"
 
     lint {
-        checkReleaseBuilds = true
+        // Release 构建不跑 lintVital：它和 R8 抢 CPU，实测单独就要约 1.5 分钟；需要时手动跑 ./gradlew lint。
+        checkReleaseBuilds = false
     }
     // 建议与 targetSdk 和 Compose BOM 推荐的 SDK 版本对齐
 
@@ -270,13 +272,14 @@ android {
     packaging{
         resources{
             excludes += "/META-INF/{AL2.0,LGPL2.1}" // 排除 AL2.0 和 LGPL2.1 许可证文件
+            pickFirsts += "META-INF/LICENSE.md" // Bouncy Castle 两个依赖的许可证内容相同，保留一份。
             pickFirsts += "META-INF/LICENSE-LGPL-3.txt"
             pickFirsts += "META-INF/DEPENDENCIES"
             pickFirsts+="META-INF/LICENSE-LGPL-2.1.txt"
             pickFirsts+="META-INF/LICENSE-W3C-TEST"
         }
     }
-    ndkVersion = "29.0.14206865"
+    ndkVersion = "30.0.16248370"
     
     testOptions {
         unitTests {
@@ -343,6 +346,7 @@ ksp {
         // ===== Core Android & Lifecycle =====
         implementation(libs.androidx.core.ktx)
         implementation(libs.androidx.lifecycle.runtime.ktx)
+        implementation(libs.androidx.lifecycle.runtime.compose)
         implementation(libs.androidx.lifecycle.process)
         implementation(libs.androidx.datastore.preferences)
 
@@ -353,7 +357,7 @@ ksp {
         implementation(libs.kotlinx.coroutines.core)
         implementation(libs.kotlinx.coroutines.android)
         // 独立 JS 隔离进程：后台执行不依赖 WebView 页面，取消可以终止整个执行环境。
-        implementation("androidx.javascriptengine:javascriptengine:1.1.0")
+        implementation("androidx.javascriptengine:javascriptengine:1.1.1")
 
         // ===== Ktor Client (网络请求) =====
         implementation(libs.ktor.client.core)

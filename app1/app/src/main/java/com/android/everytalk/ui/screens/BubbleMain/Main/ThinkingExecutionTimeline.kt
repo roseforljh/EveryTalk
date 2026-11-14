@@ -62,6 +62,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.android.everytalk.R
+import com.android.everytalk.data.mcp.McpToolLabels
 import com.android.everytalk.data.network.TOOL_CALL_WRITING_STATUS
 import com.android.everytalk.data.DataClass.ExecutionStep
 import com.android.everytalk.data.DataClass.ExecutionStepType
@@ -92,6 +93,9 @@ internal fun localizedExecutionStatusText(status: String?): String? {
         text == TOOL_CALL_WRITING_STATUS -> stringResource(R.string.thinking_writing)
         text == "正在接收思考" -> stringResource(R.string.thinking_receiving)
         text == "已收到思考，等待正文" -> stringResource(R.string.thinking_received_waiting_content)
+        text == "正在连接云端" -> stringResource(R.string.thinking_cloud_connecting)
+        text == "正在核对云端同步" -> stringResource(R.string.thinking_cloud_sync)
+        text == "正在准备上下文与工具" -> stringResource(R.string.thinking_cloud_preparing)
         text == "正在准备服务器" -> stringResource(R.string.thinking_preparing_server)
         text == "正在恢复远端任务" -> stringResource(R.string.thinking_restoring_remote_task)
         text == "等待服务器重连" -> stringResource(R.string.thinking_waiting_server_reconnect)
@@ -125,8 +129,9 @@ internal fun localizedExecutionStatusText(status: String?): String? {
         text == "调用MCP" -> stringResource(R.string.thinking_calling_mcp)
         text.startsWith("调用MCP · ") -> stringResource(
             R.string.thinking_calling_mcp_named,
-            text.removePrefix("调用MCP · "),
+            McpToolLabels.display(text.removePrefix("调用MCP · ")),
         )
+        text.startsWith("mcp_") && McpToolLabels.display(text) != text -> stringResource(R.string.thinking_calling_mcp)
         text.startsWith("工具结果 · ") -> stringResource(
             R.string.thinking_tool_result,
             text.removePrefix("工具结果 · "),
@@ -160,7 +165,7 @@ internal fun executionSummaryText(
     latestReasoningSummary(reasoningText)?.let { return it }
     if (activity.isNotEmpty()) return activity
     executionSteps.lastOrNull()?.let { step ->
-        return listOfNotNull(step.title, step.labels.firstOrNull()).joinToString(" · ")
+        return listOfNotNull(step.title, step.labels.firstOrNull()).joinToString(" · ", transform = McpToolLabels::display)
     }
     return "等待首个响应"
 }
@@ -229,8 +234,8 @@ internal sealed interface ExecutionProcessSection {
 }
 
 private fun continuesSameTool(previous: ExecutionTimelineEntry?, step: ExecutionStep): Boolean {
-    val previousToolName = previous?.step?.labels?.singleOrNull()?.trim().orEmpty()
-    val toolName = step.labels.singleOrNull()?.trim().orEmpty()
+    val previousToolName = previous?.step?.toolName ?: previous?.step?.labels?.singleOrNull()?.trim().orEmpty()
+    val toolName = step.toolName ?: step.labels.singleOrNull()?.trim().orEmpty()
     return step.type in setOf(ExecutionStepType.Tool, ExecutionStepType.Agent) &&
         previous?.step?.type == step.type &&
         toolName.isNotEmpty() &&
@@ -879,7 +884,7 @@ private fun ExecutionLabels(
     ) {
         step.labels.forEachIndexed { index, label ->
             CapsuleLabel(
-                text = if (step.type == ExecutionStepType.Web) linkHost(label).ifBlank { label } else label,
+                text = if (step.type == ExecutionStepType.Web) linkHost(label).ifBlank { McpToolLabels.display(label) } else McpToolLabels.display(label),
                 icon = when (step.type) {
                     ExecutionStepType.Search -> R.drawable.ic_search
                     ExecutionStepType.Web -> R.drawable.ic_globe
@@ -921,7 +926,7 @@ private fun ExecutionLabels(
 @Composable
 private fun ExecutionStepDetails(step: ExecutionStep) {
     val detail = step.detail?.trim().takeUnless { it.isNullOrEmpty() }
-        ?: step.labels.joinToString(" ").trim()
+        ?: step.labels.joinToString(" ", transform = McpToolLabels::display).trim()
     if (detail.isEmpty() && step.resultPreview.isNullOrBlank()) return
     val flatDarkStyle = MaterialTheme.colorScheme.background.luminance() < 0.5f
     val statusColor = when {

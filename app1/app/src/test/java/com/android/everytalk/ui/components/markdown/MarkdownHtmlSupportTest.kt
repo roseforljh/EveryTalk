@@ -55,7 +55,7 @@ class MarkdownHtmlSupportTest {
             style = TextStyle.Default,
             annotatorSettings = DefaultAnnotatorSettings(
                 linkTextSpanStyle = TextLinkStyles(style = SpanStyle()),
-                codeSpanStyle = SpanStyle(),
+                codeSpanStyle = SpanStyle(), highlightSpanStyle = SpanStyle(),
                 annotator = createPreparedMessageMarkdownAnnotator(prepared),
             ),
             flavour = EveryTalkMarkdownFlavourDescriptor,
@@ -75,7 +75,7 @@ class MarkdownHtmlSupportTest {
             style = TextStyle.Default,
             annotatorSettings = DefaultAnnotatorSettings(
                 linkTextSpanStyle = TextLinkStyles(style = SpanStyle()),
-                codeSpanStyle = SpanStyle(),
+                codeSpanStyle = SpanStyle(), highlightSpanStyle = SpanStyle(),
                 annotator = markdownAnnotator(),
             ),
             flavour = EveryTalkMarkdownFlavourDescriptor,
@@ -107,7 +107,7 @@ class MarkdownHtmlSupportTest {
             style = TextStyle.Default,
             annotatorSettings = DefaultAnnotatorSettings(
                 linkTextSpanStyle = TextLinkStyles(style = SpanStyle()),
-                codeSpanStyle = SpanStyle(),
+                codeSpanStyle = SpanStyle(), highlightSpanStyle = SpanStyle(),
                 annotator = createPreparedMessageMarkdownAnnotator(prepared),
             ),
             flavour = EveryTalkMarkdownFlavourDescriptor,
@@ -198,7 +198,7 @@ class MarkdownHtmlSupportTest {
             style = TextStyle.Default,
             annotatorSettings = DefaultAnnotatorSettings(
                 linkTextSpanStyle = TextLinkStyles(style = SpanStyle()),
-                codeSpanStyle = SpanStyle(),
+                codeSpanStyle = SpanStyle(), highlightSpanStyle = SpanStyle(),
                 annotator = createPreparedMessageMarkdownAnnotator(prepared),
             ),
         )
@@ -292,7 +292,7 @@ class MarkdownHtmlSupportTest {
         style = TextStyle.Default,
         annotatorSettings = DefaultAnnotatorSettings(
             linkTextSpanStyle = TextLinkStyles(style = SpanStyle()),
-            codeSpanStyle = SpanStyle(),
+            codeSpanStyle = SpanStyle(), highlightSpanStyle = SpanStyle(),
             annotator = markdownAnnotator { content, child ->
                 annotateMarkdownHtmlCompatibility(content, child)
             },

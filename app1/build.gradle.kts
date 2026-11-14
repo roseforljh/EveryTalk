@@ -4,5 +4,5 @@ plugins {
 
     // Android Gradle Plugin
     alias(libs.plugins.android.application) apply false
-    id("com.android.library") version "9.4.1" apply false
+    id("com.android.library") version libs.versions.agp.get() apply false
 }

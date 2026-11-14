@@ -767,6 +767,9 @@
     <string name="agent_unknown_keep">不重试</string>
     <string name="agent_unknown_retry">重新执行</string>
     <string name="agent_unknown_title">操作结果无法确认</string>
+    <string name="thinking_cloud_connecting">正在连接云端</string>
+    <string name="thinking_cloud_sync">正在核对云端同步</string>
+    <string name="thinking_cloud_preparing">正在准备上下文与工具</string>
     <string name="thinking_preparing_server">正在准备服务器</string>
     <string name="thinking_restoring_remote_task">正在恢复远端任务</string>
     <string name="thinking_waiting_server_reconnect">等待服务器重连</string>
@@ -2120,4 +2123,9 @@
     <string name="ui_model_capability_thinking_budget_description">思考预算 tokens</string>
     <string name="ui_settings_config_text_model">文本模型</string>
     <string name="ui_settings_config_image_model">图片模型</string>
+    <string name="attachment_pdf_page">PDF 第 %1$d 页</string>
+    <string name="selection_ask_everytalk">询问 EveryTalk</string>
+    <string name="selection_new_conversation">新会话</string>
+    <string name="selection_current_conversation">本会话</string>
+    <string name="selection_remove_quote">移除引用</string>
 </resources>

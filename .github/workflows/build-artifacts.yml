@@ -20,19 +20,19 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
 
-      - name: Setup JDK 21
-        uses: actions/setup-java@v4
+      - name: Setup JDK 27
+        uses: actions/setup-java@v6.2.0
         with:
           distribution: temurin
-          java-version: 21
+          java-version: 27
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6.4.1
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@v4.0.4
 
       - name: Detect Android project directory
         id: detect-app
@@ -92,7 +92,9 @@ jobs:
       # 这两步允许失败：runtime.js 已入库且与重新构建逐字节一致，
       # 装不上时 Gradle 会打警告退回入库产物，不让整条构建因为一个前端工具挂掉。
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@v2.2.0
+        with:
+          bun-version: 1.4.4
         continue-on-error: true
 
       - name: Install just-bash runtime dependencies
@@ -173,7 +175,7 @@ jobs:
 
       - name: Upload Android artifacts to Release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3.0.4
         with:
           files: |
             ${{ env.ARTIFACT_GLOB }}
@@ -211,7 +213,7 @@ jobs:
 
       - name: Upload artifacts for manual runs
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: android-${{ env.BUILD_VARIANT }}-apk
           path: |

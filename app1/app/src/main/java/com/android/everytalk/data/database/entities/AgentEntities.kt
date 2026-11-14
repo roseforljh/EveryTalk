@@ -145,6 +145,7 @@ data class AgentSteeringMessageEntity(
         Index("retryOfRequestId"),
     ],
 )
+@kotlinx.serialization.Serializable
 data class AgentRequestEntity(
     @PrimaryKey val id: String,
     val runId: String,

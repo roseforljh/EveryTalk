@@ -46,6 +46,9 @@ class OpenAIDirectClientPayloadTest {
 
         assertFalse(payload.contains("prompt_cache_key"))
         assertTrue(payload.contains("\"stream_options\":{\"include_usage\":true}"))
+        // 有会话时中转也按会话发缓存键
+        val session = buildPayload(request(apiAddress = "https://example.com/v1", model = "gpt-5.4").copy(conversationId = "conv-1"))
+        assertTrue(session.contains("\"prompt_cache_key\":\"et-s-"))
     }
 
     @Test

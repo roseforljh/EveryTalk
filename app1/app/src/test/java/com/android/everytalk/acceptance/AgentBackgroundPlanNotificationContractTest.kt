@@ -11,7 +11,6 @@ import com.android.everytalk.data.agent.AgentRunStatus
 import com.android.everytalk.util.AgentNotificationManager
 import com.android.everytalk.util.locale.localizeUiMessage
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.After
 import org.junit.Before
@@ -25,16 +24,10 @@ import org.robolectric.annotation.Config
 import org.robolectric.Shadows.shadowOf
 import java.util.UUID
 
-/** 验证通知只承担状态展示和会话跳转，不反向控制 Agent 生命周期。 */
+/** 验证真实通知结果，不通过源码关键词推断任务行为。 */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [35])
+@Config(sdk = [35], application = Application::class)
 class AgentBackgroundPlanNotificationContractTest {
-    private val serviceSource = AgentBackgroundPlanTestFiles.source("service/ComputerConnectionService.kt")
-    private val sendFlow = AgentBackgroundPlanTestFiles.source("statecontroller/message/MessageSenderSendFlow.kt")
-    private val toggleFlow = AgentBackgroundPlanTestFiles.source("statecontroller/viewmodel/AppViewModelActions.kt")
-    private val coordinator = AgentBackgroundPlanTestFiles.source("data/agent/AgentRunCoordinator.kt")
-    private val allSources = AgentBackgroundPlanTestFiles.allProductionKotlin()
-
     @Before
     fun clearKoinBeforeTest() {
         stopKoin()
@@ -50,15 +43,12 @@ class AgentBackgroundPlanNotificationContractTest {
     @Test
     fun `前台不展示Agent事件且返回前台清除已有事件通知`() {
         val context = notificationContext()
-
         notify(context, UUID.randomUUID().toString(), "WAITING_APPROVAL", "Agent 需要你的确认")
         assertEquals(1, notifications(context).size)
-
         AgentNotificationManager.onAppForeground(context)
-        assertTrue("返回前台后必须清除 Agent 事件通知", notifications(context).isEmpty())
-
+        assertTrue(notifications(context).isEmpty())
         notify(context, UUID.randomUUID().toString(), "WAITING_APPROVAL", "Agent 需要你的确认")
-        assertTrue("App 在前台时禁止弹 Agent 事件通知", notifications(context).isEmpty())
+        assertTrue(notifications(context).isEmpty())
     }
 
     @Test
@@ -66,26 +56,12 @@ class AgentBackgroundPlanNotificationContractTest {
         val context = notificationContext()
         val firstRunId = UUID.randomUUID().toString()
         val secondRunId = UUID.randomUUID().toString()
-
-        AgentNotificationManager.notifyAgentRunTerminal(
-            context = context,
-            conversationId = "conversation-1",
-            runId = firstRunId,
-            status = AgentRunStatus.COMPLETED,
-        )
-        AgentNotificationManager.notifyAgentRunTerminal(
-            context = context,
-            conversationId = "conversation-1",
-            runId = firstRunId,
-            status = AgentRunStatus.COMPLETED,
-        )
-        AgentNotificationManager.notifyAgentRunTerminal(
-            context = context,
-            conversationId = "conversation-2",
-            runId = secondRunId,
-            status = AgentRunStatus.COMPLETED,
-        )
-
+        for (runId in listOf(firstRunId, firstRunId, secondRunId)) {
+            AgentNotificationManager.notifyAgentRunTerminal(
+                context = context, conversationId = "conversation-1", runId = runId,
+                status = AgentRunStatus.COMPLETED,
+            )
+        }
         assertEquals(2, notifications(context).size)
     }
 
@@ -93,12 +69,10 @@ class AgentBackgroundPlanNotificationContractTest {
     fun `任务成功后必须撤销同一Execution的旧等待确认通知`() {
         val context = notificationContext()
         val executionId = UUID.randomUUID().toString()
-
         notify(context, executionId, "WAITING_APPROVAL", "Agent 需要你的确认")
         notify(context, executionId, "SUCCEEDED", "任务完成")
-
         val notifications = notifications(context)
-        assertEquals("终态到达后只能保留终态通知", 1, notifications.size)
+        assertEquals(1, notifications.size)
         assertEquals(context.localizeUiMessage("任务完成"), notifications.single().extras.getCharSequence(Notification.EXTRA_TITLE)?.toString())
     }
 
@@ -106,12 +80,10 @@ class AgentBackgroundPlanNotificationContractTest {
     fun `任务已经成功时必须丢弃迟到的过程事件`() {
         val context = notificationContext()
         val executionId = UUID.randomUUID().toString()
-
         notify(context, executionId, "SUCCEEDED", "任务完成")
         notify(context, executionId, "WAITING_APPROVAL", "Agent 需要你的确认")
-
         val notifications = notifications(context)
-        assertEquals("成功后的迟到过程事件不能生成第二条通知", 1, notifications.size)
+        assertEquals(1, notifications.size)
         assertEquals(context.localizeUiMessage("任务完成"), notifications.single().extras.getCharSequence(Notification.EXTRA_TITLE)?.toString())
     }
 
@@ -119,98 +91,31 @@ class AgentBackgroundPlanNotificationContractTest {
     fun `服务重建会清除旧断线通知`() {
         val context = notificationContext()
         notify(context, UUID.randomUUID().toString(), "CONNECTION_LOST", "SSH 连接断开")
-
         AgentNotificationManager.clearConnectionFailureNotifications(context)
-
-        assertTrue("旧断线通知必须被清掉", notifications(context).isEmpty())
+        assertTrue(notifications(context).isEmpty())
     }
 
     @Test
-    fun `通知权限检查必须集中处理运行时权限全局开关和渠道`() {
-        val gateFiles = allSources.filter { (_, text) ->
-            text.contains("areNotificationsEnabled") && text.contains("getNotificationChannel")
-        }
-        assertTrue("缺少统一通知可用性检查：运行时权限、全局开关、渠道三者必须同时判断", gateFiles.isNotEmpty())
-        val gate = gateFiles.joinToString("\n") { it.second }
-        assertTrue(gate.contains("POST_NOTIFICATIONS"))
-        assertTrue(gate.contains("IMPORTANCE_NONE"))
-    }
-
-    @Test
-    fun `通知权限不得阻断Agent开启发送和模型恢复`() {
-        val marker = "canPostAgentEventNotifications"
-        assertFalse("开启 Agent 仍被通知权限阻断", toggleFlow.contains(marker))
-        assertFalse("发送 Agent 消息仍被通知权限阻断", sendFlow.contains(marker))
-        assertFalse("模型恢复仍被通知权限阻断", coordinator.contains(marker))
-    }
-
-    @Test
-    fun `前台服务通知没有任何操作按钮`() {
-        assertTrue("服务通知不能 addAction", !serviceSource.contains(".addAction("))
-        val controller = Robolectric.buildService(ComputerConnectionService::class.java).create()
-        val service = controller.get()
-        val manager = service.getSystemService(NotificationManager::class.java)
-        val notification = shadowOf(manager).allNotifications.single()
+    fun `前台通知没有操作按钮且点击只打开应用`() {
+        // 仅附加 Service 的 Context 并调用真实通知构造函数，不启动与通知断言无关的数据库监听和恢复任务。
+        val service = Robolectric.buildService(ComputerConnectionService::class.java).get()
+        val state = ComputerConnectionService::class.java.getDeclaredField("notificationState")
+            .apply { isAccessible = true }.get(service)
+        val builder = ComputerConnectionService::class.java.declaredMethods.single { it.name == "buildNotification" }
+            .apply { isAccessible = true }
+        val notification = builder.invoke(service, state) as Notification
         assertTrue(notification.actions.isNullOrEmpty())
+        assertEquals("com.android.everytalk.statecontroller.MainActivity",
+            shadowOf(requireNotNull(notification.contentIntent)).savedIntent.component?.className)
+        assertTrue(notification.flags and Notification.FLAG_ONLY_ALERT_ONCE != 0)
+        assertTrue(notification.flags and Notification.FLAG_ONGOING_EVENT != 0)
     }
 
     @Test
-    fun `前台服务通知必须能点击进入对应会话`() {
-        assertTrue("通知缺少 setContentIntent", serviceSource.contains("setContentIntent"))
-        assertTrue("通知跳转必须携带 conversationId", serviceSource.contains("conversationId"))
-    }
-
-    @Test
-    fun `通知必须显示活动任务数量但不能显示命令和输出`() {
-        assertTrue("通知没有活动任务数量", serviceSource.contains("activeTaskCount") || serviceSource.contains("taskCount"))
-        assertTrue("通知必须保持 onlyAlertOnce", serviceSource.contains("setOnlyAlertOnce(true)"))
-        assertTrue("通知不得拼接 command", !serviceSource.contains("execution.command"))
-        assertTrue("通知不得拼接 stdout", !serviceSource.contains("stdout"))
-        assertTrue("通知不得拼接 stderr", !serviceSource.contains("stderr"))
-    }
-
-    @Test
-    fun `前台服务通知每秒显示运行时长而非钟表时间`() {
+    fun `前台通知按已运行秒数显示时长而非钟表时间`() {
         assertEquals("1s", agentNotificationElapsedText(1_000L, 2_000L))
         assertEquals("2s", agentNotificationElapsedText(1_000L, 3_000L))
-        assertTrue("通知时长必须每秒刷新", serviceSource.contains("delay(1_000L)"))
-        assertTrue("通知禁止继续显示系统钟表时间", serviceSource.contains("setShowWhen(false)"))
-        assertTrue("禁止恢复 HH:mm:ss 钟表文本", !serviceSource.contains("HH:mm:ss"))
-    }
-
-    @Test
-    fun `任务事件通知必须覆盖完成失败审批并做去重`() {
-        val notificationSources = allSources
-            .filter { (file, text) -> file.name.contains("Notification") || text.contains("NotificationCompat.Builder") }
-            .joinToString("\n") { it.second }
-        listOf("SUCCEEDED", "FAILED", "WAITING_APPROVAL").forEach { event ->
-            assertTrue("通知系统缺少 $event 事件", notificationSources.contains(event))
-        }
-        assertTrue(
-            "相同事件必须按 executionId 与事件类型去重",
-            notificationSources.contains("executionId") &&
-                (notificationSources.contains("lastNotified") || notificationSources.contains("dedup")),
-        )
-    }
-
-    @Test
-    fun `通知权限撤销后保留远端任务并继续模型续写`() {
-        val recoverySources = allSources
-            .filter { (_, text) -> text.contains("MODEL_CONTINUATION_PENDING") }
-            .joinToString("\n") { it.second }
-        assertTrue("必须保留 MODEL_CONTINUATION_PENDING 恢复链路", recoverySources.contains("resumePendingContinuationRuns"))
-        assertFalse("模型续写不能依赖通知权限", coordinator.contains("canPostAgentEventNotifications"))
-        val permissionSources = allSources
-            .filter { (_, text) -> text.contains("POST_NOTIFICATIONS") }
-            .joinToString("\n") { it.second }
-        assertFalse("通知权限处理代码不得取消 VPS 任务", permissionSources.contains("cancelRemoteExecution"))
-    }
-
-    @Test
-    fun `通知只能跳转不能处理停止取消通过和拒绝`() {
-        val notificationBuilder = serviceSource.substringAfter("private fun buildNotification", "")
-        assertTrue("通知 Builder 禁止 addAction", !notificationBuilder.contains(".addAction("))
-        assertTrue("通知点击只能使用 setContentIntent", notificationBuilder.contains("setContentIntent"))
+        assertEquals("0s", agentNotificationElapsedText(3_000L, 2_000L))
     }
 
     private fun notificationContext(): Context {
@@ -227,12 +132,8 @@ class AgentBackgroundPlanNotificationContractTest {
 
     private fun notify(context: Context, executionId: String, eventType: String, title: String) {
         AgentNotificationManager.notifyTaskEvent(
-            context = context,
-            conversationId = "conversation-1",
-            executionId = executionId,
-            eventType = eventType,
-            title = title,
-            message = title,
+            context = context, conversationId = "conversation-1", executionId = executionId,
+            eventType = eventType, title = title, message = title,
         )
     }
 }

@@ -1,8 +1,8 @@
 package com.android.everytalk.data.mcp
 
 /**
- * 工具别名（mcp_<哈希>_<工具>）到“服务器 · 工具”的显示名。
- * 只用于界面展示，由 McpManager 随连接状态刷新；查不到时原样返回。
+ * 工具别名（mcp_<哈希>_<工具>）到真实工具显示名。
+ * 只用于界面展示，由 McpManager 随连接状态刷新；离线历史也不能泄露哈希别名。
  */
 object McpToolLabels {
     @Volatile private var labels: Map<String, String> = emptyMap()
@@ -13,5 +13,8 @@ object McpToolLabels {
         }.toMap()
     }
 
-    fun display(name: String): String = labels[name] ?: name
+    private val aliasPrefix = Regex("^mcp_[0-9a-f]{32}_")
+
+    /** MCP 后只显示真实工具名；完整别名仍留在调用和账本里用于精确路由。 */
+    fun display(name: String): String = if (aliasPrefix.containsMatchIn(name)) name.replaceFirst(aliasPrefix, "") else labels[name] ?: name
 }

@@ -80,6 +80,8 @@ data class ExecutionStep(
     /** 只保留有限长度的工具结果供抽屉展开查看，完整结果仍由原工具结果存储负责。 */
     val resultPreview: String? = null,
     val durationMs: Long? = null,
+    /** 原始工具身份只用于分组；显示名去哈希后仍需区分不同服务器的同名工具。 */
+    val toolName: String? = null,
 )
 
 /**

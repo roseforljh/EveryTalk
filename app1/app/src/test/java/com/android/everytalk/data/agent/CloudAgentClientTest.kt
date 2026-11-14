@@ -72,7 +72,7 @@ class CloudAgentClientTest {
             val api = CloudAgentClient("https://example.com", { "access" }, { permitted }, http)
             assertTrue(runCatching { api.get(id) }.exceptionOrNull() is IllegalStateException)
         } finally { http.close() }
-        val errorHttp = HttpClient(MockEngine { respond("""{"error":"AGENT_UNAVAILABLE","detail":"secret-token"}""", HttpStatusCode.ServiceUnavailable) })
+        val errorHttp = HttpClient(MockEngine { respond("""{"error":{"code":"AGENT_UNAVAILABLE","message":"secret-token"}}""", HttpStatusCode.ServiceUnavailable) })
         try {
             val error = runCatching { CloudAgentClient("https://example.com", { "access" }, { true }, errorHttp).get(id) }.exceptionOrNull()
             assertTrue(error is CloudAgentHttpException)

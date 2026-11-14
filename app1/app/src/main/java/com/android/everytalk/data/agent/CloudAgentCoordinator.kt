@@ -65,7 +65,14 @@ internal class CloudAgentCoordinator(
     suspend fun discover() {
         if (!permitted()) return
         for (run in database.agentDao().getActiveRuns()) {
-            if (run.executionOwner == "CLOUD" && run.cloudAccountId == accountId) track(run.id)
+            if (run.executionOwner != "CLOUD" || run.cloudAccountId != accountId) continue
+            // 从未开始执行、气泡也已被删掉的任务没有可显示、可提交的东西：直接结束，侧栏不再一直转圈。
+            if (run.cloudCursor == 0L && database.chatDao().getMessage(run.sessionId, run.visibleAssistantMessageId) == null) {
+                database.agentDao().upsertRun(run.copy(status = AgentRunStatus.CANCELLED.name, loopState = AgentRunStatus.CANCELLED.name,
+                    updatedAt = System.currentTimeMillis()))
+                continue
+            }
+            track(run.id)
         }
         val remote = try { client.activeRuns() } catch (error: CloudAgentHttpException) {
             if (error.status == 404) serverSupported = false
@@ -112,6 +119,8 @@ internal class CloudAgentCoordinator(
             finally { bytes.fill(0) }
         check(input["id"]?.jsonPrimitive?.content == run.id) { "冻结输入身份不匹配" }
         try { client.create(input) } catch (stopped: CloudAgentHttpException) {
+            // 输入被后端拒收（合同不符、过大）：重发同一份输入也只会再被拒，直接结束并显示原因，不能一直转圈。
+            if (stopped.status in setOf(400, 413, 422)) return localTerminal(run, "FAILED", "云端拒绝了这次任务（${stopped.code ?: stopped.status}），请重新发送")
             if (stopped.code != "AGENT_STOPPED_BEFORE_CREATE") throw stopped
             localTerminal(run, "CANCELLED", null)
         }
@@ -123,9 +132,14 @@ internal class CloudAgentCoordinator(
      */
     private suspend fun localTerminal(run: AgentRunEntity, status: String, error: String?): CloudRunView {
         val chat = database.chatDao()
-        val session = checkNotNull(chat.getSession(run.sessionId)) { "会话不存在" }
-        val user = checkNotNull(chat.getMessage(run.sessionId, run.userMessageId)) { "用户问题不存在" }
-        val assistant = checkNotNull(chat.getMessage(run.sessionId, run.visibleAssistantMessageId)) { "回复不存在" }
+        val session = chat.getSession(run.sessionId)
+        val user = chat.getMessage(run.sessionId, run.userMessageId)
+        val assistant = chat.getMessage(run.sessionId, run.visibleAssistantMessageId)
+        if (session == null || user == null || assistant == null) {
+            // 气泡已被删掉：没有可投影的消息，只把本地运行记录结束掉，侧边栏不再转圈，也不再反复提交。
+            database.agentDao().upsertRun(run.copy(status = status, loopState = status, updatedAt = System.currentTimeMillis()))
+            throw IllegalStateException("云端任务对应的消息已不存在")
+        }
         return CloudRunView(1, run.id, session.uuid, user.uuid, assistant.uuid, status, run.cloudGeneration, run.cloudCursor + 1,
             CloudRunSnapshot("", "", emptyList(), null, run.createdAt, System.currentTimeMillis(), error))
     }

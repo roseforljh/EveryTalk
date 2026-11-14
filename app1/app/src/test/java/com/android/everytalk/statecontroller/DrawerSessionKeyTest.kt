@@ -7,6 +7,15 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.MutableStateFlow
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -41,6 +50,33 @@ class DrawerSessionKeyTest {
     @After
     fun tearDown() {
         stopKoin()
+    }
+
+    @Test
+    fun `后台停止界面状态收集且回前台直接显示最新值`() {
+        val source = MutableStateFlow(0)
+        val owner = object : LifecycleOwner {
+            override val lifecycle = LifecycleRegistry(this)
+        }
+        var displayed = -1
+        composeRule.runOnUiThread { owner.lifecycle.currentState = Lifecycle.State.RESUMED }
+        composeRule.setContent {
+            CompositionLocalProvider(LocalLifecycleOwner provides owner) {
+                val value by source.collectAsStateWithLifecycle()
+                SideEffect { displayed = value }
+                Text("$value")
+            }
+        }
+        composeRule.waitUntil { source.subscriptionCount.value == 1 }
+        composeRule.runOnIdle { owner.lifecycle.currentState = Lifecycle.State.CREATED }
+        composeRule.waitUntil { source.subscriptionCount.value == 0 }
+        composeRule.runOnIdle { repeat(100) { source.value = it + 1 } }
+        composeRule.runOnIdle {
+            assertEquals(0, displayed)
+            owner.lifecycle.currentState = Lifecycle.State.RESUMED
+        }
+        composeRule.waitUntil { displayed == 100 }
+        composeRule.runOnIdle { owner.lifecycle.currentState = Lifecycle.State.DESTROYED }
     }
 
     @Test

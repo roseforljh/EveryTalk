@@ -8,7 +8,8 @@ import com.android.everytalk.data.database.entities.MemoryEntity
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
-/** 一次发送冻结的本机资料，只存在内存，不进入聊天或 Agent 恢复快照。 */
+/** 一次发送冻结的本机资料，不进入聊天或 Agent 恢复快照；云端任务只在发起手机的本机偏好里保存到任务结束。 */
+@kotlinx.serialization.Serializable
 data class MemoryRequestSnapshot(val context: MemoryWriteContext, val userText: String, val prompt: String)
 
 object MemoryPromptRenderer {

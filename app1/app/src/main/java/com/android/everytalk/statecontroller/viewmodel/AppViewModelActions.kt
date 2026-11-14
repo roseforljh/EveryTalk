@@ -1122,13 +1122,14 @@ import java.util.UUID
                             val index = stateHolder.messages.indexOfFirst { it.id == messageId }
                             if (index >= 0) {
                                 val message = stateHolder.messages[index]
-                                message.contextUsageSnapshot?.let { snapshot ->
-                                    stateHolder.messages[index] = message.copy(
-                                        contextUsageSnapshot = snapshot.copy(
-                                            activeContextTokensOverride = outcome.tokensAfter,
-                                        ),
-                                    )
-                                }
+                                // 云端回复只有实测用量、没有快照：补一份只带覆盖值的快照，圆环同样改成压缩后的占用。
+                                val snapshot = message.contextUsageSnapshot ?: com.android.everytalk.data.DataClass.ContextUsageSnapshot(
+                                    messageId = message.id, systemPromptTokens = 0, conversationTextTokens = 0, mediaTokens = 0,
+                                    toolSchemaTokens = 0, protocolOverheadTokens = 0, reservedOutputTokens = 0, contextWindowTokens = 0,
+                                )
+                                stateHolder.messages[index] = message.copy(
+                                    contextUsageSnapshot = snapshot.copy(activeContextTokensOverride = outcome.tokensAfter),
+                                )
                             }
                             stateHolder.messages.add(
                                 Message(

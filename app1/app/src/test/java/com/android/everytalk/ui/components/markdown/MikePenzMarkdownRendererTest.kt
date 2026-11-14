@@ -98,6 +98,7 @@ class MikePenzMarkdownRendererTest {
         val settings = DefaultAnnotatorSettings(
             linkTextSpanStyle = TextLinkStyles(style = SpanStyle(color = Color.Blue)),
             codeSpanStyle = SpanStyle(fontFamily = FontFamily.Monospace),
+            highlightSpanStyle = SpanStyle(),
             annotator = markdownAnnotator(),
         ).withRegularMarkdownStrongWeight()
 

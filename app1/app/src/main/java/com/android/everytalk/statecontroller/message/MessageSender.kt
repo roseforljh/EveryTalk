@@ -356,7 +356,7 @@ internal fun appendLocalBashTool(
             "type" to "function",
             "function" to mapOf(
                 "name" to "local_bash",
-                "description" to "Run a restricted Bash command in a temporary in-memory snapshot of the app's private Workspace, without system files or network. File changes are discarded after execution. " + ComputerToolCatalog.PHONE_FILE_POLICY,
+                "description" to "Run a restricted Bash command in a temporary in-memory snapshot of the app's private Workspace, without system files or network. Use diff to compare files; diff -u produces unified patches. File changes are discarded after execution. " + ComputerToolCatalog.PHONE_FILE_POLICY,
                 "parameters" to mapOf(
                     "type" to "object",
                     "properties" to mapOf(

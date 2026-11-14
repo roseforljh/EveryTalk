@@ -327,7 +327,9 @@ class SyncResourceSynchronizerTest {
         val run = store.prepare(user, session.id, question.id, placeholder.id, "original-config")
         val final = CloudRunView(1, run.id, session.uuid, question.uuid, placeholder.uuid, "COMPLETED", 8, 27,
             CloudRunSnapshot("最后快照", "", emptyList(), null, 20, 40))
-        store.apply(user, final)
+        // 同步正式消息和归档可能早于 SSE 终态，必须沿用运行中草稿的本机 ID，不能生成第二个气泡。
+        val running = final.copy(status = "RUNNING", cursor = 26, snapshot = final.snapshot.copy(finishedAt = null))
+        store.apply(user, running)
         val credentials = ComputerCredentialStore(ct, SecretKeySpec(ByteArray(32) { 9 }, "AES"))
         val frozen = "{\"id\":\"${run.id}\",\"apiKey\":\"test-only\"}".toByteArray()
         credentials.saveCloudAgentInput(user, run.id, frozen)
@@ -345,13 +347,14 @@ class SyncResourceSynchronizerTest {
             if (row.entity == "attachments") api.rows[key] = row.copy(payload = JsonObject(row.payload + ("origin" to JsonPrimitive("cloud_agent"))))
         }
         sync(target, api); sync(second, api)
+        assertEquals(placeholder.id, target.chatDao().getMessageByUuid(placeholder.uuid)!!.id)
         val unavailable = object : SyncApi by api {
             override suspend fun downloadFile(info: SyncFileInfo, target: File) =
                 throw SyncHttpException(503, serverCode = "TEMPORARILY_UNAVAILABLE", message = "模拟归档未下载")
         }
         try { SyncResourceSynchronizer(ct, target, unavailable, user).use { it.synchronize() }; fail("归档未取得前不能清理") }
         catch (error: SyncHttpException) { assertEquals(503, error.statusCode) }
-        assertEquals(final, store.read(run.id))
+        assertEquals(running, store.read(run.id))
         assertArrayEquals(frozen, credentials.loadCloudAgentInput(user, run.id))
         assertNull(target.settingsDao().getValue("sync_resource_restored:${ai.uuid}"))
         val uploads = api.fileUploads
@@ -367,7 +370,7 @@ class SyncResourceSynchronizerTest {
         val archived = target.agentDao().getRun(run.id)!!
         assertEquals("CLOUD", archived.executionOwner); assertEquals(user, archived.cloudAccountId)
         assertEquals(run.id, archived.cloudRunId); assertEquals("original-config", archived.configIdSnapshot)
-        assertEquals(27L, archived.cloudCursor); assertEquals(8L, archived.cloudGeneration)
+        assertEquals(26L, archived.cloudCursor); assertEquals(8L, archived.cloudGeneration)
         assertEquals("COMPLETED", archived.status); assertEquals("SYNC_HISTORY_ONLY", archived.terminalReason)
         assertEquals(listOf(entry), target.agentDao().getEntries(run.id))
         assertNull(store.read(run.id)); assertNull(credentials.loadCloudAgentInput(user, run.id))

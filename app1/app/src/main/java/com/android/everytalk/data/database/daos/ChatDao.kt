@@ -189,6 +189,10 @@ interface ChatDao {
     @Query("SELECT * FROM message_drafts WHERE sessionId = :sessionId AND id = :messageId LIMIT 1")
     suspend fun getDraft(sessionId: String, messageId: String): MessageDraftEntity?
 
+    /** 云端正式消息可能先于 SSE 终态到达，同步必须按 UUID 沿用草稿的本机 ID。 */
+    @Query("SELECT * FROM message_drafts WHERE uuid = :uuid LIMIT 1")
+    suspend fun getDraftByUuid(uuid: String): MessageDraftEntity?
+
     @Query("SELECT * FROM message_drafts")
     suspend fun getAllDrafts(): List<MessageDraftEntity>
 
@@ -439,7 +443,11 @@ interface ChatDao {
     @Query(
         """
         SELECT id, sessionId, text, sender, timestamp, isPlaceholderName
-        FROM (SELECT $MESSAGE_COLUMNS FROM messages WHERE deleted = 0 UNION ALL SELECT $MESSAGE_COLUMNS FROM message_drafts)
+        FROM (
+            SELECT id, sessionId, text, sender, timestamp, isPlaceholderName, uuid FROM messages WHERE deleted = 0
+            UNION ALL
+            SELECT id, sessionId, text, sender, timestamp, isPlaceholderName, uuid FROM message_drafts
+        )
         WHERE sessionId IN (
             SELECT id FROM chat_sessions WHERE deleted = 0 AND (:isImageGen IS NULL OR isImageGeneration = :isImageGen)
         )

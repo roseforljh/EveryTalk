@@ -19,7 +19,6 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
-import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -101,30 +100,30 @@ class AgentQuestionLifecycleTest {
             coordinator.run(AgentLoopRequest(request, "session", "user", messageId,
                 ModelTokenLimits(maxOutputTokens = 512, maxContextTokens = 8192))).toList()
         }
-        return coordinator.pendingInterventions.value.single()
+        return withTimeout(15_000) { coordinator.pendingInterventions.first { it.isNotEmpty() }.single() }
     }
 
     @Test
-    fun `卡片消失取消提交协程仍立即显示回答并继续同一个任务`() = runBlocking {
+    fun `页面在回答处理中销毁仍显示回答并继续同一个任务`() = runBlocking {
         val question = ask()
         val received = Channel<AppStreamEvent>(Channel.UNLIMITED)
         val observer = launch(start = CoroutineStart.UNDISPATCHED) {
             coordinator.events.collect { received.send(it.second) }
         }
-        // 对应 Compose 移除卡片时取消 rememberCoroutineScope，不能取消已接受的回答。
-        lateinit var submission: Deferred<Boolean>
-        val card = launch(Dispatchers.Unconfined) {
-            coordinator.pendingInterventions.first { it.isEmpty() }
-            submission.cancel()
-        }
-        submission = async(start = CoroutineStart.LAZY) {
-            coordinator.answerUserQuestion(question.suspensionId, question.rowVersion,
-                requireNotNull(question.resolutionNonce), "选择方案二")
+        // 锁住真实接收边界，让 UI 调用确定停在 await，而不是碰运气等待卡片移除后才取消。
+        val field = AgentRunCoordinator::class.java.getDeclaredField("interventionMutex").apply { isAccessible = true }
+        val gate = field.get(coordinator) as kotlinx.coroutines.sync.Mutex
+        gate.lock()
+        val submission = try {
+            async(start = CoroutineStart.UNDISPATCHED) {
+                coordinator.answerUserQuestion(question.suspensionId, question.rowVersion,
+                    requireNotNull(question.resolutionNonce), "选择方案二")
+            }.also { it.cancelAndJoin() }
+        } finally {
+            gate.unlock()
         }
         try {
-            submission.start()
             withTimeout(15_000) {
-                card.join()
                 val event = received.receive()
                 assertTrue("回答接受后应立即产生气泡事件", event is AppStreamEvent.AgentFollowUpAccepted)
                 assertEquals("选择方案二", (event as AppStreamEvent.AgentFollowUpAccepted).text)
@@ -132,7 +131,7 @@ class AgentQuestionLifecycleTest {
                 val request = resumedRequest.await()
                 assertTrue(request.messages.any { it.role == "user" && it.toString().contains("选择方案二") })
                 assertTrue(submission.isCancelled)
-                assertTrue(coordinator.pendingInterventions.value.isEmpty())
+                coordinator.pendingInterventions.first { it.isEmpty() }
                 finishResponse.complete(Unit)
                 while (received.receive() !is AppStreamEvent.Finish) { /* 等待自然结束。 */ }
                 val run = requireNotNull(database.agentDao().getRun(question.runId))
@@ -141,7 +140,6 @@ class AgentQuestionLifecycleTest {
                 assertEquals(1, database.chatDao().getMessagesForSession("session").count { it.id == event.messageId })
             }
         } finally {
-            card.cancelAndJoin()
             observer.cancelAndJoin()
         }
     }
@@ -223,7 +221,7 @@ class AgentQuestionLifecycleTest {
         try {
             assertTrue(coordinator.answerUserQuestion(question.suspensionId, question.rowVersion,
                 requireNotNull(question.resolutionNonce), "立即回答"))
-            assertTrue(coordinator.pendingInterventions.value.isEmpty())
+            withTimeout(15_000) { coordinator.pendingInterventions.first { it.isEmpty() } }
             assertFalse(resumedRequest.isCompleted)
             previousJob.complete()
             withTimeout(15_000) { resumedRequest.await() }
@@ -245,7 +243,7 @@ class AgentQuestionLifecycleTest {
         turns.set(0)
         val second = ask("assistant-2")
         coordinator.cancelAllActiveRuns()
-        assertTrue(coordinator.pendingInterventions.value.isEmpty())
+        withTimeout(15_000) { coordinator.pendingInterventions.first { it.isEmpty() } }
         assertEquals(AgentRunStatus.CANCELLED.name, database.agentDao().getRun(second.runId)?.status)
         assertEquals(SuspensionState.CANCELLED.name,
             database.agentDao().getSuspension(second.suspensionId)?.status)
