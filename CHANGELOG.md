@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.31.0](https://github.com/roseforljh/EveryTalk/compare/v1.30.0...v1.31.0) (2026-11-14)
+
+
+### Features
+
+* **agent:** 支持把 Agent 任务交给后端执行并恢复快照 ([9e9fdd3](https://github.com/roseforljh/EveryTalk/commit/9e9fdd3359b1b61ba14536b040910baffa5b6a1c))
+* **agent:** 登录用户的整轮任务交给云端执行，本机可随时接管控制 ([9bc4148](https://github.com/roseforljh/EveryTalk/commit/9bc4148504d36400b275ce8b70e9317ab145f6d7))
+* **db:** agent_runs 增加云端执行归属与续接游标 ([4ecfe44](https://github.com/roseforljh/EveryTalk/commit/4ecfe446ca331ae791d1efd59b215315bdefed31))
+* **sync:** 多设备实时快照保留变更卡片、来源与用量 ([39f521f](https://github.com/roseforljh/EveryTalk/commit/39f521fe285850267dfd33d49a3a0c79bf1eda65))
+
+
+### Bug Fixes
+
+* **agent:** 压缩与主请求的有界重试，首事件超时按可重试处理 ([8f2e0f5](https://github.com/roseforljh/EveryTalk/commit/8f2e0f549e57c9c2e9d27c32aac6d2b29c9c9823))
+* **agent:** 完善云端任务与同步交互，升级技术栈并修复 Release 打包 ([918245a](https://github.com/roseforljh/EveryTalk/commit/918245a4c6ff3b2e4b19961b1f245d2edcdb1dbd))
+* **agent:** 超窗时不再本地裁剪历史，交给服务商报错 ([0d46417](https://github.com/roseforljh/EveryTalk/commit/0d46417192f19cadea601ecfac7b1fc59d4b34a9))
+* **agent:** 超窗自动压缩、长历史分段滚动摘要、压缩请求不写缓存 ([2dddc82](https://github.com/roseforljh/EveryTalk/commit/2dddc82c8e046989143698332a97f633e2b4ea93))
+* **attachment:** 本地读不出文字的附件按原文件发给上游 ([aec5e89](https://github.com/roseforljh/EveryTalk/commit/aec5e89db5ed80361a44d97733d4fab61c307af2))
+* **chat:** 重答不再重复旧消息，编辑队列清空后按钮回到运行态 ([36d2f56](https://github.com/roseforljh/EveryTalk/commit/36d2f564cad35d142926018d5af374d0df14f2e4))
+* **computer:** 手机文件只在用户明确要求时保存 ([9bf48aa](https://github.com/roseforljh/EveryTalk/commit/9bf48aa3b1a7bb650f41d25625cf9f1ae4341502))
+* **drawer:** 侧栏按会话 ID 而不是列表下标标识当前会话 ([6320960](https://github.com/roseforljh/EveryTalk/commit/632096067ca09678850ec17749659fe9c82809d0))
+* **selection:** 询问 EveryTalk 前先释放选区焦点 ([0b055b7](https://github.com/roseforljh/EveryTalk/commit/0b055b716a93ea586bdb32f04cdddef430395c9f))
+
 ## [1.30.0](https://github.com/roseforljh/EveryTalk/compare/v1.29.0...v1.30.0) (2026-11-13)
 
 
