@@ -1,5 +1,9 @@
 package com.android.everytalk.ui.screens.BubbleMain.Main
 
+import com.android.everytalk.data.database.entities.toMessage
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.collectAsState
+import com.android.everytalk.data.DataClass.executionDisplay
 import com.android.everytalk.ui.topanchor.reportExpansionHeight
 import com.android.everytalk.ui.topanchor.UserExpansionHeightTracker
 import androidx.compose.ui.res.painterResource
@@ -388,8 +392,9 @@ internal fun ReasoningToggleAndContent(
     }
     // 不足 1 秒的耗时没有信息量，不显示“0秒”，结束后改为概括做了什么。
     val elapsedText = elapsedMillis?.takeIf { it >= 1_000L }?.let { localizedExecutionDuration(it) }
-    val summarySteps = executionSteps.ifEmpty {
-        executionTrace.filterIsInstance<ExecutionTraceEvent.Tool>().map { it.step }
+    val summarySteps = remember(executionSteps, executionTrace) {
+        executionSteps.ifEmpty { executionTrace.filterIsInstance<ExecutionTraceEvent.Tool>().map { it.step } }
+            .map { it.executionDisplay() }
     }
     val executionChainTitle = when {
         processIsActive && !hasToolGroups -> requireNotNull(activeStatusText)
@@ -516,11 +521,24 @@ internal fun ReasoningToggleAndContent(
     }
 
     if (showReasoningSheet) {
+        val detailContext = androidx.compose.ui.platform.LocalContext.current
+        val syncRevision by com.android.everytalk.data.sync.SyncLocalChanges.revision.collectAsState()
+        val originalDetailTrace = detailExecutionTraceProvider?.invoke() ?: detailExecutionTrace
+        val restoredTrace by produceState(originalDetailTrace, currentMessageId, originalDetailTrace, syncRevision, processIsActive) {
+            value = originalDetailTrace
+            if (!processIsActive) value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val db = com.android.everytalk.data.database.AppDatabase.getDatabase(detailContext)
+                val stored = db.chatDao().getStoredMessage(currentMessageId, currentMessageId)?.toMessage()
+                val repaired = stored?.let { com.android.everytalk.data.agent.AgentRunStore(db.agentDao()).archivedExecution(it) }
+                // 普通消息和无法修复的归档继续使用调用方的完整轨迹，不能拿库内旧帧覆盖。
+                if (repaired == null || repaired === stored) originalDetailTrace else repaired.executionTrace
+            }
+        }
         ReasoningBottomSheet(
             displayedReasoningText = displayedReasoningText,
             activityStatusText = activityStatusText,
             executionSteps = executionSteps,
-            executionTrace = detailExecutionTraceProvider?.invoke() ?: detailExecutionTrace,
+            executionTrace = restoredTrace,
             webSearchResults = webSearchResults,
             isReasoningActive = processIsActive,
             messageIsError = messageIsError,
@@ -565,13 +583,14 @@ internal fun ExecutionGroupToggle(
         val endedAt = executionFinishedAtMillis ?: nowMillis.takeIf { active }
         endedAt?.minus(startedAt)?.takeIf { it >= 1_000L }
     }?.let { localizedExecutionDuration(it) }
+    val stepTypes = remember(steps) { steps.map { it.executionDisplay().type }.toSet() }
     val title = when {
         active && elapsedText != null -> stringResource(R.string.thinking_processing_duration, elapsedText)
         active -> stringResource(R.string.computer_action_working).trimEnd('…')
         messageIsError && elapsedText != null -> stringResource(R.string.thinking_failed_duration, elapsedText)
         messageIsError -> stringResource(R.string.thinking_execution_failed)
         elapsedText != null -> stringResource(R.string.thinking_elapsed_duration, elapsedText)
-        steps.isNotEmpty() -> executionStepsSummary(steps.map { it.type }.toSet(), steps.size)
+        steps.isNotEmpty() -> executionStepsSummary(stepTypes, steps.size)
         else -> stringResource(R.string.thinking_process)
     }
     ExecutionChainHeader(
@@ -984,7 +1003,7 @@ private fun InlineExecutionStep(
     onOpenDetails: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val step = entry.step
+    val step = remember(entry.step) { entry.step.executionDisplay() }
     val title = localizedExecutionStatusText(step.title) ?: step.title
     val label = com.android.everytalk.data.mcp.McpToolLabels.display(step.labels.firstOrNull()?.trim().orEmpty())
     val text = buildString {
@@ -1032,7 +1051,8 @@ private fun executionToolGroupSummary(entries: List<ExecutionTimelineEntry>): St
     val count = entries.sumOf { it.invocationCount.toLong() }
         .coerceAtMost(Int.MAX_VALUE.toLong())
         .toInt()
-    return executionStepsSummary(entries.map { it.step.type }.toSet(), count)
+    val types = remember(entries) { entries.map { it.step.executionDisplay().type }.toSet() }
+    return executionStepsSummary(types, count)
 }
 
 @Composable

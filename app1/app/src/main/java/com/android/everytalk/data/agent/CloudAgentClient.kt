@@ -92,6 +92,8 @@ internal data class CloudRunTrace(
     val id: String = "",
     val name: String = "",
     val arguments: JsonObject? = null,
+    /** 缺失为旧服务端已开始；新版工具声明占位明确为 false。 */
+    val started: Boolean = true,
     val finishedAt: Long? = null,
     val result: JsonElement? = null,
     val isError: Boolean = false,

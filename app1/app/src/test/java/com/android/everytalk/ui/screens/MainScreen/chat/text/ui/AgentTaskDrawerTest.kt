@@ -57,6 +57,29 @@ class AgentTaskDrawerTest {
         mathRenderer.close()
     }
 
+    @Test fun `同步的真实命令可完整展开未执行目标仍能切换且凭据不外露`() {
+        val command = "echo start\n" + "printf safe\n".repeat(400) + "TOKEN=private-value\necho end"
+        val step = executionToolStep("restored-command", "exec", kotlinx.serialization.json.buildJsonObject {
+            put("command", kotlinx.serialization.json.JsonPrimitive(command))
+            put("computer_id", kotlinx.serialization.json.JsonPrimitive("a"))
+        }).copy(started = false, completed = false)
+        val tasks = buildAgentTaskItems(AgentRunStatus.CANCELLED.name,
+            Message(sender = Sender.AI, text = "", executionTrace = listOf(ExecutionTraceEvent.Tool(step))),
+            listOf(AgentTaskTarget("a", "服务器 A"), AgentTaskTarget("b", "未使用的服务器 B")), emptyList())
+        rule.setContent { MaterialTheme {
+            AgentTaskOverlay("restored-operation", tasks, emptyList(), 60.dp, 100.dp) { _, _, _ -> }
+        } }
+        openFromEdge()
+        rule.onNodeWithText("未执行").assertExists()
+        rule.onNodeWithText("执行命令").assertIsDisplayed().performClick()
+        val full = step.executionDisplay().detail!!
+        assertTrue(full.length > 4000)
+        assertFalse(full.contains("private-value"))
+        rule.onNodeWithText(full).assertExists()
+        rule.onNodeWithTag("agent-task-tab-b").performClick().assertIsSelected()
+        rule.onNodeWithText("未使用的服务器 B").assertExists()
+    }
+
     @Test fun `新审批自动展开所属服务器且收起后不重复弹出下一条仍可审批`() {
         val trace = (1..20).map { index -> ExecutionTraceEvent.Tool(
             ExecutionStep("approval-step-$index", ExecutionStepType.Tool, "检查 $index", computerId = "a", completed = true)) }

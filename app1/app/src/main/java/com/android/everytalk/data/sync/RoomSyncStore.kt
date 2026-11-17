@@ -1006,7 +1006,9 @@ internal class RoomSyncStore(
 
     private suspend fun applyAttachment(record: SyncRecord) {
         val old = attachments.get(record.id)
+        val oldMetadata = settings.getValue("sync_resource_meta:${record.id}")
         if (record.deleted) {
+            if (old?.deleted != true || oldMetadata != null) invalidateResourceRestore(old?.messageId)
             settings.deleteSetting("sync_resource_meta:${record.id}")
             attachments.upsert(
                 (old ?: SyncAttachmentEntity(record.id, "", "", "", "application/octet-stream", 1, "0".repeat(64), kind = "file"))
@@ -1027,7 +1029,7 @@ internal class RoomSyncStore(
         val size = SyncPayloadMapper.long(payload, "size")
         val sha256 = requireNotNull(SyncPayloadMapper.string(payload, "sha256"))
         require(size >= 1 && sha256.matches(Regex("[0-9a-f]{64}")))
-        attachments.upsert(SyncAttachmentEntity(
+        val incoming = SyncAttachmentEntity(
             id = record.id,
             sessionId = sessionId,
             messageId = messageId,
@@ -1040,11 +1042,24 @@ internal class RoomSyncStore(
             position = SyncPayloadMapper.long(payload, "position").toInt().coerceAtLeast(0),
             updatedAt = modified(record),
             syncStatus = SyncStatus.SYNCED,
-        ))
+        )
+        val sameMetadata = oldMetadata?.let { runCatching { syncJson.parseToJsonElement(it) == payload }.getOrDefault(false) } == true
+        if (incoming != old || !sameMetadata) invalidateResourceRestore(old?.messageId, messageId)
+        attachments.upsert(incoming)
         // 到达这里的权威记录已通过版本保护，且对应云端实际接受的引用；也可确认丢失的 ACK。
         if (settings.getValue("sync_rejected:attachments:${record.id}") == "FILE_NOT_READY") {
             settings.deleteSetting("sync_rejected:attachments:${record.id}")
         }
+    }
+
+    /** 权威资源实际变化才使缓存失效；时间相同或非最大行更新也不能漏下新归档。与游标同事务提交。 */
+    private suspend fun invalidateResourceRestore(vararg messageIds: String?) {
+        messageIds.filterNotNull().filter(String::isNotBlank).distinct().forEach { id ->
+            settings.deleteSetting("sync_resource_received:$id")
+            settings.deleteSetting("sync_resource_receive_failed:$id")
+        }
+        if (userId != null) settings.deleteSetting("sync_resource_restore_stamp:$userId")
+        else settings.getByPrefix("sync_resource_restore_stamp:").forEach { settings.deleteSetting(it.key) }
     }
 
     private companion object {

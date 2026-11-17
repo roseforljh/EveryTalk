@@ -80,8 +80,15 @@ class CloudAgentStoreTest {
             val epochs = synchronizeCloudAgentParents(db, api, io.mockk.mockk(), state, session.id, user.id, { true })
             assertEquals(2L to 3L, epochs)
             io.mockk.coVerify(exactly = 0) { api.pull(any(), any()) }
+            val targets = listOf(
+                com.android.everytalk.data.computer.ComputerTargetBinding("a", "workspace-a", "服务器 A"),
+                com.android.everytalk.data.computer.ComputerTargetBinding("b", "workspace-b", "未使用的服务器 B"),
+            )
+            val expectedTargets = targets.map { AgentTaskTarget(it.computerId, it.displayName) }
             val request = ChatRequest(listOf(SimpleTextApiMessage(id = user.id, role = "user", content = "问题")),
-                "OpenAI", "OpenAI兼容", "https://example.com/v1", "test-only", "test-model", conversationId = session.id)
+                "OpenAI", "OpenAI兼容", "https://example.com/v1", "test-only", "test-model", conversationId = session.id,
+                localComputerRequestContext = com.android.everytalk.data.computer.ComputerRequestContext(
+                    session.id, "a", "workspace-a", selectedTargets = targets))
             val input = AgentLoopRequest(request, session.id, user.id, "missing-ai", ModelTokenLimits(512, 8_000))
             var submitted = false
             val run = prepareCloudAgentSubmission(context, db, AgentRunStore(db.agentDao()),
@@ -93,6 +100,11 @@ class CloudAgentStoreTest {
                 assertEquals(draft.uuid, frozen["assistantMessageUuid"]?.jsonPrimitive?.content)
                 assertEquals(pending.id, frozen["id"]?.jsonPrimitive?.content)
                 assertEquals(SyncStatus.LOCAL_ONLY, draft.syncStatus)
+                // 不等首个云快照或终态归档，新实例已经能读出未执行目标；只保存展示字段。
+                assertEquals(expectedTargets, AgentRunStore(db.agentDao()).taskTargets(pending))
+                val targetEntry = checkNotNull(db.agentDao().getTaskTargetsEntry(pending.id))
+                assertEquals(frozen["taskTargets"], cloudAgentJson.parseToJsonElement(targetEntry.payloadJson))
+                assertFalse(targetEntry.payloadJson.contains("workspace-"))
             }
             assertTrue(submitted)
             assertEquals("missing-ai", run.visibleAssistantMessageId)
@@ -154,14 +166,31 @@ class CloudAgentStoreTest {
         assertTrue(answering.contentStarted)
     }
 
+    @Test fun `云端未开始工具保持原序不生成耗时和成功改动`() = runBlocking {
+        val view = CloudRunView(1, account, account, account, account, "CANCELLED", 1, 1,
+            CloudRunSnapshot("AB", "", listOf(CloudRunTrace("content", 1, text = "A"),
+                CloudRunTrace("tool", 2, id = "pending", name = "write_file", started = false,
+                    arguments = buildJsonObject { put("path", "/tmp/file"); put("content", "value") }),
+                CloudRunTrace("content", 3, text = "B")), null, 1, 4))
+        val message = view.toMessage(Message(id = "ai", text = "", sender = Sender.AI)) { it }
+        assertEquals(listOf("A", "pending", "B"), message.executionTrace.map { when (it) {
+            is ExecutionTraceEvent.Content -> it.text
+            is ExecutionTraceEvent.Tool -> it.step.id
+            else -> ""
+        } })
+        val step = message.executionSteps.single()
+        assertFalse(step.started); assertFalse(step.completed)
+        assertNull(step.durationMs); assertNull(step.fileChange)
+    }
+
     @Test fun `云端MCP展示真实名称且不同服务器保留原始身份`() = runBlocking {
         val alias = "mcp_023f9c37061675de7081f3bb9e208d05_firecrawl_scrape"
         val view = CloudRunView(1, account, account, account, account, "RUNNING", 1, 1,
             CloudRunSnapshot("", "", listOf(CloudRunTrace("tool", 1, id = "mcp", name = alias,
                 arguments = buildJsonObject { put("url", "https://example.com") })), null, 1))
         val message = view.toMessage(Message(id = "ai", text = "", sender = Sender.AI)) { it }
-        assertEquals("调用MCP", message.executionSteps.single().title)
-        assertEquals(listOf("firecrawl_scrape"), message.executionSteps.single().labels)
+        assertEquals("firecrawl_scrape", message.executionSteps.single().title)
+        assertEquals(listOf("https://example.com"), message.executionSteps.single().labels)
         assertEquals(alias, message.executionSteps.single().toolName)
         assertEquals(alias, view.snapshot.trace.single().name)
         com.android.everytalk.data.mcp.McpToolLabels.update(emptyList())

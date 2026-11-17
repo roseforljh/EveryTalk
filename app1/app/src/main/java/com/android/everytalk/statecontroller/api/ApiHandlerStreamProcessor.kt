@@ -6,7 +6,7 @@ import com.android.everytalk.data.DataClass.ContextCompressionState
 import com.android.everytalk.data.DataClass.ExecutionStep
 import com.android.everytalk.data.DataClass.ExecutionStepType
 import com.android.everytalk.data.DataClass.ExecutionTraceEvent
-import com.android.everytalk.data.DataClass.executionFileChange
+import com.android.everytalk.data.DataClass.executionDisplay
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.data.network.AppStreamEvent
@@ -30,11 +30,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.security.MessageDigest
-import java.util.Locale
-import com.android.everytalk.data.computer.ComputerToolNames
 import java.util.concurrent.ConcurrentHashMap
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.contentOrNull
 
 internal fun shouldAppendStreamTextChunk(chunk: String?): Boolean =
     !chunk.isNullOrEmpty() &&
@@ -128,94 +124,18 @@ internal fun mergeNativeContextCompaction(
     )
 }
 
-private fun compactStreamToolName(name: String, maxChars: Int = 24): String {
-    val normalized = name.replace(Regex("\\s+"), " ").trim()
-    if (normalized.isBlank()) return ""
-    if (normalized.length <= maxChars) return normalized
-    return normalized.take((maxChars - 3).coerceAtLeast(1)).trimEnd() + "..."
+private fun buildToolCallStatus(event: AppStreamEvent.ToolCall): String {
+    val step = executionStepForToolCall(event).executionDisplay()
+    return (listOf(step.title) + step.labels).distinct().joinToString(" · ")
 }
 
-private fun buildToolCallStatus(toolName: String): String {
-    val compactName = compactStreamToolName(com.android.everytalk.data.mcp.McpToolLabels.display(toolName))
-    val prefix = when {
-        ComputerToolNames.all.any { it.equals(toolName, ignoreCase = true) } -> "运行 Agent"
-        toolName.startsWith("mcp_", ignoreCase = true) -> "调用MCP"
-        else -> "调用工具"
-    }
-    return if (compactName.isBlank()) prefix else "$prefix · $compactName"
-}
-
-private fun compactExecutionLabel(value: String, maxChars: Int = 180): String {
-    val normalized = value.replace('\r', ' ').replace('\n', ' ').trim()
-    if (normalized.length <= maxChars) return normalized
-    return normalized.take(maxChars - 3).trimEnd() + "..."
-}
-
-private fun AppStreamEvent.ToolCall.argumentText(vararg keys: String): String =
-    keys.firstNotNullOfOrNull { key ->
-        (argumentsObj[key] as? JsonPrimitive)
-            ?.contentOrNull
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
-    }.orEmpty()
-
+/** 实时、云端与账本恢复共用准确身份和原参数，不能按 query 猜网页操作。 */
 internal fun executionStepForToolCall(
     event: AppStreamEvent.ToolCall,
     reasoningBefore: String? = null,
-): ExecutionStep {
-    val toolName = event.name.trim()
-    val query = event.argumentText("query", "q", "search_query", "searchQuery")
-    val url = event.argumentText("url", "href", "link")
-    val agentTarget = event.argumentText(
-        "command",
-        "path",
-        "destination_path",
-        "source_path",
-        "port",
-        "action",
-    )
-    val normalizedName = toolName.lowercase(Locale.ROOT)
-    // MCP 统一显示真实工具名，检索词和 URL 仍保留在原始工具参数中。
-    val displayName = if (toolName == com.android.everytalk.data.agent.McpToolDiscovery.NAME && query.isNotBlank()) "$toolName · $query"
-        else com.android.everytalk.data.mcp.McpToolLabels.display(toolName)
-    val type = when {
-        ComputerToolNames.all.any { it.equals(normalizedName, ignoreCase = true) } ->
-            ExecutionStepType.Agent
-        toolName.startsWith("mcp_") || toolName == com.android.everytalk.data.agent.McpToolDiscovery.NAME -> ExecutionStepType.Tool
-        query.isNotBlank() || normalizedName.contains("search") || normalizedName.contains("query") ->
-            ExecutionStepType.Search
-        url.isNotBlank() || normalizedName.contains("fetch") || normalizedName.contains("crawl") ->
-            ExecutionStepType.Web
-        else -> ExecutionStepType.Tool
-    }
-    val labels = buildList {
-        when (type) {
-            ExecutionStepType.Search -> add(query.ifBlank { displayName })
-            ExecutionStepType.Web -> add(url.ifBlank { displayName })
-            ExecutionStepType.Tool -> add(displayName)
-            ExecutionStepType.Agent -> add(agentTarget.ifBlank { toolName })
-        }
-    }
-        .filter { it.isNotBlank() }
-        .map(::compactExecutionLabel)
-        .distinct()
-    return ExecutionStep(
-        id = event.id.ifBlank { "${event.name}:${event.argumentsObj.hashCode()}" },
-        type = type,
-        title = when (type) {
-            ExecutionStepType.Search -> "搜索网页"
-            ExecutionStepType.Web -> "读取网页"
-            ExecutionStepType.Tool -> if (toolName.startsWith("mcp_")) "调用MCP" else "调用工具"
-            ExecutionStepType.Agent -> "运行 Agent"
-        },
-        labels = labels,
-        toolName = toolName,
-        detail = agentTarget.takeIf { type == ExecutionStepType.Agent && it.isNotBlank() },
-        reasoningBefore = reasoningBefore,
-        fileChange = executionFileChange(toolName, event.argumentsObj),
-        computerId = (event.argumentsObj["computer_id"] as? kotlinx.serialization.json.JsonPrimitive)?.content,
-    )
-}
+): ExecutionStep = com.android.everytalk.data.DataClass.executionToolStep(
+    event.id, event.name, event.argumentsObj, reasoningBefore,
+)
 
 internal fun mergeExecutionStep(
     existing: List<ExecutionStep>,
@@ -489,7 +409,7 @@ internal fun applyToolCallEventToMessage(
     reasoningText: String = message.reasoning.orEmpty(),
 ): Message {
     val toolStatus = event.status?.takeIf { it.isNotBlank() }
-        ?: buildToolCallStatus(event.name)
+        ?: buildToolCallStatus(event)
     return message.copy(
         currentWebSearchStage = toolStatus.takeIf { it.isNotBlank() },
         executionStatus = null,

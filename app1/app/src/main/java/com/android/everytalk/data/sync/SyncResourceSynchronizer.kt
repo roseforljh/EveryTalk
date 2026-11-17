@@ -500,7 +500,7 @@ internal class SyncResourceSynchronizer(
         if (cleared > 0) syncDiagnostic("resource stale failures cleared=$cleared")
         // 上一轮已全部落地且附件表没有任何变化：不必再把几千条元数据逐条查表、解析一遍。
         val stampKey = "sync_resource_restore_stamp:$user"
-        val stamp = db.syncAttachmentDao().stamp()
+        val stamp = "2:" + db.syncAttachmentDao().stamp()
         if (cleared == 0 && settings.getValue(stampKey) == stamp) return
         var allSettled = true
         val records = settings.getByPrefix("sync_resource_meta:").mapNotNull { row ->
@@ -590,7 +590,8 @@ internal class SyncResourceSynchronizer(
                 val restoredRevision = "4:$digest"
                 if (settings.getValue(marker) != restoredRevision) {
                     val history = readArchive(archives, messageId, digest)
-                    val restored = history.message
+                    val restored = com.android.everytalk.data.agent.AgentRunStore(db.agentDao())
+                        .repairArchivedExecution(history.message, history.entries)
                     require(restored.id == messageId && restored.conversationId == entries.first().first.sessionId)
                     history.resultFiles.forEach { (path, encoded) ->
                         val target = safeResultFile(path)
@@ -729,7 +730,7 @@ internal class SyncResourceSynchronizer(
                 } else throw error
             }
         }
-        if (allSettled && !moreWork && db.syncAttachmentDao().stamp() == stamp) settings.insertSetting(SystemSettingEntity(stampKey, stamp))
+        if (allSettled && !moreWork && "2:" + db.syncAttachmentDao().stamp() == stamp) settings.insertSetting(SystemSettingEntity(stampKey, stamp))
         if (touched) SyncLocalChanges.notifyChanged()
     }
 

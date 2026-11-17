@@ -969,6 +969,9 @@ interface AgentDao {
     )
     suspend fun markActiveRequestsInterrupted(reason: String, finishedAt: Long)
 
+    @Query("SELECT * FROM agent_entries WHERE runId = :runId AND kind = 'TASK_TARGETS' LIMIT 1")
+    suspend fun getTaskTargetsEntry(runId: String): AgentEntryEntity?
+
     @Query("SELECT * FROM agent_entries WHERE runId = :runId ORDER BY sequence ASC")
     suspend fun getEntries(runId: String): List<AgentEntryEntity>
 

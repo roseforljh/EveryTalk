@@ -65,6 +65,8 @@ import com.android.everytalk.R
 import com.android.everytalk.data.mcp.McpToolLabels
 import com.android.everytalk.data.network.TOOL_CALL_WRITING_STATUS
 import com.android.everytalk.data.DataClass.ExecutionStep
+import com.android.everytalk.data.DataClass.executionDisplay
+import com.android.everytalk.data.DataClass.sameOperation
 import com.android.everytalk.data.DataClass.ExecutionStepType
 import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.WebSearchResult
@@ -248,7 +250,7 @@ private fun continuesSameTool(previous: ExecutionTimelineEntry?, step: Execution
     val previousToolName = previous?.step?.toolName ?: previous?.step?.labels?.singleOrNull()?.trim().orEmpty()
     val toolName = step.toolName ?: step.labels.singleOrNull()?.trim().orEmpty()
     return step.type in setOf(ExecutionStepType.Tool, ExecutionStepType.Agent) &&
-        previous?.step?.type == step.type &&
+        previous?.step?.type == step.type && previous.step.sameOperation(step) &&
         toolName.isNotEmpty() &&
         toolName == previousToolName
 }
@@ -530,10 +532,9 @@ internal fun ThinkingExecutionTimeline(
                 }
                 is OrderedExecutionItem.Step -> {
                     val entry = item.entry
-                    val step = entry.step
+                    val step = remember(entry.step) { entry.step.executionDisplay() }
                     val currentToolIndex = toolNodeIndex++
-                    val canExpand = step.type in setOf(ExecutionStepType.Tool, ExecutionStepType.Agent) &&
-                        (step.labels.isNotEmpty() || !step.detail.isNullOrBlank() || !step.resultPreview.isNullOrBlank())
+                    val canExpand = step.labels.isNotEmpty() || !step.detail.isNullOrBlank() || !step.resultPreview.isNullOrBlank()
                     val isStepExpanded = step.id in expandedStepIds || (step.labels.isEmpty() && step.isError)
                     val toggleStepExpanded: () -> Unit = {
                         expandedStepIds = if (step.id in expandedStepIds) {
@@ -558,6 +559,7 @@ internal fun ThinkingExecutionTimeline(
                             step = step,
                             invocationCount = entry.invocationCount,
                             expanded = isStepExpanded,
+                            active = isReasoningActive,
                             onToggleExpanded = toggleStepExpanded,
                         )
                         if (itemIndex == sourceItemIndex && webSearchResults.isNotEmpty()) {
@@ -880,11 +882,12 @@ private fun ExecutionLabels(
     step: ExecutionStep,
     invocationCount: Int,
     expanded: Boolean,
+    active: Boolean,
     onToggleExpanded: () -> Unit,
 ) {
     if (step.labels.isEmpty()) {
         // 缺少工具标签的失败记录仍需显示服务端返回的原因。
-        if (step.isError || expanded) ExecutionStepDetails(step)
+        if (step.isError || expanded) ExecutionStepDetails(step, active)
         return
     }
     val uriHandler = LocalUriHandler.current
@@ -907,6 +910,7 @@ private fun ExecutionLabels(
                     ExecutionStepType.Web -> webLinkClick(uriHandler, label)
                     ExecutionStepType.Tool,
                     ExecutionStepType.Agent,
+                    ExecutionStepType.Search,
                     -> onToggleExpanded
                     else -> null
                 },
@@ -922,7 +926,7 @@ private fun ExecutionLabels(
         }
     }
     AnimatedVisibility(
-        visible = expanded && step.type in setOf(ExecutionStepType.Tool, ExecutionStepType.Agent),
+        visible = expanded,
         enter = expandVertically(
             animationSpec = tween(200, easing = FastOutSlowInEasing),
         ) + fadeIn(animationSpec = tween(150)),
@@ -930,12 +934,12 @@ private fun ExecutionLabels(
             animationSpec = tween(180, easing = FastOutSlowInEasing),
         ) + fadeOut(animationSpec = tween(120)),
     ) {
-        ExecutionStepDetails(step)
+        ExecutionStepDetails(step, active)
     }
 }
 
 @Composable
-private fun ExecutionStepDetails(step: ExecutionStep) {
+private fun ExecutionStepDetails(step: ExecutionStep, active: Boolean) {
     val detail = step.detail?.trim().takeUnless { it.isNullOrEmpty() }
         ?: step.labels.joinToString(" ", transform = McpToolLabels::display).trim()
     if (detail.isEmpty() && step.resultPreview.isNullOrBlank()) return
@@ -980,7 +984,11 @@ private fun ExecutionStepDetails(step: ExecutionStep) {
                 )
                 Text(
                     text = stringResource(
-                        if (step.isError) {
+                        if (!step.started && !active) {
+                            R.string.agent_task_unused
+                        } else if (!step.started) {
+                            R.string.agent_task_waiting
+                        } else if (step.isError) {
                             R.string.thinking_execution_failed
                         } else if (step.completed) {
                             R.string.thinking_execution_completed
@@ -1002,11 +1010,13 @@ private fun ExecutionStepDetails(step: ExecutionStep) {
                 }
             }
             if (detail.isNotEmpty()) {
-                Text(
-                    text = detail,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                )
+                androidx.compose.foundation.text.selection.SelectionContainer {
+                    Text(
+                        text = detail,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    )
+                }
             }
             step.resultPreview?.takeIf(String::isNotBlank)?.let { result ->
                 Surface(

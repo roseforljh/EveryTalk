@@ -302,6 +302,38 @@ class SyncResourceSynchronizerTest {
         assertEquals(uploads + 2, api.fileUploads)
     }
 
+    @Test fun `权威附件非最大时间更新和同毫秒替换都使两层缓存失效但重复记录不失效`() = runBlocking {
+        val db = database()
+        val store = RoomSyncStore(db, userId = user)
+        val session = UUID.randomUUID().toString(); val message = UUID.randomUUID().toString()
+        val a = UUID.randomUUID().toString(); val b = UUID.randomUUID().toString()
+        fun record(id: String, modified: Long, file: String = "file-a", seq: Long) = SyncRecord("attachments", id,
+            buildJsonObject {
+                put("sessionId", session); put("messageId", message); put("name", "history.et")
+                put("mime", "application/octet-stream"); put("size", 10); put("sha256", "a".repeat(64))
+                put("fileId", file); put("kind", "file"); put("position", 0); put("clientModifiedAt", modified)
+            }, deleted = false, serverSeq = seq)
+        suspend fun apply(record: SyncRecord) = store.applyPullPage(PullResponse(listOf(record), record.serverSeq, false, 0))
+        suspend fun mark() {
+            for (key in listOf("sync_resource_restore_stamp:$user", "sync_resource_received:$message", "sync_resource_receive_failed:$message"))
+                db.settingsDao().insertSetting(SystemSettingEntity(key, "settled"))
+        }
+        suspend fun assertInvalidated() {
+            assertNull(db.settingsDao().getValue("sync_resource_restore_stamp:$user"))
+            assertNull(db.settingsDao().getValue("sync_resource_received:$message"))
+            assertNull(db.settingsDao().getValue("sync_resource_receive_failed:$message"))
+        }
+        apply(record(a, 100, seq = 1)); apply(record(b, 200, seq = 2))
+        val stamp = db.syncAttachmentDao().stamp()
+        mark(); apply(record(a, 150, seq = 3))
+        assertEquals(stamp, db.syncAttachmentDao().stamp())
+        assertInvalidated()
+        mark(); apply(record(a, 150, "file-new", 4)); assertInvalidated()
+        mark(); apply(record(a, 150, "file-new", 5))
+        assertEquals("settled", db.settingsDao().getValue("sync_resource_restore_stamp:$user"))
+        assertEquals("settled", db.settingsDao().getValue("sync_resource_received:$message"))
+    }
+
     @Test fun `超限正文思考工具轨迹图片与技能文件完整恢复且不回传`() = runBlocking {
         val a = database(); val b = database(); val ca = context(); val cb = context(); val api = FakeSyncApi()
         val session = ChatSessionEntity("source", 100, 100, false, "完整历史")
@@ -322,6 +354,10 @@ class SyncResourceSynchronizerTest {
         a.chatDao().writeMessages(listOf(message))
         val run = AgentRunEntity("run", session.id, question.id, message.id, null, null, "RUNNING", 0, null, 1, 1)
         a.agentDao().upsertRun(run)
+        val targets = listOf(com.android.everytalk.data.agent.AgentTaskTarget("a", "服务器 A"),
+            com.android.everytalk.data.agent.AgentTaskTarget("b", "未使用的服务器 B"))
+        a.agentDao().upsertEntry(AgentEntryEntity("targets", run.id, 0, "TASK_TARGETS", null, null,
+            syncJson.encodeToString(targets), "FINAL", 1, 2))
         val toolPath = "agent_tool_results/run/output.txt"
         val toolFile = File(ca.filesDir, toolPath).apply { parentFile!!.mkdirs(); writeText("完整工具输出".repeat(60000)) }
         a.agentDao().upsertEntry(AgentEntryEntity("entry", run.id, 1, "TOOL_RESULT", null, "tool", """{"fullResultPath":"$toolPath"}""", "COMPLETED", 1, 2))
@@ -344,7 +380,9 @@ class SyncResourceSynchronizerTest {
         assertEquals(body, restored.text); assertEquals(message.reasoning, restored.reasoning)
         val restoredQuestion = b.chatDao().getMessageByUuid(question.uuid)!!
         assertEquals(trace.map { if (it is ExecutionTraceEvent.UserMessageBoundary) it.copy(messageId = restoredQuestion.id) else it }, restored.executionTrace)
-        assertEquals(restoredQuestion.id, b.agentDao().getRunByVisibleMessage(restored.id)!!.userMessageId)
+        val restoredRun = b.agentDao().getRunByVisibleMessage(restored.id)!!
+        assertEquals(restoredQuestion.id, restoredRun.userMessageId)
+        assertEquals(targets, com.android.everytalk.data.agent.AgentRunStore(b.agentDao()).taskTargets(restoredRun))
         assertEquals(SyncStatus.SYNCED, restored.syncStatus)
         // 模拟旧版已应用归档但保留了原设备引用；升级后重新应用，不能永久保留错误轮次关系。
         val restoredMarker = "sync_resource_restored:${message.uuid}"

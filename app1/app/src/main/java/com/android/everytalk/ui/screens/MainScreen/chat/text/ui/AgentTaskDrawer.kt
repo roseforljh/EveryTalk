@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.screens.MainScreen.chat.text.ui
 
+import com.android.everytalk.data.DataClass.executionDisplay
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
@@ -681,11 +682,12 @@ private fun TaskProcess(
                 }
                 is ExecutionTraceEvent.Tool -> {
                     TaskToolCard(
-                        step = event.step,
+                        storedStep = event.step,
                         expanded = expandedToolIds[event.step.id] == true,
                         onToggle = {
                             expandedToolIds[event.step.id] = !(expandedToolIds[event.step.id] ?: false)
                         },
+                        terminal = task.phase in setOf(AgentTaskPhase.COMPLETED, AgentTaskPhase.FAILED, AgentTaskPhase.STOPPED, AgentTaskPhase.UNUSED),
                     )
                 }
                 is ExecutionTraceEvent.UserMessageBoundary -> {
@@ -880,11 +882,14 @@ private fun TaskAiContentCard(text: String, index: Int = 0) {
 
 @Composable
 private fun TaskToolCard(
-    step: ExecutionStep,
+    storedStep: ExecutionStep,
     expanded: Boolean,
     onToggle: () -> Unit,
+    terminal: Boolean,
 ) {
-    val summary = step.detail?.takeIf { it.isNotBlank() } ?: step.labels.joinToString(" · ", transform = com.android.everytalk.data.mcp.McpToolLabels::display)
+    val step = remember(storedStep) { storedStep.executionDisplay() }
+    val summary = if (expanded) step.detail?.takeIf { it.isNotBlank() } ?: step.labels.joinToString(" · ")
+        else step.labels.joinToString(" · ")
     val hasDetails = summary.isNotBlank() || !step.resultPreview.isNullOrBlank()
     val statusColor = when {
         step.isError -> MaterialTheme.colorScheme.error
@@ -956,6 +961,7 @@ private fun TaskToolCard(
                     ) {
                         Text(
                             text = when {
+                                !step.started && terminal -> stringResource(R.string.agent_task_unused)
                                 step.isError -> stringResource(R.string.agent_task_failed)
                                 step.completed -> stringResource(R.string.agent_task_completed)
                                 step.started -> stringResource(R.string.agent_task_running)
@@ -983,14 +989,16 @@ private fun TaskToolCard(
                     color = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text(
-                        text = summary,
-                        maxLines = if (expanded) 12 else 2,
-                        overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                    )
+                    SelectionContainer {
+                        Text(
+                            text = summary,
+                            maxLines = if (expanded) Int.MAX_VALUE else 2,
+                            overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        )
+                    }
                 }
             }
             if (expanded && !step.resultPreview.isNullOrBlank()) {

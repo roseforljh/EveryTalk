@@ -195,8 +195,7 @@ class AgentRunStore(
      * 不使用当前会话的选服设置，避免把后来选择的服务器误认为旧任务的目标。
      */
     suspend fun taskTargets(run: AgentRunEntity): List<AgentTaskTarget> {
-        val entries = dao.getEntries(run.id)
-        entries.firstOrNull { it.kind == AgentEntryKind.TASK_TARGETS.name }?.let { entry ->
+        dao.getTaskTargetsEntry(run.id)?.let { entry ->
             try {
                 return json.decodeFromString<List<AgentTaskTarget>>(entry.payloadJson)
             } catch (error: IllegalArgumentException) {
@@ -209,7 +208,7 @@ class AgentRunStore(
         ) decodeRequestSnapshot(run)?.computerRequestContext else null
         val frozenTargets = context?.selectedTargets.orEmpty().map { AgentTaskTarget(it.computerId, it.displayName) }
         if (frozenTargets.isNotEmpty()) return frozenTargets
-        return entries.filter { it.kind == AgentEntryKind.ASSISTANT.name }
+        return dao.getEntries(run.id).filter { it.kind == AgentEntryKind.ASSISTANT.name }
             .flatMap { decodeAssistantToolCalls(it) }
             .filter { it.name in ComputerToolNames.allProviders }
             .mapNotNull { call -> (call.arguments["computer_id"] as? JsonPrimitive)?.takeIf { it.isString }?.content }
@@ -1543,7 +1542,10 @@ class AgentRunStore(
     ): List<AbstractApiMessage> = messages + decodeFinalTranscriptEntries(runId)
 
     /** 进程重建时按 AgentEntry.sequence 还原正文、思考和工具顺序。 */
-    suspend fun executionTrace(runId: String): List<ExecutionTraceEvent> = buildList {
+    suspend fun executionTrace(runId: String): List<ExecutionTraceEvent> = executionTrace(dao.getEntries(runId))
+
+    /** 已解密归档直接复用这次读取的账本，避免恢复时再次查库。 */
+    internal fun executionTrace(entries: List<AgentEntryEntity>): List<ExecutionTraceEvent> = buildList {
         fun appendContent(text: String, startedAtMillis: Long) {
             if (text.isBlank()) return
             val previous = lastOrNull()
@@ -1564,7 +1566,6 @@ class AgentRunStore(
             }
         }
 
-        val entries = dao.getEntries(runId)
         val startedIds = entries.filter { it.kind == AgentEntryKind.TOOL_EXECUTION_STARTED.name }
             .mapNotNullTo(hashSetOf()) { it.toolCallId }
         val finalizedAssistantRequests = entries.asSequence()
@@ -1632,6 +1633,58 @@ class AgentRunStore(
                 }
             }
         }
+    }
+
+    /** 旧归档在打开详情时才读取一次；同步 revision 失效，绝不在长会话加载时逐轮解码。 */
+    internal suspend fun archivedExecution(message: Message): Message {
+        val run = dao.getRunByVisibleMessage(message.id)?.takeIf { it.terminalReason == "SYNC_HISTORY_ONLY" } ?: return message
+        val revision = com.android.everytalk.data.sync.SyncLocalChanges.revision.value
+        val key = "${System.identityHashCode(dao)}:${run.id}"
+        synchronized(archivedExecutionCache) {
+            archivedExecutionCache[key]?.takeIf { it.first == revision && it.second.first == message }?.let { return it.second.second }
+        }
+        val repaired = repairArchivedExecution(message, dao.getEntries(run.id))
+        synchronized(archivedExecutionCache) { archivedExecutionCache[key] = revision to (message to repaired) }
+        return repaired
+    }
+
+    /** 只修同步归档的过程视图：原始块定顺序，已有工具事实保留；正文/用量和正式消息不改写。 */
+    internal fun repairArchivedExecution(message: Message, entries: List<AgentEntryEntity>): Message {
+        if (entries.none { it.kind == AgentEntryKind.ASSISTANT.name }) return message
+        val rebuilt = runCatching { executionTrace(entries) }.getOrNull()?.takeIf { it.isNotEmpty() } ?: return message
+        val stored = (message.executionSteps + message.executionTrace.filterIsInstance<ExecutionTraceEvent.Tool>().map { it.step }).associateBy { it.id }
+        val rebuiltIds = rebuilt.filterIsInstance<ExecutionTraceEvent.Tool>().mapTo(hashSetOf()) { it.step.id }
+        if (!rebuiltIds.containsAll(stored.keys)) return message
+        for (reasoning in listOf(false, true)) {
+            fun text(events: List<ExecutionTraceEvent>) = events.joinToString("") { event -> when {
+                !reasoning && event is ExecutionTraceEvent.Content -> event.text
+                reasoning && event is ExecutionTraceEvent.Reasoning -> event.text
+                else -> ""
+            } }
+            val original = text(message.executionTrace)
+            if (original.isNotBlank() && text(rebuilt) != original) return message
+        }
+        val storedBoundaries = message.executionTrace.filterIsInstance<ExecutionTraceEvent.UserMessageBoundary>()
+        val rebuiltBoundaries = rebuilt.filterIsInstance<ExecutionTraceEvent.UserMessageBoundary>()
+        if (storedBoundaries.isNotEmpty() && storedBoundaries.size != rebuiltBoundaries.size) return message
+        var boundaryIndex = 0
+        val trace = rebuilt.map { event ->
+            if (event is ExecutionTraceEvent.UserMessageBoundary && storedBoundaries.isNotEmpty()) storedBoundaries[boundaryIndex++]
+            else if (event !is ExecutionTraceEvent.Tool) event else {
+                val previous = stored[event.step.id]
+                if (previous == null) event.copy(step = event.step.copy(fileChange = event.step.fileChange.takeIf { event.step.completed && !event.step.isError }))
+                else {
+                    val oldEvent = message.executionTrace.filterIsInstance<ExecutionTraceEvent.Tool>().firstOrNull { it.step.id == event.step.id }
+                    event.copy(step = previous.copy(toolName = event.step.toolName ?: previous.toolName,
+                        detail = previous.detail ?: event.step.detail, reasoningBefore = ""),
+                        startedAtMillis = oldEvent?.startedAtMillis ?: event.startedAtMillis,
+                        finishedAtMillis = oldEvent?.finishedAtMillis ?: event.finishedAtMillis)
+                }
+            }
+        }
+        // 没有工具边界时不拿摘要账本替代更丰富的原始过程。
+        if (trace.none { it is ExecutionTraceEvent.Tool }) return message
+        return message.copy(executionTrace = trace, executionSteps = trace.filterIsInstance<ExecutionTraceEvent.Tool>().map { it.step })
     }
 
     suspend fun sessionTotalTokens(sessionId: String): Long =
@@ -2223,25 +2276,13 @@ private fun resolvedUnknownToolResult(call: AgentContentBlock.ToolCall): AgentCo
         isError = true,
     )
 
-private fun AgentContentBlock.ToolCall.toExecutionStep(completed: Boolean): ExecutionStep {
-    val detail = unknownExecutionDetail(this).ifBlank { name }
-    val label = detail.replace('\r', ' ').replace('\n', ' ').take(120)
-    val type = if (name in setOf("exec", "read_file", "write_file", "terminal", "upload", "download", "open_port")) {
-        ExecutionStepType.Agent
-    } else {
-        ExecutionStepType.Tool
-    }
-    return ExecutionStep(
-        id = id,
-        type = type,
-        title = if (type == ExecutionStepType.Agent) "运行 Agent" else "调用工具",
-        labels = listOf(label),
-        detail = detail.takeIf { type == ExecutionStepType.Agent && it.isNotBlank() },
-        completed = completed,
-        reasoningBefore = "",
-        fileChange = executionFileChange(name, arguments),
-        computerId = (arguments["computer_id"] as? JsonPrimitive)?.content,
-    )
+private fun AgentContentBlock.ToolCall.toExecutionStep(completed: Boolean): ExecutionStep =
+    com.android.everytalk.data.DataClass.executionToolStep(id, name, arguments, reasoningBefore = "")
+        .copy(completed = completed)
+
+/** 仅缓存最近查看的 16 个旧归档，避免静态缓存留住整本长会话。 */
+private val archivedExecutionCache = object : LinkedHashMap<String, Pair<Long, Pair<Message, Message>>>(16, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<Long, Pair<Message, Message>>>?): Boolean = size > 16
 }
 
 private const val AGENT_REQUEST_SNAPSHOT_CHUNK_CHARS = 65_536

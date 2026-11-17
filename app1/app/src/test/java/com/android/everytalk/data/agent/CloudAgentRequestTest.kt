@@ -14,6 +14,18 @@ class CloudAgentRequestTest {
     )
     private fun convert(request: ChatRequest) = cloudAgentInput(request, id, id, id, id, 0, 0, 123, "Asia/Shanghai", JsonArray(emptyList()))
 
+    @Test fun `冻结所有任务名称但展示目标不携带凭据和执行授权`() {
+        val targets = listOf(
+            com.android.everytalk.data.computer.ComputerTargetBinding("a", "workspace-a", "服务器 A"),
+            com.android.everytalk.data.computer.ComputerTargetBinding("b", "workspace-b", "未使用的服务器 B"),
+        )
+        val input = convert(request().copy(localComputerRequestContext = com.android.everytalk.data.computer.ComputerRequestContext(
+            "session", "a", "workspace-a", selectedTargets = targets)))
+        assertEquals(targets.map { it.computerId }, input.getValue("taskTargets").jsonArray.map { it.jsonObject.getValue("computerId").jsonPrimitive.content })
+        assertEquals(targets.map { it.displayName }, input.getValue("taskTargets").jsonArray.map { it.jsonObject.getValue("displayName").jsonPrimitive.content })
+        assertTrue(input.getValue("taskTargets").jsonArray.all { it.jsonObject.keys == setOf("computerId", "displayName") })
+    }
+
     @Test fun `云端执行期沿用本机阈值与稳定消息身份`() {
         val base = request().copy(messages = listOf(SimpleTextApiMessage("local-user", "user", "继续")),
             contextManagement = RequestContextManagement("config", 272000, 3209, 217600, true))

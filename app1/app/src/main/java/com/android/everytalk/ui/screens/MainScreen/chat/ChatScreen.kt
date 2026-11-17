@@ -1,4 +1,5 @@
 package com.android.everytalk.ui.screens.MainScreen
+import com.android.everytalk.data.database.entities.toMessage
 import com.android.everytalk.data.DataClass.isBuiltinModel
 import com.android.everytalk.statecontroller.*
 
@@ -117,8 +118,9 @@ fun ChatScreen(
     val taskRun = observedTaskRun?.takeIf { it.sessionId == conversationId }
     val taskApprovals by viewModel.pendingComputerAgentApprovals.collectAsStateWithLifecycle()
     val taskInterventions by viewModel.pendingInterventions.collectAsStateWithLifecycle()
-    // 展示记录只在 Run 切换时读取；已结束任务不再依赖完整请求快照。
-    val taskTargetsSnapshot by produceState<Pair<String, List<com.android.everytalk.data.agent.AgentTaskTarget>>?>(null, taskRun?.id) {
+    // Run 切换或同步账本到达后刷新；已结束任务不再依赖完整请求快照。
+    val taskTargetsRevision by com.android.everytalk.data.sync.SyncLocalChanges.revision.collectAsStateWithLifecycle()
+    val taskTargetsSnapshot by produceState<Pair<String, List<com.android.everytalk.data.agent.AgentTaskTarget>>?>(null, taskRun?.id, taskTargetsRevision) {
         value = null
         val run = taskRun ?: return@produceState
         value = withContext(Dispatchers.IO) {
@@ -144,10 +146,11 @@ fun ChatScreen(
     }
     val taskTargets = taskTargetsSnapshot?.takeIf { it.first == taskRun?.id }?.second.orEmpty()
     val taskMessage = messages.firstOrNull { it.id == taskRun?.visibleAssistantMessageId }
-    val needsTaskTrace = taskMessage?.executionTrace.isNullOrEmpty() && taskMessage?.executionSteps.isNullOrEmpty()
+    val needsTaskTrace = taskMessage?.executionTrace.isNullOrEmpty() && taskMessage?.executionSteps.isNullOrEmpty() ||
+        taskRun?.terminalReason == "SYNC_HISTORY_ONLY"
     // 历史消息可能尚未分页加载，抽屉仍直接从任务账本恢复过程；实时记录始终优先。
     val storedTaskTrace by produceState<Pair<String, List<com.android.everytalk.data.DataClass.ExecutionTraceEvent>>?>(
-        null, taskRun?.id, taskRun?.status, needsTaskTrace,
+        null, taskRun?.id, taskRun?.status, needsTaskTrace, taskTargetsRevision,
     ) {
         value = null
         val run = taskRun?.takeIf { needsTaskTrace } ?: return@produceState
@@ -156,7 +159,11 @@ fun ChatScreen(
                 val store = com.android.everytalk.data.agent.AgentRunStore(
                     com.android.everytalk.data.database.AppDatabase.getDatabase(context).agentDao(),
                 )
-                run.id to store.executionTrace(run.id)
+                val database = com.android.everytalk.data.database.AppDatabase.getDatabase(context)
+                val stored = database.chatDao().getStoredMessage(run.visibleAssistantMessageId, run.visibleAssistantMessageId)
+                run.id to if (stored != null && run.terminalReason == "SYNC_HISTORY_ONLY") {
+                    store.archivedExecution(stored.toMessage()).executionTrace
+                } else store.executionTrace(run.id)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -171,7 +178,9 @@ fun ChatScreen(
     }
     val taskItems = if (taskRun == null || taskTargets.size < 2) emptyList() else buildAgentTaskItems(
         status = taskRun.status,
-        message = taskMessage,
+        message = taskMessage?.let { message ->
+            storedTaskTrace?.takeIf { it.first == taskRun.id && needsTaskTrace }?.let { message.copy(executionTrace = it.second) } ?: message
+        },
         targets = taskTargets,
         fallbackTrace = storedTaskTrace?.takeIf { it.first == taskRun.id }?.second.orEmpty(),
         approvals = currentTaskApprovals,

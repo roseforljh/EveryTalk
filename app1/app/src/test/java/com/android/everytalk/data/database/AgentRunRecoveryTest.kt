@@ -63,6 +63,47 @@ class AgentRunRecoveryTest {
         database.close()
     }
 
+    @Test fun `旧同步归档用原始块一次补序并保留工具时间参数结果不改正文`() = runBlocking {
+        val store = AgentRunStore(database.agentDao())
+        val step = com.android.everytalk.data.DataClass.ExecutionStep("tool", com.android.everytalk.data.DataClass.ExecutionStepType.Tool,
+            "调用工具", toolName = "everytalk_memory", detail = """{"action":"search_conversations","query":"家宽"}""",
+            started = true, completed = true, durationMs = 12, resultPreview = "完整结果")
+        val message = Message(id = "archived", text = "AB", sender = Sender.AI, executionSteps = listOf(step),
+            executionTrace = listOf(ExecutionTraceEvent.Content("AB", 1), ExecutionTraceEvent.Tool(step, 2, 14)))
+        val entries = listOf(com.android.everytalk.data.database.entities.AgentEntryEntity("e", "r", 1, "ASSISTANT", null, null,
+            """[{"type":"text","text":"A"},{"type":"tool_call","id":"tool","name":"everytalk_memory","arguments":{"action":"search_conversations","query":"家宽"}},{"type":"text","text":"B"}]""", "FINAL", 1, 14))
+        val fixed = store.repairArchivedExecution(message, entries)
+        assertEquals("AB", fixed.text)
+        assertEquals(listOf("A", "tool", "B"), fixed.executionTrace.map { when (it) {
+            is ExecutionTraceEvent.Content -> it.text
+            is ExecutionTraceEvent.Tool -> it.step.id
+            else -> ""
+        } })
+        assertEquals(step, fixed.executionSteps.single().copy(reasoningBefore = step.reasoningBefore))
+        assertEquals(message, store.repairArchivedExecution(message, emptyList()))
+        // 已落地归档再次查看必须命中缓存；同步新账本到达后才重新补序。
+        database.chatDao().writeSession(ChatSessionEntity("archive-session", 1, 1, false))
+        database.chatDao().writeMessages(listOf(message.toEntity("archive-session")))
+        val run = AgentRunEntity("r", "archive-session", "user", message.id, null, null,
+            "COMPLETED", 0, "SYNC_HISTORY_ONLY", 1, 14)
+        database.agentDao().upsertRun(run)
+        entries.forEach { database.agentDao().upsertEntry(it) }
+        val first = store.archivedExecution(message)
+        assertTrue(first === store.archivedExecution(message))
+        assertTrue(first === AgentRunStore(database.agentDao()).archivedExecution(message))
+        com.android.everytalk.data.sync.SyncLocalChanges.notifyChanged()
+        val refreshed = store.archivedExecution(message)
+        assertEquals(first, refreshed)
+        assertTrue(first !== refreshed)
+        val richer = message.copy(executionTrace = message.executionTrace + ExecutionTraceEvent.Content("额外正文"))
+        assertEquals(richer, store.repairArchivedExecution(richer, entries))
+        val boundary = ExecutionTraceEvent.UserMessageBoundary("local-steering", 2)
+        val steering = com.android.everytalk.data.database.entities.AgentEntryEntity("steering", "r", 0, "STEERING", null, null,
+            """{"id":"remote-steering","content":"继续","createdAt":2}""", "FINAL", 2, 2)
+        assertEquals(boundary, store.repairArchivedExecution(message.copy(executionTrace = listOf(boundary) + message.executionTrace), listOf(steering) + entries)
+            .executionTrace.first())
+    }
+
     @Test
     fun `多服务器任务结束后清理快照并重建Store仍能查看目标和过程`() = runBlocking {
         val dao = database.agentDao()

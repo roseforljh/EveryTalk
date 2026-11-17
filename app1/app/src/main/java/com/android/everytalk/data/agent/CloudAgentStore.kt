@@ -36,13 +36,13 @@ internal suspend fun CloudRunView.toMessage(base: Message, resolve: suspend (Str
                         part.arguments ?: kotlinx.serialization.json.JsonObject(emptyMap())),
                     reasoningBefore = "",
                 ).copy(
-                    completed = completed, started = true,
+                    completed = completed, started = part.started,
                     detail = part.arguments?.toString(),
                     isError = part.isError,
-                    fileChange = if (part.isError) null else part.arguments?.let { executionFileChange(part.name, it) },
+                    fileChange = if (part.isError || !completed || !part.started) null else part.arguments?.let { executionFileChange(part.name, it) },
                     computerId = part.arguments?.get("computer_id")?.jsonPrimitive?.content,
                     resultPreview = part.result?.toString()?.take(4_000),
-                    durationMs = part.finishedAt?.let { (it - part.startedAt).coerceAtLeast(0) },
+                    durationMs = part.finishedAt?.takeIf { part.started }?.let { (it - part.startedAt).coerceAtLeast(0) },
                 )
                 ExecutionTraceEvent.Tool(step, part.startedAt, part.finishedAt)
             }
@@ -107,6 +107,7 @@ private fun cloudSearchResults(result: kotlinx.serialization.json.JsonElement?):
  */
 internal class CloudAgentStore(private val db: AppDatabase) {
     suspend fun prepare(accountId: String, sessionId: String, userId: String, assistantId: String, configId: String?,
+        taskTargets: List<AgentTaskTarget> = emptyList(),
         beforePersist: suspend (AgentRunEntity) -> Unit = {},
     ): AgentRunEntity = db.withTransaction {
         requireCloudUuid(accountId)
@@ -123,7 +124,14 @@ internal class CloudAgentStore(private val db: AppDatabase) {
         val id = UUID.randomUUID().toString()
         AgentRunEntity(id, sessionId, userId, assistantId, configId, null, AgentRunStatus.CREATED.name,
             0, null, now, now, executionOwner = "CLOUD", cloudAccountId = accountId, cloudRunId = id,
-            loopState = "SUBMITTING").also { beforePersist(it); dao.upsertRun(it) }
+            loopState = "SUBMITTING").also { run ->
+            beforePersist(run); dao.upsertRun(run)
+            // 发起设备提交时就保留冻结目标，归档尚未到达或进程重建也有抽屉入口。
+            if (taskTargets.size > 1) dao.upsertEntry(com.android.everytalk.data.database.entities.AgentEntryEntity(
+                "task-targets:${run.id}", run.id, 0, AgentEntryKind.TASK_TARGETS.name, null, null,
+                cloudAgentJson.encodeToString(kotlinx.serialization.builtins.ListSerializer(AgentTaskTarget.serializer()), taskTargets),
+                AgentEntryStatus.FINAL.name, now, now))
+        }
     }
 
     suspend fun read(runId: String): CloudRunView? = db.withTransaction {

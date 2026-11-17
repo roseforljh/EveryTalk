@@ -917,7 +917,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     val currentTaskRun = currentConversationId.flatMapLatest { id ->
         val dao = com.android.everytalk.data.database.AppDatabase.getDatabase(getApplication()).agentDao()
-        dao.observeTaskRuns(id).map { runs ->
+        kotlinx.coroutines.flow.combine(dao.observeTaskRuns(id), com.android.everytalk.data.sync.SyncLocalChanges.revision) { runs, _ -> runs }.map { runs ->
             withContext(Dispatchers.IO) {
                 val store = com.android.everytalk.data.agent.AgentRunStore(dao)
                 runs.firstOrNull { run -> store.taskTargets(run).size > 1 }
