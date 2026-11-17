@@ -221,6 +221,30 @@ val _isStreamingPaused = MutableStateFlow(false)
         return owner.value
     }
 
+    /**
+     * 云端运行中只叠加显示，结束后先把完整回复交回发送流程持有的消息列表，再撤掉运行态。
+     * 否则屏幕上虽已回答，下一次保存/构建上下文却仍读到空占位；保留本机附件路径，不复活已移除的消息。
+     */
+    fun updateRemoteLiveRun(run: RemoteLiveRun?) {
+        if (run != null) {
+            if (run.message.conversationId != _currentConversationId.value) return
+            if (!run.running) {
+                val index = messages.indexOfFirst { it.id == run.message.id }
+                if (index >= 0) {
+                    val stored = messages[index]
+                    val completed = run.message.copy(
+                        attachments = stored.attachments,
+                        imageUrls = stored.imageUrls,
+                        parts = emptyList(),
+                        isStreamingDraft = false,
+                    )
+                    if (stored != completed) messages[index] = completed
+                }
+            }
+        }
+        _remoteLiveRun.value = run
+    }
+
     /** 历史装载后优先合并活跃任务的内存快照，不以较旧的 Room 草稿覆盖实时增量。 */
     fun restoreTextConversationUi() {
         val sessionId = _currentConversationId.value

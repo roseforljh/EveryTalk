@@ -292,8 +292,10 @@ interface ChatDao {
         if (getStoredSession(session.id)?.deleted == true) return
         val storedStates = getMessageStorageStates(session.id).associateBy { it.id }
         val incomingIds = messages.mapTo(hashSetOf()) { it.id }
+        // 草稿只写草稿表。云端可能已把同 ID 回复定稿；迟到的页面草稿不是正式消息更新，
+        // 必须保留库内终稿，不能把空占位/半截输出拿去覆盖并触发正式消息保护。
         val changedMessages = messages.filter {
-            (it.id !in draftIds || storedStates[it.id] != null) && storedStates[it.id]?.storageFingerprint != it.storageFingerprint
+            it.id !in draftIds && storedStates[it.id]?.storageFingerprint != it.storageFingerprint
         }
         // 批量 UI 快照可能早于同步拉取，不凭缺席推断删除；编辑与重答等完整保存仍清理替换消息。
         val removedIds = if (removeMissingMessages) storedStates.values.filter {
