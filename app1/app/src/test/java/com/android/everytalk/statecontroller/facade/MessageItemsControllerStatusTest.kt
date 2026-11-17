@@ -1,6 +1,7 @@
 package com.android.everytalk.statecontroller.facade
 
 import com.android.everytalk.data.network.TOOL_CALL_WRITING_STATUS
+import com.android.everytalk.statecontroller.getMessageById
 
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.ApiConfig
@@ -33,6 +34,98 @@ import org.junit.Before
 import org.junit.Test
 
 class MessageItemsControllerStatusTest {
+    @Test
+    fun `云端首字前保持活动且思考工具到正文沿用同一过程key`() = runBlocking {
+        val controller = MessageItemsControllerTestAccess.newController()
+        val session = controller.stateHolder._currentConversationId.value
+        val initial = Message(id = "cloud-process", text = "", sender = Sender.AI,
+            conversationId = session, timestamp = 1_794_630_788_456L, executionStatus = "正在请求模型")
+        fun project(message: Message) {
+            controller.stateHolder._remoteLiveRun.value = com.android.everytalk.statecontroller.RemoteLiveRun("uuid", message, true)
+            Snapshot.sendApplyNotifications()
+        }
+        project(initial)
+        val waiting = controller.chatListItemsForTest().filterIsInstance<ChatListItem.AiMessageReasoning>().single()
+        assertEquals("正在请求模型", waiting.activityStatusText)
+        // UI 不能再从已经清空的本机 streaming ID 推断云端执行状态。
+        assertNull(controller.stateHolder._currentTextStreamingAiMessageId.value)
+        assertTrue(waiting.replyIsStreaming)
+        val thinking = initial.copy(reasoning = "检查来源", executionTrace = listOf(
+            ExecutionTraceEvent.Reasoning("检查来源", initial.timestamp),
+            ExecutionTraceEvent.Tool(completedToolStep(), initial.timestamp + 1_000, initial.timestamp + 2_000)))
+        project(thinking)
+        val process = withTimeout(5_000) { controller.chatListItems.first { items ->
+            items.filterIsInstance<ChatListItem.AiMessageProcessSegment>().any { it.events.size == 2 }
+        } }.filterIsInstance<ChatListItem.AiMessageProcessSegment>().single()
+        assertTrue(process.processIsActive)
+        project(thinking.copy(text = "结论", contentStarted = true, executionTrace = thinking.executionTrace +
+            ExecutionTraceEvent.Content("结论", initial.timestamp + 159_366)))
+        val output = withTimeout(5_000) { controller.chatListItems.first { items ->
+            items.any { it is ChatListItem.AiMessageContentSegment }
+        } }
+        assertEquals(process.stableId, output.filterIsInstance<ChatListItem.AiMessageProcessSegment>().single().stableId)
+    }
+
+    @Test
+    fun `云端工具后的首段回答不折进执行组且薄版同步不产生第二个耗时`() = runBlocking {
+        val controller = MessageItemsControllerTestAccess.newController()
+        val session = controller.stateHolder._currentConversationId.value
+        val start = 1_794_630_788_456L
+        // 与问题任务相同：8 段思考、13 次工具、末尾一段正式回答，过程耗时 2分39秒。
+        val trace = buildList {
+            repeat(8) { round ->
+                add(ExecutionTraceEvent.Reasoning("思考 $round", start + round * 20_000))
+                repeat(if (round < 6) 2 else if (round == 6) 1 else 0) { tool ->
+                    add(ExecutionTraceEvent.Tool(completedToolStep().copy(id = "$round-$tool"),
+                        start + round * 20_000 + tool * 1_000))
+                }
+            }
+            add(ExecutionTraceEvent.Content("正式回答", start + 159_366))
+        }
+        val live = Message(id = "cloud-answer", text = "正式回答", sender = Sender.AI,
+            conversationId = session, timestamp = start, reasoning = "思考", contentStarted = true, executionTrace = trace)
+        controller.stateHolder._remoteLiveRun.value = com.android.everytalk.statecontroller.RemoteLiveRun("uuid", live, true)
+        Snapshot.sendApplyNotifications()
+        val items = controller.chatListItemsForTest()
+        assertEquals(22, trace.size)
+        assertEquals(13, trace.filterIsInstance<ExecutionTraceEvent.Tool>().size)
+        assertTrue("单个连续过程不能再包一层同耗时的总标题", items.none { it is ChatListItem.AiMessageExecutionGroup })
+        val content = items.filterIsInstance<ChatListItem.AiMessageContentSegment>().single()
+        assertEquals("", content.executionGroupKey)
+        assertTrue(content.isStreaming)
+        val process = items.filterIsInstance<ChatListItem.AiMessageProcessSegment>().single()
+        assertEquals(159_366L, process.executionFinishedAtMillis!! - process.executionStartedAtMillis!!)
+        assertFalse(process.processIsActive)
+
+        // 同步先到的简版正文不能覆盖实时过程，也不能再插入一条同身份回复。
+        controller.stateHolder.messages.add(live.copy(reasoning = null, executionTrace = emptyList(), executionFinishedAt = start + 200_000))
+        val finished = live.copy(executionFinishedAt = start + 210_000)
+        controller.stateHolder._remoteLiveRun.value = com.android.everytalk.statecontroller.RemoteLiveRun("uuid", finished, false)
+        val viewModel = io.mockk.mockk<com.android.everytalk.statecontroller.AppViewModel>()
+        every { viewModel.stateHolder } returns controller.stateHolder
+        every { viewModel.messages } returns controller.stateHolder.messages
+        // 真正调用详情入口：本地已存在同 ID 薄版消息时仍能打开完整思考和工具。
+        assertEquals(trace, viewModel.getMessageById(live.id)!!.executionTrace)
+        Snapshot.sendApplyNotifications()
+        val finalItems = withTimeout(5_000) { controller.chatListItems.first { list -> list.any { it is ChatListItem.AiMessageFooter } } }
+        assertEquals(listOf(process.stableId), finalItems.filterIsInstance<ChatListItem.AiMessageProcessSegment>().map { it.stableId })
+        assertEquals(listOf(content.stableId), finalItems.filterIsInstance<ChatListItem.AiMessageContentSegment>().map { it.stableId })
+        assertEquals(trace.dropLast(1), finalItems.filterIsInstance<ChatListItem.AiMessageProcessSegment>().single().events)
+        assertEquals(finalItems.size, finalItems.map { it.stableId }.distinct().size)
+    }
+
+    @Test
+    fun `旧历史只有过程轨迹时仍显示单独保存的正文`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        controller.stateHolder.messages.add(Message(id = "legacy-process", text = "原有完整正文", sender = Sender.AI,
+            contentStarted = true, executionFinishedAt = 3_000, executionTrace = listOf(
+                ExecutionTraceEvent.Reasoning("思考", 1_000), ExecutionTraceEvent.Tool(completedToolStep(), 2_000))))
+        Snapshot.sendApplyNotifications()
+        val items = controller.chatListItemsForTest()
+        assertEquals("原有完整正文", items.filterIsInstance<ChatListItem.AiMarkdownNode>().single().message.text)
+        assertEquals(2, items.filterIsInstance<ChatListItem.AiMessageReasoning>().single().message.executionTrace.size)
+    }
+
     @Test
     fun `切换会话时旧远程快照不能叠入新会话`() {
         val controller = MessageItemsControllerTestAccess.newController()
@@ -694,6 +787,29 @@ class MessageItemsControllerStatusTest {
     }
 
     @Test
+    fun `压缩预算从首字前到工具后都完整进入执行区`() = runBlocking {
+        val controller = MessageItemsControllerTestAccess.newController()
+        val status = "正在压缩上下文 · gpt-test · 估算 312000 / 272000 · 触发线 217600"
+        val message = Message(id = "compression-budget", text = "", sender = Sender.AI, executionStatus = status)
+        controller.stateHolder.messages.add(message)
+        controller.stateHolder._isTextApiCalling.value = true
+        controller.stateHolder._currentTextStreamingAiMessageId.value = message.id
+        Snapshot.sendApplyNotifications()
+        assertEquals(status, controller.chatListItemsForTest()
+            .filterIsInstance<ChatListItem.AiMessageReasoning>().single().activityStatusText)
+
+        val tool = completedToolStep()
+        controller.stateHolder.messages[0] = message.copy(
+            executionSteps = listOf(tool), executionTrace = listOf(ExecutionTraceEvent.Tool(tool)),
+        )
+        Snapshot.sendApplyNotifications()
+        val updated = withTimeout(5_000) { controller.chatListItems.first { items ->
+            items.any { it is ChatListItem.AiMessageProcessSegment }
+        } }
+        assertEquals(status, updated.filterIsInstance<ChatListItem.AiMessageProcessSegment>().single().activityStatusText)
+    }
+
+    @Test
     fun `前导正文出现后 Agent 执行状态仍进入思考区`() {
         val controller = MessageItemsControllerTestAccess.newController()
         controller.stateHolder.messages.add(
@@ -1253,10 +1369,12 @@ class MessageItemsControllerStatusTest {
         )
         controller.stateHolder._isTextApiCalling.value = true
         controller.stateHolder._currentTextStreamingAiMessageId.value = messageId
+        // 真机由 Recomposer 每帧推进全局快照；测试里没有帧，手动提交后后台列表才看得到。
+        Snapshot.sendApplyNotifications()
 
-        val streamingItems = controller.chatListItems.first { items ->
+        val streamingItems = withTimeout(5_000) { controller.chatListItems.first { items ->
             items.any { it is ChatListItem.AiMessageReasoning }
-        }
+        } }
         val streamingId = streamingItems.filterIsInstance<ChatListItem.AiMessageReasoning>()
             .single().stableId
         val completedItemsDeferred = async {

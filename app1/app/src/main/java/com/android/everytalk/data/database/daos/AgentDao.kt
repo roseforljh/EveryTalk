@@ -1034,8 +1034,48 @@ interface AgentDao {
         model: String,
     ): Long?
 
+    @Query("""
+        SELECT usage.promptTokens - snapshot.estimatedPromptTokens
+        FROM agent_requests AS request
+        JOIN agent_runs AS run ON run.id = request.runId
+        JOIN agent_request_usage AS usage ON usage.requestId = request.id
+        JOIN agent_context_snapshots AS snapshot ON snapshot.requestId = request.id
+        WHERE run.sessionId = :sessionId AND run.configIdSnapshot IS :configId
+          AND request.provider = :provider AND request.endpoint IS :endpoint AND request.model = :model
+          AND request.purpose = 'AGENT_TURN' AND request.status = 'COMPLETED'
+          AND usage.quality = 'MEASURED' AND usage.source != 'ESTIMATED'
+          AND usage.promptTokens >= 0 AND snapshot.estimatedPromptTokens > 0
+          AND COALESCE(request.finishedAt, run.createdAt) >= :minTimestamp
+        ORDER BY request.finishedAt DESC, run.createdAt DESC, request.ordinal DESC
+        LIMIT 1
+    """)
+    suspend fun getLatestInputTokenCalibrationAfter(
+        sessionId: String,
+        configId: String?,
+        provider: String,
+        endpoint: String?,
+        model: String,
+        minTimestamp: Long,
+    ): Long?
+
+    @Query("""
+        SELECT id FROM (
+            SELECT id, sessionId, isError FROM messages WHERE deleted = 0
+            UNION ALL
+            SELECT id, sessionId, isError FROM message_drafts
+        ) WHERE sessionId = :sessionId AND isError = 1
+    """)
+    suspend fun getErrorMessageIdsForSession(sessionId: String): List<String>
+
     @Query("SELECT * FROM agent_compactions WHERE sessionId = :sessionId AND status = 'COMPLETED' ORDER BY createdAt DESC")
     suspend fun getCompactions(sessionId: String): List<AgentCompactionEntryEntity>
+
+    /** 只补齐同步回来的摘要，重复附件不得覆盖本机已有的同身份检查点。 */
+    @androidx.room.Insert(onConflict = androidx.room.OnConflictStrategy.IGNORE)
+    suspend fun insertSyncedCompaction(compaction: AgentCompactionEntryEntity)
+
+    @Query("SELECT c.* FROM agent_compactions c JOIN chat_sessions s ON s.id = c.sessionId WHERE c.status = 'COMPLETED' AND s.deleted = 0 AND s.isImageGeneration = 0 AND s.id NOT IN ('last_open_chat_v1','last_open_image_generation_v1') ORDER BY c.createdAt DESC")
+    suspend fun getSyncableCompactions(): List<AgentCompactionEntryEntity>
 
     @Query(
         """

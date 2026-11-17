@@ -9,6 +9,38 @@ import java.util.Base64
 
 class ComputerSshFoundationTest {
     @Test
+    fun `SSH分片等待超时继续等待但真实连接错误仍抛出`() = kotlinx.coroutines.runBlocking {
+        val client = io.mockk.mockk<net.schmizz.sshj.SSHClient>(relaxed = true)
+        val session = io.mockk.mockk<net.schmizz.sshj.connection.channel.direct.Session>(relaxed = true)
+        val command = io.mockk.mockk<net.schmizz.sshj.connection.channel.direct.Session.Command>(relaxed = true)
+        io.mockk.every { client.isConnected } returns true
+        io.mockk.every { client.isAuthenticated } returns true
+        io.mockk.every { client.startSession() } returns session
+        io.mockk.every { session.exec("echo ok") } returns command
+        io.mockk.every { command.inputStream } answers { "ok\n".byteInputStream() }
+        io.mockk.every { command.errorStream } answers { "".byteInputStream() }
+        io.mockk.every { command.outputStream } answers { java.io.ByteArrayOutputStream() }
+        io.mockk.every { command.exitStatus } returns 0
+        var open = true
+        var waits = 0
+        io.mockk.every { command.isOpen } answers { open }
+        io.mockk.every { command.join(200, java.util.concurrent.TimeUnit.MILLISECONDS) } answers {
+            if (++waits == 1) throw net.schmizz.sshj.connection.ConnectionException(
+                java.util.concurrent.TimeoutException("Timeout expired: 200 MILLISECONDS"))
+            open = false
+        }
+        val result = ComputerSshConnection(client).execute("echo ok")
+        assertEquals(2, waits)
+        assertEquals("ok\n", result.stdout)
+        assertEquals(0, result.exitCode)
+        assertTrue(!result.timedOut)
+        open = true
+        io.mockk.every { command.join(any(), any()) } throws net.schmizz.sshj.connection.ConnectionException("transport closed")
+        val error = runCatching { ComputerSshConnection(client).execute("echo ok") }.exceptionOrNull()
+        assertTrue(error is net.schmizz.sshj.connection.ConnectionException)
+    }
+
+    @Test
     fun `取消探测命令会先关通道解除阻塞读取`() = kotlinx.coroutines.runBlocking {
         val client = io.mockk.mockk<net.schmizz.sshj.SSHClient>(relaxed = true)
         val session = io.mockk.mockk<net.schmizz.sshj.connection.channel.direct.Session>(relaxed = true)

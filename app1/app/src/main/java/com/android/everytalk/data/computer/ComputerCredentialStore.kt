@@ -471,7 +471,16 @@ class ComputerCredentialStore private constructor(private val context: Context, 
     private fun getOrCreateMasterKey(): SecretKey {
         try {
             val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-            (keyStore.getKey(COMPUTER_KEYSTORE_ALIAS, null) as? SecretKey)?.let { return it }
+            (keyStore.getKey(COMPUTER_KEYSTORE_ALIAS, null) as? SecretKey)?.let { existing ->
+                // 系统可能永久作废 Keystore 密钥（锁屏/生物识别变更、清除数据后残留别名）。
+                // 作废的密钥再也无法加解密，旧密文本就不可恢复；不重建会让登录和服务器凭据保存全部失败。
+                try {
+                    Cipher.getInstance("AES/GCM/NoPadding").init(Cipher.ENCRYPT_MODE, existing)
+                    return existing
+                } catch (_: android.security.keystore.KeyPermanentlyInvalidatedException) {
+                    keyStore.deleteEntry(COMPUTER_KEYSTORE_ALIAS)
+                }
+            }
             val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
             generator.init(
                 KeyGenParameterSpec.Builder(

@@ -14,6 +14,19 @@ class CloudAgentRequestTest {
     )
     private fun convert(request: ChatRequest) = cloudAgentInput(request, id, id, id, id, 0, 0, 123, "Asia/Shanghai", JsonArray(emptyList()))
 
+    @Test fun `云端执行期沿用本机阈值与稳定消息身份`() {
+        val base = request().copy(messages = listOf(SimpleTextApiMessage("local-user", "user", "继续")),
+            contextManagement = RequestContextManagement("config", 272000, 3209, 217600, true))
+        val input = cloudAgentInput(base, id, id, id, id, 0, 0, 123, "Asia/Shanghai", JsonArray(emptyList()),
+            compactionSourceIds = listOf("old-user", "tool:old-call"),
+            messageIdReferences = mapOf("local-user" to "cloud:$id", "old-user" to "cloud:old"))
+        val management = input.getValue("contextManagement").jsonObject
+        assertEquals(217600, management.getValue("compactThresholdTokens").jsonPrimitive.int)
+        assertTrue(management.getValue("autoCompressionEnabled").jsonPrimitive.boolean)
+        assertEquals(listOf("cloud:$id"), management.getValue("messageIds").jsonArray.map { it.jsonPrimitive.content })
+        assertEquals(listOf("cloud:old", "tool:old-call"), management.getValue("sourcePrefixIds").jsonArray.map { it.jsonPrimitive.content })
+    }
+
     @Test fun `四协议保留代理前缀查询参数与完整自定义地址`() {
         for ((channel, suffix, api) in listOf(
             Triple("OpenAI兼容", "/chat/completions", "openai-completions"), Triple("Codex", "/responses", "openai-responses"),

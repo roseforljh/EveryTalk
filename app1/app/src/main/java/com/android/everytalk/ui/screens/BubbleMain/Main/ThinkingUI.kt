@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -307,7 +308,7 @@ internal fun ReasoningToggleAndContent(
     mainContentHasStarted: Boolean,
     executionStartedAtMillis: Long? = null,
     executionFinishedAtMillis: Long? = null,
-    hasOuterActiveExecutionGroup: Boolean = false,
+    hasOuterExecutionGroup: Boolean = false,
     reasoningTextColor: Color,
     reasoningToggleDotColor: Color,
     modifier: Modifier = Modifier,
@@ -334,7 +335,8 @@ internal fun ReasoningToggleAndContent(
     var userDrivenExpansion by remember(currentMessageId) { mutableStateOf(false) }
     // 正文首字出现就收起过程区，不必等待整条回复结束；收起后仍允许手动查看。
     val forceExpanded = (processIsActive || replyIsStreaming) && !mainContentHasStarted
-    val executionChainExpanded = forceExpanded || userExpanded
+    // 外层组已负责展开和收起，内部不能再出现第二套开关与耗时标题。
+    val executionChainExpanded = hasOuterExecutionGroup || forceExpanded || userExpanded
     var nowMillis by remember(currentMessageId) { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(forceExpanded, currentMessageId) {
         if (forceExpanded) {
@@ -399,7 +401,8 @@ internal fun ReasoningToggleAndContent(
         messageIsError -> stringResource(R.string.thinking_execution_failed)
         elapsedText != null -> stringResource(R.string.thinking_elapsed_duration, elapsedText)
         summarySteps.isNotEmpty() -> executionStepsSummary(summarySteps.map { it.type }.toSet(), summarySteps.size)
-        else -> stringResource(R.string.thinking_process)
+        displayedReasoningText.isNotBlank() -> stringResource(R.string.thinking_process)
+        else -> stringResource(R.string.thinking_execution)
     }
     val openReasoningSheet = {
         focusManager.clearFocus()
@@ -438,21 +441,17 @@ internal fun ReasoningToggleAndContent(
                         }
                     },
             ) {
-                val suppressRedundantActiveHeader = hasOuterActiveExecutionGroup &&
-                    processIsActive &&
-                    sections.isNotEmpty()
                 Column {
-                    if (!suppressRedundantActiveHeader) {
+                    if (!hasOuterExecutionGroup) {
                         ExecutionChainHeader(
                             text = executionChainTitle,
                             active = processIsActive,
-                            expanded = executionChainExpanded && !(hasOuterActiveExecutionGroup && processIsActive && sections.isEmpty()),
+                            expanded = executionChainExpanded,
+                            expandable = sections.isNotEmpty() || messageIsError,
                             textColor = reasoningTextColor,
                             iconColor = reasoningToggleDotColor,
                             onClick = {
-                                if (sections.isEmpty() && processIsActive) {
-                                    openReasoningSheet()
-                                } else if (!forceExpanded) {
+                                if (!forceExpanded) {
                                     // 在展开动画改变列表高度之前暂停跟随，避免查看已结束过程时被拉到底部。
                                     if (!userExpanded && !processIsActive) onCompletedProcessExpand()
                                     userDrivenExpansion = true
@@ -485,7 +484,7 @@ internal fun ReasoningToggleAndContent(
                         }
                     ) {
                     AnimatedVisibility(
-                        visible = executionChainExpanded,
+                        visible = executionChainExpanded && (sections.isNotEmpty() || messageIsError),
                         enter = fadeIn(tween(EXECUTION_SECTION_EXPAND_FADE_MS)) + expandVertically(
                             animationSpec = tween(EXECUTION_SECTION_HEIGHT_MS, easing = FastOutSlowInEasing),
                             expandFrom = Alignment.Top,
@@ -504,7 +503,7 @@ internal fun ReasoningToggleAndContent(
                             active = processIsActive,
                             reasoningActive = isReasoningStreaming,
                             messageIsError = messageIsError,
-                            indentContent = !suppressRedundantActiveHeader,
+                            indentContent = !hasOuterExecutionGroup,
                             onOpenDetails = openReasoningSheet,
                             onInteractiveExpansionChanged = nestedExpansionChanged,
                         )
@@ -595,6 +594,7 @@ private fun ExecutionChainHeader(
     iconColor: Color,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    expandable: Boolean = true,
 ) {
     val arrowRotation by animateFloatAsState(
         targetValue = if (expanded) 0f else -90f,
@@ -606,14 +606,15 @@ private fun ExecutionChainHeader(
             .testTag("reasoning-inline-status")
             .semantics(mergeDescendants = true) {
                 contentDescription = text
-                role = Role.Button
+                if (expandable) role = Role.Button
             }
-            .clickable(
+            .then(if (expandable) Modifier.clickable(
                 indication = null,
                 interactionSource = remember { MutableInteractionSource() },
                 onClick = onClick,
-            )
-            .height(24.dp)
+            ) else Modifier)
+            // 压缩预算分行显示，不能被原来单行固定高度截掉；普通过程标题仍保持一行。
+            .then(if ('\n' in text) Modifier.heightIn(min = 24.dp) else Modifier.height(24.dp))
             .padding(horizontal = 0.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -622,6 +623,7 @@ private fun ExecutionChainHeader(
                 text = text,
                 textColor = textColor,
                 useSmallStyle = false,
+                maxLines = if ('\n' in text) Int.MAX_VALUE else 1,
                 modifier = Modifier
                     .weight(1f, fill = false)
                     .testTag("reasoning-inline-status-text"),
@@ -639,17 +641,19 @@ private fun ExecutionChainHeader(
                     .testTag("reasoning-inline-status-text"),
             )
         }
-        Spacer(Modifier.width(6.dp))
-        Icon(
-            painter = painterResource(R.drawable.ic_gpt_chevron_down_md),
-            contentDescription = stringResource(
-                if (expanded) R.string.thinking_collapse_execution else R.string.thinking_expand_execution
-            ),
-            tint = iconColor.copy(alpha = 0.72f),
-            modifier = Modifier
-                .size(18.dp)
-                .graphicsLayer { rotationZ = arrowRotation },
-        )
+        if (expandable) {
+            Spacer(Modifier.width(6.dp))
+            Icon(
+                painter = painterResource(R.drawable.ic_gpt_chevron_down_md),
+                contentDescription = stringResource(
+                    if (expanded) R.string.thinking_collapse_execution else R.string.thinking_expand_execution
+                ),
+                tint = iconColor.copy(alpha = 0.72f),
+                modifier = Modifier
+                    .size(18.dp)
+                    .graphicsLayer { rotationZ = arrowRotation },
+            )
+        }
     }
 }
 
@@ -908,6 +912,7 @@ private fun ExecutionToolGroup(
                     text = summary,
                     textColor = MaterialTheme.colorScheme.onSurfaceVariant,
                     useSmallStyle = false,
+                    maxLines = if ('\n' in summary) Int.MAX_VALUE else 1,
                     modifier = Modifier
                         .weight(1f, fill = false)
                         .testTag("reasoning-chain-summary-scanning"),

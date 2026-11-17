@@ -44,6 +44,7 @@ internal fun DataPersistenceManager.loadInitialDataInternal(
         onLoadingComplete: (initialConfigPresent: Boolean, initialHistoryPresent: Boolean) -> Unit
     ) {
         stateHolder._isLoadingHistoryData.value = true
+        val navigationAtStart = stateHolder.textNavigationGeneration
         viewModelScope.launch(Dispatchers.IO) {
             cleanupExpiredCameraFiles()
             Log.d(TAG, "loadInitialData: 开始加载初始数据 (IO Thread)... loadLastChat: $loadLastChat")
@@ -417,6 +418,9 @@ internal fun DataPersistenceManager.loadInitialDataInternal(
                     val textSessionId = ConversationNameHelper.resolveStableId(lastOpenChat)
                     val imageSessionId = ConversationNameHelper.resolveStableId(lastOpenImageGenChat)
                     withContext(Dispatchers.Main.immediate) {
+                        // 启动加载很慢时用户可能已经点开了别的会话：再写“上次会话”会把它冲回首页，
+                        // 并让用户那次加载因会话 ID 变化被丢弃（表现为第一次点进去还是首页）。
+                        if (stateHolder.textNavigationGeneration != navigationAtStart) return@withContext
                         Snapshot.withMutableSnapshot {
                             visibleTextMessages?.let { visibleMessages ->
                                 // 文本列表按会话保存，必须先切到恢复的会话再填充，否则内容落进旧会话的列表。
@@ -439,6 +443,8 @@ internal fun DataPersistenceManager.loadInitialDataInternal(
                                 stateHolder._loadedHistoryIndex.value = null
                             }
                         }
+                        // 写在 withMutableSnapshot 之外看不到提交时机，统一在块结束后通知列表重读。
+                        stateHolder.notifyTextConversationLoaded()
                     }
                     Log.i(
                         TAG,

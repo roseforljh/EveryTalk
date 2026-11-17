@@ -127,6 +127,7 @@ class SyncWorker(context: Context, parameters: WorkerParameters) : CoroutineWork
         } catch (error: Exception) {
             // 仅记录异常类型，不输出异常 message/stack，避免 URL 或数据内容进入 Release 日志。
             syncDiagnostic("retry error=${error.javaClass.simpleName}")
+            if (com.android.everytalk.BuildConfig.DEBUG) AppLogger.error("Sync", "同步失败", error)
             AppLogger.warn("Sync", "同步暂未完成，等待重试")
             if (permitted()) Result.retry() else Result.success()
         } finally { resources.close(); api.close() }
@@ -168,9 +169,12 @@ object SyncScheduler {
         val db = AppDatabase.getDatabase(app)
         observer = object : InvalidationTracker.Observer(
             "chat_sessions", "messages", "memories", "user_settings", "api_configs", "voice_backend_configs",
-            "mcp_server_configs", "computers", "computer_workspaces", "system_settings", "skill_installations",
+            "mcp_server_configs", "computers", "computer_workspaces", "system_settings", "skill_installations", "agent_compactions",
         ) {
-            override fun onInvalidated(tables: Set<String>) { request(app, dataChanged = true) }
+            // 手动压缩没有普通 PENDING；直接调度，不能被后续表变更取消防抖后漏掉。
+            override fun onInvalidated(tables: Set<String>) {
+                if ("agent_compactions" in tables) requestNow(app) else request(app, dataChanged = true)
+            }
         }.also { db.invalidationTracker.addObserver(it) }
         scope.launch {
             val runtime = AuthRuntime.get(app)

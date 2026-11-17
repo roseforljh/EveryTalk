@@ -409,6 +409,14 @@ fun ChatMessagesList(
     var contextMenuPressOffset by remember { mutableStateOf(Offset.Zero) }
     var pendingAskEveryTalkQuote by remember { mutableStateOf<MessageQuoteReference?>(null) }
     val quoteJump by viewModel.quoteJump.collectAsState()
+    // 长会话只渲染最近 10 轮；顶部“加载更多”或上滑到顶时再多渲染 10 轮。
+    val hiddenHistoryCount by viewModel.hiddenHistoryCount.collectAsState()
+    // 到顶后不自动加载：要顶着阻尼继续往下拉一段再松手，才多显示 10 轮。
+    val historyPull = com.android.everytalk.ui.components.rememberEdgePullToLoadState(
+        fromTop = true,
+        enabled = hiddenHistoryCount > 0,
+        onLoad = viewModel::loadMoreHistory,
+    )
     // 防重复触发：在极短时间内只允许一次预览弹出
     var lastImagePreviewAt by remember { mutableLongStateOf(0L) }
     val listCoroutineScope = rememberCoroutineScope()
@@ -475,9 +483,6 @@ fun ChatMessagesList(
     )
     val conversationTotalTokens by remember(viewModel) {
         derivedStateOf { totalConversationTokenUsage(viewModel.messages) }
-    }
-    val latestAiMessageId by remember(viewModel) {
-        derivedStateOf { viewModel.messages.lastOrNull { it.sender == com.android.everytalk.data.DataClass.Sender.AI }?.id }
     }
     val density = LocalDensity.current
     val windowHeightDp = with(density) { LocalWindowInfo.current.containerSize.height.toDp().value }
@@ -617,7 +622,9 @@ fun ChatMessagesList(
                 userScrollEnabled = topAnchorEngine.userScrollEnabled,
                 modifier = Modifier
                     .fillMaxSize()
-                    .nestedScroll(scrollStateManager.nestedScrollConnection),
+                    .graphicsLayer { translationY = historyPull.offset }
+                    .nestedScroll(scrollStateManager.nestedScrollConnection)
+                    .nestedScroll(historyPull.connection),
                 contentPadding = PaddingValues(
                     start = ChatDimensions.HORIZONTAL_PADDING,
                     end = ChatDimensions.HORIZONTAL_PADDING,
@@ -647,6 +654,17 @@ fun ChatMessagesList(
                 }
             }
         ) { index, item ->
+            if (index == 0 && hiddenHistoryCount > 0) {
+                // 放在第一项内部而不是单独占一项：列表索引与消息项保持一一对应，滚动、跳转逻辑不用改。
+                Box(Modifier.fillMaxWidth().padding(bottom = 12.dp), contentAlignment = Alignment.Center) {
+                    androidx.compose.material3.TextButton(onClick = viewModel::loadMoreHistory) {
+                        Text(
+                            if (historyPull.reachedThreshold) stringResource(R.string.chat_release_to_load_earlier)
+                            else stringResource(R.string.chat_load_earlier_messages, hiddenHistoryCount)
+                        )
+                    }
+                }
+            }
             // 根据消息类型决定对齐方式和气泡布局
             val itemAlignment = when (item) {
                 is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage -> Alignment.CenterEnd
@@ -988,7 +1006,6 @@ fun ChatMessagesList(
                                 }
                             }
                             val reasoningIsActive = item.processIsActive &&
-                                currentStreamingId == item.messageId &&
                                 reasoningCompleteMap[item.messageId] != true &&
                                 item.events.lastOrNull() is ExecutionTraceEvent.Reasoning
 
@@ -1012,7 +1029,7 @@ fun ChatMessagesList(
                                 mainContentHasStarted = false,
                                 executionStartedAtMillis = item.executionStartedAtMillis,
                                 executionFinishedAtMillis = item.executionFinishedAtMillis,
-                                hasOuterActiveExecutionGroup = item.executionGroupKey in activeExecutionGroupKeys,
+                                hasOuterExecutionGroup = item.executionGroupKey.isNotEmpty(),
                                 reasoningTextColor = MaterialTheme.chatColors.reasoningText,
                                 reasoningToggleDotColor = MaterialTheme.colorScheme.onSurface,
                                 onInteractiveExpansionChanged = reportItemExpansion,
@@ -1040,7 +1057,7 @@ fun ChatMessagesList(
                                 } else {
                                     item.message.reasoning ?: ""
                                 }
-                            val isReasoningStreaming = currentStreamingId == item.message.id &&
+                            val isReasoningStreaming = item.replyIsStreaming &&
                                 reasoningCompleteMap[item.message.id] != true &&
                                 displayedReasoningText.isNotBlank()
                             val isReasoningComplete = reasoningCompleteMap[item.message.id] ?: false
@@ -1060,7 +1077,7 @@ fun ChatMessagesList(
                                     webSearchResults = item.message.webSearchResults.orEmpty(),
                                     isReasoningStreaming = isReasoningStreaming,
                                     isReasoningComplete = isReasoningComplete,
-                                    replyIsStreaming = currentStreamingId == item.message.id,
+                                    replyIsStreaming = item.replyIsStreaming,
                                     messageIsError = item.message.isError,
                                     mainContentHasStarted = item.message.contentStarted,
                                     executionStartedAtMillis = item.message.timestamp,
@@ -1196,7 +1213,6 @@ fun ChatMessagesList(
                             AiMessageFooterItem(
                                 message = item.message,
                                 conversationTotalTokens = conversationTotalTokens,
-                                isLatestAiMessage = item.message.id == latestAiMessageId,
                                 viewModel = viewModel,
                                 scrollStateManager = scrollStateManager,
                             )

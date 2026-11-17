@@ -9,6 +9,8 @@ import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.PartsApiMessage
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.DataClass.AgentAssistantApiMessage
+import com.android.everytalk.data.DataClass.AgentAssistantContentApiPart
+import com.android.everytalk.data.DataClass.AgentToolCallApiPart
 import com.android.everytalk.data.DataClass.AgentToolResultApiMessage
 import com.android.everytalk.data.DataClass.AgentToolResultContentApiPart
 import com.android.everytalk.data.network.PromptCachePolicy
@@ -83,12 +85,23 @@ internal object RequestTokenEstimator {
                     }
                 }
                 is AgentAssistantApiMessage -> {
-                    addText(message.text)
-                    addText(message.reasoning)
-                    message.toolCalls.forEach { call ->
+                    fun addCall(call: AgentToolCallApiPart) {
                         addText(call.id)
                         addText(call.name)
                         addText(call.arguments.toString())
+                    }
+                    // 真实有序块才是发送内容；汇总可能仍留着跨模型已移除的思考，不能重复或错误计费。
+                    // contentParts 为空的旧记录才回退到汇总；目标模型清洗后的空块由预算投影清空汇总。
+                    if (message.contentParts.isNotEmpty()) {
+                        message.contentParts.forEach { part -> when (part) {
+                            is AgentAssistantContentApiPart.Text -> addText(part.text)
+                            is AgentAssistantContentApiPart.Reasoning -> addText(part.text)
+                            is AgentAssistantContentApiPart.ToolCall -> addCall(part.call)
+                        } }
+                    } else {
+                        addText(message.text)
+                        addText(message.reasoning)
+                        message.toolCalls.forEach(::addCall)
                     }
                 }
                 is AgentToolResultApiMessage -> {

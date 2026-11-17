@@ -21,6 +21,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
@@ -117,6 +118,16 @@ class AppDrawerContentScrollTest {
         composeRule.onNodeWithContentDescription(appInfoContentDescription).assertIsDisplayed().performClick()
         composeRule.runOnIdle { assertEquals(1, appInfoClickCount) }
 
+        // 侧栏先只显示 10 个会话：点底部“加载更多”把 40 个都加载出来，再滚到深处。
+        val loadMore = context.getString(R.string.drawer_load_more).substringBefore("%")
+        repeat(3) {
+            // “加载更多”在列表最后一项，懒加载列表要先滚到它才会组合出来。
+            val lastIndex = composeRule.runOnIdle { drawerListState.layoutInfo.totalItemsCount - 1 }
+            composeRule.onNode(hasScrollToIndexAction()).performScrollToIndex(lastIndex)
+            composeRule.onNodeWithText(loadMore, substring = true).performClick()
+            composeRule.waitForIdle()
+        }
+        composeRule.runOnIdle { assertEquals(0, composeRule.onAllNodesWithText(loadMore, substring = true).fetchSemanticsNodes().size) }
         composeRule.onNode(hasScrollToIndexAction()).performScrollToIndex(33)
         composeRule.runOnIdle { scope.launch { drawerListState.scrollToItem(33, 17) } }
         composeRule.onNodeWithText("Conversation 30").assertIsDisplayed()

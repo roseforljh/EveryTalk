@@ -13,6 +13,7 @@ import com.android.everytalk.data.database.entities.AgentContextSnapshotEntity
 import com.android.everytalk.data.network.AnthropicDirectClient
 import com.android.everytalk.data.network.isOfficialAnthropicMessagesAddress
 import com.android.everytalk.data.network.isOfficialOpenAIResponsesAddress
+import com.android.everytalk.data.network.PiMessageTransformer
 import com.android.everytalk.data.network.repairAgentToolHistory
 import com.android.everytalk.statecontroller.RequestTokenEstimator
 import com.android.everytalk.statecontroller.calibratedInputTokens
@@ -61,6 +62,11 @@ data class AgentCompactionPlan(
         get() = summaryRole == "user"
 }
 
+/** 展示真正触发压缩的当次计划，不拿上一条气泡的实测或当前选择配置重新估算。 */
+internal fun AgentCompactionPlan.executionStatus(model: String, contextWindow: Int): String =
+    "${com.android.everytalk.statecontroller.CONTEXT_COMPRESSION_RUNNING_STATUS} · $model · " +
+        "估算 $tokensBefore / $contextWindow · 触发线 $triggerThreshold"
+
 /** 一次 prepare 使用的唯一预算口径，所有值均为当前请求的输入 token。 */
 internal data class AgentContextBudget(
     val contextWindow: Long,
@@ -101,8 +107,6 @@ class AgentContextManager(
         }
         val directCheckpoint = acceptedCheckpoint?.takeIf { it.matches(canonical) }
         val activeCheckpoint = acceptedCheckpoint?.takeIf { directCheckpoint == null }
-        val staleCheckpointRecovery = acceptedCheckpoint == null &&
-            knownCheckpoints.isNotEmpty()
         val activePrefixLength = if (directCheckpoint == null) {
             activeCheckpoint?.activeContextCutLength(canonical)
         } else {
@@ -115,7 +119,7 @@ class AgentContextManager(
         }
         val effective = injectExecutionCheckpoint(compacted, executionCheckpoint)
         val calibration = request.contextManagement?.inputTokenCalibration ?: 0L
-        val estimateBeforeTrim = RequestTokenEstimator.estimate(effective, request.tools)
+        val estimateBeforeTrim = estimateForTarget(effective, request)
         val activeBeforeTrim = calibratedInputTokens(estimateBeforeTrim, calibration)
         val reservedOutput = limits.maxOutputTokens.toLong()
         val contextWindow = limits.maxContextTokens.toLong()
@@ -139,12 +143,6 @@ class AgentContextManager(
         } else {
             budget.triggerThreshold
         }
-        // 旧版本检查点没有保存活动前缀时，仍按历史检查点曾经的触发规模恢复压缩，
-        // 避免切换到更大窗口模型后因为新阈值变大而重新发送整段旧历史。
-        val recoveryThreshold = knownCheckpoints
-            .mapNotNull { it.tokensBefore.takeIf { tokens -> tokens > 0L } }
-            .minOrNull()
-            ?: genericCompactionThreshold
         val compactedThroughIndex = activePrefixLength?.let { prefixLength ->
             canonical.indexAfterNonSystemCount(prefixLength)
         } ?: acceptedCheckpoint
@@ -152,7 +150,7 @@ class AgentContextManager(
             ?: -1
         val hasNewCompactionSource = acceptedCheckpoint == null || canonical
             .drop(compactedThroughIndex + 1)
-            .any { !it.role.equals("system", true) }
+            .any { !it.isSystemPrompt() }
         val autoCompressionEnabled = request.contextManagement?.autoCompressionEnabled == true
         // 自动压缩关着也不能把超出模型窗口的上下文原样发出：从大窗口模型切到小窗口模型时，
         // 网关可能照收不报错，但缓存全部失效、按全文计费。超窗就走和手动压缩同一套摘要。
@@ -160,13 +158,11 @@ class AgentContextManager(
         val needsCompaction = (autoCompressionEnabled || exceedsContextWindow) &&
             (forceLocalCompaction || !hasActiveNativeCompaction) &&
             hasNewCompactionSource &&
-            // Pi 只比较当前上下文与压缩线；最大输出不参与触发，否则大输出模型会过早反复压缩。
-            // 但压缩线按窗口百分比计算，可能高于“窗口 - 最大输出”的硬上限。超过硬上限时必须先压缩，
-            // 否则只能裁掉旧历史或直接报单轮超窗。
+            // 只按当前窗口和当前触发线决定；失效旧检查点的规模不能绕过用户本次配置。
+            // 最大输出在发请求时按剩余窗口收小，不参与自动压缩触发。
             (forceLocalCompaction ||
                 exceedsContextWindow ||
-                activeBeforeTrim > genericCompactionThreshold ||
-                (staleCheckpointRecovery && activeBeforeTrim > recoveryThreshold))
+                activeBeforeTrim > genericCompactionThreshold)
         val plan = if (needsCompaction) {
             planCompaction(
                 canonical = canonical,
@@ -182,8 +178,8 @@ class AgentContextManager(
         // 不在本地裁剪或拦截：超窗时原样发出，由服务商报错，用户据此压缩。
         // 本地按估算悄悄丢最老的历史，模型会无声失忆，开头每轮都变也让前缀缓存全部失效。
         val fitted = effective
-        val estimate = RequestTokenEstimator.estimate(fitted, request.tools)
-        val active = calibratedInputTokens(estimate, calibration)
+        val estimate = estimateBeforeTrim
+        val active = activeBeforeTrim
         val fingerprint = agentTranscriptFingerprint(fitted.map(::fingerprintPart))
         return PreparedAgentContext(
             messages = fitted,
@@ -291,7 +287,7 @@ class AgentContextManager(
         val throughIndex = canonical.indexOfFirst { it.id == plan.summarizedThroughItemId }
         if (throughIndex < 0) return plan.tokensBefore
         val compactedMessages = buildList {
-            addAll(canonical.filter { it.role.equals("system", true) })
+            addAll(canonical.filter { it.isSystemPrompt() })
             add(
                 SimpleTextApiMessage(
                     id = "agent-compaction:estimate",
@@ -303,12 +299,24 @@ class AgentContextManager(
                     },
                 )
             )
-            addAll(canonical.drop(throughIndex + 1).filterNot { it.role.equals("system", true) })
+            addAll(canonical.drop(throughIndex + 1).filterNot { it.isSystemPrompt() })
         }
-        val estimate = RequestTokenEstimator.estimate(compactedMessages, request.tools)
+        val estimate = estimateForTarget(compactedMessages, request)
         val calibration = request.contextManagement?.inputTokenCalibration ?: 0L
         return calibratedInputTokens(estimate, calibration)
     }
+
+    /** 只估算目标模型实际会收到的块；原始历史与检查点指纹不受投影影响。 */
+    private fun estimateForTarget(messages: List<AbstractApiMessage>, request: ChatRequest) =
+        RequestTokenEstimator.estimate(
+            PiMessageTransformer.transform(messages, request).map { message ->
+                // Transformer 可能删光跨模型思考；空 contentParts 此时不是旧记录，不能再回读旧汇总。
+                if (message is AgentAssistantApiMessage && message.contentParts.isEmpty()) {
+                    message.copy(text = "", reasoning = "", toolCalls = emptyList())
+                } else message
+            },
+            request.tools,
+        )
 
     /**
      * 统一预算公式：
@@ -403,7 +411,7 @@ class AgentContextManager(
         tokensBefore: Long,
         budget: AgentContextBudget,
     ): AgentCompactionPlan? {
-        val systemIndexes = canonical.indices.filter { canonical[it].role.equals("system", true) }.toSet()
+        val systemIndexes = canonical.indices.filter { canonical[it].isSystemPrompt() }.toSet()
         val sourceStart = activeSourcePrefixLength?.let { canonical.indexAfterNonSystemCount(it) + 1 }
             ?: checkpoint
             ?.summarizedThroughItemId
@@ -436,7 +444,8 @@ class AgentContextManager(
         if (summarizedGroups.isEmpty()) return null
         val retainedGroups = groups.drop(retainedGroupStart)
         val firstRetainedMessage = canonical[retainedGroups.first().first()]
-        val splitsTurn = !firstRetainedMessage.role.equals("user", true)
+        val splitsTurn = !firstRetainedMessage.role.equals("user", true) ||
+            firstRetainedMessage.isInternalNonUserMessage()
         val summaryOutputLimit = (budget.targetAfterCompaction - budget.fixedOverheadTokens - retainedTokens)
             .coerceAtLeast(MIN_COMPACTION_SUMMARY_TOKENS)
             .coerceAtMost(Int.MAX_VALUE.toLong())
@@ -477,7 +486,7 @@ class AgentContextManager(
             // 新摘要包含 previousSummary，因此覆盖范围也必须累计，不能因本次历史缺少前段而丢掉旧 ID。
             sourcePrefixIds = (checkpoint?.compactionSourcePrefixIds().orEmpty() + canonical
                 .take(throughIndex + 1)
-                .filterNot { it.role.equals("system", true) }
+                .filterNot { it.isSystemPrompt() }
                 .map { it.id }).distinct(),
             tokensBefore = tokensBefore,
             triggerThreshold = budget.triggerThreshold,
@@ -518,9 +527,19 @@ class AgentContextManager(
     }
 
     private fun AgentCompactionEntryEntity.matches(messages: List<AbstractApiMessage>): Boolean {
-        if (status != AgentCompactionStatus.COMPLETED.name) return false
+        if (status != AgentCompactionStatus.COMPLETED.name || summary.isBlank()) return false
         val throughIndex = messages.indexOfFirst { it.id == summarizedThroughItemId }
-        return throughIndex >= 0 && prefixFingerprint(messages, throughIndex) == prefixFingerprint
+        if (throughIndex < 0) return false
+        if (prefixFingerprint.isNotEmpty()) return prefixFingerprint(messages, throughIndex) == prefixFingerprint
+        // 云端归档与旧版迁移检查点不带 SHA-256 前缀指纹；只要边界仍在覆盖列表内，
+        // 且边界前没有未纳入摘要的新用户/排队指令，就按边界截断。
+        val coveredIds = compactionSourcePrefixIds()?.takeIf { it.isNotEmpty() } ?: return false
+        return summarizedThroughItemId in coveredIds && messages.take(throughIndex + 1)
+            .filterNot { it.isSystemPrompt() }
+            .none {
+                ((it.role.equals("user", true) && !it.isInternalNonUserMessage()) ||
+                    it.id.startsWith("queued:")) && it.id !in coveredIds
+            }
     }
 
     /**
@@ -531,7 +550,7 @@ class AgentContextManager(
         messages: List<AbstractApiMessage>,
     ): Boolean {
         val commonPrefixLength = activeContextCutLength(messages) ?: return false
-        val currentIds = messages.filterNot { it.role.equals("system", true) }.map { it.id }
+        val currentIds = messages.filterNot { it.isSystemPrompt() }.map { it.id }
         return currentIds.size > commonPrefixLength
     }
 
@@ -540,7 +559,7 @@ class AgentContextManager(
         messages: List<AbstractApiMessage>,
     ): Int? {
         if (status != AgentCompactionStatus.COMPLETED.name || summary.isBlank()) return null
-        val currentIds = messages.filterNot { it.role.equals("system", true) }.map { it.id }
+        val currentIds = messages.filterNot { it.isSystemPrompt() }.map { it.id }
         val sourcePrefixIds = compactionSourcePrefixIds()?.takeIf { it.isNotEmpty() }
         sourcePrefixIds?.let { sourceIds ->
             val coveredIds = sourceIds.toHashSet()
@@ -563,12 +582,12 @@ class AgentContextManager(
         messages: List<AbstractApiMessage>,
         checkpoint: AgentCompactionEntryEntity,
     ): List<AbstractApiMessage> {
-        val current = messages.filterNot { it.role.equals("system", true) }
+        val current = messages.filterNot { it.isSystemPrompt() }
         val commonPrefixLength = checkpoint.activeContextCutLength(messages) ?: return messages
         if (current.size <= commonPrefixLength) return messages
         val summaryRole = checkpoint.compactionSummaryRole()
         return buildList {
-            addAll(messages.filter { it.role.equals("system", true) })
+            addAll(messages.filter { it.isSystemPrompt() })
             add(
                 SimpleTextApiMessage(
                     id = "agent-compaction:${checkpoint.id}",
@@ -609,7 +628,7 @@ class AgentContextManager(
         if (count <= 0) return -1
         var seen = 0
         forEachIndexed { index, message ->
-            if (!message.role.equals("system", true)) {
+            if (!message.isSystemPrompt()) {
                 seen++
                 if (seen == count) return index
             }
@@ -625,7 +644,7 @@ class AgentContextManager(
         if (throughIndex < 0) return messages
         val summaryRole = checkpoint.compactionSummaryRole()
         return buildList {
-            addAll(messages.filter { it.role.equals("system", true) })
+            addAll(messages.filter { it.isSystemPrompt() })
             add(
                 SimpleTextApiMessage(
                     id = "agent-compaction:${checkpoint.id}",
@@ -637,7 +656,7 @@ class AgentContextManager(
                     },
                 )
             )
-            addAll(messages.drop(throughIndex + 1).filterNot { it.role.equals("system", true) })
+            addAll(messages.drop(throughIndex + 1).filterNot { it.isSystemPrompt() })
         }
     }
 
@@ -649,9 +668,15 @@ class AgentContextManager(
     private fun prefixFingerprint(messages: List<AbstractApiMessage>, throughIndex: Int): String =
         agentTranscriptFingerprint(
             messages.take(throughIndex + 1)
-                .filterNot { it.role.equals("system", true) }
+                .filterNot { it.isSystemPrompt() }
                 .map(::fingerprintPart)
         )
+
+    private fun AbstractApiMessage.isSystemPrompt(): Boolean =
+        role.equals("system", true) && !id.startsWith("status:") && !id.startsWith("history:")
+
+    private fun AbstractApiMessage.isInternalNonUserMessage(): Boolean =
+        id.startsWith("status:") || id.startsWith("history:") || id.startsWith("runtime-context:")
 
     /** 官方接口先尝试 Provider 原生压缩，通用摘要保留为硬窗口兜底。 */
     private fun ChatRequest.prefersNativeCompaction(): Boolean {

@@ -205,6 +205,35 @@ class DirectClientLifecycleTest {
     }
 
     @Test
+    fun `SSE流内错误保留结构化超窗字段给Classifier识别`() = runBlocking {
+        val openAiSse = "data: {\"error\":{\"message\":\"Your input exceeds the context window\",\"type\":\"invalid_request_error\",\"code\":\"context_length_exceeded\"}}\n\ndata: [DONE]\n\n"
+        withHttpClient(status = 200, body = openAiSse) { client ->
+            val error = OpenAIDirectClient.streamChatDirect(client, request("OpenAI", "OpenAI"))
+                .toList().filterIsInstance<AppStreamEvent.Error>().single()
+            assertEquals("context_length_exceeded", error.code)
+            assertEquals(
+                com.android.everytalk.statecontroller.RequestErrorCategory.INPUT_CONTEXT_TOO_LONG,
+                com.android.everytalk.statecontroller.ContextErrorClassifier.classify(
+                    com.android.everytalk.statecontroller.ProviderErrorInfo(
+                        status = error.upstreamStatus,
+                        code = error.code,
+                        type = error.type,
+                        parameter = error.parameter,
+                        message = error.rawMessage ?: error.message,
+                    )
+                ),
+            )
+        }
+        val responsesSse = "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"context_length_exceeded\",\"type\":\"invalid_request_error\",\"message\":\"Your input exceeds the context window\"}}}\n\n"
+        withHttpClient(status = 200, body = responsesSse) { client ->
+            val error = OpenAIResponsesClient.streamChatResponses(client, request("OpenAI", "Codex"))
+                .toList().filterIsInstance<AppStreamEvent.Error>().single()
+            assertEquals("context_length_exceeded", error.code)
+            assertEquals("Your input exceeds the context window", error.rawMessage)
+        }
+    }
+
+    @Test
     fun `Gemini流解析丢弃空思考块并保留工具调用签名`() = runBlocking {
         val body =
             """data: {"candidates":[{"content":{"role":"model","parts":[{"thought":true,"text":"","thoughtSignature":"cmVhc29uaW5nLXNpZw=="},{"functionCall":{"id":"call-1","name":"exec","args":{}},"thoughtSignature":"dG9vbC1zaWc="}]},"finishReason":"STOP"}]}

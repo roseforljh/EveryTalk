@@ -219,7 +219,9 @@ internal fun historyMessageItemsMatch(messages: List<Message>, chatItems: List<C
             is ChatListItem.LoadingBubblePlaceholder -> null
         }
     }
-    val expectedMessageIds = messages
+    // 页面只渲染最近若干轮：第一条已渲染消息之前的历史在“加载更多”后面，不参与就绪校验。
+    val firstRendered = messages.indexOfFirst { it.id in renderedMessageIds }
+    val expectedMessageIds = (if (firstRendered > 0) messages.subList(firstRendered, messages.size) else messages)
         .filterNot { message -> message.sender == Sender.System && message.isPlaceholderName }
         .dropWhile { message -> message.sender == Sender.System && message.text.isNotBlank() }
         .filter { message -> message.sender != Sender.Tool || message.isError }

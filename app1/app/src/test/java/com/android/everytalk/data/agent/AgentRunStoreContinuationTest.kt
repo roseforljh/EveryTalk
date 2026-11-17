@@ -486,16 +486,17 @@ class AgentRunStoreContinuationTest {
                 any(),
             )
         } returns Unit
-        val largeText = "含 Emoji 😀 " + "x".repeat(2_500_000)
-        val largeRequest = request.copy(
-            messages = listOf(
-                SimpleTextApiMessage(
-                    id = "user-large",
-                    role = "user",
-                    content = largeText,
-                ),
-            ),
+        // 超过旧版 128 块限制，并让中文、Emoji 和 JSON 转义反复跨过分块边界。
+        val text = "含 Emoji 😀\n\"\\" + "x".repeat(65_500)
+        val image = "QUJD".repeat(20_000)
+        val parts = listOf(com.android.everytalk.data.DataClass.ApiContentPart.InlineData(image, "image/png"))
+        val messages = List(140) { index ->
+            SimpleTextApiMessage(id = "user-$index", role = "user", content = text)
+        } + listOf(
+            com.android.everytalk.data.DataClass.PartsApiMessage(id = "image-1", role = "user", parts = parts),
+            com.android.everytalk.data.DataClass.PartsApiMessage(id = "image-2", role = "user", parts = parts),
         )
+        val largeRequest = request.copy(messages = messages)
 
         val run = store.createRun(
             sessionId = "session-1",
@@ -506,8 +507,12 @@ class AgentRunStoreContinuationTest {
         )
 
         assertNull(run.requestSnapshotJson)
-        org.junit.Assert.assertTrue(chunksSlot.captured.size > 1)
-        org.junit.Assert.assertTrue(chunksSlot.captured.all { it.payload.length <= 65_537 })
+        org.junit.Assert.assertTrue(chunksSlot.captured.count { it.chunkIndex >= 0 } > 128)
+        assertEquals(2, chunksSlot.captured.count { it.chunkIndex < 0 })
+        org.junit.Assert.assertTrue(chunksSlot.captured.all {
+            it.payload.length <= 65_537 &&
+                !it.payload.first().isLowSurrogate() && !it.payload.last().isHighSurrogate()
+        })
         coEvery { dao.getRunSnapshotChunkPage(run.id, any(), any()) } answers {
             val afterChunkIndex = invocation.args[1] as Int
             val limit = invocation.args[2] as Int
@@ -517,9 +522,23 @@ class AgentRunStoreContinuationTest {
         // 新 Store 模拟进程重启，确保走真实分页读取，不能命中创建时的内存缓存。
         val restored = AgentRunStore(dao).restoreChatRequest(run, "fresh-secret")
 
-        assertEquals(largeText, (restored?.messages?.single() as? SimpleTextApiMessage)?.content)
+        assertEquals(messages, restored?.messages)
         assertEquals("fresh-secret", restored?.apiKey)
-        coVerify(atLeast = 5) { dao.getRunSnapshotChunkPage(run.id, any(), 8) }
+        coVerify(atLeast = 17) { dao.getRunSnapshotChunkPage(run.id, any(), 8) }
+
+        val completeChunks = chunksSlot.captured
+        coEvery { dao.getRunSnapshotChunkPage(run.id, any(), any()) } answers {
+            val afterChunkIndex = invocation.args[1] as Int
+            val limit = invocation.args[2] as Int
+            completeChunks.filter { it.chunkIndex > afterChunkIndex && it.chunkIndex != 8 }.take(limit)
+        }
+        io.mockk.mockkStatic(android.util.Log::class)
+        try {
+            io.mockk.every { android.util.Log.e(any(), any(), any()) } returns 0
+            assertNull(AgentRunStore(dao).restoreChatRequest(run, "fresh-secret"))
+        } finally {
+            io.mockk.unmockkStatic(android.util.Log::class)
+        }
     }
 
     private fun state(opaqueStateJson: String = Json.encodeToString(

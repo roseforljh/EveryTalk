@@ -255,7 +255,10 @@ fun ChatScreen(
     val observedHistoryLoadGenerationState = rememberUpdatedState(observedHistoryLoadGeneration)
     val historyLoadGenerationState = rememberUpdatedState(historyLoadGeneration)
     val chatListItemsState = rememberUpdatedState(chatListItems)
-    val messageSnapshot = messages.toList()
+    // 必须用 SnapshotStateList 自带的 toList：返回不可变快照，内容不变时是同一个对象。
+    // 经 List 类型调用的是标准库扩展，每次重组复制一份，remember/rememberUpdatedState 只能逐条深比较
+    // 几百条带执行轨迹的消息，长会话主线程被它占满，骨架屏迟迟撤不掉。
+    val messageSnapshot = viewModel.messages.toList()
     val messagesState = rememberUpdatedState(messageSnapshot)
     val conversationIdState = rememberUpdatedState(conversationId)
     val isLoadingHistoryDataState = rememberUpdatedState(isLoadingHistoryData)

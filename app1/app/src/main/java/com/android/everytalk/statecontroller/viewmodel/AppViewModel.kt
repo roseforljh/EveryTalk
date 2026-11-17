@@ -1083,6 +1083,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
        scope = viewModelScope,
    )
    val chatListItems: StateFlow<List<ChatListItem>> get() = messageItemsController.chatListItems
+   val hiddenHistoryCount: StateFlow<Int> get() = messageItemsController.hiddenHistoryCount
+   fun loadMoreHistory() = messageItemsController.loadMoreHistory()
    val imageGenerationChatListItems: StateFlow<List<ChatListItem>> get() = messageItemsController.imageGenerationChatListItems
     internal val modelFetchManager = com.android.everytalk.statecontroller.viewmodel.ModelFetchManager()
     val fetchedModels: StateFlow<List<String>> = modelFetchManager.fetchedModels
@@ -1474,19 +1476,34 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         stateHolder.conversationGroups.value = persistenceManager.loadConversationGroups()
                         stateHolder.pinnedTextConversationIds.value = persistenceManager.loadPinnedIds(false)
                         val currentId = stateHolder._currentConversationId.value
+                        // 历史读取会挂起：读取前后都核对本机和云端运行，防止薄版同步覆盖正在输出的过程。
+                        fun canRefreshCurrentMessages(): Boolean =
+                            stateHolder._currentConversationId.value == currentId &&
+                                !stateHolder.isTextConversationDirty.value &&
+                                stateHolder.textApiJob?.isActive != true &&
+                                !stateHolder._isTextApiCalling.value &&
+                                stateHolder._remoteLiveRun.value?.let { it.running && it.message.conversationId == currentId } != true &&
+                                apiHandler.cloudRuns.value.values.none { it.running && it.message.conversationId == currentId }
                         if (currentId.isNotBlank()) {
                             val stored = AppDatabase.getDatabase(getApplication()).chatDao().getStoredSession(currentId)
                             if (stored?.deleted == true) {
                                 startNewChat()
-                            } else if (stored != null && !stateHolder.isTextConversationDirty.value && stateHolder.textApiJob?.isActive != true &&
-                                // 回答提问后由协调器续写，textApiJob 已结束；Agent 仍在输出时不能用 Room 快照覆盖实时消息。
-                                !stateHolder._isTextApiCalling.value
-                            ) {
-                                val messages = persistenceManager.loadHistorySession(currentId)
-                                if (stateHolder._currentConversationId.value == currentId && !stateHolder.isTextConversationDirty.value) {
+                            } else if (stored != null && canRefreshCurrentMessages()) {
+                                val messages = persistenceManager.loadHistorySession(currentId).orEmpty()
+                                // 同步通知多数与当前会话无关：内容相同的消息沿用界面现有对象，没有变化就不动列表。
+                                // 否则每轮同步都整表换成新对象，长会话的列表比较、重组和账本恢复全部重来，界面一直卡。
+                                val shown = stateHolder.messages.toList()
+                                val merged = withContext(Dispatchers.Default) {
+                                    val byId = shown.associateBy { it.id }
+                                    // 与打开会话同一套展示前处理，否则同一条消息两条路径结果不同，每轮都被当成变化。
+                                    com.android.everytalk.statecontroller.prepareTextHistoryForDisplay(messages, currentId)
+                                        .map { message -> byId[message.id]?.takeIf { it == message } ?: message }
+                                }
+                                if (canRefreshCurrentMessages() && stateHolder.messages.toList() === shown && merged != shown) {
                                     stateHolder.messages.clear()
-                                    stateHolder.messages.addAll(messages.orEmpty())
+                                    stateHolder.messages.addAll(merged)
                                     stateHolder.rememberSeenTextMessages(stateHolder.messages)
+                                    stateHolder.notifyTextConversationLoaded()
                                     // 与手动打开历史页走同一账本恢复，避免同步后把步骤与耗时退回旧快照。
                                     apiHandler.restoreVisibleAgentState()
                                 }

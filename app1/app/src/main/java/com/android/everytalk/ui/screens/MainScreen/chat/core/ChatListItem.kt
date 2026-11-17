@@ -144,6 +144,8 @@ sealed interface ChatListItem {
     data class AiMessageReasoning(
         val message: Message,
         val activityStatusText: String? = null,
+        // 由列表投影统一合并本机与云端运行事实，UI 不再依赖本机任务 ID 猜测。
+        val replyIsStreaming: Boolean = false,
     ) : ChatListItem {
         override val stableId: String = "${message.id}_reasoning"
     }
@@ -273,7 +275,6 @@ internal fun executionTraceForDisplay(trace: List<ExecutionTraceEvent>): List<Ex
 private fun executionNarrativeContentIndexes(
     trace: List<ExecutionTraceEvent>,
     toolCallWriting: Boolean = false,
-    streaming: Boolean = false,
 ): Set<Int> = buildSet {
     fun markPhase(startIndex: Int, endIndex: Int) {
         var lastToolIndex = -1
@@ -297,11 +298,9 @@ private fun executionNarrativeContentIndexes(
         }
     }
     markPhase(phaseStart, trace.size)
-    // 参数增量已经证明当前阶段还要调用工具，不必等完整 Tool 事件才把旁白归入执行区。
-    // 只处理最后一个用户边界之后的文本，停止后不保留虚构的工具步骤。
-    // 回复还在输出且本阶段调用过工具：后面的文字先按旁白留在执行区，结束时才归为正式回答；
-    // 否则每段旁白都会把执行区拆开、等下个工具到达再合上，画面高度来回跳。
-    if (toolCallWriting || streaming && (phaseStart until trace.size).any { trace[it] is ExecutionTraceEvent.Tool }) {
+    // 仅完整工具或参数编写状态能证明前面的文字属于旁白。
+    // “还在流式输出”并不代表后面一定有工具；否则正式回答也会被折进已结束的执行组。
+    if (toolCallWriting) {
         for (index in phaseStart until trace.size) {
             if (trace[index] is ExecutionTraceEvent.Content) add(index)
         }
@@ -333,10 +332,9 @@ internal fun orderedAiOutputSegments(
     trace: List<ExecutionTraceEvent>,
     narrativeSegments: MutableSet<Int>? = null,
     toolCallWriting: Boolean = false,
-    streaming: Boolean = false,
 ): List<OrderedAiOutputSegment> {
     val displayTrace = executionTraceForDisplay(trace)
-    val narrativeContentIndexes = executionNarrativeContentIndexes(displayTrace, toolCallWriting, streaming)
+    val narrativeContentIndexes = executionNarrativeContentIndexes(displayTrace, toolCallWriting)
     val result = mutableListOf<OrderedAiOutputSegment>()
     var content = StringBuilder()
     var contentIsNarrative = false

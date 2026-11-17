@@ -5,6 +5,7 @@ import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.computer.ComputerToolNames
 import com.android.everytalk.data.computer.LocalWorkspaceFileBridge
 import com.android.everytalk.data.computer.targetContexts
+import com.android.everytalk.data.computer.SSH_HOME_PATH
 import com.android.everytalk.data.network.AttachmentToolExecutor
 import com.android.everytalk.data.skill.SkillRepository
 import com.android.everytalk.data.skill.SkillToolNames
@@ -136,7 +137,9 @@ private suspend fun cloudSshTargets(
     val bindings = buildJsonObject {
         for (target in targets) {
             val server = repository.getComputer(target.computerId) ?: return null
-            val workspace = repository.getWorkspace(target.workspaceId)?.hostPath?.takeIf { it.startsWith("/") } ?: return null
+            // SSH Workspace 默认就是 "~"（登录用户 home），后端按 home 解析；只认绝对路径会让 SSH 工具全部退回手机执行。
+            val workspace = repository.getWorkspace(target.workspaceId)?.hostPath
+                ?.takeIf { it == SSH_HOME_PATH || it.startsWith("/") } ?: return null
             val hostKey = server.hostKeyBlobBase64?.takeIf(String::isNotBlank) ?: return null
             val addresses = runCatching { java.net.InetAddress.getAllByName(server.host).toList() }.getOrNull() ?: return null
             if (addresses.none { it is java.net.Inet4Address } || addresses.any { it is java.net.Inet4Address && !it.isCloudReachable() }) return null

@@ -180,8 +180,12 @@ class MainActivity : AppCompatActivity() {
         // 后台立即停止轮询；调度层继续校验登录、联网、限流和唯一任务，本地模式不会发请求。
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
+                // 实时通道在线时修改靠 changed 推送；整轮同步要读几千条记录，只隔 5 分钟兜底一次。
+                var lastPoll = System.currentTimeMillis()
                 while (true) {
                     delay(30_000)
+                    if (com.android.everytalk.data.sync.LiveSync.connected && System.currentTimeMillis() - lastPoll < 5 * 60_000L) continue
+                    lastPoll = System.currentTimeMillis()
                     com.android.everytalk.service.SyncScheduler.request(applicationContext)
                 }
             }
@@ -559,7 +563,15 @@ class MainActivity : AppCompatActivity() {
                                 navController = navController,
                                 startDestination = Screen.CHAT_SCREEN,
                                 modifier = Modifier
-                                    .fillMaxSize()
+                                    .fillMaxSize(),
+                                // navigation-compose 2.10 起侧滑手势预览不再使用页面的 popEnter/popExit，
+                                // 而是这两个参数（默认淡入+缩小）。沿用层级动画，侧滑时实时预览横向推出。
+                                predictivePopEnterTransition = {
+                                    settingsRoutePopEnterTransition(initialState.destination.route, targetState.destination.route)
+                                },
+                                predictivePopExitTransition = {
+                                    settingsRoutePopExitTransition(initialState.destination.route, targetState.destination.route)
+                                },
                             ) {
                                 composable(
                                     route = Screen.CHAT_SCREEN,

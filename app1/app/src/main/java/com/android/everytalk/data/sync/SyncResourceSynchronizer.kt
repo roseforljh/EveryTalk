@@ -26,7 +26,9 @@ import kotlinx.serialization.json.*
 internal data class SyncHistoryArchive(val message: Message, val run: AgentRunEntity? = null,
     val entries: List<AgentEntryEntity> = emptyList(), val resultFiles: Map<String, String> = emptyMap(),
     /** 云端任务每轮模型返回的来源记录；本机据此判定同源回放，旧归档没有。 */
-    val requests: List<com.android.everytalk.data.database.entities.AgentRequestEntity> = emptyList())
+    val requests: List<com.android.everytalk.data.database.entities.AgentRequestEntity> = emptyList(),
+    /** 摘要附件复用已加密、分块、校验的历史容器，但不覆盖可见消息。旧归档默认没有。 */
+    val compactions: List<AgentCompactionEntryEntity> = emptyList())
 
 @kotlinx.serialization.Serializable
 private data class SyncUploadedFile(val info: SyncFileInfo, val uploadedAt: Long)
@@ -70,6 +72,7 @@ internal class SyncResourceSynchronizer(
         finalizeQueuedResources()
         repairRejectedResources()
         restoreAttachments()
+        uploadCompactions()
         restoreSkills()
         uploadSkills()
         var transferred = 0
@@ -118,6 +121,21 @@ internal class SyncResourceSynchronizer(
 
     /** 只有本版本的全部引用已获确认才收尾；排队完成不能当成同步完成。 */
     private suspend fun finalizeQueuedResources() {
+        // 摘要不随锚点消息正文变化失效；全部块确认后再退休旧版本，并回收它自己的密文。
+        for (entry in settings.getByPrefix("sync_compaction_queued:$user:")) {
+            val queued = syncJson.decodeFromString<SyncQueuedResource>(entry.value)
+            if (!queued.attachments.all { (id, hash) ->
+                db.syncAttachmentDao().get(id)?.let { !it.deleted && it.syncStatus == SyncStatus.SYNCED && it.sha256 == hash } == true
+            }) continue
+            db.withTransaction {
+                for (id in queued.retired) db.syncAttachmentDao().get(id)?.takeUnless { it.deleted }?.let {
+                    db.syncAttachmentDao().upsert(it.copy(deleted = true, updatedAt = maxOf(System.currentTimeMillis(), it.updatedAt + 1), syncStatus = SyncStatus.PENDING))
+                }
+                settings.insertSetting(SystemSettingEntity("sync_compaction_uploaded:$user:${queued.revision}", "confirmed"))
+                settings.deleteSetting(entry.key)
+            }
+            root.listFiles()?.filter { it.name.startsWith("compaction-${hashBytes(queued.revision.toByteArray())}-") }?.forEach { it.delete() }
+        }
         for (entry in settings.getByPrefix("sync_resource_queued:")) {
             val messageId = entry.key.substringAfter(':')
             val queued = syncJson.decodeFromString<SyncQueuedResource>(entry.value)
@@ -176,6 +194,14 @@ internal class SyncResourceSynchronizer(
                     }
                 } else {
                     val metadata = settings.getValue("sync_resource_meta:$id")?.let { syncJson.parseToJsonElement(it).jsonObject }
+                    if (metadata?.get("role")?.jsonPrimitive?.contentOrNull == "context_compaction") {
+                        val checkpointId = metadata["compactionId"]?.jsonPrimitive?.contentOrNull
+                        if (db.agentDao().getCompactions(session.id).any { it.id == checkpointId }) {
+                            settings.deleteSetting("sync_compaction_uploaded:$user:$checkpointId")
+                            moreWork = true
+                        }
+                        continue
+                    }
                     val canRebuild = when (metadata?.get("role")?.jsonPrimitive?.contentOrNull) {
                         "message_archive" -> needsArchive(message) && (!message.id.startsWith("cloud:") || settings.getValue("sync_resource_restored:${message.uuid}") != null)
                         "tool_result" -> metadata["resultPath"]?.jsonPrimitive?.contentOrNull?.let { safeResultFile(it).isFile } == true
@@ -191,6 +217,7 @@ internal class SyncResourceSynchronizer(
                     settings.deleteSetting("sync_resource_queued:${message.uuid}")
                     settings.deleteSetting("sync_resource_failed:${message.uuid}")
                     settings.deleteSetting("sync_resource_receive_failed:${message.uuid}")
+                    settings.deleteSetting("sync_resource_received:${message.uuid}")
                 }
             } else if (failure.key.startsWith("sync_rejected:user_settings:")) {
                 val row = settings.getUserSettingByUuid(id)?.takeIf { it.kind == "skills" && !it.deleted } ?: continue
@@ -283,9 +310,51 @@ internal class SyncResourceSynchronizer(
         val history = SyncHistoryArchive(archived, run?.copy(sessionId = session.uuid, visibleAssistantMessageId = message.uuid,
             userMessageId = chat.resolveMessageSyncUuid(run.userMessageId),
             requestSnapshotJson = null), entries)
+        queueHistoryArchive(message, session, history, "message_archive")
+    }
+
+    /** 摘要不是某条回复的正文，单独补传；云端归档先到或本机清数据后仍能恢复同一活动窗口。 */
+    private suspend fun uploadCompactions() {
+        var uploaded = 0
+        for (checkpoint in db.agentDao().getSyncableCompactions()) {
+            val marker = "sync_compaction_uploaded:$user:${checkpoint.id}"
+            if (settings.getValue(marker) != null) continue
+            if (uploaded >= 5) { moreWork = true; break }
+            val session = chat.getStoredSession(checkpoint.sessionId)?.takeUnless { it.deleted } ?: continue
+            val anchor = chat.getCompactionSyncAnchor(session.id, checkpoint.createdAt) ?: continue
+            // 只转换真正的可见消息 ID；assistant:/tool:/queued: 等 Agent 内部身份跨设备保持不变。
+            val identities = chat.getMessageStorageStates(session.id).associate { it.id to it.uuid }
+            fun reference(id: String) = identities[id]?.let { "cloud:$it" } ?: id
+            val metadata = (syncJson.parseToJsonElement(checkpoint.retainedTailJson) as? JsonObject) ?: JsonObject(emptyMap())
+            val mappedMetadata = JsonObject(metadata.mapValues { (key, value) ->
+                if (key in setOf("source_prefix_ids", "retained_ids")) JsonArray(value.jsonArray.map { JsonPrimitive(reference(it.jsonPrimitive.content)) }) else value
+            })
+            val mapped = checkpoint.copy(sessionId = session.uuid, summarizedThroughItemId = reference(checkpoint.summarizedThroughItemId),
+                prefixFingerprint = "", retainedTailJson = mappedMetadata.toString())
+            val history = SyncHistoryArchive(Message(id = anchor.uuid, text = "", sender = anchor.sender,
+                timestamp = checkpoint.createdAt, conversationId = session.uuid), compactions = listOf(mapped))
+            queuedAttachments.clear()
+            retiringAttachments.clear()
+            queueHistoryArchive(anchor, session, history, "context_compaction", checkpoint.id)
+            // 排队状态和预期引用一起落盘；重启后仍逐块等 ACK，不把上传完成当成备份完成。
+            if (queuedAttachments.isEmpty()) continue
+            db.withTransaction {
+                settings.insertSetting(SystemSettingEntity("sync_compaction_queued:$user:${checkpoint.id}", syncJson.encodeToString(
+                    SyncQueuedResource.serializer(), SyncQueuedResource(checkpoint.id, queuedAttachments.toMap(), retiringAttachments.toList()))))
+                settings.insertSetting(SystemSettingEntity(marker, "queued"))
+            }
+            moreWork = true
+            uploaded++
+        }
+    }
+
+    /** 普通历史和摘要共享传输容器；role 分组隔离，摘要永远不会退休或覆盖正文归档。 */
+    private suspend fun queueHistoryArchive(message: MessageEntity, session: ChatSessionEntity, history: SyncHistoryArchive,
+        role: String, compactionId: String? = null) {
         val json = syncJson.encodeToString(SyncHistoryArchive.serializer(), history)
         val digest = hashBytes(json.toByteArray())
-        val archive = File(root, "out-${message.uuid}-$digest-${state.readSecretsEpoch()}")
+        val archivePrefix = compactionId?.let { "compaction-${hashBytes(it.toByteArray())}" } ?: "out-${message.uuid}"
+        val archive = File(root, "$archivePrefix-$digest-${state.readSecretsEpoch()}")
         if (!archive.isFile) {
             val compressed = java.io.ByteArrayOutputStream().also { output -> GZIPOutputStream(output).use { it.write(json.toByteArray()) } }.toByteArray()
             archive.writeBytes(crypt(compressed, session.uuid, message.uuid, true))
@@ -301,14 +370,16 @@ internal class SyncResourceSynchronizer(
                     while (remaining > 0) { val count = input.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt()); if (count < 0) break; output.write(buffer, 0, count); remaining -= count }
                 }
                 val info = try { uploadFile(chunk, "application/octet-stream") } finally { chunk.delete() }
-                val extra = buildJsonObject { put("role", "message_archive"); put("resourceDigest", digest)
+                val extra = buildJsonObject { put("role", role); put("resourceDigest", digest)
+                    compactionId?.let { put("compactionId", it) }
                     put("resourceVersion", version)
                     put("chunkIndex", index); put("chunkCount", chunks); put("keyVersion", 1) }
-                queueAttachment(message, session, info, "history.et", "file", index, "archive:$version:$index", extra)
+                val scope = if (compactionId == null) "archive" else role
+                queueAttachment(message, session, info, "history.et", "file", index, "$scope:$version:$index", extra)
             }
         }
         // 新归档变小时为旧尾块发墓碑，否则接收端会误以为归档永远缺块。
-        retireResources(message.uuid, "message_archive", version)
+        retireResources(message.uuid, role, version, if (compactionId == null) null else "compactionId", compactionId)
     }
 
     private suspend fun retireResources(message: String, role: String, version: String, groupField: String? = null, groupValue: String? = null) {
@@ -427,22 +498,74 @@ internal class SyncResourceSynchronizer(
             }
         }
         if (cleared > 0) syncDiagnostic("resource stale failures cleared=$cleared")
+        // 上一轮已全部落地且附件表没有任何变化：不必再把几千条元数据逐条查表、解析一遍。
+        val stampKey = "sync_resource_restore_stamp:$user"
+        val stamp = db.syncAttachmentDao().stamp()
+        if (cleared == 0 && settings.getValue(stampKey) == stamp) return
+        var allSettled = true
         val records = settings.getByPrefix("sync_resource_meta:").mapNotNull { row ->
             val id = row.key.substringAfter(':')
             val attachment = db.syncAttachmentDao().get(id)?.takeIf { !it.deleted && it.syncStatus == SyncStatus.SYNCED } ?: return@mapNotNull null
             val payload = runCatching { syncJson.parseToJsonElement(row.value).jsonObject }.getOrNull() ?: return@mapNotNull null
             attachment to payload
         }
+        // 全部已落地时不发变更通知：否则每轮同步都让界面重读当前会话。
+        var touched = cleared > 0
         for ((messageId, entries) in records.groupBy { it.first.messageId }) {
             // 恢复不降速，只是分批：每批之间放开同步锁并立刻续传，下一轮开头会先上传这期间的本地修改。
             if (downloads >= RESTORE_DOWNLOADS_PER_RUN) { moreWork = true; break }
-            val message = chat.getMessageByUuid(messageId)?.takeUnless { it.deleted } ?: continue
             val failureMarker = "sync_resource_receive_failed:$messageId"
+            // 同一组资源已完整落地就不再每轮重读整行、重算哈希、重解密改写（几百条消息时每轮二十多秒、上百 MB 垃圾）。
+            val receivedMarker = "sync_resource_received:$messageId"
             // 旧版本只保存笼统的下载失败，升级后重查一次并记录真实错误码；
             // 同一版本仍然只尝试一次永久错误，不能让坏附件无限请求服务器。
             val version = "2:" + entries.joinToString { "${it.first.id}:${it.first.updatedAt}" }
             if (settings.getValue(failureMarker) == version) continue
+            // 归档标记被旧版本改写过（非第 4 版）时仍要重新应用。
+            if (settings.getValue(receivedMarker) == "$user:$version" &&
+                settings.getValue("sync_resource_restored:$messageId")?.startsWith("4:") != false) continue
+            val message = chat.getMessageByUuid(messageId)?.takeUnless { it.deleted }
+            if (message == null) { allSettled = false; continue }
+            touched = true
+            // 归档因本机活跃 Run 等原因这轮没能落地时不记完成，下一轮继续尝试。
+            var settled = true
             try {
+            // 摘要附件与消息归档独立恢复：不覆盖消息，不要求对应云端 Run 已下载。
+            val compactionArchives = entries.filter { it.second["role"]?.jsonPrimitive?.contentOrNull == "context_compaction" &&
+                it.second["keyVersion"]?.jsonPrimitive?.longOrNull == 1L }
+                .groupBy { it.second["resourceVersion"] }.values
+            for (parts in compactionArchives) {
+                val metadata = parts.first().second
+                val count = metadata["chunkCount"]?.jsonPrimitive?.intOrNull ?: continue
+                if (parts.size != count || parts.map { it.second["chunkIndex"]?.jsonPrimitive?.intOrNull }.sortedBy { it ?: -1 } != parts.indices.toList()) continue
+                val digest = metadata.getValue("resourceDigest").jsonPrimitive.content
+                val marker = "sync_compaction_restored:$user:$digest"
+                if (settings.getValue(marker) != null) continue
+                require(parts.all { it.second["resourceDigest"] == metadata["resourceDigest"] && it.second["compactionId"] == metadata["compactionId"] })
+                val history = readArchive(parts, messageId, digest)
+                require(history.message.id == messageId && history.message.conversationId == entries.first().first.sessionId)
+                db.withTransaction {
+                    val current = chat.getMessageByUuid(messageId)?.takeUnless { it.deleted } ?: return@withTransaction
+                    val session = chat.getStoredSession(current.sessionId)?.takeUnless { it.deleted } ?: return@withTransaction
+                    require(history.compactions.size == 1)
+                    val checkpoint = history.compactions.single()
+                    require(checkpoint.id == metadata["compactionId"]?.jsonPrimitive?.content && checkpoint.sessionId == session.uuid &&
+                        checkpoint.status == "COMPLETED" && checkpoint.summary.isNotBlank())
+                    suspend fun reference(id: String): String = if (id.startsWith("cloud:")) chat.resolveLocalMessageReference(id) else id
+                    val saved = syncJson.parseToJsonElement(checkpoint.retainedTailJson).jsonObject
+                    val mapped = saved.toMutableMap()
+                    for (key in listOf("source_prefix_ids", "retained_ids")) (saved[key] as? JsonArray)?.let { ids ->
+                        mapped[key] = JsonArray(ids.map { JsonPrimitive(reference(it.jsonPrimitive.content)) })
+                    }
+                    db.agentDao().insertSyncedCompaction(checkpoint.copy(sessionId = session.id,
+                        summarizedThroughItemId = reference(checkpoint.summarizedThroughItemId), prefixFingerprint = "",
+                        retainedTailJson = JsonObject(mapped).toString()))
+                    val uploadMarker = "sync_compaction_uploaded:$user:${checkpoint.id}"
+                    if (settings.getValue(uploadMarker) == null) settings.insertSetting(SystemSettingEntity(uploadMarker, "received"))
+                    settings.insertSetting(SystemSettingEntity(marker, "true"))
+                }
+                if (settings.getValue(marker) == null) settled = false
+            }
             val toolFiles = entries.filter { it.second["role"]?.jsonPrimitive?.contentOrNull == "tool_result" }
                 .groupBy { it.second.getValue("resultPath").jsonPrimitive.content }
             for ((path, parts) in toolFiles) {
@@ -516,6 +639,19 @@ internal class SyncResourceSynchronizer(
                                 history.entries.forEach { entry -> require(entry.runId == run.id); db.agentDao().upsertEntry(entry) }
                                 if (run.executionOwner == "CLOUD") db.agentDao().deleteRunSnapshotChunks(run.id)
                             }
+                            for (checkpoint in history.compactions) {
+                                require(checkpoint.sessionId == history.message.conversationId && checkpoint.status == "COMPLETED" && checkpoint.summary.isNotBlank())
+                                suspend fun reference(id: String) = if (id.startsWith("cloud:")) chat.resolveLocalMessageReference(id) else id
+                                val saved = syncJson.parseToJsonElement(checkpoint.retainedTailJson).jsonObject
+                                val mapped = saved.toMutableMap()
+                                for (key in listOf("source_prefix_ids", "retained_ids")) (saved[key] as? JsonArray)?.let { ids ->
+                                    mapped[key] = JsonArray(ids.map { JsonPrimitive(reference(it.jsonPrimitive.content)) })
+                                }
+                                db.agentDao().insertSyncedCompaction(checkpoint.copy(sessionId = current.sessionId,
+                                    summarizedThroughItemId = reference(checkpoint.summarizedThroughItemId), prefixFingerprint = "", retainedTailJson = JsonObject(mapped).toString()))
+                                val uploadMarker = "sync_compaction_uploaded:$user:${checkpoint.id}"
+                                if (settings.getValue(uploadMarker) == null) settings.insertSetting(SystemSettingEntity(uploadMarker, "received"))
+                            }
                             chat.deleteDrafts(current.sessionId, listOf(current.id))
                             settings.insertSetting(SystemSettingEntity(marker, restoredRevision))
                         }
@@ -527,6 +663,7 @@ internal class SyncResourceSynchronizer(
                     archived.terminalReason == "SYNC_HISTORY_ONLY" && settings.getValue(marker) == restoredRevision) {
                     com.android.everytalk.data.computer.ComputerCredentialStore(context).deleteCloudAgentInput(user, archived.id)
                 }
+                if (settings.getValue(marker) != restoredRevision) settled = false
             }
             val media = entries.filter { it.second["role"]?.jsonPrimitive?.contentOrNull in setOf(null, "media") && it.first.fileId != null }
             if (media.isNotEmpty()) {
@@ -566,6 +703,7 @@ internal class SyncResourceSynchronizer(
                 if (current.id.startsWith("cloud:")) settings.insertSetting(SystemSettingEntity("sync_resource_source:$messageId", "$user:${current.storageFingerprint}"))
             }
             settings.deleteSetting("sync_rejected:attachments:${entries.first().first.id}")
+            if (settled) settings.insertSetting(SystemSettingEntity(receivedMarker, "$user:$version")) else allSettled = false
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: SyncHttpException) {
                 if (error.statusCode in setOf(401, 408, 409, 429) || error.statusCode >= 500) throw error
@@ -591,7 +729,8 @@ internal class SyncResourceSynchronizer(
                 } else throw error
             }
         }
-        SyncLocalChanges.notifyChanged()
+        if (allSettled && !moreWork && db.syncAttachmentDao().stamp() == stamp) settings.insertSetting(SystemSettingEntity(stampKey, stamp))
+        if (touched) SyncLocalChanges.notifyChanged()
     }
 
     private suspend fun file(attachment: SyncAttachmentEntity): File = cached(SyncFileInfo(requireNotNull(attachment.fileId), attachment.size, attachment.sha256, attachment.mime))

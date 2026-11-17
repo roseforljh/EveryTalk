@@ -232,6 +232,7 @@ data class AgentContextSnapshotEntity(
     ],
     indices = [Index(value = ["sessionId", "createdAt"])],
 )
+@kotlinx.serialization.Serializable
 data class AgentCompactionEntryEntity(
     @PrimaryKey val id: String,
     val sessionId: String,

@@ -14,6 +14,7 @@ import com.android.everytalk.data.database.AppDatabase
 import com.android.everytalk.data.database.entities.AgentContextSnapshotEntity
 import com.android.everytalk.data.database.entities.ChatSessionEntity
 import com.android.everytalk.data.database.entities.PendingMessageEntity
+import com.android.everytalk.data.database.entities.toEntity
 import com.android.everytalk.data.network.AppStreamEvent
 import com.android.everytalk.data.network.ModelTurnTransport
 import com.android.everytalk.data.network.TokenUsage
@@ -603,6 +604,34 @@ class AgentContextCompressionRecoveryTest {
     }
 
     @Test
+    fun `延迟工具全集不应让有效摘要被误判为没有收益`() = runBlocking {
+        val sessionId = "deferred-compaction-gain"
+        seedSession(sessionId)
+        val base = loopRequest(sessionId, compactThresholdTokens = 1_500)
+        val tools = (1..25).map { index -> mapOf<String, Any>("type" to "function", "function" to mapOf(
+            "name" to "mcp_gain_$index", "description" to "[Large] " + "文".repeat(600),
+            "parameters" to mapOf("type" to "object"))) }
+        val input = base.copy(request = base.request.copy(tools = tools, messages = listOf(
+            SimpleTextApiMessage(id = "old-user", role = "user", content = "旧".repeat(1_000)),
+            SimpleTextApiMessage(id = "old-assistant", role = "assistant", content = "文".repeat(1_000)),
+            SimpleTextApiMessage(id = "latest-user", role = "user", content = "继续"),
+        )))
+        var calls = 0
+        val loop = AgentLoop(runStore = store, modelTransport = ModelTurnTransport {
+            calls++
+            flowOf(AppStreamEvent.Content(if (calls == 1) "保留旧需求与结论" else "完成"), AppStreamEvent.Finish("stop"))
+        })
+        val events = loop.run(input).toList()
+        val run = store.getRunsForSession(sessionId).single()
+        val summary = database.agentDao().getRequests(run.id).single { it.purpose == AgentRequestPurpose.COMPACTION.name }
+        assertEquals(AgentRequestStatus.COMPLETED.name, summary.status)
+        assertEquals(1, store.compactions(sessionId).size)
+        assertTrue(checkNotNull(store.latestCompaction(sessionId)).estimatedTokensAfter < 1_500)
+        assertEquals(2, calls)
+        assertTrue(events.any { it is AppStreamEvent.Content && it.text == "完成" })
+    }
+
+    @Test
     fun `执行检查点随AgentRun持久化并可恢复`() = runBlocking {
         val sessionId = "execution-checkpoint"
         seedSession(sessionId)
@@ -667,6 +696,58 @@ class AgentContextCompressionRecoveryTest {
     }
 
     @Test
+    fun `成功工具轮后再次超窗自动压缩继续且不重跑工具`() = runBlocking {
+        val sessionId = "overflow-after-success"
+        seedSession(sessionId)
+        var requests = 0
+        var effects = 0
+        val loop = AgentLoop(runStore = store, toolRuntime = AgentToolRuntime(executorProvider = {
+            { _, _, _, _, _ -> effects++; com.android.everytalk.data.network.AppToolExecutionResult(kotlinx.serialization.json.JsonPrimitive("已执行".repeat(500))) }
+        }, approvalProvider = { null }), modelTransport = ModelTurnTransport {
+            requests++
+            when (requests) {
+                1 -> flowOf(AppStreamEvent.Content("失败尝试的半截正文"), AppStreamEvent.Error("context length exceeded", code = "context_length_exceeded"))
+                2, 5 -> flowOf(AppStreamEvent.Content("保留旧目标和工具执行事实"), AppStreamEvent.Finish("stop"))
+                3 -> flowOf(AppStreamEvent.Content("执行进展".repeat(500)),
+                    AppStreamEvent.ToolCall("once", "exec", kotlinx.serialization.json.buildJsonObject {}), AppStreamEvent.Finish("tool_calls"))
+                4 -> flowOf(AppStreamEvent.Error("context length exceeded", code = "context_length_exceeded"))
+                else -> flowOf(AppStreamEvent.Content("自动完成"), AppStreamEvent.Finish("stop"))
+            }
+        })
+        val input = loopRequest(sessionId, 8000)
+        val events = loop.run(input.copy(request = input.request.copy(tools = listOf(mapOf(
+            "type" to "function", "function" to mapOf("name" to "exec", "parameters" to mapOf("type" to "object")),
+        ))))).toList()
+        val run = store.getRunsForSession(sessionId).single()
+        assertEquals(AgentRunStatus.COMPLETED.name, run.status)
+        assertEquals(6, requests)
+        assertEquals(1, effects)
+        assertEquals(2, store.compactions(sessionId).size)
+        assertTrue(events.any { it is AppStreamEvent.Content && it.text == "自动完成" })
+        assertTrue(database.agentDao().getEntries(run.id).none { it.payloadJson.contains("失败尝试的半截正文") })
+    }
+
+    @Test
+    fun `截断摘要不能保存为检查点`() = runBlocking {
+        val sessionId = "incomplete-summary"
+        seedSession(sessionId)
+        val loop = AgentLoop(runStore = store, modelTransport = ModelTurnTransport {
+            flowOf(AppStreamEvent.Content("只完成前半段"), AppStreamEvent.Finish("length"))
+        })
+        val request = manualCompactionRequest(listOf(
+            SimpleTextApiMessage(id = "old-user", role = "user", content = "早期需求".repeat(7000)),
+            SimpleTextApiMessage(id = "old-assistant", role = "assistant", content = "早期结论".repeat(7000)),
+            SimpleTextApiMessage(id = "latest-user", role = "user", content = "继续处理"),
+        ))
+        val error = runCatching { loop.compactNow(sessionId, request, ModelTokenLimits(maxOutputTokens = 512, maxContextTokens = 1_000_000)) }.exceptionOrNull()
+        assertTrue(error?.message.orEmpty().contains("未完整生成"))
+        assertTrue(store.compactions(sessionId).isEmpty())
+        val run = store.getRunsForSession(sessionId).single()
+        assertEquals(AgentRunStatus.FAILED.name, run.status)
+        assertEquals(AgentRequestStatus.FAILED.name, database.agentDao().getRequests(run.id).single().status)
+    }
+
+    @Test
     fun `手动压缩无视阈值直接生成检查点并把隐藏 Run 置为终态`() = runBlocking {
         val sessionId = "manual-compaction"
         seedSession(sessionId)
@@ -707,9 +788,12 @@ class AgentContextCompressionRecoveryTest {
         seedSession(sessionId)
         val window = 60_000
         val sent = mutableListOf<ChatRequest>()
+        var calls = 0
         val loop = AgentLoop(
             runStore = store,
             modelTransport = ModelTurnTransport { turn ->
+                // 第一段断流（云端中转任务失败）只重试这一段，不能让整次压缩失败。
+                if (++calls == 1) return@ModelTurnTransport flowOf(AppStreamEvent.Error(message = "OpenAI 连接失败：云端任务已失败或过期"))
                 sent += turn.request
                 flowOf(AppStreamEvent.Content("摘要${sent.size}"), AppStreamEvent.StreamEnd("summary"))
             },
@@ -731,6 +815,7 @@ class AgentContextCompressionRecoveryTest {
         // 后一段带上前一段的摘要，最后落库的是最后一段的结果。
         assertTrue(sent.last().messages.last().let { it as SimpleTextApiMessage }.content.contains("摘要${sent.size - 1}"))
         assertEquals("摘要${sent.size}", store.latestCompaction(sessionId)?.summary)
+        assertEquals(sent.size + 1, calls)
     }
 
     @Test
@@ -1179,6 +1264,103 @@ class AgentContextCompressionRecoveryTest {
             "B 收到 ${sentTokens} tokens（全量 ${fullTokens}），ids=${sent.map { it.id }}，events=${events.filterIsInstance<AppStreamEvent.ExecutionStatusUpdate>().map { it.status }}",
             sent.any { it.id.startsWith("agent-compaction:") } && sent.none { it.id == "u0" },
         )
+    }
+
+    @Test
+    fun `无Run的失败气泡不入模且状态事件不拆开ToolBatch并随压缩清除旧校准`() = runBlocking {
+        val sessionId = "status-and-orphan-error-and-calibration"
+        seedSession(sessionId)
+        val user1 = com.android.everytalk.data.DataClass.Message(
+            id = "u1", text = "检查文件", sender = com.android.everytalk.data.DataClass.Sender.User, timestamp = 1L,
+        ).toEntity(sessionId)
+        val ai1 = com.android.everytalk.data.DataClass.Message(
+            id = "ai1", text = "完成", sender = com.android.everytalk.data.DataClass.Sender.AI, timestamp = 2L,
+        ).toEntity(sessionId)
+        val errNoRun = com.android.everytalk.data.DataClass.Message(
+            id = "err-no-run", text = "⚠️ 网络错误".repeat(200), sender = com.android.everytalk.data.DataClass.Sender.AI,
+            timestamp = 3L, isError = true,
+        ).toEntity(sessionId)
+        val user2 = com.android.everytalk.data.DataClass.Message(
+            id = "u2", text = "继续", sender = com.android.everytalk.data.DataClass.Sender.User, timestamp = 4L,
+        ).toEntity(sessionId)
+        database.chatDao().writeMessages(listOf(user1, ai1, errNoRun, user2))
+
+        val base = loopRequest(sessionId, compactThresholdTokens = 8_000)
+        val run1 = store.createRun(sessionId, "u1", "ai1", "config-1", base.request)
+        val call = AgentContentBlock.ToolCall("call-1", "exec", kotlinx.serialization.json.buildJsonObject {})
+        store.appendAssistant(run1.id, "req-1", AgentAssistantTurn(listOf(call)), AgentEntryStatus.FINAL)
+        // 模拟执行期间写了一条 STATUS，随后工具结果才落盘。
+        store.appendStatusEvent(run1.id, "CONFIG_ERROR", "连接重建")
+        store.appendToolResult(run1.id, "req-1", AgentContentBlock.ToolResult("call-1", "exec", kotlinx.serialization.json.JsonPrimitive("ok")))
+
+        val snap = AgentContextManager().prepare("req-1", base.request, base.tokenLimits).snapshot.copy(
+            estimatedPromptTokens = 5_000, activeContextTokens = 5_000,
+        )
+        val req1 = store.createRequest(run1, 1, AgentRequestPurpose.AGENT_TURN, 1, base.request.provider, base.request.apiAddress, base.request.model, snap.transcriptFingerprint, snap)
+        store.saveUsage(req1.id, TokenUsage(inputTokens = 105_000, isFinal = true, source = TokenUsageSource.OPENAI_CHAT))
+        store.updateRequest(req1, AgentRequestStatus.COMPLETED, finishedAt = 10L)
+        store.updateRunStatus(run1, AgentRunStatus.COMPLETED)
+
+        val expanded = store.expandTranscript(
+            sessionId,
+            listOf(
+                SimpleTextApiMessage(id = "u1", role = "user", content = "检查文件"),
+                SimpleTextApiMessage(id = "ai1", role = "assistant", content = "完成"),
+                SimpleTextApiMessage(id = "err-no-run", role = "assistant", content = "⚠️ 网络错误"),
+                SimpleTextApiMessage(id = "u2", role = "user", content = "继续"),
+            ),
+        )
+        assertTrue("无 Run 失败气泡不得进入上下文", expanded.none { it.id == "err-no-run" })
+        val assistantIdx = expanded.indexOfFirst { it.id.startsWith("assistant:") }
+        assertTrue(expanded[assistantIdx + 1].id == "tool:call-1")
+        assertTrue(expanded[assistantIdx + 2].id.startsWith("status:"))
+        assertEquals("user", expanded[assistantIdx + 2].role)
+        val injected = com.android.everytalk.data.network.SystemPromptInjector.smartInjectSystemPrompt(expanded)
+        assertTrue("状态消息不得拼进顶部系统提示词", !(injected.first() as SimpleTextApiMessage).content.contains("连接重建"))
+
+        // 压缩检查点晚于 req1：旧实测校准 (+100,000) 必须失效归零。
+        val plan = AgentCompactionPlan(
+            messagesToSummarize = listOf(expanded.first()),
+            previousSummary = null,
+            summarizedThroughItemId = "u1",
+            prefixFingerprint = "fp",
+            retainedTailIds = listOf("u2"),
+            summaryRole = "system",
+            tokensBefore = 10_000,
+        )
+        store.saveCompaction(sessionId, "config-1", plan, "早期摘要", "summary-req-1", 500, "{}")
+        val calibratedAfterCompaction = store.calibrateRequest(sessionId, base.request, base.tokenLimits)
+        assertEquals(0L, calibratedAfterCompaction.contextManagement?.inputTokenCalibration)
+    }
+
+    @Test
+    fun `上下文准备阶段压缩完成后立即清除旧校准避免重复触发`() = runBlocking {
+        val sessionId = "mid-run-compaction-resets-calibration"
+        seedSession(sessionId)
+        val base = loopRequest(sessionId, compactThresholdTokens = 5_000).let { req ->
+            req.copy(
+                request = req.request.copy(
+                    messages = listOf(
+                        SimpleTextApiMessage("u1", "user", "早期需求".repeat(2_000)),
+                        SimpleTextApiMessage("a1", "assistant", "早期结论".repeat(2_000)),
+                        SimpleTextApiMessage("u2", "user", "继续"),
+                    ),
+                    contextManagement = req.request.contextManagement?.copy(inputTokenCalibration = 6_000L),
+                ),
+            )
+        }
+        val sent = mutableListOf<ChatRequest>()
+        val loop = AgentLoop(runStore = store, modelTransport = ModelTurnTransport { turn ->
+            val isSummary = (turn.request.messages.firstOrNull() as? SimpleTextApiMessage)?.content ==
+                com.android.everytalk.data.network.SystemPromptModules.historySummary
+            if (!isSummary) sent += turn.request
+            flowOf(AppStreamEvent.Content(if (isSummary) "压缩后短摘要" else "主响应完成"), AppStreamEvent.Finish("stop"))
+        })
+        loop.run(base).toList()
+        val mainRun = store.getRunsForSession(sessionId).single()
+        val mainSnapshot = checkNotNull(store.usageSummary(mainRun.id).activeContext)
+        assertEquals(0L, mainSnapshot.calibrationTokens)
+        assertEquals(0L, sent.single().contextManagement?.inputTokenCalibration)
     }
 
     private fun manualCompactionRequest(messages: List<SimpleTextApiMessage>): ChatRequest = ChatRequest(

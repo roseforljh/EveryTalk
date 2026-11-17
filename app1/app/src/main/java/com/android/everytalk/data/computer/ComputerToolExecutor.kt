@@ -271,15 +271,17 @@ class ComputerToolExecutor(
                 is ComputerException -> error
                 else -> ComputerException(
                     ComputerErrorCodes.EXECUTION_UNKNOWN,
-                    "Computer Tool 执行失败",
+                    "Computer Tool 执行失败：${error::class.java.simpleName}",
                     retryable = true,
                     cause = error,
                 )
             }
-            AppLogger.warn(
+            // Release 包会移除 Log.w，执行失败必须用 error 级别才能在线上留下原因。
+            AppLogger.error(
                 "ComputerRuntime",
                 "Execution 失败 execution=${execution.id} code=${computerError.code} " +
-                    "type=${error::class.java.simpleName} message=${error.message}",
+                    "type=${error::class.java.simpleName}",
+                ComputerDiagnostics.sanitizedThrowable(error),
             )
             val status = if (computerError.code in setOf(
                     ComputerErrorCodes.EXECUTION_UNKNOWN,

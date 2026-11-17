@@ -234,6 +234,8 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
     }
 
     private suspend fun saveSetting(key: String, value: String?) = database.withTransaction {
+        // 切换会话等会反复保存同样的值；没变化就不写库，更不能触发整套同步配置重投影（占写锁好几秒）。
+        if (settingsDao.getValue(key) == value) return@withTransaction
         if (value == null) {
             settingsDao.deleteSetting(key)
         } else {

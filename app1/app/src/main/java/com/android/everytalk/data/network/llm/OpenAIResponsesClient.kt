@@ -147,6 +147,10 @@ object OpenAIResponsesClient {
             if (!terminalSent) send(AppStreamEvent.Finish(completed.stopReason))
         } catch (error: CancellationException) {
             throw error
+        } catch (error: ResponsesStreamException) {
+            terminalSent = true
+            send(error.event)
+            send(AppStreamEvent.Finish("api_error"))
         } catch (error: Exception) {
             val result = NetworkUtils.handleConnectionError(error, "OpenAI-Responses")
             send(result.error)
@@ -159,6 +163,8 @@ object OpenAIResponsesClient {
         client: HttpClient,
         request: ChatRequest,
     ): Flow<AppStreamEvent> = streamSingleTurn(client, request)
+
+    private class ResponsesStreamException(val event: AppStreamEvent.Error) : IllegalStateException(event.message)
 
     private data class ResponsesToolCallInfo(
         val callId: String,
@@ -748,15 +754,27 @@ object OpenAIResponsesClient {
                                                 ?.jsonPrimitive
                                                 ?.contentOrNull
                                                 ?: "Responses API 请求失败"
-                                            throw IllegalStateException(message)
+                                            throw ResponsesStreamException(AppStreamEvent.Error(
+                                                message = "Responses API 错误: $message",
+                                                code = errorObject?.get("code")?.jsonPrimitive?.contentOrNull,
+                                                type = errorObject?.get("type")?.jsonPrimitive?.contentOrNull,
+                                                parameter = errorObject?.get("param")?.jsonPrimitive?.contentOrNull,
+                                                rawMessage = message,
+                                            ))
                                         }
                                     }
                                     "error" -> {
+                                        val errObj = event["error"] as? JsonObject
                                         val errorMsg = event["message"]?.jsonPrimitive?.contentOrNull
-                                            ?: event["error"]?.let { errEl ->
-                                                (errEl as? JsonObject)?.get("message")?.jsonPrimitive?.contentOrNull
-                                            } ?: "Unknown error"
-                                        throw IllegalStateException(errorMsg)
+                                            ?: errObj?.get("message")?.jsonPrimitive?.contentOrNull
+                                            ?: "Unknown error"
+                                        throw ResponsesStreamException(AppStreamEvent.Error(
+                                            message = "Responses API 错误: $errorMsg",
+                                            code = (event["code"] ?: errObj?.get("code"))?.jsonPrimitive?.contentOrNull,
+                                            type = (event["type"] ?: errObj?.get("type"))?.jsonPrimitive?.contentOrNull,
+                                            parameter = (event["param"] ?: errObj?.get("param"))?.jsonPrimitive?.contentOrNull,
+                                            rawMessage = errorMsg,
+                                        ))
                                     }
                                 }
                             } catch (e: CancellationException) {

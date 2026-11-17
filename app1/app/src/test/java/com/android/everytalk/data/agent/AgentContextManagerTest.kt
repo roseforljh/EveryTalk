@@ -446,6 +446,83 @@ class AgentContextManagerTest {
     }
 
     @Test
+    fun `切小窗口后的压缩状态使用本次计划占用和触发线而非旧请求实测`() {
+        fun prepare(chars: Int) = manager.prepare(
+            requestId = "switch-window",
+            request = request(
+                messages = (0 until 4).flatMap { index -> listOf(
+                    SimpleTextApiMessage(id = "u-$index", role = "user", content = "问".repeat(chars)),
+                    SimpleTextApiMessage(id = "a-$index", role = "assistant", content = "答".repeat(chars)),
+                ) },
+                maxContextTokens = 272_000,
+                compactThresholdTokens = 217_600,
+            ),
+            limits = ModelTokenLimits(maxOutputTokens = 128_000, maxContextTokens = 272_000),
+        )
+        assertNull(prepare(19_650).compactionPlan) // 约 157k，不能仅因输出上限而压缩。
+        val prepared = prepare(39_000)
+        val plan = checkNotNull(prepared.compactionPlan)
+        assertEquals(prepared.snapshot.activeContextTokens, plan.tokensBefore)
+        assertEquals(217_600L, plan.triggerThreshold)
+        assertEquals(
+            "正在压缩上下文 · gpt-test · 估算 ${plan.tokensBefore} / 272000 · 触发线 217600",
+            plan.executionStatus("gpt-test", 272_000),
+        )
+    }
+
+    @Test
+    fun `跨模型不发送的思考不进入压缩预算且同源真实块仍计入`() {
+        val thinking = "思".repeat(10_000)
+        val assistant = AgentAssistantApiMessage(
+            id = "old-thinking", reasoning = thinking,
+            contentParts = listOf(com.android.everytalk.data.DataClass.AgentAssistantContentApiPart.Reasoning(thinking)),
+            sourceProvider = "OpenAI", sourceEndpoint = "https://example.test", sourceModel = "old-model",
+        )
+        val messages = listOf(
+            SimpleTextApiMessage(id = "old-user", role = "user", content = "旧问题"),
+            assistant,
+            SimpleTextApiMessage(id = "latest-user", role = "user", content = "继续"),
+        )
+        val request = request(messages, maxContextTokens = 8_192, compactThresholdTokens = 6_553)
+        val limits = ModelTokenLimits(maxOutputTokens = 512, maxContextTokens = 8_192)
+        val crossModel = manager.prepare("cross-model", request, limits)
+        assertTrue("被目标模型丢弃的思考不应计入预算", crossModel.snapshot.activeContextTokens < 100)
+        assertNull(crossModel.compactionPlan)
+        assertEquals("预算投影不能删除历史思考", assistant, crossModel.messages[1])
+
+        // 汇总故意为空，真实块仍有一万 token：不能通过忽略所有思考修复跨模型误算。
+        val sameSource = request.copy(messages = listOf(messages[0], assistant.copy(reasoning = ""), messages[2]), model = "old-model")
+        assertTrue(manager.prepare("same-model", sameSource, limits).compactionPlan != null)
+
+        val plan = AgentCompactionPlan(listOf(messages[0]), null, "old-user", "prefix", listOf("old-thinking", "latest-user"),
+            summaryRole = "system", tokensBefore = 20_000)
+        assertTrue("压缩后增益校验也不能算回未发送的旧思考",
+            manager.estimateCompactedContextTokens(request, plan, "旧问题摘要") < 100)
+    }
+
+    @Test
+    fun `失效检查点不能用旧触发规模绕过当前压缩线`() {
+        val stale = AgentCompactionEntryEntity(
+            id = "stale", sessionId = "session-1", configIdSnapshot = "old-config", summary = "旧分支摘要",
+            summarizedThroughItemId = "missing", prefixFingerprint = "stale", retainedTailJson = "{}",
+            tokensBefore = 500, estimatedTokensAfter = 100, summaryRequestId = "old-summary",
+            status = AgentCompactionStatus.COMPLETED.name, createdAt = 1,
+        )
+        fun prepare(chars: Int) = manager.prepare(
+            "stale-threshold",
+            request((0 until 4).map { index -> SimpleTextApiMessage(id = "current-$index",
+                role = if (index % 2 == 0) "user" else "assistant", content = "文".repeat(chars)) },
+                maxContextTokens = 8_192, compactThresholdTokens = 6_553),
+            ModelTokenLimits(maxOutputTokens = 512, maxContextTokens = 8_192), checkpoint = stale,
+        )
+        val below = prepare(300)
+        assertTrue(below.snapshot.activeContextTokens > stale.tokensBefore)
+        assertTrue(below.snapshot.activeContextTokens < 6_553)
+        assertNull("旧检查点不能降低当前配置线", below.compactionPlan)
+        assertTrue("仍应在超过当前线时压缩", prepare(1_800).compactionPlan != null)
+    }
+
+    @Test
     fun `Pi触发语义下最大输出不参与当前上下文压缩判断`() {
         val messages = buildList {
             repeat(4) { index ->
@@ -636,6 +713,50 @@ class AgentContextManagerTest {
         assertTrue(compacted.contains("command: bun test"))
         assertTrue(compacted.contains("exitCode: 1"))
         assertTrue(compacted.contains("ERROR: failed at /workspace/src/App.kt:42"))
+    }
+
+    @Test
+    fun `状态消息不拆分工具组且可随空指纹检查点一并被压缩掉`() {
+        val statusMsg = SimpleTextApiMessage(id = "status:old-1", role = "system", content = "[EveryTalk Agent 状态] CONFIG_ERROR: 状态清理")
+        val runtimeCtx = SimpleTextApiMessage(id = "runtime-context:old-1:computer-session-state", role = "user", content = "[EveryTalk Runtime Context]")
+        val failedOld = SimpleTextApiMessage(id = "failed-old", role = "assistant", content = "旧失败残余".repeat(4_000))
+        val boundaryUser = SimpleTextApiMessage(id = "user-boundary", role = "user", content = "边界提问")
+        val assistant = assistantWithCalls("call-1", "call-2").copy(id = "assistant-keep")
+        val statusMid = SimpleTextApiMessage(id = "status:mid-1", role = "system", content = "[EveryTalk Agent 状态] compaction_end")
+        val result1 = toolResult("call-1")
+        val result2 = toolResult("call-2")
+        val messages = listOf(statusMsg, runtimeCtx, failedOld, boundaryUser, assistant, statusMid, result1, result2)
+
+        val cleaned = manager.removeOrphanToolResults(messages)
+        assertTrue("穿插 status 不得制造伪造 missing 结果", cleaned.none { it.id.startsWith("missing:") || it.id.startsWith("history:") })
+        val assistantIdx = cleaned.indexOfFirst { it.id == "assistant-keep" }
+        assertEquals(listOf("result-call-1", "result-call-2", "status:mid-1"), cleaned.drop(assistantIdx + 1).map { it.id })
+
+        val checkpoint = AgentCompactionEntryEntity(
+            id = "cp-boundary",
+            sessionId = "session-1",
+            configIdSnapshot = "config-1",
+            summary = "已概括早期历史",
+            summarizedThroughItemId = "user-boundary",
+            prefixFingerprint = "",
+            retainedTailJson = """{"summary_role":"user","source_prefix_ids":["user-boundary"],"retained_ids":["assistant-keep","result-call-1","result-call-2"]}""",
+            tokensBefore = 50_000,
+            estimatedTokensAfter = 1_000,
+            summaryRequestId = null,
+            status = AgentCompactionStatus.COMPLETED.name,
+            createdAt = 1L,
+        )
+        val prepared = manager.prepare(
+            requestId = "req-boundary",
+            request = request(cleaned, maxContextTokens = 272_000, compactThresholdTokens = 217_600),
+            limits = ModelTokenLimits(maxOutputTokens = 128_000, maxContextTokens = 272_000),
+            checkpoint = checkpoint,
+        )
+        assertNull(prepared.compactionPlan)
+        assertTrue(prepared.messages.none {
+            it.id == "status:old-1" || it.id == runtimeCtx.id || it.id == "failed-old" || it.id == "user-boundary"
+        })
+        assertTrue(prepared.messages.any { it.id == "status:mid-1" })
     }
 
     private fun assistantWithCalls(vararg ids: String): AgentAssistantApiMessage =

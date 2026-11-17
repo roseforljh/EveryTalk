@@ -90,10 +90,10 @@ object AttachmentToolExecutor {
         val files = linkedMapOf<String, kotlinx.serialization.json.JsonElement>()
         var totalBytes = 0L
         for (attachment in attachments.distinctBy { it.id }) {
-            val file = resolveAttachmentFile(context, attachment) ?: kotlin.error("附件文件不可访问")
             val maxChars = 24 * 1024 * 1024
-            // 读不出文字的附件（压缩包、未知二进制）原文件已随消息交给模型；read_attachment 如实返回与本机相同的错误。
+            // 读不出文字或本机文件已丢失（同步来的历史附件）只记该附件的错误；read_attachment 如实返回与本机相同的错误，不拖垮整次提交。
             val page = try {
+                val file = resolveAttachmentFile(context, attachment) ?: kotlin.error("附件文件不可访问")
                 if (DocumentProcessor.isTextMime(attachment.mimeType)) {
                     require(file.length() <= maxChars) { "云任务附件内容超过 24MB" }
                     FileInputStream(file).use { DocumentProcessor.extractPlainTextPage(it, 0, file.length(), maxChars) }
@@ -129,8 +129,11 @@ object AttachmentToolExecutor {
     ): File? {
         val path = attachment.filePath?.takeIf(String::isNotBlank) ?: return null
         val root = File(context.filesDir, FileManager.CHAT_ATTACHMENTS_DIR).canonicalFile
+        // 其他设备同步来的附件落在 sync-resources/<账号>/ 下，同样是本 App 私有文件。
+        val syncRoot = File(context.filesDir, "sync-resources").canonicalFile
         val file = runCatching { File(path).canonicalFile }.getOrNull() ?: return null
-        return file.takeIf { it.isFile && it.parentFile?.canonicalFile == root }
+        val parent = file.parentFile ?: return null
+        return file.takeIf { it.isFile && (parent == root || parent.parentFile == syncRoot) }
     }
 
     private fun error(message: String): JsonObject = buildJsonObject {

@@ -467,6 +467,10 @@
     <string name="chat_no_available_model_configuration">No model configuration is available</string>
     <string name="chat_native_search_unavailable">The current model has no native web access. Configure an external search provider in Settings.</string>
     <string name="chat_loading_conversation">Loading conversation</string>
+    <string name="chat_load_earlier_messages">Load earlier messages (%1$d)</string>
+    <string name="chat_release_to_load_earlier">Release to load earlier messages</string>
+    <string name="drawer_release_to_load_more">Release to load more</string>
+    <string name="drawer_load_more">Load more chats (%1$d)</string>
     <string name="drawer_conversation_running">Generating response</string>
     <string name="chat_action_copy_full_text">Copy full text</string>
     <string name="chat_action_regenerate">Regenerate</string>
@@ -772,6 +776,10 @@
     <string name="thinking_cloud_connecting">Connecting to cloud</string>
     <string name="thinking_cloud_sync">Checking cloud sync</string>
     <string name="thinking_cloud_preparing">Preparing context and tools</string>
+    <string name="thinking_cloud_submitting">Submitting cloud task</string>
+    <string name="thinking_cloud_queued">Waiting to run</string>
+    <string name="thinking_requesting_model">Requesting model</string>
+    <string name="thinking_generating_reply">Generating reply</string>
     <string name="thinking_preparing_server">Preparing server</string>
     <string name="thinking_restoring_remote_task">Restoring remote task</string>
     <string name="thinking_waiting_server_reconnect">Waiting for server reconnection</string>
@@ -836,13 +844,13 @@
     <string name="context_usage_estimated">Estimated</string>
     <string name="context_usage_unavailable">No usage data is available for this message</string>
     <string name="context_usage_turn">This turn</string>
-    <string name="context_usage_request">Current model request</string>
+    <string name="context_usage_request">This model request</string>
     <string name="context_usage_agent_run">This agent run · %1$d requests</string>
     <string name="context_usage_total">Total</string>
     <string name="context_usage_input">Input</string>
     <string name="context_usage_output">Output</string>
     <string name="context_usage_conversation_total">Conversation cumulative usage</string>
-    <string name="context_usage_current_context">Current context</string>
+    <string name="context_usage_current_context">Request context</string>
     <string name="context_usage_window_total">Context limit</string>
     <string name="context_usage_unknown">Unknown</string>
     <string name="context_usage_tokens_description">%1$s tokens</string>
@@ -1185,6 +1193,7 @@
     <string name="thinking_getting_current_time">Getting the current time</string>
     <string name="thinking_reading_attachment">Reading attachment</string>
     <string name="thinking_context_compressing">Compressing context</string>
+    <string name="thinking_context_compressing_budget">Compressing context · %1$s\nEstimated %2$s / %3$s\nTrigger %4$s</string>
     <string name="thinking_context_compression_failed">Context compression failed: %1$s</string>
     <string name="thinking_calling_tool">Calling tool</string>
     <string name="thinking_calling_tool_named">Calling tool · %1$s</string>

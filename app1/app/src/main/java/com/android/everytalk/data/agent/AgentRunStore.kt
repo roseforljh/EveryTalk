@@ -47,7 +47,11 @@ import com.android.everytalk.data.database.daos.ComputerDao
 import com.android.everytalk.data.skill.MessageSkillReference
 import com.android.everytalk.data.skill.SkillRequestSnapshot
 import com.android.everytalk.models.SelectedMediaItem
+import java.io.InputStream
+import java.io.OutputStream
+import java.io.SequenceInputStream
 import java.security.MessageDigest
+import java.util.Enumeration
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.serialization.json.Json
@@ -67,8 +71,13 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.json.decodeFromStream
+import kotlinx.serialization.json.encodeToStream
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import android.util.Log
 
@@ -437,24 +446,31 @@ class AgentRunStore(
             snapshotCache[run.id]?.let { return@withLock it }
             // requestSnapshotJson 只用于兼容 24 版及更早的数据；25 版开始分页读取小块。
             val legacySnapshot = run.requestSnapshotJson?.takeIf(String::isNotBlank)
-            val encoded = legacySnapshot ?: withContext(Dispatchers.IO) { readChunkedSnapshot(run.id) }
-            if (encoded == null) {
-                // 终态快照会被主动清理，查看历史轨迹时缺失属于正常情况；活动任务缺失才是恢复错误。
-                if (AGENT_FINAL_RUN_STATUSES.none { it.name == run.status }) {
-                    Log.e(AGENT_RUN_STORE_TAG, "恢复快照不存在: runId=${run.id}")
-                }
-                return@withLock null
-            }
             try {
-                withContext(Dispatchers.IO) {
-                    rehydrateSnapshotBlobs(run.id, json.decodeFromString(AgentRequestSnapshot.serializer(), encoded))
-                }.also { snapshotCache[run.id] = it }
-            } catch (error: Throwable) {
-                // 这里不能只返回 null：恢复入口只能看到“不可解码”，无法区分块缺失、
-                // 多态消息不兼容还是新增参数转换失败。只记录长度和异常类型，不记录快照正文。
+                val snapshot = withContext(Dispatchers.IO) {
+                    val decoded = if (legacySnapshot != null) {
+                        json.decodeFromString(AgentRequestSnapshot.serializer(), legacySnapshot)
+                    } else {
+                        readChunkedSnapshot(run.id)
+                    }
+                    decoded?.let { rehydrateSnapshotBlobs(run.id, it) }
+                }
+                if (snapshot == null) {
+                    // 终态快照会被主动清理，查看历史轨迹时缺失属于正常情况；活动任务缺失才是恢复错误。
+                    if (AGENT_FINAL_RUN_STATUSES.none { it.name == run.status }) {
+                        Log.e(AGENT_RUN_STORE_TAG, "恢复快照不存在: runId=${run.id}")
+                    }
+                } else {
+                    snapshotCache[run.id] = snapshot
+                }
+                snapshot
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                // 保留具体失败阶段，不输出快照正文；取消和 OOM 不能伪装成“快照缺失”。
                 Log.e(
                     AGENT_RUN_STORE_TAG,
-                    "恢复快照 JSON 解码失败: runId=${run.id}, chars=${encoded.length}, " +
+                    "恢复快照 JSON 解码失败: runId=${run.id}, " +
                         "error=${error.javaClass.simpleName}: ${error.message}",
                     error,
                 )
@@ -464,45 +480,44 @@ class AgentRunStore(
     }
 
     /**
-     * 每次最多读取 8 个 64K 块，保证单次 CursorWindow 数据量明显低于 Android 的约 2MB 上限。
-     * 块编号必须从 0 连续递增，缺块时拒绝拼出半份上下文。
+     * 每次最多读 8 块，直接交给流式 JSON 解码，不再拼接、复制整份历史。
+     * 必须在 IO 调度器调用；同步 InputStream 取下一页时沿用父任务的取消状态。
+     * 块编号从 0 连续递增，缺块或尾部截断交给恢复入口报告，不能恢复半份上下文。
      */
-    private suspend fun readChunkedSnapshot(runId: String): String? {
-        val snapshot = StringBuilder()
-        var expectedChunkIndex = 0
-        while (true) {
-            val page = dao.getRunSnapshotChunkPage(
-                runId = runId,
-                afterChunkIndex = expectedChunkIndex - 1,
-                limit = AGENT_REQUEST_SNAPSHOT_READ_PAGE_SIZE,
-            )
-            if (page.isEmpty()) {
-                if (expectedChunkIndex == 0) {
-                    return null
+    @OptIn(ExperimentalSerializationApi::class)
+    private suspend fun readChunkedSnapshot(runId: String): AgentRequestSnapshot? {
+        val firstPage = dao.getRunSnapshotChunkPage(runId, -1, AGENT_REQUEST_SNAPSHOT_READ_PAGE_SIZE)
+        if (firstPage.isEmpty()) return null
+        val context = currentCoroutineContext().minusKey(kotlin.coroutines.ContinuationInterceptor)
+        val chunks = iterator<InputStream> {
+            var page = firstPage
+            var expectedChunkIndex = 0
+            while (page.isNotEmpty()) {
+                for (chunk in page) {
+                    check(chunk.chunkIndex == expectedChunkIndex) {
+                        "恢复快照分块不连续: expected=$expectedChunkIndex, actual=${chunk.chunkIndex}"
+                    }
+                    expectedChunkIndex += 1
+                    yield(chunk.payload.byteInputStream())
                 }
-                return snapshot.toString()
+                if (page.size < AGENT_REQUEST_SNAPSHOT_READ_PAGE_SIZE) break
+                // 只桥接这一页的 Room 挂起查询，不启动额外生产者或持有整份 JSON。
+                page = runBlocking(context) {
+                    dao.getRunSnapshotChunkPage(runId, expectedChunkIndex - 1, AGENT_REQUEST_SNAPSHOT_READ_PAGE_SIZE)
+                }
             }
-            page.forEach { chunk ->
-                if (chunk.chunkIndex != expectedChunkIndex) {
-                    Log.e(
-                        AGENT_RUN_STORE_TAG,
-                        "恢复快照分块不连续: runId=$runId, expected=$expectedChunkIndex, actual=${chunk.chunkIndex}",
-                    )
-                    return null
-                }
-                if (expectedChunkIndex >= AGENT_REQUEST_SNAPSHOT_MAX_JSON_CHUNKS) {
-                    Log.e(AGENT_RUN_STORE_TAG, "恢复快照过大，放弃恢复以免 OOM: runId=$runId")
-                    return null
-                }
-                snapshot.append(chunk.payload)
-                expectedChunkIndex += 1
-            }
-            if (page.size < AGENT_REQUEST_SNAPSHOT_READ_PAGE_SIZE) return snapshot.toString()
         }
+        return SequenceInputStream(object : Enumeration<InputStream> {
+            override fun hasMoreElements() = chunks.hasNext()
+            override fun nextElement() = chunks.next()
+        }).use { input -> json.decodeFromStream(AgentRequestSnapshot.serializer(), input) }
     }
 
+    @OptIn(ExperimentalSerializationApi::class)
     private fun snapshotChunks(runId: String, snapshot: AgentRequestSnapshot) =
-        agentRequestSnapshotChunks(runId, snapshot) { json.encodeToString(AgentRequestSnapshot.serializer(), it) }
+        agentRequestSnapshotChunks(runId, snapshot) { value, output ->
+            json.encodeToStream(AgentRequestSnapshot.serializer(), value, output)
+        }
 
     /** 把 JSON 中的 blob 引用换回真实 Base64，同一引用只读一次。 */
     private suspend fun rehydrateSnapshotBlobs(runId: String, snapshot: AgentRequestSnapshot): AgentRequestSnapshot {
@@ -1429,13 +1444,26 @@ class AgentRunStore(
         limits: ModelTokenLimits,
     ): ChatRequest {
         val management = request.contextManagement ?: return request
-        val calibration = dao.getLatestInputTokenCalibration(
-            sessionId = sessionId,
-            configId = management.configId,
-            provider = request.provider,
-            endpoint = request.apiAddress,
-            model = request.model,
-        ) ?: 0L
+        // 压缩之后旧全文实测的差值不再代表新投影的偏差，参考 Pi 只信任压缩之后的新实测。
+        val minTimestamp = dao.getCompactions(sessionId).firstOrNull()?.createdAt ?: 0L
+        val calibration = (if (minTimestamp > 0L) {
+            dao.getLatestInputTokenCalibrationAfter(
+                sessionId = sessionId,
+                configId = management.configId,
+                provider = request.provider,
+                endpoint = request.apiAddress,
+                model = request.model,
+                minTimestamp = minTimestamp,
+            )
+        } else {
+            dao.getLatestInputTokenCalibration(
+                sessionId = sessionId,
+                configId = management.configId,
+                provider = request.provider,
+                endpoint = request.apiAddress,
+                model = request.model,
+            )
+        }) ?: 0L
         val window = limits.maxContextTokens.toLong().coerceAtLeast(1L)
         return request.copy(contextManagement = management.copy(
             inputTokenCalibration = calibration.coerceIn(-window, window),
@@ -1468,7 +1496,8 @@ class AgentRunStore(
     ): List<AbstractApiMessage> {
         val runsByMessageId = dao.getRunsForSession(sessionId)
             .associateBy(AgentRunEntity::visibleAssistantMessageId)
-        if (runsByMessageId.isEmpty()) return messages
+        val errorMessageIds = dao.getErrorMessageIdsForSession(sessionId).toHashSet()
+        if (runsByMessageId.isEmpty() && errorMessageIds.isEmpty()) return messages
         // steering/follow-up 同时会写入普通聊天历史供 UI 展示。它们已经由 AgentEntry
         // 投影到对应 Run，重新组装上下文时必须跳过历史副本，否则模型会收到两遍用户指令。
         val visibleMessageIds = messages.mapTo(hashSetOf()) { it.id }
@@ -1495,7 +1524,8 @@ class AgentRunStore(
                 if (message.id in projectedQueuedMessageIds && message.role == "user") return@forEach
                 val run = runsByMessageId[message.id]
                 if (run == null) {
-                    add(message)
+                    // 没有关联 Run 的普通失败气泡只保留给界面展示，绝不能送进模型上下文。
+                    if (message.id !in errorMessageIds) add(message)
                     return@forEach
                 }
                 val failed = run.status == AgentRunStatus.FAILED.name
@@ -1907,7 +1937,15 @@ class AgentRunStore(
             .filter { it.kind == AgentEntryKind.ASSISTANT.name && it.status == AgentEntryStatus.FINAL.name }
             .mapNotNull { it.requestId }
             .toSet()
-        return entries.mapNotNull { entry ->
+        val result = mutableListOf<AbstractApiMessage>()
+        val pendingToolCallIds = mutableSetOf<String>()
+        val deferredStatuses = mutableListOf<SimpleTextApiMessage>()
+        fun flushDeferredStatuses() {
+            if (deferredStatuses.isEmpty()) return
+            result += deferredStatuses
+            deferredStatuses.clear()
+        }
+        entries.forEach { entry ->
             if (failedRequestId != null &&
                 entry.status == AgentEntryStatus.PARTIAL.name &&
                 entry.kind == AgentEntryKind.ASSISTANT.name &&
@@ -1920,28 +1958,54 @@ class AgentRunStore(
                     ?.filterIsInstance<AgentContentBlock.Text>()
                     ?.joinToString("") { it.text }
                     ?.takeIf(String::isNotBlank)
-                return@mapNotNull text?.let {
-                    SimpleTextApiMessage(id = "assistant:partial:${entry.requestId}", role = "assistant", content = it)
+                if (text != null) {
+                    pendingToolCallIds.clear()
+                    flushDeferredStatuses()
+                    result += SimpleTextApiMessage(id = "assistant:partial:${entry.requestId}", role = "assistant", content = text)
                 }
+                return@forEach
             }
-            if (entry.status != AgentEntryStatus.FINAL.name) return@mapNotNull null
+            if (entry.status != AgentEntryStatus.FINAL.name) return@forEach
             when (entry.kind) {
                 AgentEntryKind.RUNTIME_CONTEXT.name -> entry.requestId
                     ?.takeIf(finalizedAssistantRequests::contains)
                     ?.let { runCatching { json.decodeFromString(SimpleTextApiMessage.serializer(), entry.payloadJson) }.getOrNull() }
+                    ?.let { message ->
+                        pendingToolCallIds.clear()
+                        flushDeferredStatuses()
+                        result += message
+                    }
                 AgentEntryKind.ASSISTANT.name -> decodeAssistantEntry(
                     entry,
                     entry.requestId?.let(requestsById::get),
                     sourceProtocol,
-                )
-                AgentEntryKind.TOOL_RESULT.name -> decodeToolResultEntry(entry)
-                AgentEntryKind.STATUS.name -> decodeStatusEntry(entry)
+                )?.let { message ->
+                    pendingToolCallIds.clear()
+                    flushDeferredStatuses()
+                    result += message
+                    message.toolCalls.mapTo(pendingToolCallIds) { it.id }
+                }
+                AgentEntryKind.TOOL_RESULT.name -> decodeToolResultEntry(entry)?.let { toolResult ->
+                    result += toolResult
+                    pendingToolCallIds.remove(toolResult.toolCallId)
+                    if (pendingToolCallIds.isEmpty()) flushDeferredStatuses()
+                }
+                // 工具并发或重连期间写入的 STATUS 必须等当前批次 ToolResult 落齐再放行，
+                // 否则会把 Assistant 与 ToolResult 拆开并触发伪造 missing 结果。
+                AgentEntryKind.STATUS.name -> decodeStatusEntry(entry)?.let { statusMessage ->
+                    if (pendingToolCallIds.isNotEmpty()) deferredStatuses += statusMessage else result += statusMessage
+                }
                 AgentEntryKind.STEERING.name,
                 AgentEntryKind.FOLLOW_UP.name,
-                -> decodeQueuedUserEntry(entry, runId)
-                else -> null
+                -> decodeQueuedUserEntry(entry, runId)?.let { queued ->
+                    pendingToolCallIds.clear()
+                    flushDeferredStatuses()
+                    result += queued
+                }
             }
         }
+        flushDeferredStatuses()
+        return result
     }
 
     private fun decodeAssistantEntry(
@@ -2019,7 +2083,7 @@ class AgentRunStore(
             )
         }.getOrNull()
 
-    /** 状态事件作为内部 system 消息进入恢复请求，让 AI 解释现状且禁止重复执行。 */
+    /** 状态事件作为带时间戳位置的历史事件进入恢复请求，不放进 system 避免破坏前缀缓存与阻止压缩。 */
     private fun decodeStatusEntry(entry: AgentEntryEntity): SimpleTextApiMessage? = runCatching {
         val payload = json.parseToJsonElement(entry.payloadJson).jsonObject
         val reason = payload["reason"]?.jsonPrimitive?.content ?: return@runCatching null
@@ -2027,7 +2091,7 @@ class AgentRunStore(
         val executionId = payload["execution_id"]?.jsonPrimitive?.content
         SimpleTextApiMessage(
             id = "status:${entry.id}",
-            role = "system",
+            role = "user",
             content = buildString {
                 append("[EveryTalk Agent 状态] ").append(reason).append(": ").append(message)
                 executionId?.let { append("，execution_id=").append(it) }
@@ -2182,8 +2246,6 @@ private fun AgentContentBlock.ToolCall.toExecutionStep(completed: Boolean): Exec
 
 private const val AGENT_REQUEST_SNAPSHOT_CHUNK_CHARS = 65_536
 private const val AGENT_REQUEST_SNAPSHOT_READ_PAGE_SIZE = 8
-/** JSON 部分超过 128 块（约 8M 字符）只可能是旧版内联图片快照，拼接会把堆打爆，直接拒绝。 */
-private const val AGENT_REQUEST_SNAPSHOT_MAX_JSON_CHUNKS = 128
 /** 冒号和连字符不属于 Base64 字符集，不会和真实数据混淆。 */
 private const val AGENT_SNAPSHOT_BLOB_PREFIX = "everytalk-blob:"
 private val AGENT_TERMINAL_RUN_STATUSES = setOf(
@@ -2199,52 +2261,49 @@ private val AGENT_FINAL_RUN_STATUSES = setOf(
 )
 
 /**
- * 把恢复快照切成 CursorWindow 可安全读取的小行。
- * 边界遇到 Emoji 等代理对时把低代理一并放入当前块，重新拼接后文本保持原样。
+ * 流式 UTF-8 编码只保留一个 64K 缓冲。等到下一个字符开始再落块，避免把中文、Emoji
+ * 的字节拆开后写进 Room 字符串列；不会产生整份 JSON String 或 ByteArray。
  */
-internal fun agentRequestSnapshotChunks(
+private fun agentRequestSnapshotJsonChunks(
     runId: String,
-    encodedSnapshot: String,
-    maxChars: Int = AGENT_REQUEST_SNAPSHOT_CHUNK_CHARS,
+    snapshot: AgentRequestSnapshot,
+    encode: (AgentRequestSnapshot, OutputStream) -> Unit,
 ): List<AgentRunSnapshotChunkEntity> {
-    require(maxChars > 0) { "快照分块大小必须大于 0" }
-    if (encodedSnapshot.isEmpty()) {
-        return listOf(AgentRunSnapshotChunkEntity(runId, 0, ""))
-    }
-    return buildList {
-        var start = 0
-        var chunkIndex = 0
-        while (start < encodedSnapshot.length) {
-            var end = (start + maxChars).coerceAtMost(encodedSnapshot.length)
-            if (
-                end < encodedSnapshot.length &&
-                encodedSnapshot[end - 1].isHighSurrogate() &&
-                encodedSnapshot[end].isLowSurrogate()
-            ) {
-                end += 1
-            }
-            add(
-                AgentRunSnapshotChunkEntity(
-                    runId = runId,
-                    chunkIndex = chunkIndex,
-                    payload = encodedSnapshot.substring(start, end),
-                ),
-            )
-            start = end
-            chunkIndex += 1
+    val chunks = ArrayList<AgentRunSnapshotChunkEntity>()
+    val output = object : OutputStream() {
+        private val buffer = ByteArray(AGENT_REQUEST_SNAPSHOT_CHUNK_CHARS + 4)
+        private var size = 0
+
+        private fun emitChunk() {
+            if (size == 0) return
+            chunks += AgentRunSnapshotChunkEntity(runId, chunks.size, String(buffer, 0, size, Charsets.UTF_8))
+            size = 0
         }
+
+        override fun write(value: Int) {
+            if (size >= AGENT_REQUEST_SNAPSHOT_CHUNK_CHARS && value and 0xC0 != 0x80) emitChunk()
+            buffer[size++] = value.toByte()
+        }
+
+        override fun write(bytes: ByteArray, offset: Int, length: Int) {
+            for (index in offset until offset + length) write(bytes[index].toInt())
+        }
+
+        override fun close() = emitChunk()
     }
+    output.use { encode(snapshot, it) }
+    return chunks
 }
 
 /**
- * 图片、音频的 Base64 不进快照 JSON：每份数据按 64K 切成负编号块，JSON 里只留
- * `everytalk-blob:起始块:块数` 引用。正编号读取路径因此只拼几十 KB 的 JSON，
- * 同一份数据在多条历史消息里出现也只存一次。
+ * 图片、音频的 Base64 单独按 64K 切成负编号块，JSON 里只留
+ * `everytalk-blob:起始块:块数` 引用，同一份数据在多条历史消息里出现也只存一次。
+ * 剩余长文本 JSON 也流式分块，仍和 Run 一起事务保存，格式兼容旧快照。
  */
 internal fun agentRequestSnapshotChunks(
     runId: String,
     snapshot: AgentRequestSnapshot,
-    encode: (AgentRequestSnapshot) -> String,
+    encode: (AgentRequestSnapshot, OutputStream) -> Unit,
 ): List<AgentRunSnapshotChunkEntity> {
     val blobs = LinkedHashMap<String, String>()
     snapshot.messages.forEach { message ->
@@ -2252,7 +2311,7 @@ internal fun agentRequestSnapshotChunks(
             if (part is ApiContentPart.InlineData && part.base64Data.isNotEmpty()) blobs[part.base64Data] = ""
         }
     }
-    if (blobs.isEmpty()) return agentRequestSnapshotChunks(runId, encode(snapshot))
+    if (blobs.isEmpty()) return agentRequestSnapshotJsonChunks(runId, snapshot, encode)
     val blobChunks = ArrayList<AgentRunSnapshotChunkEntity>()
     var nextIndex = -blobs.keys.sumOf { (it.length + AGENT_REQUEST_SNAPSHOT_CHUNK_CHARS - 1) / AGENT_REQUEST_SNAPSHOT_CHUNK_CHARS }
     for (data in blobs.keys) {
@@ -2277,7 +2336,7 @@ internal fun agentRequestSnapshotChunks(
             })
         },
     )
-    return blobChunks + agentRequestSnapshotChunks(runId, encode(referenced))
+    return blobChunks + agentRequestSnapshotJsonChunks(runId, referenced, encode)
 }
 
 /** 请求快照只保留恢复需要的本地参数，API Key 和设备标识禁止落库。 */

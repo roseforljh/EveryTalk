@@ -432,7 +432,6 @@ fun AiMessageFooterItem(
     viewModel: AppViewModel,
     scrollStateManager: ChatScrollStateManager,
     onShowOptions: (Message) -> Unit = {},
-    isLatestAiMessage: Boolean = false,
 ) {
     var showPopupMenu by remember { mutableStateOf(false) }
     var showContextUsage by remember(message.id) { mutableStateOf(false) }
@@ -451,16 +450,10 @@ fun AiMessageFooterItem(
         message.contextUsageSnapshot?.configId,
         message.modelName,
         message.providerName,
+        message.contextUsageSnapshot?.contextWindowTokens,
         availableModels,
-        selectedModel?.id,
-        isLatestAiMessage,
     ) {
-        // 只有最新回复代表下一次请求的占用；历史回复的用量属于当时的模型，按它自己的窗口算。
-        resolveLiveContextWindowTokens(
-            message = message,
-            configs = availableModels,
-            activeConfigId = selectedModel?.id?.takeIf { isLatestAiMessage },
-        )
+        resolveLiveContextWindowTokens(message, availableModels)
     }
 
     Column(

@@ -467,6 +467,10 @@
     <string name="chat_no_available_model_configuration">当前无可用模型配置</string>
     <string name="chat_native_search_unavailable">当前模型无原生联网，请先在设置中配置外部搜索商</string>
     <string name="chat_loading_conversation">正在加载会话</string>
+    <string name="chat_load_earlier_messages">加载更早的消息（%1$d 条）</string>
+    <string name="chat_release_to_load_earlier">松手加载更早的消息</string>
+    <string name="drawer_release_to_load_more">松手加载更多会话</string>
+    <string name="drawer_load_more">加载更多会话（%1$d 个）</string>
     <string name="chat_action_copy_full_text">复制全文</string>
     <string name="chat_action_regenerate">重新回答</string>
     <string name="chat_action_export_text">导出文本</string>
@@ -770,6 +774,10 @@
     <string name="thinking_cloud_connecting">正在连接云端</string>
     <string name="thinking_cloud_sync">正在核对云端同步</string>
     <string name="thinking_cloud_preparing">正在准备上下文与工具</string>
+    <string name="thinking_cloud_submitting">正在提交云端任务</string>
+    <string name="thinking_cloud_queued">等待执行</string>
+    <string name="thinking_requesting_model">正在请求模型</string>
+    <string name="thinking_generating_reply">正在生成回复</string>
     <string name="thinking_preparing_server">正在准备服务器</string>
     <string name="thinking_restoring_remote_task">正在恢复远端任务</string>
     <string name="thinking_waiting_server_reconnect">等待服务器重连</string>
@@ -834,13 +842,13 @@
     <string name="context_usage_estimated">估算</string>
     <string name="context_usage_unavailable">当前消息暂无用量数据</string>
     <string name="context_usage_turn">本轮会话消耗</string>
-    <string name="context_usage_request">当前模型请求</string>
+    <string name="context_usage_request">本次模型请求</string>
     <string name="context_usage_agent_run">本次 Agent · %1$d 次请求</string>
     <string name="context_usage_total">合计</string>
     <string name="context_usage_input">输入</string>
     <string name="context_usage_output">输出</string>
     <string name="context_usage_conversation_total">会话累计消耗</string>
-    <string name="context_usage_current_context">当前上下文</string>
+    <string name="context_usage_current_context">请求上下文</string>
     <string name="context_usage_window_total">上下文上限</string>
     <string name="context_usage_unknown">未知</string>
     <string name="context_usage_tokens_description">%1$s令牌数</string>
@@ -1179,6 +1187,7 @@
     <string name="thinking_getting_current_time">获取当前时间</string>
     <string name="thinking_reading_attachment">读取附件</string>
     <string name="thinking_context_compressing">正在压缩上下文</string>
+    <string name="thinking_context_compressing_budget">正在压缩上下文 · %1$s\n估算 %2$s / %3$s\n触发线 %4$s</string>
     <string name="thinking_context_compression_failed">上下文压缩失败：%1$s</string>
     <string name="thinking_calling_tool">调用工具</string>
     <string name="thinking_calling_tool_named">调用工具 · %1$s</string>

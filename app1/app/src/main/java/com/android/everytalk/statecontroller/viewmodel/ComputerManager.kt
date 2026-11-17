@@ -550,7 +550,7 @@ class ComputerManager(
                     throw error
                 } catch (error: Exception) {
                     // 失败已由 refreshComputer 写成 OFFLINE/HOST_KEY_CHANGED，界面照常提示手动处理。
-                    AppLogger.warn("ComputerRuntime", "服务器自动重连检测失败：${error.javaClass.simpleName}")
+                    AppLogger.warn("ComputerRuntime", "服务器自动重连检测失败：${error.javaClass.simpleName} ${(error as? com.android.everytalk.data.computer.ComputerException)?.code.orEmpty()}")
                 }
             }
         }

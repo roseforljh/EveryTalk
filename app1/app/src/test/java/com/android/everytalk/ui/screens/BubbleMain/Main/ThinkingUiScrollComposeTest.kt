@@ -101,6 +101,62 @@ class ThinkingUiScrollComposeTest {
     }
 
     @Test
+    fun `无思考的云端准备阶段只显示状态而没有空展开入口`() {
+        composeRule.mainClock.autoAdvance = false
+        composeRule.setContent {
+            MaterialTheme {
+                ReasoningToggleAndContent(
+                    currentMessageId = "cloud-waiting", displayedReasoningText = "",
+                    activityStatusText = "正在连接云端", replyIsStreaming = true,
+                    isReasoningStreaming = false, isReasoningComplete = false,
+                    messageIsError = false, mainContentHasStarted = false,
+                    reasoningTextColor = Color.Black, reasoningToggleDotColor = Color.Black,
+                    onVisibilityChanged = {},
+                )
+            }
+        }
+        composeRule.mainClock.advanceTimeBy(1_000L)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("reasoning-inline-status-text", useUnmergedTree = true).assertTextEquals("正在连接云端")
+        composeRule.onNodeWithContentDescription("展开执行过程").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("收起执行过程").assertDoesNotExist()
+        composeRule.onNodeWithTag("reasoning-chain-summaries").assertDoesNotExist()
+        composeRule.onNodeWithTag("reasoning-sheet-surface").assertDoesNotExist()
+    }
+
+    @Test
+    fun `已结束执行组展开只保留一个耗时标题且内部思考可回看`() {
+        composeRule.mainClock.autoAdvance = false
+        val tool = ExecutionStep(id = "nested-tool", type = ExecutionStepType.Tool,
+            title = "调用工具", labels = listOf("webfetch"), completed = true)
+        composeRule.setContent {
+            MaterialTheme {
+                androidx.compose.foundation.layout.Column {
+                    ExecutionGroupToggle(steps = listOf(tool), messageIsError = false,
+                        executionStartedAtMillis = 1_000, executionFinishedAtMillis = 160_366,
+                        expanded = true, onClick = {})
+                    ReasoningToggleAndContent(
+                        currentMessageId = "nested-process", displayedReasoningText = "核对来源",
+                        executionTrace = listOf(ExecutionTraceEvent.Reasoning("核对来源"), ExecutionTraceEvent.Tool(tool)),
+                        isReasoningStreaming = false, isReasoningComplete = true, messageIsError = false,
+                        mainContentHasStarted = false, executionStartedAtMillis = 1_000, executionFinishedAtMillis = 160_366,
+                        hasOuterExecutionGroup = true,
+                        reasoningTextColor = Color.Black, reasoningToggleDotColor = Color.Black,
+                        onVisibilityChanged = {},
+                    )
+                }
+            }
+        }
+        composeRule.mainClock.advanceTimeBy(1_000L)
+        composeRule.waitForIdle()
+        assertEquals(1, composeRule.onAllNodesWithTag("reasoning-inline-status").fetchSemanticsNodes().size)
+        composeRule.onNodeWithTag("reasoning-chain-summary-0").assertIsDisplayed().performClick()
+        composeRule.mainClock.advanceTimeBy(1_000L)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("reasoning-sheet-surface").assertIsDisplayed()
+    }
+
+    @Test
     fun `运行中手动展开的执行区结束后收起且再次展开只通知一次`() {
         val streaming = mutableStateOf(true)
         var completedExpansions = 0

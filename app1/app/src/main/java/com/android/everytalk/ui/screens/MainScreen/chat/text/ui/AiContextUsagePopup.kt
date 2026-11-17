@@ -123,24 +123,16 @@ internal fun aiContextUsageSummary(
 internal fun resolveLiveContextWindowTokens(
     message: Message,
     configs: List<ApiConfig>,
-    activeConfigId: String? = null,
 ): Long {
-    val snapshot = message.contextUsageSnapshot
-    val configId = snapshot?.configId
-    val liveConfig = activeConfigId
-        ?.let { id -> configs.firstOrNull { it.id == id } }
-        ?: configId
+    // 实测输入只属于这次请求，必须配发送时的窗口；切换模型或修改配置不能重写历史占用比例。
+    message.contextUsageSnapshot?.contextWindowTokens?.takeIf { it > 0L }?.let { return it }
+    val configId = message.contextUsageSnapshot?.configId
+    val requestConfig = configId
         ?.let { id -> configs.firstOrNull { it.id == id } }
         ?: configs.firstOrNull { config ->
             config.model == message.modelName && config.provider == message.providerName
         }
-    return liveConfig
-        ?.modelParameters
-        ?.maxContextTokens
-        ?.toLong()
-        ?.takeIf { it > 0L }
-        ?: snapshot?.contextWindowTokens?.coerceAtLeast(0L)
-        ?: 0L
+    return requestConfig?.modelParameters?.maxContextTokens?.toLong()?.takeIf { it > 0L } ?: 0L
 }
 
 internal fun totalConversationTokenUsage(messages: Iterable<Message>): Long {

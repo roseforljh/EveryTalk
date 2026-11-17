@@ -14,8 +14,15 @@ object SyncStatus {
  * 对相同表和 ID 生成相同 UUID，迁移与重新保存采用相同规则，避免旧消息每次保存产生新身份。
  * 服务端拉取的数据必须保留服务器提供的 UUID，不能用本地 ID 重新计算。
  */
-fun localSyncUuid(table: String, id: String): String =
-    UUID.nameUUIDFromBytes("EveryTalk:$table:$id".toByteArray(Charsets.UTF_8)).toString()
+fun localSyncUuid(table: String, id: String): String {
+    // cloud:<uuid> 本身就是从服务器 UUID 生成的本地 ID。重新哈希会让同一条记录换身份：
+    // 之后再拉到原 UUID 时本地 ID 已被占用，插入被忽略，整页同步回滚并无限重试。
+    id.removePrefix("cloud:").takeIf { it.length < id.length }
+        ?.let { runCatching { UUID.fromString(it).toString() }.getOrNull() }
+        ?.takeIf { it.equals(id.removePrefix("cloud:"), ignoreCase = true) }
+        ?.let { return it }
+    return UUID.nameUUIDFromBytes("EveryTalk:$table:$id".toByteArray(Charsets.UTF_8)).toString()
+}
 
 /** 最近打开记录只是历史的副本，不能上传成另一份对话；文字和图片历史都可同步。 */
 fun isSyncableTextSession(id: String, isImageGeneration: Boolean): Boolean =

@@ -51,6 +51,123 @@ class SyncResourceSynchronizerTest {
     private suspend fun sync(db: AppDatabase, api: SyncApi) = SyncEngine(api, RoomSyncStore(db), SyncStateStore(db)).runOnce()
     @After fun close() { databases.forEach { it.close() }; directories.forEach { it.deleteRecursively() } }
 
+    @Test fun `跨设备恢复完整历史时同步摘要边界而不重新压缩旧原文`() = runBlocking {
+        val a = database(); val b = database(); val ca = context(); val cb = context(); val api = FakeSyncApi()
+        val session = ChatSessionEntity("compacted-session", 1, 1, false)
+        a.chatDao().writeSession(session)
+        val old = Message(id = "old-question", text = "旧工具历史".repeat(7000), sender = Sender.User, timestamp = 1).toEntity(session.id)
+        val answer = Message(id = "old-answer", text = "已完成", sender = Sender.AI, timestamp = 2).toEntity(session.id)
+        val next = Message(id = "new-question", text = "继续", sender = Sender.User, timestamp = 3).toEntity(session.id)
+        a.chatDao().writeMessages(listOf(old, answer, next).map { it.copy(syncStatus = SyncStatus.PENDING) })
+        // 与真实 Agent 会话一样，气泡会展开成稳定的 assistant/tool 内部记录；摘要必须覆盖这份原文。
+        val run = AgentRunEntity("compacted-run", session.id, old.id, answer.id, null, null, "COMPLETED", 0, null, 1, 2)
+        a.agentDao().upsertRun(run)
+        a.agentDao().upsertEntry(AgentEntryEntity("assistant-entry", run.id, 1, "ASSISTANT", null, null,
+            """[{"type":"tool_call","id":"old-call","name":"exec","arguments":{}}]""", "FINAL", 1, 2))
+        a.agentDao().upsertEntry(AgentEntryEntity("tool-entry", run.id, 2, "TOOL_RESULT", null, "old-call",
+            syncJson.encodeToString(com.android.everytalk.data.agent.AgentContentBlock.ToolResult.serializer(),
+                com.android.everytalk.data.agent.AgentContentBlock.ToolResult("old-call", "exec", JsonPrimitive(old.text), false)), "FINAL", 1, 2))
+        val answerWithTrace = answer.toMessage().copy(executionSteps = listOf(ExecutionStep("old-call", ExecutionStepType.Tool, "exec"))).toEntity(session.id)
+        a.chatDao().writeMessages(listOf(answerWithTrace.copy(syncStatus = SyncStatus.PENDING)))
+        val manager = com.android.everytalk.data.agent.AgentContextManager()
+        val plan = com.android.everytalk.data.agent.AgentCompactionPlan(
+            messagesToSummarize = emptyList(), previousSummary = null, summarizedThroughItemId = "tool:old-call",
+            prefixFingerprint = "", retainedTailIds = listOf(next.id), sourcePrefixIds = listOf(old.id, "assistant:assistant-entry", "tool:old-call"),
+            summaryRole = "system", tokensBefore = 30_000,
+        )
+        val checkpoint = com.android.everytalk.data.agent.AgentRunStore(a.agentDao()).saveCompaction(
+            session.id, "config", plan, "旧任务已完成", "summary-request", 100, manager.compactionMetadata(plan))
+        fun request(messages: List<MessageEntity>) = ChatRequest(
+            messages = messages.map { SimpleTextApiMessage(it.id, if (it.sender == Sender.User) "user" else "assistant", it.text) },
+            provider = "OpenAI", channel = "OpenAI兼容", apiAddress = "https://example.com", apiKey = "test", model = "test",
+            contextManagement = RequestContextManagement("config", 8_000, 500, 7_000, true),
+        )
+        val limits = ModelTokenLimits(maxOutputTokens = 500, maxContextTokens = 8_000)
+        val sourceRequest = request(listOf(old, answer, next))
+        val before = manager.prepare("source", sourceRequest.copy(messages = com.android.everytalk.data.agent.AgentRunStore(a.agentDao())
+            .expandTranscript(session.id, sourceRequest.messages)), limits, checkpoint)
+        assertNull(before.compactionPlan)
+        SyncResourceSynchronizer(ca, a, api, user).use { it.synchronize() }
+        assertEquals(1, a.agentDao().getSyncableCompactions().size)
+        assertTrue(a.settingsDao().getByPrefix("sync_resource_meta:").any { it.value.contains("context_compaction") })
+        sync(a, api); sync(b, api)
+        assertTrue(api.rows.values.any { it.payload["role"]?.jsonPrimitive?.content == "context_compaction" })
+        assertNotNull(b.chatDao().getMessageByUuid(next.uuid))
+        SyncResourceSynchronizer(cb, b, api, user).use { it.synchronize() }
+        assertEquals(b.settingsDao().getByPrefix("sync_rejected:").toString(), 1, b.agentDao().getSyncableCompactions().size)
+        val restored = b.agentDao().getCompactions("cloud:${session.uuid}").single()
+        val targetRequest = request(b.chatDao().getMessagesForSession("cloud:${session.uuid}"))
+        val targetTranscript = com.android.everytalk.data.agent.AgentRunStore(b.agentDao()).expandTranscript("cloud:${session.uuid}", targetRequest.messages)
+        assertTrue(targetTranscript.any { it.id == "tool:old-call" })
+        val after = manager.prepare("target", targetRequest.copy(messages = targetTranscript), limits, restored)
+        assertNull(after.compactionPlan)
+        assertEquals(before.snapshot.activeContextTokens, after.snapshot.activeContextTokens)
+        assertEquals("tool:old-call", restored.summarizedThroughItemId)
+        assertFalse(after.messages.filterIsInstance<SimpleTextApiMessage>().any { it.content.contains(old.text) })
+        assertEquals(old.text, b.chatDao().getMessageByUuid(old.uuid)!!.text)
+        val uploads = api.fileUploads
+        SyncResourceSynchronizer(ca, a, api, user).use { it.synchronize() }
+        SyncResourceSynchronizer(cb, b, api, user).use { it.synchronize() }
+        assertEquals(uploads, api.fileUploads)
+        assertEquals("confirmed", a.settingsDao().getValue("sync_compaction_uploaded:$user:${checkpoint.id}"))
+        assertTrue(a.settingsDao().getByPrefix("sync_compaction_queued:").isEmpty())
+        val resourceRoot = File(ca.filesDir, "sync-resources/${UUID.nameUUIDFromBytes(user.toByteArray())}")
+        assertTrue(resourceRoot.listFiles().orEmpty().none { it.name.startsWith("compaction-") })
+        // 服务端清空后重新上传仍携带摘要；主动清本地文字后不能留下阻止恢复的去重标记。
+        SyncStateStore(a).markAllLocalDataPending()
+        assertNull(a.settingsDao().getValue("sync_compaction_uploaded:$user:${checkpoint.id}"))
+        SyncStateStore(b).clearSyncableLocalData()
+        assertTrue(b.settingsDao().getByPrefix("sync_compaction_restored:").isEmpty())
+        assertTrue(b.settingsDao().getByPrefix("sync_compaction_uploaded:").isEmpty())
+    }
+
+    @Test fun `摘要分块中断可续传且失效引用无缓存时重建后才清错误`() = runBlocking {
+        val db = database(); val ctx = context(); val api = FakeSyncApi().apply { validateFileReferences = true; chunkSize = 1024 }
+        val session = ChatSessionEntity("summary-retry", 1, 1, false)
+        db.chatDao().writeSession(session)
+        val message = Message(id = "summary-anchor", text = "继续", sender = Sender.User, timestamp = 1).toEntity(session.id)
+        db.chatDao().writeMessages(listOf(message.copy(syncStatus = SyncStatus.PENDING)))
+        val checkpoint = AgentCompactionEntryEntity("retry-checkpoint", session.id, null,
+            (1..300).joinToString { UUID.randomUUID().toString() }, message.id, "", "{}", 10_000, 500, null, "COMPLETED", 2)
+        db.agentDao().upsertCompaction(checkpoint)
+        val marker = "sync_compaction_uploaded:$user:${checkpoint.id}"
+        var remaining = 1
+        val limited = object : SyncApi by api {
+            override suspend fun uploadFile(file: File, mime: String): SyncFileInfo {
+                if (remaining-- <= 0) throw SyncHttpException(429, 30, "RATE_LIMITED", "模拟摘要分块中断")
+                return api.uploadFile(file, mime)
+            }
+        }
+        try { SyncResourceSynchronizer(ctx, db, limited, user).use { it.synchronize() }; fail("应在传完全部摘要前中断") }
+        catch (error: SyncHttpException) { assertEquals(429, error.statusCode) }
+        assertEquals(1, api.fileUploads)
+        assertNull(db.settingsDao().getValue(marker))
+        SyncResourceSynchronizer(ctx, db, api, user).use { it.synchronize() }
+        assertEquals("queued", db.settingsDao().getValue(marker))
+        val previous = db.syncAttachmentDao().getPending(100).filter { it.messageId == message.uuid }
+        assertTrue(previous.size > 1)
+        assertEquals(previous.size, api.fileUploads)
+        File(ctx.filesDir, "sync-resources").deleteRecursively()
+        previous.forEach { api.expireFile(it.fileId!!) }
+        sync(db, api)
+        assertEquals("FILE_NOT_READY", db.settingsDao().getValue("sync_rejected:attachments:${previous.first().id}"))
+        SyncResourceSynchronizer(ctx, db, api, user).use { it.synchronize() }
+        assertEquals("queued", db.settingsDao().getValue(marker))
+        assertEquals("FILE_NOT_READY", db.settingsDao().getValue("sync_rejected:attachments:${previous.first().id}"))
+        api.failPushNumber = api.pushes + 1
+        try { sync(db, api); fail("模拟已接收引用但确认丢失") } catch (_: java.io.IOException) { }
+        assertEquals("queued", db.settingsDao().getValue(marker))
+        sync(db, api)
+        SyncResourceSynchronizer(ctx, db, api, user).use { it.synchronize() }
+        sync(db, api)
+        assertEquals("confirmed", db.settingsDao().getValue(marker))
+        assertTrue(previous.all { db.syncAttachmentDao().get(it.id)!!.deleted })
+        assertEquals(0, db.settingsDao().syncRejectedCount())
+        val uploaded = api.fileUploads
+        SyncResourceSynchronizer(ctx, db, api, user).use { it.synchronize() }
+        assertEquals(uploaded, api.fileUploads)
+    }
+
     @Test fun `文件引用过期后从上传块定向恢复且确认前保留失败`() = runBlocking {
         val db = database(); val ctx = context(); val api = FakeSyncApi().apply { validateFileReferences = true }
         val session = ChatSessionEntity("source", 1, 1, false)
@@ -234,6 +351,8 @@ class SyncResourceSynchronizerTest {
         val revision = b.settingsDao().getValue(restoredMarker)!!
         b.chatDao().writeMessages(listOf(restored.copy(executionTrace = trace)))
         b.settingsDao().insertSetting(SystemSettingEntity(restoredMarker, revision.removePrefix("4:")))
+        // 旧版没有整体完成戳，升级后的第一轮会完整复查。
+        b.settingsDao().deleteSetting("sync_resource_restore_stamp:$user")
         assetsB.synchronize()
         assertEquals(restoredQuestion.id, (b.chatDao().getMessageByUuid(message.uuid)!!.executionTrace.first()
             as ExecutionTraceEvent.UserMessageBoundary).messageId)
@@ -247,8 +366,10 @@ class SyncResourceSynchronizerTest {
         assertEquals("print('hello')", File(restoredVersion.rootPath, "script.py").readText())
         assertTrue(RoomSyncStore(b).pendingBatch().isEmpty())
         val uploads = api.fileUploads; val pushes = api.pushes
+        val restoredTool = File(cb.filesDir, toolPath).apply { setLastModified(1_000_000L) }
         assetsB.synchronize(); sync(b, api)
         assertEquals(uploads, api.fileUploads); assertEquals(pushes, api.pushes)
+        assertEquals("已完整恢复的资源不应每轮重新解密改写", 1_000_000L, restoredTool.lastModified())
     }
 
     @Test fun `只有用户调整边界也上传完整归档并在另一台恢复原顺序`() = runBlocking {
@@ -342,7 +463,35 @@ class SyncResourceSynchronizerTest {
         source.agentDao().upsertRun(run.copy(status = "COMPLETED", updatedAt = 40, executionOwner = "LOCAL"))
         val entry = AgentEntryEntity("cloud-entry", run.id, 1, "TOOL_RESULT", null, step.id, "{}", "COMPLETED", 20, 30)
         source.agentDao().upsertEntry(entry)
+        val checkpoint = AgentCompactionEntryEntity("cloud-runtime-summary", session.uuid, null, "旧工具已完成", "tool:old", "",
+            """{"summary_role":"user","source_prefix_ids":["cloud:${question.uuid}","tool:old"],"retained_ids":["tool:write"]}""", 9000, 500, null, "COMPLETED", 35)
         SyncResourceSynchronizer(cs, source, api, user).use { it.synchronize() }; sync(source, api)
+        // 用生产同款 AES-GCM/gzip 信封模拟后端 message_archive 内携带摘要，不借单独摘要附件过关。
+        for ((key, row) in api.rows.toMap()) {
+            if (row.entity != "attachments" || row.payload["role"]?.jsonPrimitive?.content != "message_archive") continue
+            assertEquals(1, row.payload.getValue("chunkCount").jsonPrimitive.int)
+            val file = File(cs.filesDir, "archive-fixture")
+            val info = SyncFileInfo(row.payload.getValue("fileId").jsonPrimitive.content, row.payload.getValue("size").jsonPrimitive.long,
+                row.payload.getValue("sha256").jsonPrimitive.content, "application/octet-stream")
+            api.downloadFile(info, file)
+            val bytes = file.readBytes()
+            val aad = JsonArray(listOf("everytalk-history", user, session.uuid, ai.uuid, "0").map(::JsonPrimitive)).toString().toByteArray()
+            val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+            val secret = SecretKeySpec(ByteArray(32) { it.toByte() }, "AES")
+            cipher.init(javax.crypto.Cipher.DECRYPT_MODE, secret, javax.crypto.spec.GCMParameterSpec(128, bytes.copyOfRange(0, 12)))
+            cipher.updateAAD(aad)
+            val original = java.util.zip.GZIPInputStream(cipher.doFinal(bytes.copyOfRange(12, bytes.size)).inputStream()).use { it.readBytes() }
+            val archive = syncJson.decodeFromString(SyncHistoryArchive.serializer(), original.toString(Charsets.UTF_8)).copy(compactions = listOf(checkpoint))
+            val json = syncJson.encodeToString(SyncHistoryArchive.serializer(), archive).toByteArray()
+            val zipped = java.io.ByteArrayOutputStream().also { out -> java.util.zip.GZIPOutputStream(out).use { it.write(json) } }.toByteArray()
+            val nonce = SyncCrypto.randomBytes(12)
+            cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, secret, javax.crypto.spec.GCMParameterSpec(128, nonce)); cipher.updateAAD(aad)
+            file.writeBytes(nonce + cipher.doFinal(zipped))
+            val uploaded = api.uploadFile(file, info.mime)
+            val digest = java.security.MessageDigest.getInstance("SHA-256").digest(json).joinToString("") { "%02x".format(it) }
+            api.rows[key] = row.copy(payload = JsonObject(row.payload + mapOf("fileId" to JsonPrimitive(uploaded.fileId), "size" to JsonPrimitive(uploaded.size),
+                "sha256" to JsonPrimitive(uploaded.sha256), "resourceDigest" to JsonPrimitive(digest), "resourceVersion" to JsonPrimitive("cloud-summary-$digest"))))
+        }
         api.rows.toMap().forEach { (key, row) ->
             if (row.entity == "attachments") api.rows[key] = row.copy(payload = JsonObject(row.payload + ("origin" to JsonPrimitive("cloud_agent"))))
         }
@@ -365,6 +514,13 @@ class SyncResourceSynchronizerTest {
             assertEquals(ai.executionSteps, restored.executionSteps)
             val localQuestion = db.chatDao().getMessageByUuid(question.uuid)!!
             assertEquals(localQuestion.id, (restored.executionTrace.first() as ExecutionTraceEvent.UserMessageBoundary).messageId)
+            val summary = db.agentDao().getCompactions(restored.sessionId).single()
+            assertEquals(checkpoint.summary, summary.summary)
+            assertEquals("tool:old", summary.summarizedThroughItemId)
+            val metadata = syncJson.parseToJsonElement(summary.retainedTailJson).jsonObject
+            assertEquals(listOf(localQuestion.id, "tool:old"), metadata.getValue("source_prefix_ids").jsonArray.map { it.jsonPrimitive.content })
+            assertEquals(listOf("tool:write"), metadata.getValue("retained_ids").jsonArray.map { it.jsonPrimitive.content })
+            assertEquals("received", db.settingsDao().getValue("sync_compaction_uploaded:$user:${checkpoint.id}"))
             assertTrue(RoomSyncStore(db).pendingBatch().isEmpty())
         }
         val archived = target.agentDao().getRun(run.id)!!

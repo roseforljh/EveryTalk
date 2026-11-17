@@ -31,6 +31,11 @@ import kotlinx.coroutines.flow.Flow
  * UNION 按位置拼接，SELECT * 会把草稿的值错位塞进别的列（NOT NULL 列读到 null 即崩溃）。
  * 两边必须按列名显式列出。
  */
+/** 单次按主键取整行的条数；大行仍可能超出一个 CursorWindow，但无排序，重查只是主键定位。 */
+private const val MESSAGE_FETCH_CHUNK = 16
+
+data class MessageOrderRow(val id: String, val draft: Boolean)
+
 const val MESSAGE_COLUMNS = "id, sessionId, text, contentParts, sender, reasoning, contentStarted, isError, name, timestamp, isPlaceholderName, webSearchResults, currentWebSearchStage, imageUrls, attachments, outputType, parts, executionStatus, executionSteps, executionTrace, executionFinishedAt, enabledToolIds, computerIdSnapshot, workspaceIdSnapshot, modelName, providerName, tokenUsage, contextUsageSnapshot, contextCompressionState, storageFingerprint, uuid, updated_at, deleted, sync_status, ever_synced, is_incomplete"
 
 @Dao
@@ -104,6 +109,10 @@ interface ChatDao {
     /** 资源补传先只读身份和内容指纹：绝大多数消息早已传完，不必为了核对把正文和执行轨迹整行读出来。 */
     @Query("SELECT id, storageFingerprint, uuid, updated_at, deleted, sync_status, ever_synced FROM messages WHERE deleted=0 AND sessionId IN (SELECT id FROM chat_sessions WHERE deleted=0 AND id NOT IN ('last_open_chat_v1','last_open_image_generation_v1')) ORDER BY timestamp DESC, uuid")
     suspend fun getResourceSyncCandidates(): List<MessageStorageState>
+
+    /** 摘要用独立附件同步，挂到压缩时已经存在的正式消息，不能依赖稍后才产生的云端回复。 */
+    @Query("SELECT * FROM messages WHERE sessionId = :sessionId AND deleted = 0 AND timestamp <= :createdAt ORDER BY timestamp DESC, uuid LIMIT 1")
+    suspend fun getCompactionSyncAnchor(sessionId: String, createdAt: Long): MessageEntity?
     /** 旧版本提示词仅在 System 消息中，升级时只读取这一列，不解析附件和工具轨迹。 */
     @Query("SELECT text FROM messages WHERE sessionId = :sessionId AND sender = 'System' AND isPlaceholderName = 0 AND deleted = 0 ORDER BY timestamp DESC LIMIT 1")
     suspend fun getLegacySystemPrompt(sessionId: String): String?
@@ -145,9 +154,16 @@ interface ChatDao {
     @Query("SELECT * FROM messages WHERE uuid = :uuid LIMIT 1")
     suspend fun getMessageByUuid(uuid: String): MessageEntity?
 
+    // 只解析引用时不要整行读：大回复的执行轨迹每行近 1MB，循环里逐条整行解码会堆出上百 MB 垃圾。
+    @Query("SELECT uuid FROM messages WHERE id = :id OR uuid = :uuid LIMIT 1")
+    suspend fun getStoredMessageUuid(id: String, uuid: String): String?
+
+    @Query("SELECT id FROM messages WHERE uuid = :uuid LIMIT 1")
+    suspend fun getMessageIdByUuid(uuid: String): String?
+
     /** 跨设备引用只认同步 UUID；兼容旧归档里的原设备 ID，不重复散列已经是 UUID 的引用。 */
     suspend fun resolveMessageSyncUuid(reference: String): String =
-        getStoredMessage(reference, reference)?.uuid
+        getStoredMessageUuid(reference, reference)
             ?: reference.removePrefix("cloud:").takeIf { runCatching { java.util.UUID.fromString(it).toString() == it }.getOrDefault(false) }
             ?: com.android.everytalk.data.database.entities.localSyncUuid("messages", reference)
 
@@ -160,7 +176,7 @@ interface ChatDao {
     /** 引用先到、消息后到时仍返回最终的本机 ID；真正到达后无需重排或创建替身消息。 */
     suspend fun resolveLocalMessageReference(reference: String): String {
         val uuid = resolveMessageSyncUuid(reference)
-        return getMessageByUuid(uuid)?.id ?: "cloud:$uuid"
+        return getMessageIdByUuid(uuid) ?: "cloud:$uuid"
     }
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
@@ -172,6 +188,9 @@ interface ChatDao {
     /** messages 是 append-only；UUID 冲突时由 SQLite 直接忽略，绝不覆盖本地正文。 */
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertRemoteMessage(message: MessageEntity): Long
+
+    @Query("UPDATE messages SET uuid = :uuid WHERE id = :id AND uuid = :rehashedUuid AND ever_synced = 0 AND NOT EXISTS (SELECT 1 FROM messages WHERE uuid = :uuid)")
+    suspend fun restoreRemoteMessageUuid(id: String, rehashedUuid: String, uuid: String)
 
     @Query("UPDATE messages SET deleted = 1, sync_status = 'SYNCED', ever_synced = 1 WHERE uuid = :uuid")
     suspend fun markRemoteMessageDeleted(uuid: String): Int
@@ -309,10 +328,26 @@ interface ChatDao {
 
     // 旧数据的问题与回复可能共用同一毫秒。相同时间先问题后回复，再按同步 UUID 排序，
     // 不能依赖插入顺序或本机 ID，否则另一台手机会把回复排到问题之前。
-    // 结果超过一个 CursorWindow 时会分段重查；并发会话同时写入会让分段错位读到空行，必须在同一事务快照内读完。
-    @Transaction
-    @Query("SELECT * FROM (SELECT $MESSAGE_COLUMNS FROM messages WHERE deleted = 0 UNION ALL SELECT $MESSAGE_COLUMNS FROM message_drafts) WHERE sessionId = :sessionId AND sessionId IN (SELECT id FROM chat_sessions WHERE deleted = 0) ORDER BY timestamp ASC, CASE sender WHEN 'System' THEN 0 WHEN 'User' THEN 1 WHEN 'AI' THEN 2 ELSE 3 END, uuid ASC")
-    suspend fun getMessagesForSession(sessionId: String): List<MessageEntity>
+    // 先只排序轻量列，再按主键分批取整行：带执行轨迹的行近 1MB，整行参与 UNION+ORDER BY 时，
+    // 每装满一个 CursorWindow 就要把整个排序重跑一遍，几百条消息的长会话读取时间按平方增长（骨架屏久久不退）。
+    // 不加 @Transaction：Room 的事务走唯一写连接，会排在同步的长写事务后面干等。每批都是独立的一致快照，
+    // 两步之间并发新增的消息下次刷新再出现、被删的直接缺席；页面只删自己见过的消息，缺席不会误删。
+    suspend fun getMessagesForSession(sessionId: String): List<MessageEntity> {
+        val order = getMessageOrderForSession(sessionId)
+        val (draftOrder, formalOrder) = order.partition { it.draft }
+        val formal = formalOrder.map { it.id }.chunked(MESSAGE_FETCH_CHUNK).flatMap { getMessageRowsByIds(it) }.associateBy { it.id }
+        val drafts = draftOrder.map { it.id }.chunked(MESSAGE_FETCH_CHUNK).flatMap { getDraftRowsByIds(it) }.associateBy { it.id }
+        return order.mapNotNull { if (it.draft) drafts[it.id] else formal[it.id] }
+    }
+
+    @Query("SELECT id, draft FROM (SELECT id, 0 AS draft, sessionId, timestamp, sender, uuid FROM messages WHERE deleted = 0 UNION ALL SELECT id, 1 AS draft, sessionId, timestamp, sender, uuid FROM message_drafts) WHERE sessionId = :sessionId AND sessionId IN (SELECT id FROM chat_sessions WHERE deleted = 0) ORDER BY timestamp ASC, CASE sender WHEN 'System' THEN 0 WHEN 'User' THEN 1 WHEN 'AI' THEN 2 ELSE 3 END, uuid ASC")
+    suspend fun getMessageOrderForSession(sessionId: String): List<MessageOrderRow>
+
+    @Query("SELECT $MESSAGE_COLUMNS FROM messages WHERE deleted = 0 AND id IN (:ids)")
+    suspend fun getMessageRowsByIds(ids: List<String>): List<MessageEntity>
+
+    @Query("SELECT $MESSAGE_COLUMNS FROM message_drafts WHERE id IN (:ids)")
+    suspend fun getDraftRowsByIds(ids: List<String>): List<MessageEntity>
 
     @Query("SELECT * FROM (SELECT $MESSAGE_COLUMNS FROM messages WHERE deleted = 0 UNION ALL SELECT $MESSAGE_COLUMNS FROM message_drafts) WHERE sessionId = :sessionId AND id = :messageId AND sessionId IN (SELECT id FROM chat_sessions WHERE deleted = 0) LIMIT 1")
     suspend fun getMessage(sessionId: String, messageId: String): MessageEntity?

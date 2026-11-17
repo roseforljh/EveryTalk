@@ -552,7 +552,12 @@ class ComputerSshConnection internal constructor(private val client: SSHClient) 
                     val deadline = System.currentTimeMillis() + timeoutMillis
                     while (remoteCommand.isOpen && System.currentTimeMillis() < deadline) {
                         ensureActive()
-                        remoteCommand.join(200, TimeUnit.MILLISECONDS)
+                        // sshj 0.41 起 join(超时) 到点未关闭会抛 Timeout expired；这里只是分片等待，到点继续下一片。
+                        try {
+                            remoteCommand.join(200, TimeUnit.MILLISECONDS)
+                        } catch (error: net.schmizz.sshj.connection.ConnectionException) {
+                            if (error.cause !is java.util.concurrent.TimeoutException) throw error
+                        }
                     }
                     val timedOut = remoteCommand.isOpen
                     if (timedOut) runCatching { remoteCommand.close() }

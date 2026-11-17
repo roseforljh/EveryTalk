@@ -335,7 +335,7 @@ class AgentRunCoordinator(
                 _cloudRuns.value = emptyMap(); clearCloudWaiting()
                 if (accountId == null || !com.android.everytalk.data.sync.syncServerConfigured(com.android.everytalk.BuildConfig.EVERYTALK_SYNC_BASE_URL)) return@collectLatest
                 val state = com.android.everytalk.data.sync.SyncStateStore(database)
-                if (!state.prepareAutomaticAccount(accountId, auth.binding) {
+                if (!state.ensureAutomaticAccount(accountId, auth.binding) {
                     (auth.auth.state.value as? com.android.everytalk.data.auth.AuthState.SignedIn)?.user?.id == accountId
                 }) return@collectLatest
                 kotlinx.coroutines.coroutineScope {
@@ -392,23 +392,6 @@ class AgentRunCoordinator(
         val coordinator = cloudCoordinator ?: return false
         coordinator.command(runId, type, fields, generation)
         return true
-    }
-
-    init {
-        if (databaseOverride == null) liveScope.launch { observeCloudAccount() }
-        liveScope.launch {
-            events.collect { (messageId, event) -> if (uiEventCollectors.get() == 0) publishLiveFromLedger(messageId, event) }
-        }
-        // 界面不在时，另一台设备的停止请求由这里执行。
-        liveScope.launch {
-            com.android.everytalk.data.sync.LiveSync.cancelRequests.collect { sessionUuid ->
-                if (uiEventCollectors.get() > 0) return@collect
-                val session = database.chatDao().getSessionByUuid(sessionUuid) ?: return@collect
-                agentRunStore.getRunsForSession(session.id)
-                    .filter { it.status !in setOf("COMPLETED", "FAILED", "CANCELLED") }
-                    .forEach { cancelVisibleRun(it.visibleAssistantMessageId) }
-            }
-        }
     }
 
     /** 按 Room 账本重建可见回复并上报，500ms 节流；Finish 立即通知结束。 */
@@ -1056,7 +1039,7 @@ class AgentRunCoordinator(
         if (!coordinator.serverSupported) throw CloudAgentIneligible("后端不支持云端任务，请检查后端版本")
         if (!permitted()) throw CloudAgentIneligible("账号登录状态已变化，请重新登录后重发")
         try {
-            check(state.prepareAutomaticAccount(accountId, auth.binding) {
+            check(state.ensureAutomaticAccount(accountId, auth.binding) {
                 (auth.auth.state.value as? com.android.everytalk.data.auth.AuthState.SignedIn)?.user?.id == accountId
             }) { "账号数据选择未完成" }
         } catch (cancelled: CancellationException) { throw cancelled
@@ -1083,7 +1066,7 @@ class AgentRunCoordinator(
             prepareCloudAgentSubmission(appContext, database, agentRunStore, skillRepository, memoryCoordinator,
                 input, accountId, epochs, computerSessionStateProvider(input.request.localComputerRequestContext), ::permitted,
                 compact = { sessionId, request, limits, plan ->
-                    status("正在压缩上下文")
+                    status(plan.executionStatus(request.model, limits.maxContextTokens))
                     agentLoop.compactForSubmission(sessionId, request, limits, plan)
                 },
                 beforePersist = { run, frozen ->
@@ -2183,6 +2166,24 @@ class AgentRunCoordinator(
         }
         computerDao.markResultAttached(execution.id)
         return true
+    }
+
+    // 放在类末尾：协程在后台线程立即执行，必须等所有 StateFlow 字段初始化完，否则启动即空指针崩溃。
+    init {
+        if (databaseOverride == null) liveScope.launch { observeCloudAccount() }
+        liveScope.launch {
+            events.collect { (messageId, event) -> if (uiEventCollectors.get() == 0) publishLiveFromLedger(messageId, event) }
+        }
+        // 界面不在时，另一台设备的停止请求由这里执行。
+        liveScope.launch {
+            com.android.everytalk.data.sync.LiveSync.cancelRequests.collect { sessionUuid ->
+                if (uiEventCollectors.get() > 0) return@collect
+                val session = database.chatDao().getSessionByUuid(sessionUuid) ?: return@collect
+                agentRunStore.getRunsForSession(session.id)
+                    .filter { it.status !in setOf("COMPLETED", "FAILED", "CANCELLED") }
+                    .forEach { cancelVisibleRun(it.visibleAssistantMessageId) }
+            }
+        }
     }
 }
 

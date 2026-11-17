@@ -59,6 +59,25 @@ internal class SyncStateStore(private val database: AppDatabase) {
     suspend fun isPausedAfterCloudReset(): Boolean = settings.getValue(KEY_RESET_PAUSED) == "true"
 
     /**
+     * 云端连接与发送只需确认账号已经完成初始化，不必重复修复同步队列。
+     * 已绑定同账号时只读短事务，不能排在持有全局同步锁的附件上传后面；
+     * 首次登录、旧版升级和换号仍走原初始化，云端清空后的暂停仍立即生效。
+     */
+    suspend fun ensureAutomaticAccount(
+        accountId: String,
+        binding: SyncAccountBindingStore,
+        canPrepare: () -> Boolean = { true },
+    ): Boolean {
+        if (!canPrepare()) return false
+        val prepared = database.withTransaction {
+            settings.getValue(KEY_AUTOMATIC_ACCOUNT) == accountId &&
+                settings.getValue(KEY_ACCOUNT) == accountId
+        }
+        if (prepared && binding.readBoundAccountId() == accountId) return isEnabled() && canPrepare()
+        return prepareAutomaticAccount(accountId, binding, canPrepare)
+    }
+
+    /**
      * 登录后自动接管游客文字数据；已绑定其他账号时等待原有三选一，不隐式上传。
      * 自动模式只初始化一次：重启或重新登录保留游标、拒绝记录和已同步状态，避免反复全量上传。
      * 云端清空后的暂停是用户的数据保护决定，不能被登录恢复或应用重启重新开启。
@@ -214,7 +233,7 @@ internal class SyncStateStore(private val database: AppDatabase) {
         settings.markAllUserSettingsPending()
         // 云端 epoch 变化后，旧的远端字段清单已经失效；重新上传必须从消息核心字段开始。
         settings.getByPrefix("sync_message_fields:").forEach { settings.deleteSetting(it.key) }
-        listOf("sync_resource_source:", "sync_resource_queued:", "sync_resource_retry:", "sync_resource_failed:", "sync_resource_receive_failed:").forEach { prefix ->
+        listOf("sync_resource_source:", "sync_compaction_uploaded:", "sync_compaction_queued:", "sync_resource_queued:", "sync_resource_retry:", "sync_resource_failed:", "sync_resource_receive_failed:", "sync_resource_received:", "sync_resource_restore_stamp:").forEach { prefix ->
             settings.getByPrefix(prefix).forEach { settings.deleteSetting(it.key) }
         }
         settings.insertSetting(SystemSettingEntity("sync_resource_republish", "true"))
@@ -231,7 +250,7 @@ internal class SyncStateStore(private val database: AppDatabase) {
                 value = stripAccountFields(syncJson.parseToJsonElement(row.value), true)?.toString() ?: "{}")))
         }
         database.openHelper.writableDatabase.execSQL("DELETE FROM sync_attachments")
-        listOf("sync_resource_meta:", "sync_resource_queued:", "sync_resource_retry:", "sync_private_applied:", "sync_secret_cache:", "sync_resource_restored:").forEach { prefix ->
+        listOf("sync_resource_meta:", "sync_compaction_uploaded:", "sync_compaction_queued:", "sync_compaction_restored:", "sync_resource_queued:", "sync_resource_retry:", "sync_private_applied:", "sync_secret_cache:", "sync_resource_restored:", "sync_resource_received:", "sync_resource_restore_stamp:").forEach { prefix ->
             settings.getByPrefix(prefix).forEach { settings.deleteSetting(it.key) }
         }
     }
@@ -259,6 +278,9 @@ internal class SyncStateStore(private val database: AppDatabase) {
         settings.clearPinnedItems(false)
         settings.clearTextGroupsForSync()
         settings.clearUserSettingsForSync()
+        for (prefix in listOf("sync_compaction_uploaded:", "sync_compaction_queued:", "sync_compaction_restored:")) {
+            settings.getByPrefix(prefix).forEach { settings.deleteSetting(it.key) }
+        }
         settings.clearSyncRejections()
     }
 

@@ -28,6 +28,20 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.ConcurrentHashMap
  
  class ViewModelStateHolder {
+    /** 用户每次打开/切换会话都加一；启动时恢复“上次会话”据此判断用户已自己选了会话，不能再覆盖。 */
+    @Volatile var textNavigationGeneration: Long = 0L
+
+    /**
+     * 整批装入会话消息后加一。列表构建在后台 snapshotFlow 里读消息列表，实测整批装入后的第一次修改
+     * 偶尔收不到变更通知，要等下一次无关修改才刷新（骨架屏卡十几秒到一直不退）；按这个版本号强制重读。
+     */
+    val textConversationRevision = kotlinx.coroutines.flow.MutableStateFlow(0L)
+
+    /** 主线程直接改全局快照时，后台线程要等下一帧推进全局快照才看得到；先强制提交再通知重读。 */
+    fun notifyTextConversationLoaded() {
+        androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
+        textConversationRevision.value++
+    }
     // 🎯 Streaming message state manager for efficient UI updates
     // Provides StateFlow-based observation of streaming content
     // Requirements: 1.4, 3.4

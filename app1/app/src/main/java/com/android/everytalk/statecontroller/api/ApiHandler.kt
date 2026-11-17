@@ -752,12 +752,9 @@ class ApiHandler(
                 }
                 continue
             }
-            val trace = agentRunStore.executionTrace(run.id).map { event ->
-                // 旧云端账本的 FOLLOW_UP/STEERING 仍携带原设备消息 ID，展示前按相同规则恢复引用。
-                if (run.terminalReason == "SYNC_HISTORY_ONLY" && event is ExecutionTraceEvent.UserMessageBoundary) {
-                    event.copy(messageId = AppDatabase.getDatabase(context).chatDao().resolveLocalMessageReference(event.messageId))
-                } else event
-            }
+            // 同步归档 Run 只供审计，对账会直接丢弃；先跳过，别为它解码整本账（长会话上百个 Run、几十 MB）。
+            if (run.terminalReason == "SYNC_HISTORY_ONLY") continue
+            val trace = agentRunStore.executionTrace(run.id)
             // Run 状态可能在读取账本时推进或被用户终止；这种快照不能应用。
             if (agentRunStore.getRun(run.id) != run) continue
             withContext(Dispatchers.Main.immediate) {

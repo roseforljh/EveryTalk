@@ -130,8 +130,12 @@ import java.util.TimeZone
     }
 
     internal fun AppViewModel.getMessageById(id: String): Message? {
-        return messages.find { it.id == id } ?: imageGenerationMessages.find { it.id == id }
-            ?: stateHolder._remoteLiveRun.value?.message?.takeIf { it.id == id }
+        val local = messages.find { it.id == id } ?: imageGenerationMessages.find { it.id == id }
+        val remote = stateHolder._remoteLiveRun.value?.takeIf {
+            it.message.id == id && !stateHolder._isTextApiCalling.value
+        } ?: return local
+        // 详情、菜单和列表必须读取同一份快照；同步先到的薄版正文不能抹掉云端完整过程。
+        return com.android.everytalk.statecontroller.facade.overlayRemoteMessage(listOfNotNull(local), remote).single()
     }
 
     internal fun AppViewModel.getStreamingReasoning(messageId: String) = stateHolder.getStreamingReasoning(messageId)

@@ -387,16 +387,17 @@ class HistoryManagerCustomPromptPersistenceTest {
         )
 
         val otherConversation = listOf(
-            Message(id = "user-other", text = "另一个会话", sender = Sender.User),
-            Message(id = "ai-other", text = "另一个回答", sender = Sender.AI),
+            Message(id = "user-other", text = "另一个会话", sender = Sender.User, timestamp = 30),
+            Message(id = "ai-other", text = "另一个回答", sender = Sender.AI, timestamp = 40),
         )
         val originalConversation = listOf(
-            Message(id = "user-a", text = "问题 a", sender = Sender.User),
-            Message(id = "ai-a-old", text = "旧回答", sender = Sender.AI),
+            Message(id = "user-a", text = "问题 a", sender = Sender.User, timestamp = 10),
+            Message(id = "ai-a-old", text = "旧回答", sender = Sender.AI, timestamp = 20),
         )
+        // 新回复到达：时间晚于原有消息，才应挪到顶部。
         val updatedConversation = listOf(
-            Message(id = "user-a", text = "问题 a", sender = Sender.User),
-            Message(id = "ai-a-new", text = "回答 b", sender = Sender.AI),
+            Message(id = "user-a", text = "问题 a", sender = Sender.User, timestamp = 10),
+            Message(id = "ai-a-new", text = "回答 b", sender = Sender.AI, timestamp = 50),
         )
 
         stateHolder._historicalConversations.value = listOf(otherConversation, originalConversation)
@@ -416,6 +417,34 @@ class HistoryManagerCustomPromptPersistenceTest {
     }
 
     @Test
+    fun `opening and leaving a conversation without new messages keeps its sidebar position`() = runBlocking {
+        val stateHolder = ViewModelStateHolder()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val historyManager = HistoryManager(
+            stateHolder = stateHolder,
+            persistenceManager = mockk(relaxed = true),
+            compareMessageLists = { left, right -> left == right },
+            onHistoryModified = {},
+            scope = scope
+        )
+        val newer = listOf(Message(id = "user-newer", text = "newer", sender = Sender.User, timestamp = 30))
+        // 侧栏里是轻量预览；打开后是完整消息，内容表示不同但没有新消息。
+        val preview = listOf(Message(id = "user-old", text = "old", sender = Sender.User, timestamp = 10))
+        val full = listOf(Message(id = "user-old", text = "old", sender = Sender.User, timestamp = 10, reasoning = "完整字段"))
+        stateHolder._historicalConversations.value = listOf(newer, preview)
+        stateHolder._loadedHistoryIndex.value = 1
+        stateHolder.setCurrentConversationId("user-old")
+        stateHolder.messages.addAll(full)
+        try {
+            historyManager.saveCurrentChatToHistoryNow(forceSave = true)
+            assertEquals("user-newer", stateHolder._historicalConversations.value[0].first().id)
+            assertEquals("user-old", stateHolder._historicalConversations.value[1].first().id)
+        } finally {
+            scope.coroutineContext[Job]?.cancelAndJoin()
+        }
+    }
+
+    @Test
     fun `force save moves updated existing conversation to top immediately`() = runBlocking {
         val stateHolder = ViewModelStateHolder()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
@@ -428,16 +457,16 @@ class HistoryManagerCustomPromptPersistenceTest {
         )
 
         val newerConversation = listOf(
-            Message(id = "user-newer", text = "newer question", sender = Sender.User),
-            Message(id = "ai-newer", text = "newer answer", sender = Sender.AI),
+            Message(id = "user-newer", text = "newer question", sender = Sender.User, timestamp = 30),
+            Message(id = "ai-newer", text = "newer answer", sender = Sender.AI, timestamp = 40),
         )
         val oldConversation = listOf(
-            Message(id = "user-old", text = "old question", sender = Sender.User),
-            Message(id = "ai-old", text = "old answer", sender = Sender.AI),
+            Message(id = "user-old", text = "old question", sender = Sender.User, timestamp = 10),
+            Message(id = "ai-old", text = "old answer", sender = Sender.AI, timestamp = 20),
         )
         val updatedOldConversation = listOf(
-            Message(id = "user-old", text = "old question", sender = Sender.User),
-            Message(id = "ai-old-updated", text = "updated old answer", sender = Sender.AI),
+            Message(id = "user-old", text = "old question", sender = Sender.User, timestamp = 10),
+            Message(id = "ai-old-updated", text = "updated old answer", sender = Sender.AI, timestamp = 50),
         )
 
         stateHolder._historicalConversations.value = listOf(newerConversation, oldConversation)

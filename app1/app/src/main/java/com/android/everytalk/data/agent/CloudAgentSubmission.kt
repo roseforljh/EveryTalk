@@ -8,7 +8,7 @@ import com.android.everytalk.data.memory.MemoryCoordinator
 import com.android.everytalk.data.memory.MemoryPromptRenderer
 import com.android.everytalk.data.skill.SkillRepository
 import com.android.everytalk.models.SelectedMediaItem
-import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.*
 import java.util.TimeZone
 import com.android.everytalk.data.database.AppDatabase
 import com.android.everytalk.data.database.entities.SyncStatus
@@ -137,9 +137,14 @@ private suspend fun freezeCloudAgentInput(
     runStore.restoreLegacyCompaction(input.sessionId, preparedInput.request)
     val transcript = MemoryPromptRenderer.forHistory(runStore.expandTranscript(input.sessionId, preparedInput.request.messages))
     val request = refreshComputerExecutionPolicy(preparedInput.request.copy(messages = transcript), sessionState)
+    // 新云任务尚未加载延迟工具：预算与后端第一轮声明一致，不能把全部授权 schema 都算进输入。
+    // 原 request 仍冻结完整绑定供 tool_search 按需加载；摘要增益校验也必须使用相同的声明预算。
+    val budgetRequest = request.copy(tools = McpToolDiscovery.project(
+        AgentToolResultReadTool.withTool(request.tools), emptyList(),
+    ))
     suspend fun prepare() = runStore.compactions(input.sessionId).let { checkpoints ->
         AgentContextManager().prepare(
-            requestId = "cloud-submission", request = request, limits = preparedInput.tokenLimits,
+            requestId = "cloud-submission", request = budgetRequest, limits = preparedInput.tokenLimits,
             checkpoint = checkpoints.firstOrNull(), checkpointFallbacks = checkpoints,
         )
     }
@@ -148,7 +153,7 @@ private suspend fun freezeCloudAgentInput(
     repeat(4) {
         val plan = prepared.compactionPlan ?: return@repeat
         check(permitted()) { "云端任务账号授权已变更" }
-        compact(input.sessionId, request, preparedInput.tokenLimits, plan)
+        compact(input.sessionId, budgetRequest, preparedInput.tokenLimits, plan)
         prepared = prepare()
     }
     check(prepared.compactionPlan == null) { "上下文压缩后仍超出模型窗口" }
@@ -170,9 +175,16 @@ private suspend fun freezeCloudAgentInput(
     }
     check(!user.deleted && user.sender == Sender.User && !assistant.deleted && assistant.sender == Sender.AI) { "云端任务消息身份无效" }
     // 地址、消息协议或附件转换失败不能留下没有冻结输入的 SUBMITTING 记录。
+    val checkpoint = runStore.compactions(input.sessionId).firstOrNull { it.id == prepared.snapshot.compactionId }
+    val coveredIds = checkpoint?.let { saved ->
+        Json.parseToJsonElement(saved.retainedTailJson).jsonObject["source_prefix_ids"]?.jsonArray
+            ?.map { it.jsonPrimitive.content }
+    }.orEmpty()
+    val identities = chat.getMessageStorageStates(input.sessionId).associate { it.id to "cloud:${it.uuid}" }
     val frozen = cloudAgentInput(modelRequest, java.util.UUID.randomUUID().toString(), session.uuid, user.uuid, assistant.uuid,
         epochs.first, epochs.second, assistant.timestamp, TimeZone.getDefault().id, tools,
-        contextUsage = assistant.toMessage().contextUsageSnapshot)
+        contextUsage = assistant.toMessage().contextUsageSnapshot, compactionSourceIds = coveredIds, messageIdReferences = identities,
+        previousSummary = checkpoint?.summary)
     check(permitted()) { "云端任务账号授权已变更" }
     return frozen to request
 }

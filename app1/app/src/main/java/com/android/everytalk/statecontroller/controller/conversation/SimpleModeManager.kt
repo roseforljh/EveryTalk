@@ -125,6 +125,7 @@ class SimpleModeManager(
      */
     suspend fun switchToTextMode(forceNew: Boolean = false, skipSavingTextChat: Boolean = false) {
         textHistoryRequestGeneration++
+        stateHolder.textNavigationGeneration++
         imageHistoryRequestGeneration++
         Log.d(TAG, "Switching to TEXT mode (forceNew: $forceNew, skipSavingTextChat: $skipSavingTextChat)")
         
@@ -219,6 +220,7 @@ class SimpleModeManager(
      */
     suspend fun switchToImageMode(forceNew: Boolean = false, skipSavingImageChat: Boolean = false) {
         textHistoryRequestGeneration++
+        stateHolder.textNavigationGeneration++
         imageHistoryRequestGeneration++
         Log.d(TAG, "Switching to IMAGE mode (forceNew: $forceNew, skipSavingImageChat: $skipSavingImageChat)")
         
@@ -310,6 +312,7 @@ class SimpleModeManager(
     suspend fun loadTextHistory(index: Int) {
         val requestGeneration = ++textHistoryRequestGeneration
         imageHistoryRequestGeneration++
+        stateHolder.textNavigationGeneration++
         val sourceConversationId = stateHolder._currentConversationId.value
         Log.d(TAG, "🔥 [START] Loading TEXT history at index: $index")
         _uiMode.value = ModeType.TEXT // 立即更新意图
@@ -339,45 +342,7 @@ class SimpleModeManager(
         Log.d(TAG, "🔥 Stable ID: $stableId, System Prompt chars=${systemPrompt.length}")
 
         val (processedMessages, reasoningCompleteStates, animationPlayedStates) = withContext(Dispatchers.Default) {
-            val recoveredMessages = ConversationNameHelper
-                .withoutStoredConversationTitle(conversationToLoad)
-                .map { msg ->
-                // 修复：处理AI消息文本丢失问题
-                if (msg.sender == Sender.AI) {
-                    android.util.Log.d("SimpleModeManager", "Processing AI message ${msg.id}: text length=${msg.text.length}, parts=${msg.parts.size}, contentStarted=${msg.contentStarted}")
-                    
-                    if (msg.text.isBlank() && msg.parts.isNotEmpty()) {
-                        // 尝试从parts重建文本内容
-                        val rebuiltText = msg.parts.toRecoveredMarkdown()
-                        
-                        if (rebuiltText.isNotBlank()) {
-                            android.util.Log.d("SimpleModeManager", "Rebuilt AI message text from parts: ${rebuiltText.take(50)}...")
-                            msg.copy(text = rebuiltText, contentStarted = true)
-                        } else if (msg.contentStarted && msg.text.isBlank()) {
-                            // 如果contentStarted=true但文本为空，至少保留占位符
-                            android.util.Log.w("SimpleModeManager", "AI message ${msg.id} has contentStarted=true but empty text, using placeholder")
-                            msg.copy(text = "...", contentStarted = true)
-                        } else {
-                            msg
-                        }
-                    } else if (msg.parts.isEmpty() && msg.text.isNotBlank()) {
-                        val tempProcessor = com.android.everytalk.util.messageprocessor.MessageProcessor().apply { initialize(stableId, msg.id) }
-                        tempProcessor.finalizeMessageProcessing(msg)
-                    } else {
-                        msg
-                    }
-                } else {
-                    msg
-                }
-            }.map { msg ->
-                // 修复：确保AI消息总是有 contentStarted = true，即使文本为空
-                val updatedContentStarted = when {
-                    msg.sender == Sender.AI -> true  // AI消息始终设置为true
-                    else -> msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank() || msg.isError
-                }
-                msg.copy(contentStarted = updatedContentStarted)
-            }
-            val preparedMessages = prepareLoadedHistoryMessages(recoveredMessages, stableId)
+            val preparedMessages = prepareTextHistoryForDisplay(conversationToLoad, stableId)
             val reasoningCompleteStates = preparedMessages.asSequence()
                 .filter { msg -> msg.sender == Sender.AI && !msg.reasoning.isNullOrBlank() }
                 .associate { msg -> msg.id to true }
@@ -438,6 +403,8 @@ class SimpleModeManager(
                 stateHolder.textReasoningCompleteMap.putAll(reasoningCompleteStates)
                 stateHolder.textMessageAnimationStates.putAll(animationPlayedStates)
             }
+            // 快照块已提交，再通知列表按新内容重读。
+            stateHolder.notifyTextConversationLoaded()
             stateHolder.restoreTextConversationUi()
             Log.d(TAG, "🔥 Loaded messages into state.")
             Log.d(TAG, "🔥 Set reasoning and animation states.")
@@ -569,4 +536,45 @@ class SimpleModeManager(
             else -> 0
         }
     }
+}
+
+/** 打开会话和同步后刷新共用同一套展示前处理；两条路径结果不同会让每轮刷新都判定消息变了，整表重建。 */
+internal fun prepareTextHistoryForDisplay(conversationToLoad: List<Message>, stableId: String): List<Message> {
+    val recoveredMessages = ConversationNameHelper
+        .withoutStoredConversationTitle(conversationToLoad)
+                .map { msg ->
+                // 修复：处理AI消息文本丢失问题
+                if (msg.sender == Sender.AI) {
+                    if (msg.text.isBlank() && msg.parts.isNotEmpty()) {
+                        // 尝试从parts重建文本内容
+                        val rebuiltText = msg.parts.toRecoveredMarkdown()
+                        
+                        if (rebuiltText.isNotBlank()) {
+                            android.util.Log.d("SimpleModeManager", "Rebuilt AI message text from parts: ${rebuiltText.take(50)}...")
+                            msg.copy(text = rebuiltText, contentStarted = true)
+                        } else if (msg.contentStarted && msg.text.isBlank()) {
+                            // 如果contentStarted=true但文本为空，至少保留占位符
+                            android.util.Log.w("SimpleModeManager", "AI message ${msg.id} has contentStarted=true but empty text, using placeholder")
+                            msg.copy(text = "...", contentStarted = true)
+                        } else {
+                            msg
+                        }
+                    } else if (msg.parts.isEmpty() && msg.text.isNotBlank()) {
+                        val tempProcessor = com.android.everytalk.util.messageprocessor.MessageProcessor().apply { initialize(stableId, msg.id) }
+                        tempProcessor.finalizeMessageProcessing(msg)
+                    } else {
+                        msg
+                    }
+                } else {
+                    msg
+                }
+            }.map { msg ->
+                // 修复：确保AI消息总是有 contentStarted = true，即使文本为空
+                val updatedContentStarted = when {
+                    msg.sender == Sender.AI -> true  // AI消息始终设置为true
+                    else -> msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank() || msg.isError
+                }
+                msg.copy(contentStarted = updatedContentStarted)
+            }
+    return prepareLoadedHistoryMessages(recoveredMessages, stableId)
 }

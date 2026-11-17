@@ -236,7 +236,7 @@ fun SettingsScreen(
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
-        containerColor = Color.Transparent,
+        containerColor = MaterialTheme.colorScheme.background, // 侧滑返回预览时底层页面会露出，本页必须自带不透明背景
         contentWindowInsets = WindowInsets(0.dp)
     ) { contentPadding ->
         Box(

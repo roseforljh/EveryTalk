@@ -367,6 +367,23 @@ object GeminiDirectClient {
                             
                             try {
                                 val jsonChunk = Json.parseToJsonElement(chunk).jsonObject
+                                (jsonChunk["error"] as? JsonObject)?.let { errorObject ->
+                                    val msg = errorObject["message"]?.jsonPrimitive?.contentOrNull ?: "Gemini 流式请求失败"
+                                    val code = errorObject["code"]?.jsonPrimitive?.contentOrNull
+                                    val type = errorObject["status"]?.jsonPrimitive?.contentOrNull
+                                    emitEvent(AppStreamEvent.Error(
+                                        message = "Gemini API 错误: $msg",
+                                        code = code,
+                                        type = type,
+                                        rawMessage = msg,
+                                    ))
+                                    return ParseResult(
+                                        hasToolCalls = false,
+                                        fullText = fullText.toString(),
+                                        assistantContent = null,
+                                        finishReason = "error",
+                                    )
+                                }
                                 ProviderSafetyResponse.geminiBlockReason(jsonChunk)?.let { reason ->
                                     safetyBlocked = true
                                     emitEvent(ProviderSafetyResponse.error(reason))

@@ -8,6 +8,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -17,8 +18,8 @@ import androidx.compose.ui.res.stringResource
 import com.android.everytalk.R
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.gestures.scrollBy
-import androidx.compose.ui.platform.LocalDensity
 import kotlinx.coroutines.flow.first
 import androidx.compose.ui.Alignment
 import androidx.compose.animation.*
@@ -155,36 +156,18 @@ fun AppDrawerContent(
             ProcessedDrawerItems(pinned, custom, ungrouped)
         }
     }.value
-    // 打开侧栏时把当前会话放到列表中部；历史还在加载时等加载完再定位。
-    val currentSessionId by rememberUpdatedState(currentConversationId)
-    val currentProcessedItems by rememberUpdatedState(processedItems)
-    val currentExpandedGroups by rememberUpdatedState(expandedGroups)
-    val density = LocalDensity.current
-    LaunchedEffect(sessionKey, isLoadingHistoryData, isImageGenerationMode) {
-        if (sessionKey == 0 || isLoadingHistoryData) return@LaunchedEffect
-        val target = currentSessionId.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
-        val items = currentProcessedItems
-        val itemHeightPx = with(density) { 64.dp.toPx() } // 与 DrawerConversationListItem 行高一致
-        // 与下方 LazyColumn 的 item 顺序一致：操作区、分组标题、分组内容、会话标题、[置顶标题、置顶内容]、未分组会话。
-        val pinnedSlots = if (items.pinned.isNotEmpty()) 2 else 0
-        val ungroupedPos = items.ungrouped.indexOfFirst { it.stableId == target }
-        val pinnedPos = items.pinned.indexOfFirst { it.stableId == target }
-        val (listIndex, innerOffsetPx) = when {
-            ungroupedPos >= 0 -> (4 + pinnedSlots + ungroupedPos) to 0f
-            pinnedPos >= 0 && "pinned" in currentExpandedGroups -> 5 to pinnedPos * itemHeightPx
-            pinnedPos >= 0 -> 4 to 0f
-            else -> 2 to 0f
-        }
-        snapshotFlow { listState.layoutInfo.totalItemsCount }.first { it > listIndex }
-        listState.scrollToItem(listIndex)
-        val info = listState.layoutInfo
-        val item = info.visibleItemsInfo.firstOrNull { it.index == listIndex } ?: return@LaunchedEffect
-        // 置顶容器是一个整体 item，只取其中那一行的高度来居中。
-        val rowHeight = if (pinnedPos >= 0 && listIndex == 5) itemHeightPx else item.size.toFloat()
-        val rowCenter = item.offset + innerOffsetPx + rowHeight / 2f
-        val viewportCenter = (info.viewportStartOffset + info.viewportEndOffset) / 2f
-        listState.scrollBy(rowCenter - viewportCenter)
-    }
+    // 先只渲染最新 10 个未分组会话；当前会话更靠后时多渲染到它为止。底部顶着阻尼拉过一段松手再加 10 个。
+    // 已加载的数量随侧栏一起记住，下次展开停在上次的位置。
+    // 侧栏内容被重建时，至少渲染到列表记住的滚动位置再多一页，保证位置原样恢复。
+    var ungroupedPageLimit by rememberSaveable { mutableStateOf(maxOf(DRAWER_PAGE_SIZE, listState.firstVisibleItemIndex + DRAWER_PAGE_SIZE)) }
+    val currentUngroupedPosition = processedItems.ungrouped.indexOfFirst { it.stableId == currentConversationId }
+    val ungroupedLimit = maxOf(ungroupedPageLimit, currentUngroupedPosition + 1)
+    val hiddenUngroupedCount = (processedItems.ungrouped.size - ungroupedLimit).coerceAtLeast(0)
+    val drawerPull = com.android.everytalk.ui.components.rememberEdgePullToLoadState(
+        fromTop = false,
+        enabled = hiddenUngroupedCount > 0,
+        onLoad = { ungroupedPageLimit = ungroupedLimit + DRAWER_PAGE_SIZE },
+    )
     @Composable
     fun ConversationItem(itemData: FilteredConversationItem, modifier: Modifier = Modifier) {
         val isPinned = itemData.stableId in pinnedIds
@@ -294,7 +277,9 @@ fun AppDrawerContent(
                 state = listState,
                 modifier = Modifier
                     .fillMaxSize()
-                    .zIndex(0f),
+                    .zIndex(0f)
+                    .graphicsLayer { translationY = drawerPull.offset }
+                    .nestedScroll(drawerPull.connection),
                 contentPadding = PaddingValues(top = topChromeHeight, bottom = bottomChromeHeight),
             ) {
                 item(key = "drawer_primary_actions") {
@@ -502,13 +487,25 @@ fun AppDrawerContent(
                         }
                         // 未分组会话始终显示。
                         items(
-                            items = processedItems.ungrouped,
+                            items = processedItems.ungrouped.take(ungroupedLimit),
                             key = { item -> "ungrouped_${item.stableId}_${isImageGenerationMode}" },
                         ) { itemData ->
                             ConversationItem(
                                 itemData = itemData,
                                 modifier = Modifier.animateItem(placementSpec = tween(300)),
                             )
+                        }
+                        if (hiddenUngroupedCount > 0) {
+                            item(key = "drawer_load_more") {
+                                Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
+                                    androidx.compose.material3.TextButton(onClick = { ungroupedPageLimit = ungroupedLimit + DRAWER_PAGE_SIZE }) {
+                                        Text(
+                                            if (drawerPull.reachedThreshold) stringResource(R.string.drawer_release_to_load_more)
+                                            else stringResource(R.string.drawer_load_more, hiddenUngroupedCount)
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -692,3 +689,5 @@ fun AppDrawerContent(
         }
     }
 }
+
+private const val DRAWER_PAGE_SIZE = 10

@@ -581,7 +581,9 @@ class HistoryManager(
             if (messagesToSave.isNotEmpty() && (isDirty || forceSave && contentChanged)) {
                 if (contentChanged) {
                     mutableHistory[currentLoadedIdx] = updatedConversation
-                    if (currentLoadedIdx > 0) {
+                    // 侧栏按最后一条消息时间排序（与库里 lastModifiedTimestamp 一致）。历史列表里存的是轻量预览，
+                    // 和完整消息比较永远“不同”；只有真的来了更新的消息才挪到顶部，打开、切走不改顺序。
+                    if (currentLoadedIdx > 0 && hasNewerMessage(storedConversation, messagesToSave)) {
                         mutableHistory.add(0, mutableHistory.removeAt(currentLoadedIdx))
                         finalNewLoadedIndex = 0
                     } else {
@@ -628,8 +630,9 @@ class HistoryManager(
                         storedConversation = mutableHistory[duplicateIndex],
                         currentMessages = messagesToSave,
                     )
+                    val previousConversation = mutableHistory[duplicateIndex]
                     mutableHistory[duplicateIndex] = updatedConversation
-                    if (duplicateIndex > 0) {
+                    if (duplicateIndex > 0 && hasNewerMessage(previousConversation, messagesToSave)) {
                         mutableHistory.add(0, mutableHistory.removeAt(duplicateIndex))
                         finalNewLoadedIndex = 0
                     } else {
@@ -1080,3 +1083,6 @@ class HistoryManager(
         }
     }
 }
+
+private fun hasNewerMessage(stored: List<Message>, current: List<Message>): Boolean =
+    (current.maxOfOrNull { it.timestamp } ?: 0L) > (stored.maxOfOrNull { it.timestamp } ?: 0L)

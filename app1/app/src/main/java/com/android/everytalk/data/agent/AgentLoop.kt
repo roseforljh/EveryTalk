@@ -387,13 +387,16 @@ class AgentLoop(
                             message = "reason=threshold,tokensBefore=${plan.tokensBefore},contextWindow=${input.tokenLimits.maxContextTokens}," +
                                 "triggerThreshold=${plan.triggerThreshold},recentTarget=${plan.recentTargetTokens},nativeOrLocal=local",
                         )
-                        emit(AppStreamEvent.ExecutionStatusUpdate("正在压缩上下文"))
+                        emit(AppStreamEvent.ExecutionStatusUpdate(
+                            plan.executionStatus(input.request.model, input.tokenLimits.maxContextTokens),
+                        ))
                         val completedCompaction = try {
                             executeCompaction(
                                 run = checkNotNull(run),
                                 requestOrdinal = requestOrdinal,
                                 plan = plan,
-                                baseRequest = input.request.copy(messages = contextTranscript),
+                                // 摘要前后按同一份实际工具声明校验，不能在增益判断时重新算回延迟工具全集。
+                                baseRequest = modelRequest.copy(messages = contextTranscript),
                                 limits = input.tokenLimits,
                             )
                         } catch (error: AgentContextWindowException) {
@@ -433,8 +436,14 @@ class AgentLoop(
                                 "contextWindow=${input.tokenLimits.maxContextTokens},triggerThreshold=${plan.triggerThreshold}," +
                                 "recentTarget=${plan.recentTargetTokens},summaryTokens=${plan.summaryOutputTokenLimit},nativeOrLocal=local",
                         )
-                        // 摘要替代了早期中立历史，供应商上一轮的原生连续状态已不再对应新前缀。
+                        // 摘要替代了早期中立历史，供应商上一轮的原生连续状态与旧实测校准都已不再对应新前缀。
                         providerContinuation = null
+                        input = input.copy(request = input.request.copy(
+                            contextManagement = input.request.contextManagement?.copy(inputTokenCalibration = 0L),
+                        ))
+                        modelRequest = modelRequest.copy(
+                            contextManagement = modelRequest.contextManagement?.copy(inputTokenCalibration = 0L),
+                        )
                         requestId = UUID.randomUUID().toString()
                         val refreshedSessionStatePrompt = computerSessionStateProvider(input.request.localComputerRequestContext)
                         contextTranscript = transcript + listOfNotNull(
@@ -557,27 +566,7 @@ class AgentLoop(
                     val isContextOverflow = ContextErrorClassifier.classify(
                         turnFailure.toProviderErrorInfo()
                     ) == RequestErrorCategory.INPUT_CONTEXT_TOO_LONG
-                    if (isContextOverflow && !overflowRecoveryUsed && assistant.blocks.isEmpty()) {
-                        overflowRecoveryUsed = true
-                        runStore.updateRequest(
-                            request = requestFact,
-                            status = AgentRequestStatus.FAILED,
-                            finishReason = "overflow_recovery",
-                            firstEventAt = firstEventAt,
-                            finishedAt = finishedAt,
-                        )
-                        run = runStore.updateRunStatus(
-                            run = checkNotNull(run),
-                            status = AgentRunStatus.RETRYING,
-                            requestOrdinal = ordinal,
-                            terminalReason = "overflow_recovery",
-                        )
-                        runStore.appendStatusEvent(
-                            runId = checkNotNull(run).id,
-                            reason = "overflow_recovery",
-                            message = "provider context overflow，执行一次紧急压缩后重试",
-                        )
-                        emit(AppStreamEvent.ExecutionStatusUpdate("上下文超限，正在紧急压缩后重试"))
+                    if (isContextOverflow && !overflowRecoveryUsed) {
                         val emergencyRequest = modelRequest.copy(
                             messages = contextTranscript,
                             localProviderContinuation = null,
@@ -593,6 +582,26 @@ class AgentLoop(
                         )
                         val emergencyPlan = emergency.compactionPlan
                         if (emergencyPlan != null) {
+                            overflowRecoveryUsed = true
+                            runStore.updateRequest(
+                                request = requestFact,
+                                status = AgentRequestStatus.FAILED,
+                                finishReason = "overflow_recovery",
+                                firstEventAt = firstEventAt,
+                                finishedAt = finishedAt,
+                            )
+                            run = runStore.updateRunStatus(
+                                run = checkNotNull(run),
+                                status = AgentRunStatus.RETRYING,
+                                requestOrdinal = ordinal,
+                                terminalReason = "overflow_recovery",
+                            )
+                            runStore.appendStatusEvent(
+                                runId = checkNotNull(run).id,
+                                reason = "overflow_recovery",
+                                message = "provider context overflow，执行一次紧急压缩后重试",
+                            )
+                            emit(AppStreamEvent.ExecutionStatusUpdate("上下文超限，正在紧急压缩后重试"))
                             val recoveredCompaction = executeCompaction(
                                 run = checkNotNull(run),
                                 requestOrdinal = ordinal + 1,
@@ -610,6 +619,9 @@ class AgentLoop(
                                     "tokensAfter=${recoveredCompaction.estimatedTokensAfter},overflowRecovery=true",
                             )
                             providerContinuation = null
+                            input = input.copy(request = input.request.copy(
+                                contextManagement = input.request.contextManagement?.copy(inputTokenCalibration = 0L),
+                            ))
                             requestOrdinal = ordinal + 1
                             continue
                         }
@@ -679,6 +691,8 @@ class AgentLoop(
                     }
                 }
 
+                // Pi：一次成功模型轮后重新允许溢出恢复，不把“一次”错误地限制为整个任务。
+                if (finishReason != "length") overflowRecoveryUsed = false
                 val frozenRuntimeContext = com.android.everytalk.data.network.SystemPromptInjector
                     .freezeRuntimeContext(prepared.messages, requestId)
                 runStore.appendAssistant(
@@ -2324,11 +2338,15 @@ class AgentLoop(
         )
         runStore.saveUsage(requestId, measured)
         val finalSummary = (finalText ?: summary.toString()).trim()
-        val error = failure ?: if (finalSummary.isEmpty()) AppStreamEvent.Error(
+        // Pi：有正文也不能接受 length 的半截摘要，否则旧历史被不完整检查点覆盖。
+        val error = failure ?: if (finishReason in setOf("length", "aborted")) AppStreamEvent.Error(
+            message = "模型摘要未完整生成", code = "incomplete_compaction", type = "provider_error",
+        ) else if (finalSummary.isEmpty()) AppStreamEvent.Error(
             message = "模型未返回摘要", code = "empty_compaction", type = "provider_error",
         ) else null
         if (error != null) {
-            val retryable = error.isRetryableNetworkError(finishReason) && canRetryProviderAttempt(requestFact.attempt)
+            val retryable = error.code != "incomplete_compaction" &&
+                error.isRetryableNetworkError(finishReason) && canRetryProviderAttempt(requestFact.attempt)
             runStore.updateRequest(
                 requestFact,
                 if (retryable) AgentRequestStatus.INTERRUPTED else AgentRequestStatus.FAILED,
@@ -2378,8 +2396,28 @@ class AgentLoop(
         )
     }
 
-    /** 分段压缩的中间段：只取摘要文本，不单独记 Request，失败直接按压缩失败处理。 */
+    /**
+     * 分段压缩的中间段：只取摘要文本，不单独记 Request。
+     * 断流等可重试错误就地重试本段（与最后一段同样的有界次数），不让前面已完成的段白跑、整次压缩失败。
+     */
     private suspend fun summarizeCompactionChunk(
+        run: AgentRunEntity,
+        requestOrdinal: Int,
+        request: ChatRequest,
+    ): String {
+        var attempt = 1
+        while (true) {
+            val result = runCatching { streamCompactionChunk(run, requestOrdinal, request) }
+            val error = result.exceptionOrNull() ?: return result.getOrThrow()
+            if (error !is AgentRetryableNetworkException || !canRetryProviderAttempt(attempt)) {
+                throw if (error is AgentRetryableNetworkException) AgentContextWindowException("上下文压缩失败：${error.message}") else error
+            }
+            delay(agentResumeRetryDelayMillis(attempt))
+            attempt++
+        }
+    }
+
+    private suspend fun streamCompactionChunk(
         run: AgentRunEntity,
         requestOrdinal: Int,
         request: ChatRequest,
@@ -2387,6 +2425,7 @@ class AgentLoop(
         val text = StringBuilder()
         var finalText: String? = null
         var failure: AppStreamEvent.Error? = null
+        var finishReason: String? = null
         modelTransport.streamTurn(
             ModelTurnRequest(
                 requestId = UUID.randomUUID().toString(),
@@ -2402,10 +2441,16 @@ class AgentLoop(
                     is AppStreamEvent.Content -> text.append(event.text)
                     is AppStreamEvent.ContentFinal -> finalText = event.text.takeIf(String::isNotBlank)
                     is AppStreamEvent.Error -> failure = event
+                    is AppStreamEvent.Finish -> finishReason = event.reason
+                    is AppStreamEvent.StreamEnd -> finishReason = "stream_end"
                     else -> Unit
                 }
             }
-        failure?.let { throw AgentContextWindowException("上下文压缩失败：${it.message}") }
+        failure?.let {
+            if (it.isRetryableNetworkError(finishReason)) throw AgentRetryableNetworkException(it.message, it.code ?: "connection_aborted", 0)
+            throw AgentContextWindowException("上下文压缩失败：${it.message}")
+        }
+        if (finishReason in setOf("length", "aborted")) throw AgentContextWindowException("上下文压缩失败：模型摘要未完整生成")
         return (finalText ?: text.toString()).trim().ifEmpty {
             throw AgentContextWindowException("上下文压缩失败：模型未返回摘要")
         }

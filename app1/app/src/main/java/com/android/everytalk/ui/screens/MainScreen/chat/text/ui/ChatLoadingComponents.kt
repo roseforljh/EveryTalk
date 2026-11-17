@@ -161,6 +161,16 @@ internal fun LoadingStageIndicator(
     text: String,
     modifier: Modifier = Modifier,
 ) {
+    // 压缩预算有多行；复用扫描文字，不进入单行等待提示的固定高度与渐隐裁切。
+    if ('\n' in text) {
+        com.android.everytalk.ui.screens.BubbleMain.Main.ScanningHighlightText(
+            text = text,
+            textColor = MaterialTheme.colorScheme.onSurface,
+            maxLines = Int.MAX_VALUE,
+            modifier = modifier.fillMaxWidth().padding(start = 24.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
+        )
+        return
+    }
     val displayParts = remember(text) { splitLoadingStageDisplayText(text) }
     val stageStartedAt = remember(text) { SystemClock.elapsedRealtime() }
     var liveElapsedMs by remember(text) { mutableLongStateOf(0L) }

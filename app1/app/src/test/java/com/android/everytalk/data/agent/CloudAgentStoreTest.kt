@@ -99,6 +99,61 @@ class CloudAgentStoreTest {
         } finally { scope.coroutineContext[kotlinx.coroutines.Job]?.cancel(); db.close() }
     }
 
+    @Test fun `云端压缩预算排除未声明工具但冻结输入保留完整授权`() = runBlocking {
+        val db = database()
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        try {
+            val context = ApplicationProvider.getApplicationContext<Context>()
+            val session = ChatSessionEntity("cloud-budget", 1, 1, false)
+            val user = Message(id = "latest", text = "继续", sender = Sender.User).toEntity(session.id)
+            db.chatDao().writeSession(session); db.chatDao().writeMessages(listOf(user))
+            val tools = (1..25).map { index -> mapOf<String, Any>("type" to "function", "function" to mapOf(
+                "name" to "mcp_budget_$index", "description" to "[Large] " + "文".repeat(600),
+                "parameters" to mapOf("type" to "object"))) }
+            val request = ChatRequest(
+                messages = listOf(SimpleTextApiMessage(id = "old", role = "user", content = "旧问题"),
+                    SimpleTextApiMessage(id = "answer", role = "assistant", content = "旧回答"),
+                    SimpleTextApiMessage(id = user.id, role = "user", content = "继续")),
+                provider = "OpenAI", channel = "OpenAI兼容", apiAddress = "https://example.com/v1", apiKey = "test-only", model = "model",
+                tools = tools, conversationId = session.id,
+                contextManagement = RequestContextManagement(configId = "config", maxContextTokens = 8_000,
+                    reservedOutputTokens = 512, compactThresholdTokens = 6_400, autoCompressionEnabled = true),
+                localCloudMcpBindings = tools.associate { McpToolDiscovery.name(it) to buildJsonObject {
+                    put("kind", "mcp"); put("url", "https://example.com/mcp"); put("transport", "streamable_http")
+                    put("remoteName", "read"); put("headers", buildJsonObject {})
+                } },
+            )
+            var submitted = false
+            prepareCloudAgentSubmission(context, db, AgentRunStore(db.agentDao()),
+                com.android.everytalk.data.skill.SkillRepository(context, db.skillDao()),
+                com.android.everytalk.data.memory.MemoryCoordinator(db, scope),
+                AgentLoopRequest(request, session.id, user.id, "budget-ai", ModelTokenLimits(512, 8_000)),
+                account, 0L to 0L, null, { true }, compact = { _, _, _, _ -> fail("未声明工具不能触发压缩") },
+                beforePersist = { _, _ -> }) { _, frozen, original ->
+                submitted = true
+                assertEquals(tools, original.tools)
+                val frozenTools = (frozen.getValue("tools") as kotlinx.serialization.json.JsonArray).map { it.jsonObject }
+                assertEquals(27, frozenTools.size) // 全部 25 个 MCP + 结果读取 + 发现工具。
+                assertEquals(25, frozenTools.count { it["deferred"]?.jsonPrimitive?.content == "true" })
+                assertTrue(frozenTools.any { it["name"]?.jsonPrimitive?.content == McpToolDiscovery.NAME })
+            }
+            assertTrue(submitted)
+        } finally { scope.coroutineContext[kotlinx.coroutines.Job]?.cancel(); db.close() }
+    }
+
+    @Test fun `云端思考工具不算正文开始且正文首字才设置标志`() = runBlocking {
+        val base = Message(id = "ai", text = "", sender = Sender.AI)
+        val view = CloudRunView(1, account, account, account, account, "RUNNING", 1, 1,
+            CloudRunSnapshot("", "思考", listOf(CloudRunTrace("reasoning", 1, text = "思考"),
+                CloudRunTrace("tool", 2, id = "tool", name = "webfetch")), "正在请求模型", 1))
+        val thinking = view.toMessage(base) { it }
+        assertFalse(thinking.contentStarted)
+        assertEquals(2, thinking.executionTrace.size)
+        val answering = view.copy(snapshot = view.snapshot.copy(text = "回答", trace = view.snapshot.trace +
+            CloudRunTrace("content", 3, text = "回答"))).toMessage(base) { it }
+        assertTrue(answering.contentStarted)
+    }
+
     @Test fun `云端MCP展示真实名称且不同服务器保留原始身份`() = runBlocking {
         val alias = "mcp_023f9c37061675de7081f3bb9e208d05_firecrawl_scrape"
         val view = CloudRunView(1, account, account, account, account, "RUNNING", 1, 1,

@@ -76,6 +76,7 @@ import com.android.everytalk.util.web.linkHost
 import com.android.everytalk.util.locale.localizeUiMessage
 
 private const val MAX_VISIBLE_SOURCE_PILLS = 5
+private val CompressionBudgetStatus = Regex("^正在压缩上下文 · (.+) · 估算 (\\d+) / (\\d+) · 触发线 (\\d+)$")
 private val TimelineSearchBlue = Color(0xFF2563EB)
 private val TimelineWebGreen = Color(0xFF00A86B)
 private val TimelineToolOrange = Color(0xFFF06A00)
@@ -87,7 +88,12 @@ private val TimelineErrorRed = Color(0xFFE5484D)
 internal fun localizedExecutionStatusText(status: String?): String? {
     val text = status?.trim()?.takeIf(String::isNotEmpty) ?: return null
     val context = LocalContext.current
+    val compressionBudget = CompressionBudgetStatus.matchEntire(text)?.groupValues
     return when {
+        compressionBudget != null -> stringResource(
+            R.string.thinking_context_compressing_budget,
+            compressionBudget[1], compressionBudget[2], compressionBudget[3], compressionBudget[4],
+        )
         text == "等待首个响应" -> stringResource(R.string.thinking_waiting_first_response)
         text == "正在处理" -> stringResource(R.string.computer_action_working)
         text == TOOL_CALL_WRITING_STATUS -> stringResource(R.string.thinking_writing)
@@ -96,6 +102,11 @@ internal fun localizedExecutionStatusText(status: String?): String? {
         text == "正在连接云端" -> stringResource(R.string.thinking_cloud_connecting)
         text == "正在核对云端同步" -> stringResource(R.string.thinking_cloud_sync)
         text == "正在准备上下文与工具" -> stringResource(R.string.thinking_cloud_preparing)
+        text == "正在提交云端任务" -> stringResource(R.string.thinking_cloud_submitting)
+        text == "等待执行" -> stringResource(R.string.thinking_cloud_queued)
+        text == "正在恢复任务" -> stringResource(R.string.thinking_restoring_remote_task)
+        text == "正在请求模型" -> stringResource(R.string.thinking_requesting_model)
+        text == "正在生成回复" -> stringResource(R.string.thinking_generating_reply)
         text == "正在准备服务器" -> stringResource(R.string.thinking_preparing_server)
         text == "正在恢复远端任务" -> stringResource(R.string.thinking_restoring_remote_task)
         text == "等待服务器重连" -> stringResource(R.string.thinking_waiting_server_reconnect)

@@ -20,6 +20,9 @@ internal fun cloudAgentInput(
     timezone: String,
     tools: JsonArray,
     contextUsage: ContextUsageSnapshot? = null,
+    compactionSourceIds: List<String> = emptyList(),
+    messageIdReferences: Map<String, String> = emptyMap(),
+    previousSummary: String? = null,
 ): JsonObject {
     listOf(runId, sessionUuid, userUuid, assistantUuid).forEach(::requireCloudUuid)
     require(epoch >= 0 && secretsEpoch >= 0)
@@ -89,6 +92,14 @@ internal fun cloudAgentInput(
             })
         })
         put("messages", JsonArray(messages))
+        request.contextManagement?.let { management -> put("contextManagement", buildJsonObject {
+            put("autoCompressionEnabled", management.autoCompressionEnabled)
+            put("compactThresholdTokens", management.compactThresholdTokens)
+            put("inputTokenCalibration", management.inputTokenCalibration)
+            put("messageIds", JsonArray(transformed.map { JsonPrimitive(messageIdReferences[it.id] ?: it.id) }))
+            previousSummary?.let { put("previousSummary", it) }
+            put("sourcePrefixIds", JsonArray(compactionSourceIds.map { JsonPrimitive(messageIdReferences[it] ?: it) }))
+        }) }
         if (files.isNotEmpty()) put("files", JsonObject(files))
         if (nativeTools.isNotEmpty()) put("nativeTools", JsonArray(nativeTools))
         put("tools", tools); put("thinkingLevel", if (codeExecution) "off" else level)

@@ -225,6 +225,19 @@ class SyncEngineTest {
         assertEquals(existing.uuid, db.chatDao().getStoredMessage(existing.id, "")!!.uuid)
     }
 
+    @Test fun `旧版把云端消息重算成本地UUID时拉取归还服务器身份并继续同步`() = runBlocking {
+        val db = device(); val s = seed(db, count = 0)
+        val remoteUuid = UUID.randomUUID().toString()
+        val rehashed = UUID.nameUUIDFromBytes("EveryTalk:messages:cloud:$remoteUuid".toByteArray(Charsets.UTF_8)).toString()
+        val existing = message("cloud:$remoteUuid", s).copy(uuid = rehashed)
+        db.chatDao().writeMessages(listOf(existing))
+        val state = SyncStateStore(db)
+        state.saveCursor(100, 0)
+        RoomSyncStore(db).applyPullPage(page(SyncPayloadMapper.message(existing.copy(uuid = remoteUuid), s.uuid), since = 100))
+        assertEquals(remoteUuid, db.chatDao().getStoredMessage(existing.id, "")!!.uuid)
+        assertEquals(remoteUuid, com.android.everytalk.data.database.entities.localSyncUuid("messages", "cloud:$remoteUuid"))
+    }
+
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Test fun `两设备修改标签后刷新当前输入框且取消立即生效`() = runBlocking {
         val a = device(); val b = device(); val api = FakeSyncApi(); val s = seed(a)
@@ -617,6 +630,47 @@ class SyncEngineTest {
         val api = FakeSyncApi(); run(db, api)
         assertEquals(2, api.rows.size)
         assertTrue(RoomSyncStore(db).pendingBatch().isEmpty())
+    }
+
+    @Test fun `云端账号就绪检查不等待后台附件同步且仍遵守暂停和退出`() = runBlocking {
+        val db = device(); seed(db)
+        val state = SyncStateStore(db); val binding = Binding()
+        assertTrue(state.ensureAutomaticAccount("a", binding))
+        val entered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val sync = async {
+            SyncEngine(FakeSyncApi(), RoomSyncStore(db), state, beforeComplete = {
+                entered.complete(Unit)
+                release.await()
+            }).runOnce()
+        }
+        try {
+            kotlinx.coroutines.withTimeout(3_000) { entered.await() }
+            assertTrue(SyncRuntimeLock.mutex.isLocked)
+            // 旧入口会排队等同步结束，证明这里确实覆盖了手机上的同锁阻塞。
+            val legacy = async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+                state.prepareAutomaticAccount("a", binding)
+            }
+            try {
+                assertFalse(legacy.isCompleted)
+                kotlinx.coroutines.withTimeout(3_000) {
+                    assertTrue(state.ensureAutomaticAccount("a", binding))
+                    assertFalse(state.ensureAutomaticAccount("a", binding) { false })
+                    state.pauseAfterCloudReset()
+                    assertFalse(state.ensureAutomaticAccount("a", binding))
+                    state.resumeAfterCloudReset()
+                    state.requireEpochDecision(3)
+                    assertFalse(state.ensureAutomaticAccount("a", binding))
+                }
+                assertFalse(release.isCompleted)
+            } finally {
+                legacy.cancel()
+                legacy.join()
+            }
+        } finally {
+            release.complete(Unit)
+            sync.await()
+        }
     }
 
     @Test fun `重启和资料刷新保留游标且不重复上传拒绝记录`() = runBlocking {

@@ -80,7 +80,7 @@ internal suspend fun CloudRunView.toMessage(base: Message, resolve: suspend (Str
         text = snapshot.text,
         reasoning = snapshot.reasoning.takeIf(String::isNotEmpty),
         parts = emptyList(),
-        contentStarted = snapshot.text.isNotEmpty() || trace.isNotEmpty(),
+        contentStarted = snapshot.text.isNotBlank() || trace.any { it is ExecutionTraceEvent.Content && it.text.isNotBlank() },
         executionTrace = trace,
         executionSteps = trace.filterIsInstance<ExecutionTraceEvent.Tool>().map { it.step },
         executionStatus = if (status == "FAILED") snapshot.error else snapshot.executionStatus,

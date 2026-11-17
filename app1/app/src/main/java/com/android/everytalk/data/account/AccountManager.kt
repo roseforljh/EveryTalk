@@ -317,6 +317,9 @@ internal class AccountManager(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
+            if (com.android.everytalk.BuildConfig.DEBUG) {
+                com.android.everytalk.util.AppLogger.error("Account", "账号操作失败：${error::class.java.simpleName}", error)
+            }
             val message = when (error) {
                 is SerializationException -> "登录信息无效，请重新登录或稍后重试"
                 is AccountAuthException, is IllegalArgumentException -> error.message

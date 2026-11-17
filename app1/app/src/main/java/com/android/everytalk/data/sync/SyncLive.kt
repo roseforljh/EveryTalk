@@ -90,6 +90,9 @@ internal suspend fun mapLiveMessageReferences(message: Message, resolve: suspend
  * 结束通知和"云端有新数据"通知。快照只经过服务器内存，不写入同步库。
  */
 internal object LiveSync {
+    /** 实时通道在线时，对方设备的修改会以 changed 事件推来，前台不必再每 30 秒整轮同步。 */
+    @Volatile var connected: Boolean = false
+        private set
     /** 每个进程一个设备身份，服务器据此不把自己的快照和变更推回给自己。 */
     val deviceId: String = UUID.randomUUID().toString()
 
@@ -322,14 +325,17 @@ internal object LiveSync {
                     val reader = BoundedSseLineReader(response.bodyAsChannel(), maxEventBytes = 4L shl 20, maxStreamBytes = Long.MAX_VALUE)
                     var event = ""
                     val data = StringBuilder()
-                    while (true) {
-                        val line = reader.readLine() ?: break
-                        when {
-                            line.isEmpty() -> { dispatch(event, data.toString()); event = ""; data.clear() }
-                            line.startsWith("event:") -> event = line.substring(6).trim()
-                            line.startsWith("data:") -> data.append(line.substring(5).removePrefix(" "))
+                    connected = true
+                    try {
+                        while (true) {
+                            val line = reader.readLine() ?: break
+                            when {
+                                line.isEmpty() -> { dispatch(event, data.toString()); event = ""; data.clear() }
+                                line.startsWith("event:") -> event = line.substring(6).trim()
+                                line.startsWith("data:") -> data.append(line.substring(5).removePrefix(" "))
+                            }
                         }
-                    }
+                    } finally { connected = false }
                 }
             } catch (error: CancellationException) {
                 throw error

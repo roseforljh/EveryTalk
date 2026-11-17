@@ -515,7 +515,7 @@ internal class RoomSyncStore(
     private suspend fun attachmentChange(value: SyncAttachmentEntity): PushChange {
         val change = SyncPayloadMapper.attachment(value)
         val metadata = settings.getValue("sync_resource_meta:${value.id}")?.let { runCatching { syncJson.parseToJsonElement(it).jsonObject }.getOrNull() }
-        val extra = metadata?.filterKeys { it in setOf("role", "resourceDigest", "resourceVersion", "chunkIndex", "chunkCount", "keyVersion", "mediaId", "originalSize", "originalDigest", "resultPath") }.orEmpty()
+        val extra = metadata?.filterKeys { it in setOf("role", "resourceDigest", "resourceVersion", "chunkIndex", "chunkCount", "keyVersion", "mediaId", "originalSize", "originalDigest", "resultPath", "compactionId") }.orEmpty()
         return change.copy(payload = JsonObject(change.payload + extra))
     }
 
@@ -777,6 +777,9 @@ internal class RoomSyncStore(
         ).toEntity(session.id).copy(uuid = record.id, updatedAt = timestamp, syncStatus = SyncStatus.SYNCED, everSynced = true)
         val remoteFieldsBefore = settings.getValue(remoteMessageFieldsKey(record.id))
             ?.split(',')?.filter(String::isNotBlank)?.toSet().orEmpty()
+        // 旧版保存时把 cloud:<uuid> 重新哈希出新 UUID 且尚未上传：归还服务器身份，否则这条记录永远插不进来。
+        chat.restoreRemoteMessageUuid(localId,
+            java.util.UUID.nameUUIDFromBytes("EveryTalk:messages:$localId".toByteArray(Charsets.UTF_8)).toString(), record.id)
         val old = chat.getMessageByUuid(record.id)
         if (old == null) {
             chat.insertRemoteMessage(message)

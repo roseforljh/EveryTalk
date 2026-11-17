@@ -116,7 +116,11 @@ object AnthropicDirectClient {
             }
             completed.errorMessage?.let { message ->
                 terminalSent = true
-                send(AppStreamEvent.Error("Anthropic API 错误: $message"))
+                send(AppStreamEvent.Error(
+                    message = "Anthropic API 错误: $message",
+                    type = completed.errorType,
+                    rawMessage = message,
+                ))
                 send(AppStreamEvent.Finish("api_error"))
             }
             if (!terminalSent && completed.fullText.isNotEmpty() && completed.toolCalls.isEmpty()) {
@@ -577,6 +581,7 @@ object AnthropicDirectClient {
         val blocks = linkedMapOf<Int, AnthropicStreamBlock>()
         var stopReason: String? = null
         var errorMessage: String? = null
+        var errorType: String? = null
         var reasoningOpen = false
         var messageStopped = false
         var latestActiveUsage: TokenUsage? = null
@@ -707,11 +712,9 @@ object AnthropicDirectClient {
                 }
                 "message_stop" -> messageStopped = true
                 "error" -> {
-                    errorMessage = (event["error"] as? JsonObject)
-                        ?.get("message")
-                        ?.jsonPrimitive
-                        ?.contentOrNull
-                        ?: "未知流式错误"
+                    val err = event["error"] as? JsonObject
+                    errorType = err?.get("type")?.jsonPrimitive?.contentOrNull
+                    errorMessage = err?.get("message")?.jsonPrimitive?.contentOrNull ?: "未知流式错误"
                     messageStopped = true
                 }
             }
@@ -796,6 +799,7 @@ object AnthropicDirectClient {
             stopReason = stopReason,
             errorMessage = errorMessage,
             activeUsage = latestActiveUsage,
+            errorType = errorType,
         )
     }
 
@@ -995,4 +999,5 @@ internal data class AnthropicParseResult(
     val stopReason: String?,
     val errorMessage: String?,
     val activeUsage: TokenUsage?,
+    val errorType: String? = null,
 )

@@ -39,6 +39,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.flatMapLatest
 import androidx.compose.runtime.snapshotFlow
@@ -349,22 +351,47 @@ open class MessageItemsController(
         return state
     }
 
+    /** 当前会话页面显示的最近对话轮数；只影响渲染，内存与数据库仍持有完整历史，搜索、发送上下文不受影响。 */
+    private val historyWindow = MutableStateFlow("" to HISTORY_WINDOW_ROUNDS)
+
+    /** 页面顶部之外还有多少条较早消息没渲染；为 0 时不显示“加载更多”。 */
+    val hiddenHistoryCount = MutableStateFlow(0)
+
+    /** 顶部“加载更多”或上滑到顶：多渲染 [HISTORY_WINDOW_ROUNDS] 轮。 */
+    fun loadMoreHistory() {
+        val sessionId = stateHolder._currentConversationId.value
+        historyWindow.update { (id, rounds) -> sessionId to (if (id == sessionId) rounds else HISTORY_WINDOW_ROUNDS) + HISTORY_WINDOW_ROUNDS }
+    }
+
+    private data class HistorySource(val sessionId: String, val messages: List<Message>, val rounds: Int, val pinnedMessageId: String?)
+
     val chatListItems: StateFlow<List<ChatListItem>> =
         combine(
-            stateHolder._currentConversationId.flatMapLatest { sessionId ->
-                snapshotFlow { sessionId to stateHolder.textMessagesForConversation(sessionId).toList() }
+            combine(stateHolder._currentConversationId, stateHolder.textConversationRevision) { sessionId, _ -> sessionId }.flatMapLatest { sessionId ->
+                combine(
+                    snapshotFlow { stateHolder.textMessagesForConversation(sessionId).toList() },
+                    historyWindow,
+                    stateHolder._quoteJump,
+                ) { list, (windowSession, rounds), jump ->
+                    // 换会话回到最近 10 轮；引用/搜索跳转的目标在窗口之外时把窗口扩到它。
+                    HistorySource(sessionId, list, if (windowSession == sessionId) rounds else HISTORY_WINDOW_ROUNDS, jump?.messageId)
+                }
             },
             stateHolder._isTextApiCalling,
             stateHolder._currentTextStreamingAiMessageId,
             stateHolder._remoteLiveRun,
         ) { source, localApiCalling, localStreamingId, remote ->
-            val (sessionId, roomMessages) = source
+            val sessionId = source.sessionId
+            val roomMessages = source.messages
             // 当前会话与 overlay 分别发射；切换期间绝不能把上一会话的最后一帧叠进新列表。
             val overlay = remote?.takeIf { !localApiCalling && it.message.conversationId == sessionId }
             val messages = overlayRemoteMessage(roomMessages, overlay)
             val isApiCalling = localApiCalling || overlay?.running == true
             val currentStreamingAiMessageId = if (localApiCalling) localStreamingId else overlay?.takeIf { it.running }?.message?.id
-            val renderableMessages = filterRenderableMessages(messages)
+            val allRenderableMessages = filterRenderableMessages(messages)
+            val windowStart = historyWindowStart(allRenderableMessages, source.rounds, source.pinnedMessageId)
+            val renderableMessages = if (windowStart > 0) allRenderableMessages.subList(windowStart, allRenderableMessages.size) else allRenderableMessages
+            hiddenHistoryCount.value = windowStart
             retainCurrentMessageState(renderableMessages, chatListItemCache)
             liveTextMessageIds.retainAll(renderableMessages.mapTo(HashSet()) { it.id })
             val itemGroups = renderableMessages
@@ -413,9 +440,7 @@ open class MessageItemsController(
                             val cachedFooter = cached?.items
                                 ?.filterIsInstance<ChatListItem.AiMessageFooter>()
                                 ?.firstOrNull()
-                            val hasOrderedOutput = message.executionTrace.any {
-                                it is ExecutionTraceEvent.Content || it is ExecutionTraceEvent.UserMessageBoundary
-                            }
+                            val hasOrderedOutput = message.hasOrderedOutput()
                             val expectedHasFooter = !message.isError && if (hasOrderedOutput) {
                                 !isCurrentlyStreaming
                             } else if (isCurrentlyStreaming) {
@@ -728,6 +753,12 @@ open class MessageItemsController(
         return state
     }
 
+    // 纯过程从首条轨迹起走有序路径；旧历史若只在 text 中保存正文，仍使用原入口，不能漏掉正文。
+    private fun Message.hasOrderedOutput(): Boolean = executionTrace.isNotEmpty() &&
+        (text.isBlank() || executionTrace.any {
+            it is ExecutionTraceEvent.Content || it is ExecutionTraceEvent.UserMessageBoundary
+        })
+
     private fun createAiMessageItems(
         message: Message,
         isApiCalling: Boolean,
@@ -741,10 +772,8 @@ open class MessageItemsController(
             if (isImageGeneration) stateHolder.imageReasoningCompleteMap else stateHolder.textReasoningCompleteMap
         val reasoningComplete = reasoningCompleteMap[message.id] ?: false
 
-        if (
-            !isImageGeneration &&
-            message.executionTrace.any { it is ExecutionTraceEvent.Content || it is ExecutionTraceEvent.UserMessageBoundary }
-        ) {
+        // 从第一段真实过程起就使用有序列表；首段正文只追加新项，不替换整段过程及展开状态。
+        if (!isImageGeneration && message.hasOrderedOutput()) {
             return createOrderedAiOutputItems(
                 message = message,
                 state = state,
@@ -773,6 +802,7 @@ open class MessageItemsController(
                     ChatListItem.AiMessageReasoning(
                         message = message,
                         activityStatusText = resolveStreamingStageText(message, elapsedMs, reasoningComplete),
+                        replyIsStreaming = true,
                     )
                 )
             }
@@ -782,6 +812,7 @@ open class MessageItemsController(
                     ChatListItem.AiMessageReasoning(
                         message = message,
                         activityStatusText = resolveStreamingStageText(message, elapsedMs, reasoningComplete),
+                        replyIsStreaming = true,
                     )
                 )
             }
@@ -800,6 +831,7 @@ open class MessageItemsController(
                                 elapsedMs,
                                 reasoningComplete,
                             ),
+                            replyIsStreaming = true,
                         )
                     )
                 }
@@ -920,7 +952,6 @@ open class MessageItemsController(
             trace = message.executionTrace,
             narrativeSegments = narrativeSegments,
             toolCallWriting = toolCallWriting,
-            streaming = replyIsStreaming,
         ).toMutableList()
         // 编写阶段还没有完整工具记录。追加临时过程段，后续真实工具沿用同一列表位置；
         // 不把未执行的操作写入历史，停止或失败后也不会残留“正在编写”。
@@ -1196,7 +1227,10 @@ open class MessageItemsController(
             "webfetch_reading" -> "读取网页"
             else -> status
         }
-        return compactStatusText(display)
+        // 压缩预算是供界面解析的完整状态，不能先截成 28 字而丢失窗口和触发线。
+        return if (display.startsWith("${com.android.everytalk.statecontroller.CONTEXT_COMPRESSION_RUNNING_STATUS} · ")) {
+            display
+        } else compactStatusText(display)
     }
 
     private fun compactStatusText(text: String, maxChars: Int = 28): String {
@@ -1299,4 +1333,21 @@ open class MessageItemsController(
             blocksHash = renderState.blocksHash,
         )
     }
+}
+
+private const val HISTORY_WINDOW_ROUNDS = 10
+
+/** 从末尾数 [rounds] 个用户提问作为窗口起点；[pinnedMessageId] 在更早位置时从它所在一轮开始。 */
+internal fun historyWindowStart(messages: List<Message>, rounds: Int, pinnedMessageId: String? = null): Int {
+    var start = 0
+    var seen = 0
+    for (index in messages.indices.reversed()) {
+        if (messages[index].sender == Sender.User && ++seen == rounds) { start = index; break }
+    }
+    val pinned = pinnedMessageId?.let { id -> messages.indexOfFirst { it.id == id } } ?: -1
+    if (pinned in 0 until start) {
+        start = (pinned downTo 0).firstOrNull { messages[it].sender == Sender.User } ?: 0
+    }
+    // 前面只剩系统提示时不算“还有更早的对话”。
+    return if ((0 until start).all { messages[it].sender == Sender.System }) 0 else start
 }

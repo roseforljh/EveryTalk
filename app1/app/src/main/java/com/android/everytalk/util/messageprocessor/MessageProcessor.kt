@@ -25,7 +25,6 @@ class MessageProcessor {
     fun initialize(sessionId: String, messageId: String) {
         this.sessionId.set(sessionId)
         this.messageId.set(messageId)
-        logger.debug("Initialized MessageProcessor for session=$sessionId, message=$messageId")
     }
 
     /**
@@ -141,7 +140,6 @@ class MessageProcessor {
         val currentText = getCurrentText()
         val currentReasoning = getCurrentReasoning()
 
-        logger.debug("Finalizing message ${message.id}: currentText=${currentText.length} chars, reasoning=${currentReasoning?.length ?: 0} chars")
 
         // 不做“整体重组/替换”。若本地缓冲为空，保留既有 message 字段，避免覆盖已持久化/已加载的文本。
         val normalizedFinalText = TextSanitizer.removeUnicodeReplacementCharacters(

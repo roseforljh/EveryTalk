@@ -25,6 +25,10 @@ interface SyncAttachmentDao {
     @Query("SELECT * FROM sync_attachments WHERE id = :id LIMIT 1")
     suspend fun get(id: String): SyncAttachmentEntity?
 
+    /** 附件表的整体版本：任何新增、更新、删除或同步状态变化都会改变它。 */
+    @Query("SELECT COUNT(*) || ':' || COALESCE(MAX(updated_at), 0) || ':' || COALESCE(SUM(deleted), 0) || ':' || COALESCE(SUM(sync_status = 'SYNCED'), 0) FROM sync_attachments")
+    suspend fun stamp(): String
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(value: SyncAttachmentEntity)
 

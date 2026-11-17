@@ -150,7 +150,7 @@ class AiContextUsagePopupTest {
     }
 
     @Test
-    fun `模型参数更新后圆环使用同一配置的最新上下文上限`() {
+    fun `历史请求优先使用发送时窗口而不是修改后的配置`() {
         val message = usageMessage(configId = "config-1")
         val updatedConfig = ApiConfig(
             address = "https://example.com",
@@ -163,38 +163,47 @@ class AiContextUsagePopupTest {
         )
 
         assertEquals(
-            2_000L,
+            1_000L,
             resolveLiveContextWindowTokens(message, listOf(updatedConfig)),
         )
     }
 
     @Test
-    fun `切换模型后圆环使用当前会话模型的上下文上限`() {
-        val message = usageMessage(configId = "model-a")
-        val modelA = ApiConfig(
+    fun `切换到小窗口模型不把旧Gemini实测伪装成当前请求`() {
+        val message = usageMessage(configId = "gemini", inputTokens = 157_489, outputTokens = 804).let {
+            it.copy(contextUsageSnapshot = it.contextUsageSnapshot?.copy(contextWindowTokens = 1_048_576))
+        }
+        val gemini = ApiConfig(
             address = "https://example.com",
             key = "test-key",
-            model = "model-a",
-            provider = "OpenAI",
-            id = "model-a",
-            name = "模型 A",
-            modelParameters = ModelParameters(maxContextTokens = 128_000),
+            model = "gemini",
+            provider = "Google",
+            id = "gemini",
+            name = "Gemini",
+            modelParameters = ModelParameters(maxContextTokens = 1_048_576),
         )
-        val modelB = modelA.copy(
-            model = "model-b",
-            id = "model-b",
-            name = "模型 B",
-            modelParameters = ModelParameters(maxContextTokens = 1_000_000),
-        )
+        val gpt = gemini.copy(model = "gpt", id = "gpt", name = "GPT",
+            modelParameters = ModelParameters(maxContextTokens = 272_000))
+        val window = resolveLiveContextWindowTokens(message, listOf(gemini, gpt))
+        val summary = aiContextUsageSummary(message, 522_900_000, window)
 
-        assertEquals(
-            1_000_000L,
-            resolveLiveContextWindowTokens(
-                message = message,
-                configs = listOf(modelA, modelB),
-                activeConfigId = modelB.id,
-            ),
-        )
+        assertEquals(1_048_576L, window)
+        assertEquals(157_489L, summary?.requestInputTokens)
+        assertEquals(804L, summary?.requestOutputTokens)
+        assertEquals(157_489L, summary?.currentContextTokens)
+        assertEquals(157_489f / 1_048_576f, summary?.fraction ?: -1f, 0.0001f)
+    }
+
+    @Test
+    fun `缺少历史快照时仅回退到同配置或同模型而非列表首项`() {
+        val message = usageMessage(configId = "gemini").copy(contextUsageSnapshot = null,
+            modelName = "gemini", providerName = "Google")
+        val gpt = ApiConfig(address = "https://example.com", key = "test", model = "gpt", provider = "OpenAI",
+            id = "gpt", name = "GPT", modelParameters = ModelParameters(maxContextTokens = 272_000))
+        val gemini = gpt.copy(id = "gemini", model = "gemini", provider = "Google",
+            modelParameters = ModelParameters(maxContextTokens = 1_048_576))
+        assertEquals(1_048_576L, resolveLiveContextWindowTokens(message, listOf(gpt, gemini)))
+        assertEquals(0L, resolveLiveContextWindowTokens(message, listOf(gpt)))
     }
 
     @Test
@@ -245,7 +254,7 @@ class AiContextUsagePopupTest {
 
         composeRule.onNodeWithContentDescription("查看上下文用量 10%").performClick()
         composeRule.onNodeWithText("上下文用量").assertIsDisplayed()
-        composeRule.onNodeWithText("当前模型请求").assertIsDisplayed()
+        composeRule.onNodeWithText("本次模型请求").assertIsDisplayed()
         composeRule.onNodeWithText("本次 Agent · 1 次请求").assertIsDisplayed()
         composeRule.onNodeWithContentDescription(
             context.getString(
@@ -261,7 +270,7 @@ class AiContextUsagePopupTest {
         ).assertIsDisplayed()
         composeRule.onNodeWithText("会话累计消耗").assertIsDisplayed()
         composeRule.onNodeWithText("420").assertIsDisplayed()
-        composeRule.onNodeWithText("当前上下文").assertIsDisplayed()
+        composeRule.onNodeWithText("请求上下文").assertIsDisplayed()
         composeRule.onNodeWithText("上下文上限").assertIsDisplayed()
         composeRule.onNodeWithText("1,000").assertIsDisplayed()
     }

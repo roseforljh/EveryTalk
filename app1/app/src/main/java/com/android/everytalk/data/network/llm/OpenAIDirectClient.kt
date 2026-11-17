@@ -560,6 +560,26 @@ object OpenAIDirectClient {
                                     ?.let { sources ->
                                         emitEvent(AppStreamEvent.WebSearchResults(sources))
                                     }
+                                (jsonChunk["error"] as? JsonObject)?.let { errorObject ->
+                                    val msg = errorObject["message"]?.jsonPrimitive?.contentOrNull ?: "OpenAI 流式请求失败"
+                                    val code = errorObject["code"]?.jsonPrimitive?.contentOrNull
+                                    val type = errorObject["type"]?.jsonPrimitive?.contentOrNull
+                                    val param = errorObject["param"]?.jsonPrimitive?.contentOrNull
+                                        ?: errorObject["parameter"]?.jsonPrimitive?.contentOrNull
+                                    emitEvent(AppStreamEvent.Error(
+                                        message = "OpenAI API 错误: $msg",
+                                        code = code,
+                                        type = type,
+                                        parameter = param,
+                                        rawMessage = msg,
+                                    ))
+                                    return OpenAIParseResult(
+                                        hasToolCalls = false,
+                                        fullText = fullText.toString(),
+                                        reasoningContent = fullReasoningContent.toString(),
+                                        stopReason = "error",
+                                    )
+                                }
                                 (jsonChunk["usage"] as? JsonObject)?.let { usage ->
                                     parseOpenAIChatTokenUsage(usage)?.let { parsedUsage ->
                                         latestUsage = parsedUsage

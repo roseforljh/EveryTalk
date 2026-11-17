@@ -68,8 +68,17 @@ class AttachmentToolExecutorTest {
         assertEquals(before, attachmentDir.listFiles().orEmpty().map { it.name }.toSet())
         val outside = File(context.cacheDir, "cloud-outside.txt").apply { writeText("private") }
         try {
-            assertTrue(runCatching { AttachmentToolExecutor.cloudSnapshot(context, listOf(attachment.copy(filePath = outside.absolutePath))) }.isFailure)
+            val rejected = AttachmentToolExecutor.cloudSnapshot(context, listOf(attachment.copy(filePath = outside.absolutePath)))
+                .getValue(attachment.id) as JsonObject
+            assertTrue("不可访问" in rejected.getValue("error").jsonPrimitive.content && "content" !in rejected)
         } finally { outside.delete() }
+        // 其他设备同步来的附件在 sync-resources/<账号>/ 下，云任务和本机都要能读。
+        val synced = File(context.filesDir, "sync-resources/account/assembled-1").apply { parentFile?.mkdirs(); writeText("同步附件") }
+        try {
+            val sealedSynced = AttachmentToolExecutor.cloudSnapshot(context, listOf(attachment.copy(filePath = synced.absolutePath)))
+                .getValue(attachment.id) as JsonObject
+            assertEquals("同步附件", sealedSynced.getValue("content").jsonPrimitive.content)
+        } finally { File(context.filesDir, "sync-resources").deleteRecursively() }
     }
 
     @Test

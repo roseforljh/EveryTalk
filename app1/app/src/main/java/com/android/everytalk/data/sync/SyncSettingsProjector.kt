@@ -86,6 +86,9 @@ internal class SyncSettingsProjector(
     }
 
     suspend fun refresh(onlyRejected: Boolean = false) = database.withTransaction {
+        // 只修被拒记录时没有被拒记录就无事可做；否则每轮同步都要在写事务里把全部配置和几百个会话重投影一遍，
+        // 占着写锁好几秒，打开会话的读取只能排在后面（骨架屏迟迟不退）。
+        if (onlyRejected && settings.getByPrefix("sync_rejected:user_settings:").isEmpty()) return@withTransaction
         repairOnly = onlyRejected
         migrateLegacySettingKeys()
         existingValues = settings.getSyncableUserSettings().mapNotNull { row ->
