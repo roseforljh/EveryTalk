@@ -1,5 +1,6 @@
 package com.android.everytalk.statecontroller
 
+import com.android.everytalk.data.DataClass.executionDisplay
 import com.android.everytalk.data.DataClass.ExecutionStepType
 import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.Message
@@ -17,6 +18,36 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ExecutionStepTest {
+    @Test fun `记忆搜索按动作展示且未知query工具不冒充网页搜索`() {
+        for ((action, title) in listOf("search_conversations" to "搜索聊天记录", "search" to "搜索记忆")) {
+            val step = executionStepForToolCall(AppStreamEvent.ToolCall("memory", "everytalk_memory",
+                buildJsonObject { put("action", action); put("query", "家宽 不通") }))
+            assertEquals(ExecutionStepType.Tool, step.type)
+            assertEquals(title, step.title)
+            assertEquals(listOf("家宽 不通"), step.labels)
+            val legacy = step.copy(type = ExecutionStepType.Search, title = "搜索网页")
+            assertEquals(title, legacy.executionDisplay().title)
+        }
+        val unknown = executionStepForToolCall(AppStreamEvent.ToolCall("u", "database_search", buildJsonObject { put("query", "row") }))
+        assertEquals(ExecutionStepType.Tool, unknown.type)
+        assertEquals("database_search", unknown.title)
+    }
+
+    @Test fun `长命令保留完整参数与换行展示仅遮蔽凭据`() {
+        val command = "echo start\n" + "printf safe\n".repeat(500) + "TOKEN=private-value"
+        val step = executionStepForToolCall(AppStreamEvent.ToolCall("cmd", "local_bash", buildJsonObject { put("command", command) }))
+        assertEquals(ExecutionStepType.Agent, step.type)
+        assertTrue(step.detail!!.contains("private-value"))
+        val display = step.executionDisplay()
+        assertTrue(display.detail!!.length > 4000)
+        assertTrue(display.detail!!.contains("echo start\n"))
+        assertFalse(display.detail!!.contains("private-value"))
+        val longSecret = "private".repeat(100)
+        val quoted = executionStepForToolCall(AppStreamEvent.ToolCall("quoted", "exec",
+            buildJsonObject { put("command", "TOKEN=\"$longSecret\" echo safe") })).executionDisplay()
+        assertFalse(quoted.labels.single().contains("private"))
+    }
+
     @Test
     fun `编写状态不产生执行记录且完整工具调用会替换它`() {
         val writingEvent = AppStreamEvent.ExecutionStatusUpdate(TOOL_CALL_WRITING_STATUS)
@@ -236,7 +267,7 @@ class ExecutionStepTest {
         )
 
         val pending = applyToolCallEventToMessage(message, toolCall)
-        assertEquals("运行 Agent · exec", pending.currentWebSearchStage)
+        assertEquals("执行命令 · uname -a", pending.currentWebSearchStage)
         assertEquals(listOf("uname -a"), pending.executionSteps.single().labels)
         assertFalse(pending.executionSteps.single().completed)
 

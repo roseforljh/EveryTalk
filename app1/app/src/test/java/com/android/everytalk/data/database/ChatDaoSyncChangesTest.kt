@@ -225,6 +225,23 @@ class ChatDaoSyncChangesTest {
         assertEquals(0, count("message_drafts"))
     }
 
+    @Test fun `云端先定稿后下一轮携带旧草稿只保存新问题不改写正式回复`() = runBlocking {
+        val placeholder = answer.copy(text = "", reasoning = null, executionStatus = "正在请求模型")
+        save(listOf(question, placeholder), drafts = setOf(answer.id))
+        // 云端已完成并写入正式回复，页面仍可能持有提交时的旧占位快照。
+        val completed = answer.copy(executionFinishedAt = 4)
+        save(listOf(question, completed)); syncAll()
+        val formal = dao.getMessage(session.id, answer.id)!!
+        val nextQuestion = question.copy(id = "q2", text = "接着问", timestamp = 5)
+
+        save(listOf(question, placeholder, nextQuestion), drafts = setOf(answer.id))
+
+        assertEquals(formal, dao.getMessage(session.id, answer.id))
+        assertEquals(nextQuestion.text, dao.getMessage(session.id, nextQuestion.id)!!.text)
+        assertEquals(listOf(nextQuestion.id), dao.getPendingSyncMessages().map { it.id })
+        assertEquals(0, count("message_drafts"))
+    }
+
     @Test fun `后台下载给草稿补附件不能提前将其转成正式消息`() = runBlocking {
         save(listOf(question, answer), drafts = setOf(answer.id))
         val attachment = com.android.everytalk.models.SelectedMediaItem.GenericFile(

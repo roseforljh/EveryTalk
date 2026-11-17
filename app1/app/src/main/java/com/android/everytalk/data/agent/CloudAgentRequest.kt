@@ -92,6 +92,11 @@ internal fun cloudAgentInput(
             })
         })
         put("messages", JsonArray(messages))
+        request.localComputerRequestContext?.selectedTargets?.takeIf { it.isNotEmpty() }?.let { targets ->
+            put("taskTargets", JsonArray(targets.map { target -> buildJsonObject {
+                put("computerId", target.computerId); put("displayName", target.displayName)
+            } }))
+        }
         request.contextManagement?.let { management -> put("contextManagement", buildJsonObject {
             put("autoCompressionEnabled", management.autoCompressionEnabled)
             put("compactThresholdTokens", management.compactThresholdTokens)

@@ -82,6 +82,36 @@ class ViewModelStateHolderStreamingStateTest {
     }
 
     @Test
+    fun `云端完成后先交回完整回复再连续发送且旧会话快照不能覆盖当前会话`() {
+        stateHolder.setCurrentConversationId("cloud-session")
+        val question = Message(id = "q1", text = "问题", sender = Sender.User, timestamp = 1)
+        val placeholder = Message(id = "a1", text = "", sender = Sender.AI, timestamp = 2,
+            conversationId = "cloud-session", executionStatus = "正在请求模型")
+        stateHolder.messages.addAll(listOf(question, placeholder))
+        val final = placeholder.copy(text = "完整回答", reasoning = "完整思考", contentStarted = true,
+            executionStatus = null, executionFinishedAt = 3,
+            executionTrace = listOf(ExecutionTraceEvent.Reasoning("完整思考"), ExecutionTraceEvent.Content("完整回答")))
+        val live = RemoteLiveRun("session-uuid", final, true, cloudRunId = "run-1")
+
+        stateHolder.updateRemoteLiveRun(live)
+        assertEquals(placeholder, stateHolder.messages[1])
+        stateHolder.updateRemoteLiveRun(live.copy(running = false))
+        assertEquals(final, stateHolder.messages[1])
+        assertFalse(stateHolder._remoteLiveRun.value!!.running)
+        // 第二轮保存与上下文构建直接读同一列表，不靠重新进 App 或后台同步补齐。
+        stateHolder.messages.add(Message(id = "q2", text = "继续问", sender = Sender.User, timestamp = 4))
+        stateHolder.updateRemoteLiveRun(null)
+        assertEquals(listOf("问题", "完整回答", "继续问"), stateHolder.messages.map { it.text })
+        assertEquals(final.executionTrace, stateHolder.messages[1].executionTrace)
+
+        stateHolder.setCurrentConversationId("other-session")
+        stateHolder.messages.add(placeholder.copy(text = "另一会话", conversationId = "other-session"))
+        stateHolder.updateRemoteLiveRun(live.copy(running = false))
+        assertEquals("另一会话", stateHolder.messages.single().text)
+        assertNull(stateHolder._remoteLiveRun.value)
+    }
+
+    @Test
     fun `思考分片按批提交且终态同步不丢尾部`() {
         val messageId = "reasoning-batched"
         stateHolder.createStreamingBuffer(messageId)

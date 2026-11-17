@@ -917,7 +917,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     val currentTaskRun = currentConversationId.flatMapLatest { id ->
         val dao = com.android.everytalk.data.database.AppDatabase.getDatabase(getApplication()).agentDao()
-        dao.observeTaskRuns(id).map { runs ->
+        kotlinx.coroutines.flow.combine(dao.observeTaskRuns(id), com.android.everytalk.data.sync.SyncLocalChanges.revision) { runs, _ -> runs }.map { runs ->
             withContext(Dispatchers.IO) {
                 val store = com.android.everytalk.data.agent.AgentRunStore(dao)
                 runs.firstOrNull { run -> store.taskTargets(run).size > 1 }
@@ -1407,7 +1407,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             kotlinx.coroutines.flow.combine(stateHolder._currentConversationId, com.android.everytalk.data.sync.LiveSync.remote,
                 apiHandler.cloudRuns, com.android.everytalk.data.sync.SyncLocalChanges.revision) { id, remote, cloud, _ -> Triple(id, remote + cloud, cloud) }
                 .collectLatest { (currentId, remote, cloud) ->
-                    stateHolder._remoteLiveRun.value = if (remote.isEmpty()) null else withContext(Dispatchers.IO) {
+                    val live = if (remote.isEmpty()) null else withContext(Dispatchers.IO) {
                         val sessionUuid = chatDao.getStoredSession(currentId)?.uuid ?: return@withContext null
                         val run = remote[sessionUuid] ?: return@withContext null
                         val cloudRunId = run.runId.takeIf { cloud[sessionUuid]?.runId == it }
@@ -1420,6 +1420,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                             executionStatus = message.executionStatus.takeIf { run.running || message.isError }), run.running,
                             cloudRunId = cloudRunId)
                     }
+                    // 先交接终稿再放开下一轮发送；读取期间切页则丢弃旧会话结果。
+                    if (stateHolder._currentConversationId.value == currentId) stateHolder.updateRemoteLiveRun(live)
                 }
         }
         // 分支对话由云端执行时没有本机流式 Job：把云端快照直接写进分支消息列表，运行态单独记一份。

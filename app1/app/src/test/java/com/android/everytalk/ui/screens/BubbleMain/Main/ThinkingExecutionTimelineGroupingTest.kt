@@ -45,6 +45,14 @@ class ThinkingExecutionTimelineGroupingTest {
         assertEquals("检查配置\n运行 uname -a\n查看结果", preview)
     }
 
+    @Test fun `同名工具不同真实查询和命令不得合并丢失`() {
+        val first = com.android.everytalk.data.DataClass.executionToolStep("one", "everytalk_memory",
+            kotlinx.serialization.json.buildJsonObject { put("action", kotlinx.serialization.json.JsonPrimitive("search_conversations")); put("query", kotlinx.serialization.json.JsonPrimitive("家宽 不通")) })
+        val second = first.copy(id = "two", labels = listOf("另一条查询"), detail = "different arguments")
+        assertEquals(2, executionTimelineEntries(listOf(first, second)).size)
+        assertEquals(1, executionTimelineEntries(listOf(first, first.copy(id = "repeat"))).size)
+    }
+
     @Test
     fun `连续同名工具合并并在胶囊右侧显示次数`() {
         val steps = List(9) { index -> toolStep("tool-$index", "read_attachment") }
@@ -86,7 +94,7 @@ class ThinkingExecutionTimelineGroupingTest {
                     messageIsError = false, reasoningContent = { _, _ -> })
             }
         }
-        composeRule.onNodeWithText("firecrawl_scrape").fetchSemanticsNode("")
+        assertTrue(composeRule.onAllNodesWithText("firecrawl_scrape").fetchSemanticsNodes().isNotEmpty())
         assertTrue(composeRule.onAllNodesWithText(alias).fetchSemanticsNodes().isEmpty())
         assertEquals(alias, legacy.labels.single())
     }

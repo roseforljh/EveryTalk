@@ -501,6 +501,7 @@ class AgentRunCoordinator(
     private suspend fun executeCloudDeviceTool(runId: String, call: AgentContentBlock.ToolCall,
         approval: com.android.everytalk.data.computer.ComputerToolApprovalRequest?): Pair<String, Boolean> {
         val context = approvedContext(cloudRunContext(runId), runId, call.id, approval)
+        cloudRunContexts.edit().putLong("device_started:$runId:${call.id}", System.currentTimeMillis()).commit()
         if (call.name == com.android.everytalk.data.memory.MemoryTool.NAME) {
             val snapshot = cloudRunContexts.getString(memoryKey(runId), null)?.let {
                 runCatching { cloudAgentJson.decodeFromString(com.android.everytalk.data.memory.MemoryRequestSnapshot.serializer(), it) }.getOrNull()
@@ -521,6 +522,8 @@ class AgentRunCoordinator(
             put("toolCallId", kotlinx.serialization.json.JsonPrimitive(toolCallId))
             put("result", kotlinx.serialization.json.JsonPrimitive(text))
             put("isError", kotlinx.serialization.json.JsonPrimitive(isError))
+            cloudRunContexts.getLong("device_started:$runId:$toolCallId", 0L).takeIf { it > 0L }
+                ?.let { put("startedAt", kotlinx.serialization.json.JsonPrimitive(it)) }
             tools?.let { put("tools", it) }
         }, onFailure)
 
@@ -735,7 +738,7 @@ class AgentRunCoordinator(
         val waiting = view.snapshot.waiting?.takeUnless { view.terminal }
         // 批准记录要留到任务结束：写入成功但结果未送达时重新执行仍需它（写入对相同内容幂等）。
         if (view.terminal) {
-            val prefixes = listOf("approved:${view.id}:", "approved_tool:${view.id}:", "device_result:${view.id}:")
+            val prefixes = listOf("approved:${view.id}:", "approved_tool:${view.id}:", "device_result:${view.id}:", "device_started:${view.id}:")
             cloudRunContexts.edit().apply { cloudRunContexts.all.keys.filter { key -> prefixes.any(key::startsWith) }.forEach(::remove) }
                 .remove(view.id).remove(ownerKey(view.id)).remove(memoryKey(view.id)).apply()
             memoryCoordinator.bind(view.id, null)
@@ -794,6 +797,7 @@ class AgentRunCoordinator(
                             // 绝不在收到等待设备时重新生成审批，避免绕过内容与原文件版本校验。
                             val approved = cloudApprovedWrite(view.id, waiting.toolCallId)
                                 ?: error("这次保存没有在本机确认，请在发起任务的手机上确认后重试")
+                            cloudRunContexts.edit().putLong("device_started:${view.id}:${waiting.toolCallId}", System.currentTimeMillis()).commit()
                             val saved = cloudFileSave.execute(args, waiting.toolCallId, approved.context.copy(
                                 runId = view.id, approvedToolCallId = waiting.toolCallId, approvedLocalFileWrite = approved))
                             kotlinx.serialization.json.buildJsonObject {
@@ -814,6 +818,8 @@ class AgentRunCoordinator(
                             put("toolCallId", kotlinx.serialization.json.JsonPrimitive(waiting.toolCallId))
                             put("result", result)
                             put("isError", kotlinx.serialization.json.JsonPrimitive(isError))
+                            cloudRunContexts.getLong("device_started:${view.id}:${waiting.toolCallId}", 0L).takeIf { it > 0L }
+                                ?.let { put("startedAt", kotlinx.serialization.json.JsonPrimitive(it)) }
                         }) { cloudDeviceHandled.remove("${view.id}:${waiting.toolCallId}:${view.generation}") }
                     }
                 }

@@ -96,7 +96,8 @@ internal suspend fun prepareCloudAgentSubmission(
     } catch (error: Exception) { throw CloudAgentIneligible(error.message.orEmpty(), error) }
     fun withRunId(run: AgentRunEntity) = JsonObject(frozen + ("id" to kotlinx.serialization.json.JsonPrimitive(run.id)))
     val run = CloudAgentStore(database).prepare(accountId, input.sessionId, input.userMessageId, input.visibleAssistantMessageId,
-        request.contextManagement?.configId) { pending ->
+        request.contextManagement?.configId,
+        request.localComputerRequestContext?.selectedTargets.orEmpty().map { AgentTaskTarget(it.computerId, it.displayName) }) { pending ->
         check(permitted()) { "云端任务账号授权已变更" }
         beforePersist(pending, withRunId(pending))
     }
