@@ -743,6 +743,41 @@ internal class RoomSyncStore(
         val draft = chat.getDraftByUuid(record.id)?.message
         if (draft != null) check(draft.sessionId == session.id && draft.sender == sender) { "SYNC_MESSAGE_IDENTITY_CONFLICT" }
         val localId = draft?.id ?: "cloud:${record.id}"
+        // 简版记录里的显示片段：文字按下标引用正文，工具只是占位。
+        val displayTrace = record.payload["displaySegments"]?.jsonArray?.mapIndexedNotNull { index, segment ->
+                val part = segment.jsonObject
+                val type = part["type"]?.jsonPrimitive?.contentOrNull
+                if (type == "tool") {
+                    // 工具占位：只有名称、状态和时间；完整参数与结果等归档恢复后再替换。
+                    val name = part["tool"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                    val base = com.android.everytalk.data.DataClass.executionToolStep("sync:${record.id}:$index", name.ifBlank { "tool" }, JsonObject(emptyMap()), "")
+                    val startedAt = part["startedAt"]?.jsonPrimitive?.longOrNull
+                    val finishedAt = part["finishedAt"]?.jsonPrimitive?.longOrNull
+                    val step = base.copy(
+                        type = part["stepType"]?.jsonPrimitive?.contentOrNull
+                            ?.let { runCatching { com.android.everytalk.data.DataClass.ExecutionStepType.valueOf(it) }.getOrNull() } ?: base.type,
+                        labels = emptyList(), toolName = name.ifBlank { null },
+                        started = part["started"]?.jsonPrimitive?.booleanOrNull ?: true,
+                        completed = part["completed"]?.jsonPrimitive?.booleanOrNull ?: (finishedAt != null),
+                        isError = part["isError"]?.jsonPrimitive?.booleanOrNull ?: false,
+                        durationMs = part["durationMs"]?.jsonPrimitive?.longOrNull
+                            ?: if (startedAt != null && finishedAt != null) (finishedAt - startedAt).coerceAtLeast(0) else null,
+                    )
+                    return@mapIndexedNotNull ExecutionTraceEvent.Tool(step, startedAt, finishedAt)
+                }
+                val source = SyncPayloadMapper.string(record.payload, if (type == "reasoning") "reasoning" else "text").orEmpty()
+                val start = part["startUtf16"]?.jsonPrimitive?.intOrNull
+                val length = part["lengthUtf16"]?.jsonPrimitive?.intOrNull
+                // 兼容旧版完整 text；引用按 Android 字符串的 UTF-16 下标校验，先减后比避免溢出。
+                val text = part["text"]?.jsonPrimitive?.contentOrNull ?: if (start != null && length != null &&
+                    start in 0..source.length && length >= 0 && length <= source.length - start) source.substring(start, start + length)
+                    else return@mapIndexedNotNull null
+                when (type) {
+                    "content" -> ExecutionTraceEvent.Content(text)
+                    "reasoning" -> ExecutionTraceEvent.Reasoning(text)
+                    else -> null
+                }
+            }.orEmpty()
         val message = Message(
             id = localId, text = SyncPayloadMapper.string(record.payload, "text").orEmpty(), sender = sender,
             reasoning = SyncPayloadMapper.string(record.payload, "reasoning"), contentStarted = true,
@@ -780,22 +815,7 @@ internal class RoomSyncStore(
                     else -> null
                 }
             }.orEmpty(),
-            executionTrace = record.payload["displaySegments"]?.jsonArray?.mapNotNull { segment ->
-                val part = segment.jsonObject
-                val type = part["type"]?.jsonPrimitive?.contentOrNull
-                val source = SyncPayloadMapper.string(record.payload, if (type == "reasoning") "reasoning" else "text").orEmpty()
-                val start = part["startUtf16"]?.jsonPrimitive?.intOrNull
-                val length = part["lengthUtf16"]?.jsonPrimitive?.intOrNull
-                // 兼容旧版完整 text；引用按 Android 字符串的 UTF-16 下标校验，先减后比避免溢出。
-                val text = part["text"]?.jsonPrimitive?.contentOrNull ?: if (start != null && length != null &&
-                    start in 0..source.length && length >= 0 && length <= source.length - start) source.substring(start, start + length)
-                    else return@mapNotNull null
-                when (type) {
-                    "content" -> ExecutionTraceEvent.Content(text)
-                    "reasoning" -> ExecutionTraceEvent.Reasoning(text)
-                    else -> null
-                }
-            }.orEmpty(),
+            executionTrace = displayTrace, executionSteps = displayTrace.filterIsInstance<ExecutionTraceEvent.Tool>().map { it.step },
             conversationId = session.id,
         ).toEntity(session.id).copy(uuid = record.id, updatedAt = timestamp, syncStatus = SyncStatus.SYNCED, everSynced = true)
         val remoteFieldsBefore = settings.getValue(remoteMessageFieldsKey(record.id))
@@ -816,6 +836,9 @@ internal class RoomSyncStore(
             val extended = old.syncStatus == SyncStatus.SYNCED && old.text.isNotEmpty() && message.sender == old.sender &&
                 message.timestamp == old.timestamp && message.text.length > old.text.length && message.text.startsWith(old.text) &&
                 message.reasoning.orEmpty().startsWith(old.reasoning.orEmpty())
+            // 先到的简版只有文字片段，后来的简版带了工具占位：完整归档恢复前可以换成带占位的版本，恢复后永远以归档为准。
+            val upgradeTrace = old.executionTrace.none { it is ExecutionTraceEvent.Tool } && message.executionTrace.any { it is ExecutionTraceEvent.Tool } &&
+                settings.getValue("sync_resource_restored:${old.uuid}") == null
             val base = old.copy(
                 text = if (old.id.startsWith("cloud:") && old.syncStatus == SyncStatus.SYNCED && old.text.isEmpty() &&
                     settings.getValue("sync_resource_restored:${old.uuid}") == null) message.text else old.text,
@@ -824,7 +847,8 @@ internal class RoomSyncStore(
                 contextUsageSnapshot = old.contextUsageSnapshot ?: message.contextUsageSnapshot?.copy(messageId = old.id),
                 executionFinishedAt = old.executionFinishedAt ?: message.executionFinishedAt,
                 enabledToolIds = old.enabledToolIds.ifEmpty { message.enabledToolIds },
-                executionTrace = old.executionTrace.ifEmpty { message.executionTrace },
+                executionTrace = if (upgradeTrace) message.executionTrace else old.executionTrace.ifEmpty { message.executionTrace },
+                executionSteps = if (upgradeTrace) message.executionSteps else old.executionSteps.ifEmpty { message.executionSteps },
                 contentParts = if (old.contentParts.any { it is MessageContentPart.SkillReference }) old.contentParts
                     else message.contentParts.ifEmpty { old.contentParts },
             )

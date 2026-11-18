@@ -953,7 +953,11 @@ class AgentRunCoordinator(
             if (run == null) replacements[live.runId] = null
             else if (run.status in setOf("COMPLETED", "FAILED", "CANCELLED")) {
                 val completed = store.completedMessage(account, run.id)?.let { message ->
-                    live.copy(message = message, running = false, connectionStatus = null)
+                    // 正式表里先到的是只有文字的简版，完整过程（工具步骤）还在后台下载解密。这期间若本机已收到同一终稿的
+                    // 云端最后一帧，就继续显示这一帧，等完整历史恢复（SYNC_HISTORY_ONLY）后再切，避免先闪一下错乱的版式。
+                    val keepLive = run.terminalReason != "SYNC_HISTORY_ONLY" && live.message.text == message.text &&
+                        live.message.executionSteps.isNotEmpty()
+                    live.copy(message = if (keepLive) live.message.copy(isStreamingDraft = false) else message, running = false, connectionStatus = null)
                 }
                 replacements[run.id] = completed
                 // 完整归档已交接后不再逐轮解码这条长回复；否则每次无关同步都会重读所有历史终稿。
