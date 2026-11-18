@@ -56,23 +56,53 @@ internal class CloudflareRequestCredentials(
             val accessToken = stored["access_token"]?.jsonPrimitive?.contentOrNull
                 ?.takeIf { it.isNotBlank() && '\r' !in it && '\n' !in it }
                 ?: throw CloudflareApiException("AUTHORIZATION_REQUIRED", "Cloudflare Token 格式无效")
-            return refreshIfExpiring(authorization, stored) ?: accessToken
+            return refreshIfExpiring(context.computerId, authorization, stored) ?: accessToken
         } finally {
             payload.fill('\u0000')
         }
     }
 
     /**
-     * access token 快到期时用 refresh_token 续期，避免每小时把用户拉去重新登录。
-     * 续期只换 Token 和到期时间，不动授权代次，否则正在等待的写审批会全部作废。
+     * access token 快到期时续期，避免每小时把用户拉去重新登录。
+     * 登录账号时由服务器续期（同一把锁、写回账号同步），手机只同步结果，不拿同一个 refresh token 与服务器竞争；
+     * 未登录才在本机续期。续期只换 Token 和到期时间，不动授权代次，否则正在等待的写审批会全部作废。
      * 拿不到续期材料时沿用旧 Token；续期失败按授权失效处理，和以前的到期行为一致。
      */
     private suspend fun refreshIfExpiring(
+        computerId: String,
         authorization: CloudflareAuthorizationEntity,
         stored: JsonObject,
     ): String? {
         val expiresAt = authorization.expiresAt ?: return null
         if (expiresAt - System.currentTimeMillis() > TOKEN_REFRESH_MARGIN_MILLIS) return null
+        val remote = com.android.everytalk.data.agent.CloudAccountClient.current
+        var remoteMissing = false
+        if (remote != null) {
+            val current = stored["access_token"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val (material, nextExpires) = try {
+                remote.refreshCloudflare(computerId, com.android.everytalk.BuildConfig.CLOUDFLARE_OAUTH_CLIENT_ID, current, false)
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: com.android.everytalk.data.agent.CloudAgentHttpException) {
+                if (error.status == 409) throw CloudflareApiException("AUTHORIZATION_REQUIRED", "Cloudflare 授权已过期且续期失败，请重新授权")
+                // 旧后端没有续期入口：照旧在本机续期。
+                remoteMissing = error.status == 404
+                null to null
+            } catch (_: Exception) { null to null }
+            if (material != null) {
+                val access = runCatching { json.parseToJsonElement(material).jsonObject["access_token"]?.jsonPrimitive?.contentOrNull }.getOrNull()
+                    ?.takeIf { it.isNotBlank() } ?: throw CloudflareApiException("AUTHORIZATION_REQUIRED", "Cloudflare Token 格式无效")
+                val chars = material.toCharArray()
+                try { credentials.withoutSyncRecording().saveAgentAuthorization(authorization.credentialReference, chars) } finally { chars.fill(ZERO_CHAR) }
+                dao.upsertCloudflareAuthorization(authorization.copy(expiresAt = nextExpires))
+                return access
+            }
+            // 服务器暂时不可用：令牌还没真正过期就先用着，过期了才按授权失效处理；不在本机抢着续期。
+            if (!remoteMissing) {
+                if (expiresAt > System.currentTimeMillis()) return null
+                throw CloudflareApiException("AUTHORIZATION_REQUIRED", "Cloudflare 授权已过期，云端续期暂时不可用，请稍后重试")
+            }
+        }
         val refreshToken = stored["refresh_token"]?.jsonPrimitive?.contentOrNull?.takeIf(String::isNotBlank)
         val client = httpClient
         val oauth = oauthConfig

@@ -23,7 +23,8 @@ class McpManager(private val context: Context) {
     private val oauthHttp = io.ktor.client.HttpClient(io.ktor.client.engine.okhttp.OkHttp) {
         engine { config { followRedirects(false); followSslRedirects(false) } }
     }
-    private val oauth = McpOAuthManager(EncryptedMcpOAuthSecrets(context), oauthHttp)
+    private val oauth = McpOAuthManager(EncryptedMcpOAuthSecrets(context), oauthHttp,
+        mirror = EncryptedMcpOAuthSecrets(context, recordSyncChanges = false))
     private val mail = McpMailManager(EncryptedMcpOAuthSecrets(context))
     private val clientManager = McpClientManager(accessToken = { config ->
         mail.accessTokenFor(config) ?: oauth.accessTokenFor(config)

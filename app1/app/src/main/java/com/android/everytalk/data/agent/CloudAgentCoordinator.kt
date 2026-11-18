@@ -49,13 +49,15 @@ internal class CloudAgentCoordinator(
     /** 服务器声明的能力（协议协商）；旧后端为空集，提交时按旧绑定回退到设备执行。 */
     @Volatile var serverFeatures: Set<String> = emptySet()
         private set
+    /** 能力只在成功问到后缓存；断网时不缓存“空集”，否则会把新后端误当旧后端。 */
+    @Volatile private var featuresLoaded = false
 
-    /** 发送不能抢在后台发现前直接拒绝；未确认时主动检查，只有接口返回 404 才提示后端版本。 */
+    /** 发送不能抢在后台发现前直接拒绝；未确认时主动检查，只有接口返回 404 才提示后端版本。后台发现已确认支持时仍要补问能力。 */
     suspend fun ensureSupported() {
-        if (serverSupported) return
+        if (serverSupported && featuresLoaded) return
         try {
-            discover()
-            serverFeatures = try { client.capabilities() } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { emptySet() }
+            if (!serverSupported) discover()
+            if (!featuresLoaded) { serverFeatures = client.capabilities(); featuresLoaded = true }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {

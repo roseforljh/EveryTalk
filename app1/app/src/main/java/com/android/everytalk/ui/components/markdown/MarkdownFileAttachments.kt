@@ -26,6 +26,7 @@ import org.intellij.markdown.MarkdownTokenTypes
 import org.intellij.markdown.ast.ASTNode
 import androidx.compose.ui.res.stringResource
 import com.android.everytalk.R
+import kotlinx.coroutines.launch
 
 internal const val MESSAGE_FILE_SCHEME = "everytalk-file:"
 internal val LocalMessageFileAttachments = compositionLocalOf<List<SelectedMediaItem.GenericFile>> { emptyList() }
@@ -40,9 +41,11 @@ fun MessageFileAttachmentScope(attachments: List<SelectedMediaItem>, content: @C
     val fallback = LocalUriHandler.current
     val context = LocalContext.current
     val open = rememberMessageFileOpener()
-    val handler = remember(files, fallback, context, open) {
+    val scope = rememberCoroutineScope()
+    val handler = remember(files, fallback, context, open, scope) {
         object : UriHandler {
             override fun openUri(uri: String) {
+                if (openCloudPreview(context, scope, uri)) return
                 if (!uri.startsWith(MESSAGE_FILE_SCHEME)) { fallback.openUri(uri); return }
                 val file = resolveMessageFile(uri, files)
                 // 缺少消息附件映射不能推断磁盘文件已被删除，提示应与实际失败阶段一致。
@@ -52,6 +55,27 @@ fun MessageFileAttachmentScope(attachments: List<SelectedMediaItem>, content: @C
         }
     }
     CompositionLocalProvider(LocalMessageFileAttachments provides files, LocalUriHandler provides handler, content = content)
+}
+
+/**
+ * 云端任务生成的私有预览链接本身不是凭据：先用当前登录账号换一个一次性进入码，再交给浏览器打开。
+ * 不是本同步服务器的预览链接返回 false，按普通链接处理。
+ */
+internal fun openCloudPreview(context: android.content.Context, scope: kotlinx.coroutines.CoroutineScope, uri: String): Boolean {
+    if (com.android.everytalk.data.agent.previewToken(com.android.everytalk.BuildConfig.EVERYTALK_SYNC_BASE_URL, uri) == null) return false
+    val client = com.android.everytalk.data.agent.CloudAccountClient.current
+    if (client == null) { AppToast.show(context, "私有预览需要登录生成它的账号后打开"); return true }
+    scope.launch {
+        val entry = try { client.previewEntry(uri) }
+            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (_: Exception) { null }
+        if (entry == null) AppToast.show(context, "预览已过期、已撤销，或不属于当前账号")
+        else runCatching {
+            context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(entry))
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+        }.onFailure { AppToast.show(context, "没有可以打开网页的应用") }
+    }
+    return true
 }
 
 internal fun messageFileInlineKey(file: SelectedMediaItem.GenericFile): String = "message-file-icon:${file.id}"

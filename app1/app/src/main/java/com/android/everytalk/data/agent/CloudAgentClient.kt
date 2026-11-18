@@ -21,9 +21,12 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.put
 import java.io.IOException
 import java.util.UUID
 
@@ -109,8 +112,24 @@ internal fun requireCloudUuid(value: String) {
     require(runCatching { UUID.fromString(value).toString() == value }.getOrDefault(false)) { "云端任务身份无效" }
 }
 
+/** 只认本同步服务器、路径为 /v1/agent/previews/<UUID>/… 的链接，取出预览 token。 */
+internal fun previewToken(base: String, url: String): String? {
+    val prefix = base.trimEnd('/') + "/v1/agent/previews/"
+    if (!url.startsWith(prefix)) return null
+    val token = url.removePrefix(prefix).substringBefore('/').substringBefore('?').substringBefore('#')
+    return token.takeIf { runCatching { UUID.fromString(it).toString() == it }.getOrDefault(false) }
+}
+
 /** 不保留或展示服务端原始错误正文，它可能含上游凭据；仅带受控状态码和错误标识。 */
 internal class CloudAgentHttpException(val status: Int, val code: String?) : IOException("云端任务请求失败（HTTP $status${code?.let { ", $it" }.orEmpty()}）")
+
+/**
+ * 当前登录账号的云端客户端，退出或换号时清空。给打开私有预览、登录后的 OAuth 续期这类需要账号鉴权的小请求用；
+ * 为 null 就是未登录，调用方照旧走本机逻辑。
+ */
+internal object CloudAccountClient {
+    @Volatile var current: CloudAgentClient? = null
+}
 
 /**
  * 只负责传输，不启动本地 AgentLoop，也不把退订当停止。权限闭包绑定创建时账号，
@@ -150,12 +169,39 @@ internal class CloudAgentClient(
         return decode(request("/$id/commands", HttpMethod.Post, command.toString())).also { check(it.id == id) { "云端任务响应身份不匹配" } }
     }
 
-    /** 服务器声明支持的能力；旧后端没有这个入口时返回空集，调用方按旧绑定回退。 */
+    /** 服务器声明支持的能力；只有旧后端没有这个入口（404）时返回空集按旧绑定回退，断网等错误照常抛出、下次再问。 */
     suspend fun capabilities(): Set<String> = try {
-        val root = cloudAgentJson.parseToJsonElement(request("/capabilities")).jsonObject
+        val root = cloudAgentJson.parseToJsonElement(call("/v1/agent/capabilities")).jsonObject
         root["features"]?.jsonArray?.map { it.jsonPrimitive.content }.orEmpty().toSet()
-    } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled
-    } catch (_: Exception) { emptySet() }
+    } catch (error: CloudAgentHttpException) {
+        if (error.status == 404) emptySet() else throw error
+    }
+
+    /**
+     * 私有预览链接不是凭据：用账号换一个一次性进入码，返回带码的完整地址交给浏览器。
+     * 不是本服务器的预览链接返回 null，调用方按普通链接打开。
+     */
+    suspend fun previewEntry(url: String): String? {
+        val token = previewToken(base, url) ?: return null
+        val path = cloudAgentJson.parseToJsonElement(call("/v1/agent/control/previews/$token/session", HttpMethod.Post, "{}"))
+            .jsonObject["url"]?.jsonPrimitive?.content ?: return null
+        require(path.startsWith("/v1/agent/previews/$token/")) { "预览地址无效" }
+        return base + path
+    }
+
+    /** 登录后 MCP OAuth 续期交给服务器：同一把锁、写回账号同步，返回与本机格式相同的授权 JSON。 */
+    suspend fun refreshMcp(provider: String, current: String, force: Boolean): String =
+        cloudAgentJson.parseToJsonElement(call("/v1/agent/credentials/refresh", HttpMethod.Post, buildJsonObject {
+            put("kind", "mcp"); put("provider", provider); put("current", current); put("force", force)
+        }.toString())).jsonObject.getValue("secret").jsonPrimitive.content
+
+    /** 登录后 Cloudflare 续期交给服务器，返回新的令牌材料（access/refresh JSON）与到期时间。 */
+    suspend fun refreshCloudflare(computerId: String, clientId: String, current: String, force: Boolean): Pair<String, Long?> {
+        val root = cloudAgentJson.parseToJsonElement(call("/v1/agent/credentials/refresh", HttpMethod.Post, buildJsonObject {
+            put("kind", "cloudflare"); put("computerId", computerId); put("clientId", clientId); put("current", current); put("force", force)
+        }.toString())).jsonObject
+        return root.getValue("material").jsonPrimitive.content to root["expiresAt"]?.jsonPrimitive?.longOrNull
+    }
 
     /** 受保护 Secret 走独立入口：正文只在这一次请求里出现，不进命令回放，也不进历史。 */
     suspend fun secret(id: String, command: JsonObject): CloudRunView {
@@ -219,11 +265,14 @@ internal class CloudAgentClient(
         return token(force) ?: throw IOException("登录已失效，请重新登录以查看云端进度")
     }
 
-    private suspend fun request(path: String, method: HttpMethod = HttpMethod.Get, body: String? = null): String {
+    private suspend fun request(path: String, method: HttpMethod = HttpMethod.Get, body: String? = null): String =
+        call("/v1/agent/runs$path", method, body)
+
+    private suspend fun call(path: String, method: HttpMethod = HttpMethod.Get, body: String? = null): String {
         var access = access(false)
         repeat(2) { attempt ->
             check(permitted()) { "云端任务账号授权已变更" }
-            val (status, text) = client.prepareRequest("$base/v1/agent/runs$path") {
+            val (status, text) = client.prepareRequest("$base$path") {
                 this.method = method
                 bearerAuth(access)
                 if (body != null) { contentType(ContentType.Application.Json); setBody(body) }

@@ -48,11 +48,13 @@ class CloudAgentCoordinatorTest {
 
     @Test fun `首次发送主动确认云端支持且成功后不重复探测`() = runBlocking {
         val db = database(); val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-        var probes = 0
+        var probes = 0; var asked = 0
         val http = HttpClient(MockEngine { request ->
-            // 能力协商与活跃列表是两次请求；都只在首次确认时各发一次。
-            if (request.url.encodedPath.endsWith("/capabilities")) respond("{\"version\":2,\"features\":[\"secret\",\"memory\"]}")
-            else {
+            // 能力协商与活跃列表是两次请求；都只在首次确认时各发一次。能力入口在 /v1/agent/capabilities，不是任务 ID 路径。
+            if (request.url.encodedPath.endsWith("/capabilities")) {
+                assertEquals("/v1/agent/capabilities", request.url.encodedPath); asked++
+                respond("{\"version\":2,\"features\":[\"secret\",\"memory\"]}")
+            } else {
                 assertEquals("true", request.url.parameters["active"]); probes++
                 respond("{\"runs\":[]}")
             }
@@ -61,11 +63,13 @@ class CloudAgentCoordinatorTest {
             val coordinator = CloudAgentCoordinator(account, db,
                 CloudAgentClient("https://example.com", { "access" }, { true }, http), credentials(), scope, { true }, { _, _ -> })
             assertFalse(coordinator.serverSupported)
-            coordinator.ensureSupported()
-            coordinator.ensureSupported()
+            // 后台发现先确认了支持：首次发送仍要补问能力，不能拿空集当旧后端。
+            coordinator.discover()
             assertTrue(coordinator.serverSupported)
+            coordinator.ensureSupported()
+            coordinator.ensureSupported()
             assertEquals(setOf("secret", "memory"), coordinator.serverFeatures)
-            assertEquals(1, probes)
+            assertEquals(1, probes); assertEquals(1, asked)
         } finally { scope.cancel(); scope.coroutineContext[Job]!!.join(); http.close(); db.close() }
     }
 

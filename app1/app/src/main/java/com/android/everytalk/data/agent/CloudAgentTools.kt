@@ -69,7 +69,7 @@ internal suspend fun cloudAgentTools(
     val attachmentFiles = if ("read_attachment" in names) AttachmentToolExecutor.cloudSnapshot(context, attachments) else JsonObject(emptyMap())
     // 申请开启 MCP 时，把设置里已启用的服务也在提交时一起冻结；批准后服务器直接声明，不再等手机准备。
     val mcpEnableTools = if (AgentControlToolNames.REQUEST_MCP in names && mcpEnableRequest != null) {
-        JsonArray(cloudAgentTools(context, mcpEnableRequest, emptyList(), skills, null).filter { item ->
+        JsonArray(cloudAgentTools(context, mcpEnableRequest, emptyList(), skills, null, serverFeatures).filter { item ->
             val name = item.jsonObject["name"]?.jsonPrimitive?.contentOrNull.orEmpty()
             name.isNotEmpty() && name !in AgentControlToolNames.all && name !in names
         })
@@ -90,6 +90,9 @@ internal suspend fun cloudAgentTools(
     // Cloudflare 工具由后端直接调 Cloudflare API：提交前在手机上续期一次 access token，冻结进加密输入；拿不到授权就如实说明。
     val cloudflare = if (names.any { it in ComputerToolNames.cloudflare }) runCatching { cloudflareTargets(context, request.localComputerRequestContext) }
         .getOrElse { error -> if (error is kotlinx.coroutines.CancellationException) throw error; null } else null
+    // 补过的凭据只能经 exec 的 secret_names 按名字注入（服务器先让用户确认命令、输出里遮蔽值）；本轮能申请凭据时才给 exec 加这个参数。
+    val secretExec = supports("secret_exec") && supports("secret") &&
+        names.any { it == AgentControlToolNames.REQUEST_SKILL_SECRET || it == AgentControlToolNames.REQUEST_PROTECTED_SECRET }
     buildJsonArray {
         for (definition in definitions) {
             val function = definition["function"] as? Map<*, *> ?: definition
@@ -158,7 +161,8 @@ internal suspend fun cloudAgentTools(
             }
             add(buildJsonObject {
                 put("name", name); put("description", function["description"]?.toString().orEmpty())
-                put("parameters", function["parameters"]?.let(::anyToJsonElement) ?: buildJsonObject { put("type", "object") })
+                val parameters = function["parameters"]?.let(::anyToJsonElement) ?: buildJsonObject { put("type", "object") }
+                put("parameters", if (name == ComputerToolNames.EXEC && secretExec && binding["kind"]?.jsonPrimitive?.content == "ssh") withSecretNames(parameters) else parameters)
                 put("binding", binding)
                 put("approval", approval)
                 put("replay", if (binding["kind"]?.jsonPrimitive?.content in setOf("mcp", "device") ||
@@ -229,6 +233,18 @@ private fun skillIdsOf(request: ChatRequest): List<kotlinx.serialization.json.Js
     (request.localSkillSnapshot?.let { snapshot ->
         (snapshot.automaticCatalog.map { it.skillId } + snapshot.manualReferences.map { it.skillId })
     }.orEmpty()).distinct().map(::JsonPrimitive)
+
+/** 在 exec 参数里加 secret_names：只写变量名，值由服务器注入。 */
+internal fun withSecretNames(parameters: JsonElement): JsonElement {
+    val schema = parameters as? JsonObject ?: return parameters
+    val properties = schema["properties"] as? JsonObject ?: JsonObject(emptyMap())
+    return JsonObject(schema + ("properties" to JsonObject(properties + ("secret_names" to buildJsonObject {
+        put("type", "array"); put("items", buildJsonObject { put("type", "string") }); put("maxItems", 32)
+        put("description", "Names of credentials the user already provided via request_protected_secret / request_skill_secret. " +
+            "The server exports them as environment variables for this command only, asks the user to confirm first, and masks their values in the output. " +
+            "Reference them as \$NAME; never print or send them elsewhere.")
+    }))))
+}
 
 /**
  * 本轮选中的 Cloudflare 目标：账号、能力、scope、权限模式和当前 access token，只进入加密任务输入。

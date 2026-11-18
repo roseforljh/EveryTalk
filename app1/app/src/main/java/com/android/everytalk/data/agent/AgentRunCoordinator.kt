@@ -352,6 +352,7 @@ class AgentRunCoordinator(
                     cloudAccountId = accountId
                     cloudCoordinator = coordinator
                     cloudReady.value = accountId to coordinator
+                    CloudAccountClient.current = client
                     // 归档可能先于最后一帧 SSE 到达：同步写入后立刻对账，避免界面停在运行中。
                     launch { com.android.everytalk.data.sync.SyncLocalChanges.revision.collect { reconcileCloudOverlays() } }
                     try {
@@ -368,6 +369,7 @@ class AgentRunCoordinator(
                             delay(15_000)
                         }
                     } finally {
+                        if (CloudAccountClient.current === client) CloudAccountClient.current = null
                         client.close()
                         if (cloudCoordinator === coordinator) {
                             cloudCoordinator = null
@@ -651,9 +653,15 @@ class AgentRunCoordinator(
             sendCloudDeviceResult(view.id, waiting.toolCallId, saved.drop(1), saved.startsWith("1")) { cloudDeviceHandled.remove(key) }
             return
         }
-        // 凭据与能力申请不再回手机执行：服务器接收凭据、按冻结能力作答；旧路径只保留给仍在等待的旧任务。
+        // 凭据与能力申请不再回手机执行：旧版客户端提交成“等设备执行”的这类等待，请服务器接手——
+        // 能力申请由服务器如实作答，凭据等待转成服务器接收的凭据卡，任一同账号设备都能填。
         if (waiting.toolName in setOf(AgentControlToolNames.REQUEST_SKILL_SECRET, AgentControlToolNames.REQUEST_PROTECTED_SECRET,
-                AgentControlToolNames.REQUEST_CAPABILITY)) return
+                AgentControlToolNames.REQUEST_CAPABILITY)) {
+            launchCloudCommand(view.id, "adopt", "旧任务交接失败，请重试", kotlinx.serialization.json.buildJsonObject {
+                put("toolCallId", kotlinx.serialization.json.JsonPrimitive(waiting.toolCallId))
+            }) { cloudDeviceHandled.remove(key) }
+            return
+        }
         scope.launch {
             val call = AgentContentBlock.ToolCall(waiting.toolCallId, waiting.toolName, args)
             // 旧任务留下的设备等待：没有发起设备的上下文时，任何设备都可以接手，但必须由用户先确认。
@@ -1116,6 +1124,7 @@ class AgentRunCoordinator(
             prepareCloudAgentSubmission(appContext, database, agentRunStore, skillRepository, memoryCoordinator,
                 input, accountId, epochs, computerSessionStateProvider(input.request.localComputerRequestContext), ::permitted,
                 mcpEnableRequest = mcpEnable,
+                serverFeatures = coordinator.serverFeatures,
                 submission = submission,
                 beforePersist = { run, frozen ->
                     val bytes = frozen.toString().toByteArray(Charsets.UTF_8)
