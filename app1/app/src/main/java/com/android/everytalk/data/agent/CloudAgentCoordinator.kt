@@ -43,9 +43,33 @@ internal class CloudAgentCoordinator(
     private val blockedRuns = ConcurrentHashMap.newKeySet<String>()
     private val submitMutex = Mutex()
     private val projectionMutex = Mutex()
-    /** 服务器已响应过任务列表才算支持整轮云执行；旧版服务器上新请求留在本机，不提交。 */
+    /** 只缓存已成功确认的支持状态；初始 false 代表尚未确认，不代表后端不支持。 */
     @Volatile var serverSupported = false
         private set
+    /** 服务器声明的能力（协议协商）；旧后端为空集，提交时按旧绑定回退到设备执行。 */
+    @Volatile var serverFeatures: Set<String> = emptySet()
+        private set
+    /** 能力只在成功问到后缓存；断网时不缓存“空集”，否则会把新后端误当旧后端。 */
+    @Volatile private var featuresLoaded = false
+
+    /** 发送不能抢在后台发现前直接拒绝；未确认时主动检查，只有接口返回 404 才提示后端版本。后台发现已确认支持时仍要补问能力。 */
+    suspend fun ensureSupported() {
+        if (serverSupported && featuresLoaded) return
+        try {
+            if (!serverSupported) discover()
+            if (!featuresLoaded) { serverFeatures = client.capabilities(); featuresLoaded = true }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            val reason = when {
+                error is CloudAgentHttpException && error.status == 404 -> "后端不支持云端任务，请检查后端版本"
+                error is CloudAgentHttpException -> error.message.orEmpty()
+                else -> "云端暂时连不上，请稍后重发"
+            }
+            throw CloudAgentIneligible(reason, error)
+        }
+        if (!serverSupported) throw CloudAgentIneligible("云端任务账号授权已变更，请重新登录后重发")
+    }
 
     /** POST 之前先原子封存输入。相同 run 的重复调用只能使用完全相同的字节。 */
     suspend fun submit(run: AgentRunEntity, input: JsonObject) {
@@ -82,6 +106,28 @@ internal class CloudAgentCoordinator(
         for (view in remote) {
             accept(view)
             if (!view.terminal) track(view.id)
+        }
+    }
+
+    /** 回到前台不能只查活跃列表：缺席期间已完成的任务已不在列表里，旧 SSE 也可能半开，逐条 GET 补齐终态。 */
+    suspend fun refresh() {
+        if (!permitted()) return
+        // 登录恢复后解除已提交任务的鉴权阻断；未提交任务仍按显式重试处理，不能再次 POST 被拒的输入。
+        for (run in database.agentDao().getActiveRuns()) {
+            if (run.executionOwner == "CLOUD" && run.cloudAccountId == accountId && run.cloudCursor > 0L && blockedRuns.remove(run.id)) {
+                synchronized(jobs) { jobs[run.id] }?.cancelAndJoin()
+            }
+        }
+        discover()
+        for (run in database.agentDao().getActiveRuns()) {
+            if (run.executionOwner != "CLOUD" || run.cloudAccountId != accountId || run.cloudCursor == 0L) continue
+            try { fetch(run.id) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) {
+                if (!permitted()) return
+                onConnection(run, if (error is CloudAgentHttpException) error.message.orEmpty()
+                    else "本机进度连接中断，正在重连；不影响云端执行")
+            }
         }
     }
 
@@ -170,7 +216,8 @@ internal class CloudAgentCoordinator(
                     onConnection(run, error.message.orEmpty())
                     return
                 }
-                onConnection(run, "连接中断，正在重新连接云端任务")
+                onConnection(run, if (run.cloudCursor == 0L) "正在核对云端是否收到任务，恢复连接后继续确认"
+                    else "本机进度连接中断，正在重连；不影响云端执行")
             }
             // 这里只重连订阅，不重试模型。模型的 120 秒与三次重试由后端独立计时。
             failures++
@@ -204,6 +251,40 @@ internal class CloudAgentCoordinator(
             accept(localTerminal(run, "CANCELLED", null))
             credentials.deleteCloudAgentInput(accountId, run.id)
         }
+    }
+
+    /**
+     * 提交受保护 Secret：正文只发给服务器，由服务器保存（账号同步或目标服务器 .env）。
+     * 失败保留等待点，用户可重试；网络重试沿用同一 commandId，服务器按幂等处理。
+     */
+    suspend fun sendSecret(runId: String, toolCallId: String, value: CharArray, remember: Boolean, generation: Long?): CloudRunView {
+        check(permitted()) { "云端任务账号授权已变更" }
+        val commandId = UUID.randomUUID().toString()
+        var target = generation
+        var failures = 0
+        try {
+            while (true) {
+                try {
+                    val resolved = target ?: client.get(runId).generation.also { target = it }
+                    val body = buildJsonObject {
+                        put("type", "secret")
+                        put("commandId", commandId)
+                        put("generation", resolved)
+                        put("toolCallId", toolCallId)
+                        put("secret", String(value))
+                        put("remember", remember)
+                    }
+                    val view = client.secret(runId, body)
+                    accept(view)
+                    if (!view.terminal) track(runId)
+                    return view
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (error: Exception) {
+                    if (!permitted() || failures >= 3 || error is CloudAgentHttpException && error.status in setOf(400, 401, 403, 404, 409, 413, 422)) throw error
+                    wait(agentResumeRetryDelayMillis(++failures))
+                }
+            }
+        } finally { value.fill('\u0000') }
     }
 
     /** 命令在整个重试期间保留同一个 commandId 和 generation，审批不能误作用到新一代工具。 */

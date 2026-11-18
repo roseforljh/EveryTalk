@@ -396,6 +396,10 @@ interface ChatDao {
     @Query("SELECT id, sessionId, text, contentParts AS contentPartsJson, sender, reasoning, contentStarted, isError, name, timestamp, outputType, executionTrace AS executionTraceJson, executionFinishedAt, enabledToolIds AS enabledToolIdsJson, modelName, providerName, tokenUsage AS tokenUsageJson, contextUsageSnapshot AS contextUsageSnapshotJson, uuid, updated_at, deleted, sync_status, ever_synced, is_incomplete FROM messages WHERE sync_status = 'PENDING' AND sender IN ('User', 'AI', 'System', 'Tool') AND isPlaceholderName = 0 AND sessionId IN (SELECT id FROM chat_sessions WHERE deleted = 0 AND id NOT IN ('last_open_chat_v1', 'last_open_image_generation_v1')) ORDER BY timestamp ASC, CASE sender WHEN 'System' THEN 0 WHEN 'User' THEN 1 WHEN 'AI' THEN 2 ELSE 3 END, uuid ASC LIMIT :limit")
     suspend fun getPendingSyncMessageRows(limit: Int = Int.MAX_VALUE): List<SyncMessageRow>
 
+    /** 云端任务提交清单的候选：本会话尚未上云的原消息加本轮问题，筛选与常规推送一致；cloud: 来自云端，不回传。 */
+    @Query("SELECT uuid FROM messages WHERE sessionId = :sessionId AND deleted = 0 AND (sync_status = 'PENDING' OR id = :userMessageId) AND sender IN ('User', 'AI', 'System', 'Tool') AND isPlaceholderName = 0 AND id NOT LIKE 'cloud:%' ORDER BY timestamp ASC, CASE sender WHEN 'System' THEN 0 WHEN 'User' THEN 1 WHEN 'AI' THEN 2 ELSE 3 END, uuid ASC")
+    suspend fun getSubmissionMessageUuids(sessionId: String, userMessageId: String): List<String>
+
     /** 保留旧 DAO 调用方的实体返回类型；真正的 Room 查询仍使用轻量投影。 */
     suspend fun getPendingSyncMessages(limit: Int = Int.MAX_VALUE): List<MessageEntity> =
         getPendingSyncMessageRows(limit).map { it.toSyncEntity() }
@@ -582,6 +586,39 @@ interface ChatDao {
     @Query("DELETE FROM pending_messages")
     suspend fun deleteAllPendingMessages()
 
+    @Query("DELETE FROM computer_executions WHERE runId IN (SELECT id FROM agent_runs WHERE sessionId = :sessionId)")
+    suspend fun deleteComputerExecutionsForSession(sessionId: String)
+
+    @Query("DELETE FROM agent_runs WHERE sessionId = :sessionId")
+    suspend fun deleteAgentRunsForSession(sessionId: String)
+
+    @Query("DELETE FROM agent_compactions WHERE sessionId = :sessionId")
+    suspend fun deleteCompactionsForSession(sessionId: String)
+
+    @Query("DELETE FROM provider_continuation_states WHERE sessionId = :sessionId")
+    suspend fun deleteContinuationStatesForSession(sessionId: String)
+
+    /** 清理已软删除会话关联的本地 Agent 上下文、工具轨迹与执行记录，防止软删除会话残留孤儿数据。 */
+    @Transaction
+    suspend fun deleteAgentDataForSession(sessionId: String) {
+        deleteComputerExecutionsForSession(sessionId)
+        deleteAgentRunsForSession(sessionId)
+        deleteCompactionsForSession(sessionId)
+        deleteContinuationStatesForSession(sessionId)
+    }
+
+    @Query("DELETE FROM computer_executions WHERE runId IN (SELECT id FROM agent_runs WHERE sessionId IN (SELECT id FROM chat_sessions WHERE isImageGeneration = :isImageGen))")
+    suspend fun clearComputerExecutionsForMode(isImageGen: Boolean)
+
+    @Query("DELETE FROM agent_runs WHERE sessionId IN (SELECT id FROM chat_sessions WHERE isImageGeneration = :isImageGen)")
+    suspend fun clearAgentRunsForMode(isImageGen: Boolean)
+
+    @Query("DELETE FROM agent_compactions WHERE sessionId IN (SELECT id FROM chat_sessions WHERE isImageGeneration = :isImageGen)")
+    suspend fun clearCompactionsForMode(isImageGen: Boolean)
+
+    @Query("DELETE FROM provider_continuation_states WHERE sessionId IN (SELECT id FROM chat_sessions WHERE isImageGeneration = :isImageGen)")
+    suspend fun clearContinuationStatesForMode(isImageGen: Boolean)
+
     @Query("UPDATE chat_sessions SET deleted = 1, updated_at = :now, sync_status = CASE WHEN id NOT IN ('last_open_chat_v1', 'last_open_image_generation_v1') THEN 'PENDING' ELSE 'LOCAL_ONLY' END WHERE isImageGeneration = :isImageGen AND deleted = 0")
     suspend fun clearAllSessionRows(isImageGen: Boolean, now: Long = System.currentTimeMillis())
 
@@ -597,6 +634,10 @@ interface ChatDao {
         if (!isImageGen) deleteAllPendingMessages()
         clearDraftsForMode(isImageGen)
         clearNeverSyncedMessagesForMode(isImageGen)
+        clearComputerExecutionsForMode(isImageGen)
+        clearAgentRunsForMode(isImageGen)
+        clearCompactionsForMode(isImageGen)
+        clearContinuationStatesForMode(isImageGen)
         clearAllSessionRows(isImageGen)
     }
 
@@ -608,6 +649,7 @@ interface ChatDao {
         deletePendingMessagesForConversation(sessionId)
         deleteDrafts(sessionId, getDrafts(sessionId).map { it.message.id })
         deleteNeverSyncedMessages(sessionId, getMessageStorageStates(sessionId).map { it.id })
+        deleteAgentDataForSession(sessionId)
         deleteSessionRow(sessionId)
     }
 

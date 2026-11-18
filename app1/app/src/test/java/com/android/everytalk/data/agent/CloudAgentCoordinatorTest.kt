@@ -46,6 +46,64 @@ class CloudAgentCoordinatorTest {
     }
     private fun raw(view: CloudRunView) = cloudAgentJson.encodeToString(CloudRunView.serializer(), view)
 
+    @Test fun `首次发送主动确认云端支持且成功后不重复探测`() = runBlocking {
+        val db = database(); val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        var probes = 0; var asked = 0
+        val http = HttpClient(MockEngine { request ->
+            // 能力协商与活跃列表是两次请求；都只在首次确认时各发一次。能力入口在 /v1/agent/capabilities，不是任务 ID 路径。
+            if (request.url.encodedPath.endsWith("/capabilities")) {
+                assertEquals("/v1/agent/capabilities", request.url.encodedPath); asked++
+                respond("{\"version\":2,\"features\":[\"secret\",\"memory\"]}")
+            } else {
+                assertEquals("true", request.url.parameters["active"]); probes++
+                respond("{\"runs\":[]}")
+            }
+        })
+        try {
+            val coordinator = CloudAgentCoordinator(account, db,
+                CloudAgentClient("https://example.com", { "access" }, { true }, http), credentials(), scope, { true }, { _, _ -> })
+            assertFalse(coordinator.serverSupported)
+            // 后台发现先确认了支持：首次发送仍要补问能力，不能拿空集当旧后端。
+            coordinator.discover()
+            assertTrue(coordinator.serverSupported)
+            coordinator.ensureSupported()
+            coordinator.ensureSupported()
+            assertEquals(setOf("secret", "memory"), coordinator.serverFeatures)
+            assertEquals(1, probes); assertEquals(1, asked)
+        } finally { scope.cancel(); scope.coroutineContext[Job]!!.join(); http.close(); db.close() }
+    }
+
+    @Test fun `探测失败区分断网和接口缺失且恢复后允许再次发送`() = runBlocking {
+        for (status in listOf(null, HttpStatusCode.NotFound, HttpStatusCode.Unauthorized)) {
+            val db = database(); val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            var recovered = false
+            val http = HttpClient(MockEngine {
+                if (recovered) respond("{\"runs\":[]}")
+                else if (status == null) throw IOException("网络中断")
+                else respond("{}", status)
+            })
+            try {
+                val coordinator = CloudAgentCoordinator(account, db,
+                    CloudAgentClient("https://example.com", { "access" }, { true }, http), credentials(), scope, { true }, { _, _ -> })
+                try {
+                    coordinator.ensureSupported()
+                    fail("探测失败不能提交云端任务")
+                } catch (error: CloudAgentIneligible) {
+                    val expected = when (status) {
+                        null -> "云端暂时连不上，请稍后重发"
+                        HttpStatusCode.NotFound -> "后端不支持云端任务，请检查后端版本"
+                        else -> "云端任务请求失败（HTTP 401）"
+                    }
+                    assertEquals(expected, error.message)
+                }
+                assertFalse(coordinator.serverSupported)
+                recovered = true
+                coordinator.ensureSupported()
+                assertTrue(coordinator.serverSupported)
+            } finally { scope.cancel(); scope.coroutineContext[Job]!!.join(); http.close(); db.close() }
+        }
+    }
+
     @Test fun `提交响应丢失先核对同一任务断流按落盘游标恢复且不重复POST`() = runBlocking {
         val db = database(); val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val credentials = credentials(); val initial = prepare(db)
@@ -134,6 +192,85 @@ class CloudAgentCoordinatorTest {
             kotlinx.coroutines.delay(300)
             assertEquals(true, coordinator.serverSupported)
             assertEquals(0, posts)
+        } finally { scope.cancel(); scope.coroutineContext[Job]!!.join(); http.close(); db.close() }
+    }
+
+    @Test fun `后台完成后前台主动取回终态且半开订阅或进程重建都不重跑任务`() = runBlocking {
+        for (recreate in listOf(false, true)) {
+            val db = database()
+            val firstScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            val resumedScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            val initial = prepare(db)
+            CloudAgentStore(db).apply(account, initial)
+            val connected = CompletableDeferred<Unit>()
+            val done = CompletableDeferred<Message>()
+            var current = initial
+            var posts = 0
+            var commands = 0
+            val http = HttpClient(MockEngine { request ->
+                when {
+                    request.url.parameters["active"] == "true" -> respond("{\"runs\":[]}")
+                    request.url.encodedPath.endsWith("/events") -> { connected.complete(Unit); awaitCancellation() }
+                    request.url.encodedPath.endsWith("/commands") -> { commands++; error("页面或进程销毁不能发送控制命令") }
+                    request.method.value == "POST" -> { posts++; error("已确认的任务不能重复提交") }
+                    else -> respond(raw(current))
+                }
+            })
+            fun coordinator(scope: CoroutineScope) = CloudAgentCoordinator(account, db,
+                CloudAgentClient("https://example.com", { "access" }, { true }, http), credentials(), scope, { true },
+                onSnapshot = { view, message -> if (view.terminal) done.complete(message) })
+            try {
+                val first = coordinator(firstScope)
+                first.track(initial.id)
+                withTimeout(10_000) { connected.await() }
+                if (recreate) { firstScope.cancel(); firstScope.coroutineContext[Job]!!.join() }
+                // 客户端缺席期间服务器已完成；活跃列表为空，旧长连接仍挂着时也必须 GET 到终态。
+                current = initial.copy(status = "COMPLETED", cursor = 8,
+                    snapshot = initial.snapshot.copy(text = "后台完成的结果", finishedAt = 100, executionStatus = null))
+                (if (recreate) coordinator(resumedScope) else first).refresh()
+                val message = withTimeout(10_000) { done.await() }
+                assertEquals("后台完成的结果", message.text)
+                assertEquals(97L, message.executionFinishedAt!! - message.timestamp)
+                assertEquals("COMPLETED", db.agentDao().getRun(initial.id)!!.status)
+                assertEquals(8L, db.agentDao().getRun(initial.id)!!.cloudCursor)
+                assertEquals(0, posts); assertEquals(0, commands)
+            } finally {
+                firstScope.cancel(); resumedScope.cancel()
+                firstScope.coroutineContext[Job]!!.join(); resumedScope.coroutineContext[Job]!!.join()
+                http.close(); db.close()
+            }
+        }
+    }
+
+    @Test fun `已提交任务鉴权恢复后前台刷新重接订阅且不覆盖执行状态`() = runBlocking {
+        val db = database(); val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val initial = prepare(db)
+        CloudAgentStore(db).apply(account, initial)
+        var authorized = false
+        val blocked = CompletableDeferred<Unit>()
+        val connected = CompletableDeferred<Unit>()
+        var requests = 0
+        val http = HttpClient(MockEngine { request ->
+            requests++
+            when {
+                request.url.parameters["active"] == "true" -> respond("{\"runs\":[${raw(initial)}]}")
+                request.url.encodedPath.endsWith("/events") -> { connected.complete(Unit); awaitCancellation() }
+                authorized -> respond(raw(initial))
+                else -> respond("{}", HttpStatusCode.Unauthorized)
+            }
+        })
+        try {
+            val coordinator = CloudAgentCoordinator(account, db,
+                CloudAgentClient("https://example.com", { "access" }, { true }, http), credentials(), scope, { true }, { _, _ -> },
+                onConnection = { _, _ -> blocked.complete(Unit) })
+            coordinator.track(initial.id)
+            withTimeout(10_000) { blocked.await() }
+            assertEquals("执行中", CloudAgentStore(db).read(initial.id)!!.snapshot.executionStatus)
+            authorized = true
+            coordinator.refresh()
+            withTimeout(10_000) { connected.await() }
+            assertTrue(requests >= 4)
+            assertEquals("执行中", CloudAgentStore(db).read(initial.id)!!.snapshot.executionStatus)
         } finally { scope.cancel(); scope.coroutineContext[Job]!!.join(); http.close(); db.close() }
     }
 

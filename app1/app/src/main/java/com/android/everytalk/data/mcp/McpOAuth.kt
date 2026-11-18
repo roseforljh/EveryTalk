@@ -152,6 +152,8 @@ class McpOAuthManager(
     private val githubClientId: String = BuildConfig.GITHUB_MCP_OAUTH_CLIENT_ID,
     private val gmailClientId: String = BuildConfig.GMAIL_MCP_OAUTH_CLIENT_ID,
     private val microsoftClientId: String = BuildConfig.MICROSOFT_MCP_OAUTH_CLIENT_ID,
+    /** 写入服务器续期后的令牌：内容已在账号同步里，只更新本机、不再标记推送，免得旧值反写覆盖轮换结果。 */
+    private val mirror: McpOAuthSecrets = secrets,
     private val now: () -> Long = System::currentTimeMillis,
 ) {
     private val json = Json { ignoreUnknownKeys = true }
@@ -248,6 +250,28 @@ class McpOAuthManager(
             if (previous.expiresAtMillis == null || previous.expiresAtMillis > now() + 60_000L) {
                 return@withLock previous.accessToken
             }
+            // 登录账号时续期交给服务器（跨设备只有一个续期者，结果写回账号同步），手机不拿同一个 refresh token 去和服务器竞争。
+            com.android.everytalk.data.agent.CloudAccountClient.current?.let { remote ->
+                val secret = try {
+                    remote.refreshMcp(provider.key, previous.accessToken, false)
+                } catch (error: kotlinx.coroutines.CancellationException) {
+                    throw error
+                } catch (error: com.android.everytalk.data.agent.CloudAgentHttpException) {
+                    if (error.status == 409) {
+                        secrets.write(rejectedKey, fingerprint)
+                        throw McpAuthorizationRequiredException(provider)
+                    }
+                    // 旧后端没有续期入口才回到本机续期；其它失败（断网、服务忙）交给原有重试，不在本机抢着换。
+                    if (error.status != 404) throw error
+                    null
+                }
+                if (secret != null) {
+                    val refreshed = json.decodeFromString<McpAuthorizationSecret>(secret)
+                    mirror.write("token:${provider.key}", secret)
+                    secrets.remove(rejectedKey)
+                    return@withLock refreshed.accessToken
+                }
+            }
             val refresh = previous.refreshToken ?: error("授权已过期，请重新登录 ${provider.displayName}")
             val refreshed = try {
                 exchange(provider, previous.clientId, Parameters.build {
@@ -268,6 +292,19 @@ class McpOAuthManager(
             secrets.write("token:${provider.key}", json.encodeToString(refreshed))
             secrets.remove(rejectedKey)
             refreshed.accessToken
+        }
+    }
+
+    /**
+     * 登录后的云端任务只冻结当前令牌和到期时间，不在手机上续期：续期由服务器做并经同步写回，
+     * 避免手机和服务器同时拿同一个 refresh token 互相把对方作废。
+     */
+    suspend fun currentTokenFor(config: McpServerConfig): Pair<String, Long?>? {
+        val provider = McpOAuthProvider.forConfig(config) ?: return null
+        return locks.getValue(provider).withLock {
+            val token = secrets.read("token:${provider.key}")?.let { json.decodeFromString<McpAuthorizationSecret>(it) }
+                ?: error("请先登录 ${provider.displayName}")
+            token.accessToken to token.expiresAtMillis
         }
     }
 

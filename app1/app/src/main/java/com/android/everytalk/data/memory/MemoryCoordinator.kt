@@ -44,9 +44,12 @@ class MemoryCoordinator(
     private val consolidator = MemoryConsolidator(database, generate)
     private val snapshots = ConcurrentHashMap<String, MemoryRequestSnapshot>()
 
-    /** 先预留 token，再由现有 ContextManager 裁剪历史；记忆正文不放进可持久化消息。 */
-    suspend fun prepare(input: AgentLoopRequest): AgentLoopRequest = try {
-        prepareAvailable(input)
+    /**
+     * 先预留 token，再由现有 ContextManager 裁剪历史；记忆正文不放进可持久化消息。
+     * 登录后云端任务由服务器整理记忆，[background] 传 false 避免手机再花一次模型请求。
+     */
+    suspend fun prepare(input: AgentLoopRequest, background: Boolean = true): AgentLoopRequest = try {
+        prepareAvailable(input, background)
     } catch (cancelled: CancellationException) { throw cancelled
     } catch (_: Exception) {
         // 可选记忆读取失败不能让普通聊天失效；撤掉记忆工具，禁止降级为未校验写入。
@@ -55,7 +58,7 @@ class MemoryCoordinator(
             tools = withoutMemoryTool(input.request), localMemorySnapshot = null))
     }
 
-    private suspend fun prepareAvailable(input: AgentLoopRequest): AgentLoopRequest {
+    private suspend fun prepareAvailable(input: AgentLoopRequest, background: Boolean = true): AgentLoopRequest {
         val state = repository.state()
         val history = MemoryPromptRenderer.forHistory(input.request.messages)
         val tools = withoutMemoryTool(input.request)
@@ -83,11 +86,13 @@ class MemoryCoordinator(
             if (message.id == input.userMessageId || message.role != "user" || message !is SimpleTextApiMessage && message !is PartsApiMessage) message
             else settings.getValue("memory_prompt:${message.id}")?.let { MemoryPromptRenderer.inject(listOf(message), it).single() } ?: message
         }
-        // 后台整理其他闲置会话，不阻塞本次发送。
-        scope.launch { consolidator.runOnce(input.request, input.sessionId, state.settings.version) }
-        scope.launch {
-            // 索引补建失败不影响聊天；搜索时会再补一次，仍失败则沿用逐条扫描的结果。
-            try { historySearch.warmUp() } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { android.util.Log.w("Memory", "history_index_skipped") }
+        // 后台整理其他闲置会话，不阻塞本次发送；登录后由服务器整理，手机不再重复花模型请求。
+        if (background) {
+            scope.launch { consolidator.runOnce(input.request, input.sessionId, state.settings.version) }
+            scope.launch {
+                // 索引补建失败不影响聊天；搜索时会再补一次，仍失败则沿用逐条扫描的结果。
+                try { historySearch.warmUp() } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { android.util.Log.w("Memory", "history_index_skipped") }
+            }
         }
         return input.copy(
             request = input.request.copy(messages = pinned, tools = tools + MemoryTool.definition(), localMemorySnapshot = snapshot),

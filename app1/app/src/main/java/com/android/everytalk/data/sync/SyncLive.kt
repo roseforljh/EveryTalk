@@ -67,6 +67,8 @@ internal data class LiveRemoteRun(
     val message: Message,
     val running: Boolean = true,
     val runId: String = messageUuid,
+    /** 仅表示本机接收进度的连接情况，不属于服务器执行状态，也不参与持久化消息。 */
+    val connectionStatus: String? = null,
 )
 
 @Serializable

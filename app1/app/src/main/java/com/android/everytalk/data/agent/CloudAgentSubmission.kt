@@ -72,7 +72,31 @@ internal suspend fun synchronizeCloudAgentParents(
 }
 
 /**
- * 沿用权威账本、已有压缩检查点和当轮权限提示生成云输入，不在手机发起模型请求。
+ * 定向封存本轮必需的原始记录：会话、本会话待上云的原消息（含本轮完整问题）及其附件文件。
+ * 服务器在创建任务的同一事务里写入它们，POST 成功即代表账号里已有完整原记录，原手机随即卸载也能在别处恢复；
+ * 只上传这一会话的材料，不等整账号同步积压。
+ */
+internal suspend fun buildCloudAgentSubmission(context: Context, database: AppDatabase, api: SyncApi, store: RoomSyncStore,
+    accountId: String, sessionId: String, userMessageId: String): JsonObject {
+    val chat = database.chatDao()
+    val user = checkNotNull(chat.getMessage(sessionId, userMessageId)) { "用户问题尚未保存" }
+    // ponytail: 只带最近 500 条待上云消息（请求体与后端 2000 条上限内）；更早的积压留给常规同步，不影响本轮执行与恢复。
+    val candidates = chat.getSubmissionMessageUuids(sessionId, userMessageId).takeLast(500)
+        .let { if (user.uuid in it) it else it + user.uuid }
+    val (ready, attachmentIds) = SyncResourceSynchronizer(context, database, api, accountId).use { it.prepareSubmission(candidates, user.uuid) }
+    val changes = store.submissionChanges(sessionId, candidates.filter { it in ready }, attachmentIds, user.uuid)
+    val files = attachmentIds.mapNotNull { database.syncAttachmentDao().get(it) }
+        .mapNotNull { row -> row.fileId?.let { Triple(it, row.size, row.sha256) } }.distinctBy { it.first }
+    return buildJsonObject {
+        put("version", 1)
+        put("changes", JsonArray(changes.map { syncJson.encodeToJsonElement(PushChange.serializer(), it) }))
+        put("files", JsonArray(files.map { (id, size, sha256) -> buildJsonObject { put("id", id); put("size", size); put("sha256", sha256) } }))
+    }
+}
+
+/**
+ * 沿用权威账本、已有压缩检查点和当轮权限提示生成云输入，不在手机发起模型请求：
+ * 超阈值或超窗的上下文由服务器在第一轮模型请求前用同一套摘要规则压缩，手机消失也不影响。
  * 能力没有云绑定时明确失败，不能静默删工具或退回本机执行。
  */
 internal suspend fun prepareCloudAgentSubmission(
@@ -86,15 +110,21 @@ internal suspend fun prepareCloudAgentSubmission(
     epochs: Pair<Long, Long>,
     sessionState: String?,
     permitted: suspend () -> Boolean,
-    compact: suspend (String, com.android.everytalk.data.DataClass.ChatRequest, com.android.everytalk.data.DataClass.ModelTokenLimits, AgentCompactionPlan) -> Unit,
+    submission: JsonObject? = null,
+    /** 设置级 MCP 工具：模型申请开启 MCP 时在提交时预冻结，批准后由服务器直接声明。 */
+    mcpEnableRequest: com.android.everytalk.data.DataClass.ChatRequest? = null,
+    /** 服务器声明的能力；缺项时退回旧版设备执行。 */
+    serverFeatures: Set<String> = ALL_FEATURES,
     beforePersist: suspend (AgentRunEntity, JsonObject) -> Unit,
     submit: suspend (AgentRunEntity, JsonObject, com.android.everytalk.data.DataClass.ChatRequest) -> Unit,
 ): AgentRunEntity {
     val (frozen, request) = try {
-        freezeCloudAgentInput(context, database, runStore, skills, memory, input, epochs, sessionState, permitted, compact)
+        freezeCloudAgentInput(context, database, runStore, skills, memory, input, epochs, sessionState, permitted, mcpEnableRequest, serverFeatures)
     } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled
     } catch (error: Exception) { throw CloudAgentIneligible(error.message.orEmpty(), error) }
-    fun withRunId(run: AgentRunEntity) = JsonObject(frozen + ("id" to kotlinx.serialization.json.JsonPrimitive(run.id)))
+    // 清单与输入一起冻结：重试 POST 的字节完全相同，服务器按同一请求哈希幂等。
+    fun withRunId(run: AgentRunEntity) = JsonObject(frozen + ("id" to JsonPrimitive(run.id)) +
+        listOfNotNull(submission?.let { "submission" to it }))
     val run = CloudAgentStore(database).prepare(accountId, input.sessionId, input.userMessageId, input.visibleAssistantMessageId,
         request.contextManagement?.configId,
         request.localComputerRequestContext?.selectedTargets.orEmpty().map { AgentTaskTarget(it.computerId, it.displayName) }) { pending ->
@@ -130,40 +160,34 @@ private suspend fun freezeCloudAgentInput(
     epochs: Pair<Long, Long>,
     sessionState: String?,
     permitted: suspend () -> Boolean,
-    compact: suspend (String, com.android.everytalk.data.DataClass.ChatRequest, com.android.everytalk.data.DataClass.ModelTokenLimits, AgentCompactionPlan) -> Unit,
+    /** 设置级 MCP 工具：提交时一并冻结，批准后由服务器直接声明。 */
+    mcpEnableRequest: com.android.everytalk.data.DataClass.ChatRequest? = null,
+    serverFeatures: Set<String> = ALL_FEATURES,
 ): Pair<JsonObject, com.android.everytalk.data.DataClass.ChatRequest> {
     check(permitted()) { "云端任务账号授权已变更" }
     val calibrated = runStore.calibrateRequest(input.sessionId, input.request, input.tokenLimits)
-    val preparedInput = memory.prepare(input.copy(request = calibrated))
+    val preparedInput = memory.prepare(input.copy(request = calibrated), background = false)
     runStore.restoreLegacyCompaction(input.sessionId, preparedInput.request)
     val transcript = MemoryPromptRenderer.forHistory(runStore.expandTranscript(input.sessionId, preparedInput.request.messages))
     val request = refreshComputerExecutionPolicy(preparedInput.request.copy(messages = transcript), sessionState)
     // 新云任务尚未加载延迟工具：预算与后端第一轮声明一致，不能把全部授权 schema 都算进输入。
-    // 原 request 仍冻结完整绑定供 tool_search 按需加载；摘要增益校验也必须使用相同的声明预算。
+    // 原 request 仍冻结完整绑定供 tool_search 按需加载。
     val budgetRequest = request.copy(tools = McpToolDiscovery.project(
         AgentToolResultReadTool.withTool(request.tools), emptyList(),
     ))
-    suspend fun prepare() = runStore.compactions(input.sessionId).let { checkpoints ->
+    // 只套用已有的合法摘要检查点；仍超阈值的部分由服务器在首轮模型请求前压缩，手机不再先跑摘要模型。
+    val prepared = runStore.compactions(input.sessionId).let { checkpoints ->
         AgentContextManager().prepare(
             requestId = "cloud-submission", request = budgetRequest, limits = preparedInput.tokenLimits,
             checkpoint = checkpoints.firstOrNull(), checkpointFallbacks = checkpoints,
         )
     }
-    var prepared = prepare()
-    // 超窗或到阈值：先用运行中同一套摘要压好再提交，长历史可能要分段压几次。
-    repeat(4) {
-        val plan = prepared.compactionPlan ?: return@repeat
-        check(permitted()) { "云端任务账号授权已变更" }
-        compact(input.sessionId, budgetRequest, preparedInput.tokenLimits, plan)
-        prepared = prepare()
-    }
-    check(prepared.compactionPlan == null) { "上下文压缩后仍超出模型窗口" }
     val modelRequest = request.copy(messages = MemoryPromptRenderer.inject(prepared.messages,
         request.localMemorySnapshot?.prompt.orEmpty()))
     val chat = database.chatDao()
     val attachments = chat.getMessagesForSession(input.sessionId).flatMap { it.attachments }
         .filterIsInstance<SelectedMediaItem.GenericFile>().distinctBy { it.id }
-    val tools = cloudAgentTools(context, modelRequest, attachments, skills)
+    val tools = cloudAgentTools(context, modelRequest, attachments, skills, mcpEnableRequest, serverFeatures)
     check(permitted()) { "云端任务账号授权已变更" }
     val session = checkNotNull(chat.getSession(input.sessionId)) { "会话不存在" }
     val user = checkNotNull(chat.getMessage(input.sessionId, input.userMessageId)) { "用户问题尚未保存" }
@@ -182,10 +206,11 @@ private suspend fun freezeCloudAgentInput(
             ?.map { it.jsonPrimitive.content }
     }.orEmpty()
     val identities = chat.getMessageStorageStates(input.sessionId).associate { it.id to "cloud:${it.uuid}" }
+    val workspaces = cloudAgentWorkspaces(context, modelRequest)
     val frozen = cloudAgentInput(modelRequest, java.util.UUID.randomUUID().toString(), session.uuid, user.uuid, assistant.uuid,
         epochs.first, epochs.second, assistant.timestamp, TimeZone.getDefault().id, tools,
         contextUsage = assistant.toMessage().contextUsageSnapshot, compactionSourceIds = coveredIds, messageIdReferences = identities,
-        previousSummary = checkpoint?.summary)
+        previousSummary = checkpoint?.summary).let { if (workspaces == null) it else JsonObject(it + ("workspaces" to workspaces)) }
     check(permitted()) { "云端任务账号授权已变更" }
     return frozen to request
 }

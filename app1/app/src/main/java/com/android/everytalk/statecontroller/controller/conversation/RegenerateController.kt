@@ -106,6 +106,8 @@ class RegenerateController(
                     // 这里只删除目标用户消息后的连续 AI 消息，遇到下一条用户消息立即停止。
                     val messagesToRemove = collectRegenerationBranch(listRef, userMsgIndex)
                     withContext(Dispatchers.Main.immediate) {
+                        // 明确重答移除的旧问答必须进入删除白名单，刚生成而尚未保存的失败气泡也不能被当作远端新消息保留。
+                        if (!isImageGeneration) stateHolder.rememberSeenTextMessages(listOf(baseUserMessage) + messagesToRemove)
                         val idsToRemove = messagesToRemove.map { it.id }.toSet()
                         // 若这些消息中存在正在流式的，则取消之
                         idsToRemove.forEach { id ->

@@ -430,6 +430,7 @@ class ApiHandler(
     val agentRunControlSnapshots: StateFlow<Map<String, AgentRunControlSnapshot>>
         get() = agentRunCoordinator.runControlSnapshots
     internal val cloudRuns get() = agentRunCoordinator.cloudRuns
+    internal fun refreshCloudRuns() = agentRunCoordinator.refreshCloudRuns()
 
     internal suspend fun stopCloudRun(runId: String): Boolean = agentRunCoordinator.stopCloudRunById(runId)
     private val pendingAgentStops = ConcurrentHashMap<String, PendingAgentStop>()
@@ -1230,6 +1231,7 @@ class ApiHandler(
                             existingRun = run,
                             approvalDecision = record,
                         ),
+                        prepareMcpResumeRequest,
                     ).collect { event ->
                         processStreamEvent(event, run.visibleAssistantMessageId, isImageGeneration = false)
                         if (event is AppStreamEvent.AgentApprovalRequired ||
@@ -1885,7 +1887,8 @@ class ApiHandler(
                             maxContextTokens = requestBody.contextManagement?.maxContextTokens
                                 ?: com.android.everytalk.data.DataClass.DEFAULT_MAX_CONTEXT_TOKENS,
                         ),
-                    )
+                    ),
+                        prepareMcpResumeRequest,
                     ).collect { appEvent ->
                         if (stateHolder.textApiJobs[requestConversationId] != thisJob) {
                             thisJob?.cancel(CancellationException("该会话的请求已被替换"))

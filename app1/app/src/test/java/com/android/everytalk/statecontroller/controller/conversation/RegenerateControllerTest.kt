@@ -93,6 +93,8 @@ class RegenerateControllerTest {
         assertFalse(stateHolder.messages.single().id == "user-1")
         assertEquals("user-1", stateHolder.messages.single().conversationId)
         assertTrue(userKeyPresentBeforeResend)
+        // 刚生成的失败回复可能尚未经过历史保存，重答也必须明确登记旧问答，避免持久层把它们当作未见过的远端消息保留。
+        assertTrue(stateHolder.seenTextMessageIds.containsAll(listOf("user-1", "ai-1")))
         assertFalse(cleanupIds.contains("user-1"))
         assertTrue(cleanupIds.contains("ai-1"))
     }

@@ -943,12 +943,13 @@ import java.util.UUID
         }
     }
 
-    /** App 回到前台时从 Room 对账，补齐页面缺席期间的 Agent 结果。 */
+    /** App 回到前台先显示落盘结果，同时在应用级作用域核对服务器；页面不拥有订阅或执行任务。 */
     internal fun AppViewModel.reconcileVisibleAgentState() {
         viewModelScope.launch(Dispatchers.IO) {
             apiHandler.restoreVisibleAgentState()
             apiHandler.restorePendingAgentApproval()
         }
+        apiHandler.refreshCloudRuns()
     }
 
     internal fun AppViewModel.addMediaItem(item: SelectedMediaItem) {

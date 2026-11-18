@@ -437,9 +437,12 @@ fun ChatScreen(
     val isAtBottom by scrollStateManager.isAtBottom
     val isAtBottomState = rememberUpdatedState(isAtBottom)
 
-    LaunchedEffect(scrollStateManager, currentStreamingAiMessageId) {
-        val isCurrentlyStreaming = currentStreamingAiMessageId != null
-        scrollStateManager.updateStreamingState(isCurrentlyStreaming)
+    // 登录后回复由云端任务或另一台设备流式写入：本机发送链路交接后 currentStreamingAiMessageId 就清空了，
+    // 必须把远端仍在运行的回复也算作流式，否则后续轮次不会自动跟随到底部。
+    val remoteLiveRun by viewModel.stateHolder._remoteLiveRun.collectAsStateWithLifecycle()
+    val streamingMessageId = currentStreamingAiMessageId ?: remoteLiveRun?.takeIf { it.running }?.message?.id
+    LaunchedEffect(scrollStateManager, streamingMessageId) {
+        scrollStateManager.updateStreamingState(streamingMessageId != null)
     }
 
 

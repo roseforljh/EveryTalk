@@ -2186,45 +2186,6 @@ class AgentLoop(
     }
 
     /**
-     * 云端提交前的压缩：后端只执行整轮任务，超窗或到阈值时先在本机按运行中同一套摘要压好，
-     * 检查点落库后再冻结输入，下一轮云端和本机都复用它。挂在隐藏 Run 上，跑完立刻置终态。
-     */
-    suspend fun compactForSubmission(
-        sessionId: String,
-        request: ChatRequest,
-        limits: ModelTokenLimits,
-        plan: AgentCompactionPlan,
-    ) {
-        val run = runStore.createRun(
-            sessionId = sessionId,
-            userMessageId = "agent-manual-compaction",
-            visibleAssistantMessageId = "agent-manual-compaction-${UUID.randomUUID()}",
-            configIdSnapshot = request.contextManagement?.configId,
-            request = request,
-        )
-        var failed = true
-        try {
-            while (true) {
-                try {
-                    executeCompaction(run = run, requestOrdinal = 1, plan = plan, baseRequest = request, limits = limits)
-                    break
-                } catch (error: AgentRetryableNetworkException) {
-                    if (error.attempt > 3) throw error
-                    delay(agentResumeRetryDelayMillis(error.attempt))
-                }
-            }
-            failed = false
-        } finally {
-            runStore.updateRunStatus(
-                run = run,
-                status = if (failed) AgentRunStatus.FAILED else AgentRunStatus.COMPLETED,
-                requestOrdinal = 1,
-                terminalReason = AgentTerminalReasons.MANUAL_COMPACTION,
-            )
-        }
-    }
-
-    /**
      * 压缩请求走同一个单次 Provider Transport，并独立保存 Request、Usage 和耗时。
      * 其输出不进入可见 AI 消息，也不携带业务工具，防止摘要模型调用工具。
      */

@@ -71,11 +71,25 @@ class StorageContentManager(context: Context) {
             )
             StorageDetailType.SKILLS -> scanSkills(detail.bytes)
             StorageDetailType.TOOL_RESULTS -> scanToolArchives()
-            StorageDetailType.TEMPORARY_FILES -> scanFiles(
-                type = detail.type,
-                roots = temporaryRoots(),
-                kind = StorageEntryKind.TEMPORARY_FILE,
-            )
+            StorageDetailType.TEMPORARY_FILES -> (
+                scanFiles(
+                    type = detail.type,
+                    roots = listOf(File(appContext.filesDir, "chat_images_temp")),
+                    kind = StorageEntryKind.TEMPORARY_FILE,
+                ) + reclaimableSyncCacheFiles(appContext).map { file ->
+                    StorageContentEntry(
+                        id = "sync-cache/${file.name}",
+                        type = StorageDetailType.TEMPORARY_FILES,
+                        kind = StorageEntryKind.TEMPORARY_FILE,
+                        section = StorageEntrySection.DISK_FILES,
+                        title = file.name,
+                        bytes = file.length(),
+                        updatedAt = file.lastModified().takeIf { it > 0L },
+                        selectable = true,
+                        absolutePath = file.absolutePath,
+                    )
+                }
+            ).sortedByDescending(StorageContentEntry::bytes)
             StorageDetailType.OTHER_DATA -> scanOtherData(detail.bytes)
         }
         StorageCategoryContent(detail.type, detail.bytes, entries)
@@ -147,7 +161,19 @@ class StorageContentManager(context: Context) {
         }
         val sql = """
             SELECT s.id, COALESCE(s.title, ''), s.lastModifiedTimestamp, s.isImageGeneration,
-                   COUNT(m.id), COALESCE(SUM($byteExpression + 96), 0)
+                   COUNT(m.id),
+                   COALESCE(SUM($byteExpression + 96), 0) +
+                   COALESCE((
+                       SELECT SUM(COALESCE(LENGTH(CAST(e.payloadJson AS BLOB)), 0) + 64)
+                       FROM agent_runs r
+                       JOIN agent_entries e ON e.runId = r.id
+                       WHERE r.sessionId = s.id
+                   ), 0) +
+                   COALESCE((
+                       SELECT SUM(COALESCE(LENGTH(CAST(c.summary AS BLOB)), 0) + COALESCE(LENGTH(CAST(c.retainedTailJson AS BLOB)), 0) + 64)
+                       FROM agent_compactions c
+                       WHERE c.sessionId = s.id
+                   ), 0)
             FROM chat_sessions s
             LEFT JOIN (SELECT ${com.android.everytalk.data.database.daos.MESSAGE_COLUMNS} FROM messages WHERE deleted = 0 UNION ALL SELECT ${com.android.everytalk.data.database.daos.MESSAGE_COLUMNS} FROM message_drafts) m ON m.sessionId = s.id
             WHERE s.deleted = 0
@@ -305,7 +331,10 @@ class StorageContentManager(context: Context) {
         File(appContext.filesDir, "chat_images"),
     )
 
-    private fun temporaryRoots(): List<File> = listOf(File(appContext.filesDir, "chat_images_temp"))
+    private fun temporaryRoots(): List<File> = listOf(
+        File(appContext.filesDir, "chat_images_temp"),
+        File(appContext.filesDir, "sync-resources"),
+    )
 
     private fun toolResultRoots(): List<File> = listOf(File(appContext.filesDir, "agent_tool_results"))
 }

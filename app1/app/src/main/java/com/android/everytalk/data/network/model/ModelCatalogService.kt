@@ -14,10 +14,12 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
 
 private const val MAX_MODEL_PAGE_RESPONSE_BYTES = 4L * 1024L * 1024L
-private const val MODEL_DETAIL_CONCURRENCY = 6
+private const val MODEL_DETAIL_CONCURRENCY = 8
 private const val MODEL_DETAIL_BATCH_TIMEOUT_MS = 20_000L
 private const val COMMUNITY_CATALOG_TIMEOUT_MS = 10_000L
 
@@ -29,8 +31,9 @@ internal class ModelCatalogService(
 ) {
     /**
      * 获取列表时同步补齐参数，返回各来源候选而不是混成一个来源。
-     * 列表只下载一次；详情最多并发六个，超时保留已完成结果，避免大目录长时间阻塞界面。
-     * 未提供的字段继续由 pi、社区目录以及配置层的家族和默认值补齐。
+     * 列表只下载一次；单模型详情、pi 目录和社区目录三路并发，不再依次排队。
+     * 多数服务的详情与列表是同一份字段：先用一个模型试探，详情没带来列表之外的参数就不再逐个请求，
+     * 否则只给列表缺参数的模型补详情，滑动并发、单个慢请求不拖住整批，超时保留已完成结果。
      */
     suspend fun getCatalogWithCapabilities(
         apiUrl: String,
@@ -42,35 +45,59 @@ internal class ModelCatalogService(
         val cleanedApiKey = apiKey.filterNot(Char::isWhitespace)
         val cached = endpointCache.get(endpoint.protocol, endpoint.normalizedBase)
         val details = ConcurrentHashMap<String, ModelCapabilityCandidate>()
-        withTimeoutOrNull(MODEL_DETAIL_BATCH_TIMEOUT_MS) {
-            coroutineScope {
-                catalog.chunked(MODEL_DETAIL_CONCURRENCY).forEach { batch ->
-                    batch.map { candidate ->
-                        async {
-                            fetchDetail(endpoint, cleanedApiKey, candidate.modelId)?.let {
-                                details[candidate.modelId] = it
+        val (pi, community) = coroutineScope {
+            val pi = async { fetchPiCapabilities(catalog.map { it.modelId }, endpoint) }
+            val community = async {
+                withTimeoutOrNull(COMMUNITY_CATALOG_TIMEOUT_MS) {
+                    modelsDevCatalog.findCatalogCapabilities(
+                        modelIds = catalog.map { it.modelId },
+                        providerHint = channel.orEmpty(),
+                        apiAddress = endpoint.normalizedBase,
+                        protocol = endpoint.protocol,
+                        fetchRemote = ::fetchCommunityCatalog,
+                    )
+                }.orEmpty()
+            }
+            withTimeoutOrNull(MODEL_DETAIL_BATCH_TIMEOUT_MS) {
+                val missing = catalog.filterNot(::hasListedLimits)
+                val probe = missing.firstOrNull()
+                val probed = probe?.let { fetchDetail(endpoint, cleanedApiKey, it.modelId) }
+                if (probe != null && probed != null) {
+                    details[probe.modelId] = probed
+                    if (addsCapabilities(probe, probed)) {
+                        val gate = Semaphore(MODEL_DETAIL_CONCURRENCY)
+                        missing.drop(1).map { candidate ->
+                            async {
+                                gate.withPermit {
+                                    fetchDetail(endpoint, cleanedApiKey, candidate.modelId)?.let { details[candidate.modelId] = it }
+                                }
                             }
-                        }
-                    }.awaitAll()
+                        }.awaitAll()
+                    }
                 }
             }
+            pi.await() to community.await()
         }
         // 缓存落盘失败不应丢弃已经获取成功的模型和参数。
         if (details.isNotEmpty()) runCatching { endpointCache.put(details.values.toList()) }
-        val pi = fetchPiCapabilities(catalog.map { it.modelId }, endpoint)
-        val community = withTimeoutOrNull(COMMUNITY_CATALOG_TIMEOUT_MS) {
-            modelsDevCatalog.findCatalogCapabilities(
-                modelIds = catalog.map { it.modelId },
-                providerHint = channel.orEmpty(),
-                apiAddress = endpoint.normalizedBase,
-                protocol = endpoint.protocol,
-                fetchRemote = ::fetchCommunityCatalog,
-            )
-        }.orEmpty()
         // 详情在前，使相同 LIVE 来源的字段优先使用单模型响应；模型展示顺序仍以列表为准。
         val byModel = (details.values + catalog + pi + cached + community).groupBy { it.modelId.lowercase() }
         return catalog.flatMap { byModel[it.modelId.lowercase()].orEmpty() }
     }
+
+    /** 列表条目已带上下文和输出上限，详情不会更全。 */
+    private fun hasListedLimits(candidate: ModelCapabilityCandidate) =
+        (candidate.contextWindowTokens != null || candidate.maxInputTokens != null) && candidate.maxOutputTokens != null
+
+    /** 详情是否给出了列表里没有的参数；没有就说明这家详情接口只是重复列表。 */
+    private fun addsCapabilities(listed: ModelCapabilityCandidate, detail: ModelCapabilityCandidate) =
+        listed.contextWindowTokens == null && detail.contextWindowTokens != null ||
+            listed.maxInputTokens == null && detail.maxInputTokens != null ||
+            listed.maxOutputTokens == null && detail.maxOutputTokens != null ||
+            listed.supportsReasoning == null && detail.supportsReasoning != null ||
+            listed.inputModalities.isEmpty() && detail.inputModalities.isNotEmpty() ||
+            listed.reasoningEfforts.isEmpty() && detail.reasoningEfforts.isNotEmpty() ||
+            listed.supportsToolCalls == null && detail.supportsToolCalls != null
 
     suspend fun getCatalog(
         apiUrl: String,

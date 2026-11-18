@@ -512,6 +512,28 @@ internal class RoomSyncStore(
 
     private fun remoteMessageFieldsKey(uuid: String): String = "sync_message_fields:$uuid"
 
+    /**
+     * 云端任务提交清单：会话、待上云的原消息和刚封存的附件，构造规则与常规推送完全一致（超长消息只发稳定索引，
+     * 完整原文在加密归档里）。服务器把它和任务放进同一事务；本机行仍是 PENDING，常规同步随后只会得到 unchanged。
+     */
+    internal suspend fun submissionChanges(sessionId: String, messageUuids: Collection<String>, attachmentIds: Collection<String>,
+        required: String): List<PushChange> {
+        val session = checkNotNull(chat.getStoredSession(sessionId)?.takeUnless { it.deleted }) { "会话不存在" }
+        val changes = mutableListOf(SyncPayloadMapper.session(session))
+        for (uuid in messageUuids) {
+            val message = chat.getSyncMessageByUuid(uuid)?.toSyncEntity()?.takeUnless { it.deleted } ?: continue
+            val change = messageChangeForPush(message, session.uuid) ?: continue
+            // 超限的旧消息交给常规同步报告，不能让它连累本轮提交；本轮问题超限则明确失败。
+            if (change.payload.toString().toByteArray().size > maxMessagePayloadBytes) {
+                check(uuid != required) { "问题内容超出云端单条上限，请缩短后重发" }
+                continue
+            }
+            changes += change
+        }
+        for (id in attachmentIds.distinct()) attachments.get(id)?.takeUnless { it.deleted }?.let { changes += attachmentChange(it) }
+        return changes
+    }
+
     private suspend fun attachmentChange(value: SyncAttachmentEntity): PushChange {
         val change = SyncPayloadMapper.attachment(value)
         val metadata = settings.getValue("sync_resource_meta:${value.id}")?.let { runCatching { syncJson.parseToJsonElement(it).jsonObject }.getOrNull() }
@@ -690,6 +712,7 @@ internal class RoomSyncStore(
         if (record.deleted) {
             chat.deletePendingMessagesForConversation(candidate.id)
             chat.deleteDrafts(candidate.id, chat.getDrafts(candidate.id).map { it.message.id })
+            chat.deleteAgentDataForSession(candidate.id)
             chat.deleteMessagesForRemoteDeletedSession(candidate.id)
         }
     }

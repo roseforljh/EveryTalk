@@ -69,6 +69,8 @@ internal suspend fun CloudRunView.toMessage(base: Message, resolve: suspend (Str
         .distinctBy { it.second }
         .mapIndexed { index, (title, href, snippet) -> WebSearchResult(index + 1, title, href, snippet) }
     return base.copy(
+        // 采用云端持久化的同一起点，不能沿用重建气泡时的本机时间；切页、冷启动与换设备耗时一致。
+        timestamp = snapshot.startedAt,
         modelName = snapshot.modelName ?: base.modelName,
         providerName = snapshot.providerName ?: base.providerName,
         tokenUsage = usage ?: base.tokenUsage,
@@ -146,6 +148,20 @@ internal class CloudAgentStore(private val db: AppDatabase) {
             after = page.last().chunkIndex
         }
         raw.takeIf { it.isNotEmpty() }?.let { cloudAgentJson.decodeFromString<CloudRunView>(it.toString()).validate() }
+    }
+
+    /** 完整归档可能早于 SSE 终态到达；从同一事务内确认归属、终态与正式消息后交接页面，不再读取已回收的快照。 */
+    suspend fun completedMessage(accountId: String, runId: String): Message? = db.withTransaction {
+        val run = db.agentDao().getRun(runId)?.takeIf {
+            it.executionOwner == "CLOUD" && it.cloudAccountId == accountId && it.cloudRunId == runId &&
+                it.status in setOf("COMPLETED", "FAILED", "CANCELLED")
+        } ?: return@withTransaction null
+        val chat = db.chatDao()
+        val session = chat.getSession(run.sessionId)?.takeUnless { it.deleted } ?: return@withTransaction null
+        // 只读正式表，不能把遗留草稿误当作可交接的结果；沿用既有批量查询，避免重复读取长轨迹。
+        val formal = chat.getMessageRowsByIds(listOf(run.visibleAssistantMessageId)).singleOrNull()
+            ?.takeIf { it.sessionId == session.id } ?: return@withTransaction null
+        formal.toMessage().copy(conversationId = session.id, isStreamingDraft = false)
     }
 
     /** UUID 映射可能晚于事件到达。重新投影不推进游标，也不重写模型/工具事实。 */

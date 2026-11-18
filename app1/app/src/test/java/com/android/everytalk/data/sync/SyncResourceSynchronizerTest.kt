@@ -334,6 +334,38 @@ class SyncResourceSynchronizerTest {
         assertEquals("settled", db.settingsDao().getValue("sync_resource_received:$message"))
     }
 
+    @Test fun `云端任务提交清单一次推送后原机消失新设备恢复超长原问题与附件`() = runBlocking {
+        val a = database(); val b = database(); val ca = context(); val cb = context(); val api = FakeSyncApi()
+        val session = ChatSessionEntity("cloud-submit", 1, 1, false).copy(syncStatus = SyncStatus.PENDING)
+        a.chatDao().writeSession(session)
+        val image = File(ca.filesDir, "question.png").apply { writeBytes(byteArrayOf(2, 4, 6, 8)) }
+        val body = "超长原问题😀".repeat(15000)
+        val earlier = Message(id = "earlier", text = "更早没上云的问题", sender = Sender.User, timestamp = 5).toEntity(session.id)
+        val question = Message(id = "question", text = body, sender = Sender.User, timestamp = 10,
+            attachments = listOf(SelectedMediaItem.ImageFromUri(android.net.Uri.fromFile(image), "question-image", "image/png", image.absolutePath)))
+            .toEntity(session.id)
+        a.chatDao().writeMessages(listOf(earlier, question).map { it.copy(syncStatus = SyncStatus.PENDING) })
+        // 不跑常规同步：只靠提交清单。服务器把它与任务放进同一事务，之后原手机不再出现。
+        val candidates = a.chatDao().getSubmissionMessageUuids(session.id, question.id)
+        assertEquals(listOf(earlier.uuid, question.uuid), candidates)
+        val (ready, attachmentIds) = SyncResourceSynchronizer(ca, a, api, user).use { it.prepareSubmission(candidates, question.uuid) }
+        val changes = RoomSyncStore(a, userId = user).submissionChanges(session.id, candidates.filter { it in ready }, attachmentIds, question.uuid)
+        assertEquals(listOf("sessions", "messages", "messages"), changes.map { it.entity }.take(3))
+        assertTrue(changes.single { it.id == question.uuid }.payload.toString().toByteArray().size < 65536)
+        assertTrue(api.push(changes).results.all { it.status == "accepted" })
+        sync(b, api); SyncResourceSynchronizer(cb, b, api, user).use { it.synchronize() }
+        val restored = b.chatDao().getMessageByUuid(question.uuid)!!
+        assertEquals(body, restored.text)
+        assertEquals("更早没上云的问题", b.chatDao().getMessageByUuid(earlier.uuid)!!.text)
+        val media = restored.attachments.single() as SelectedMediaItem.ImageFromUri
+        assertArrayEquals(image.readBytes(), File(media.filePath!!).readBytes())
+        // 原机之后的常规同步只会得到 unchanged，不重复上传文件。
+        val uploads = api.fileUploads
+        SyncResourceSynchronizer(ca, a, api, user).use { it.synchronize() }; sync(a, api)
+        assertEquals(uploads, api.fileUploads)
+        assertEquals(0, a.settingsDao().syncRejectedCount())
+    }
+
     @Test fun `超限正文思考工具轨迹图片与技能文件完整恢复且不回传`() = runBlocking {
         val a = database(); val b = database(); val ca = context(); val cb = context(); val api = FakeSyncApi()
         val session = ChatSessionEntity("source", 100, 100, false, "完整历史")

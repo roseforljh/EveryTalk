@@ -223,6 +223,9 @@ class ComputerCredentialStore private constructor(private val context: Context, 
     /** 存储测试只替换设备主密钥；信封、AAD 和原子文件均执行生产逻辑。 */
     internal constructor(context: Context, masterKey: SecretKey) : this(context, false, masterKey)
 
+    /** 写入服务器已经写进账号同步的同一份内容（例如服务器续期后的令牌）：只更新本机，不再标记推送，免得旧值反写。 */
+    fun withoutSyncRecording(): ComputerCredentialStore = if (!recordSyncChanges) this else ComputerCredentialStore(context, false)
+
     private val rootDirectory = File(context.noBackupFilesDir, "computer_credentials")
     private val envelopeCipher by lazy { ComputerEnvelopeCipher(masterKey ?: getOrCreateMasterKey()) }
 
