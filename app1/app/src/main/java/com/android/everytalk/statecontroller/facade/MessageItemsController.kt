@@ -1126,6 +1126,7 @@ open class MessageItemsController(
                             // 段落只是同一回复的显示切片；正文文件链接仍要按原消息的附件 ID 打开。
                             // 页脚统一管理兜底附件，这里传递元数据不会额外生成附件列表。
                             attachments = message.attachments,
+                            conversationId = message.conversationId,
                         )
                         val contentItem = ChatListItem.AiMessageContentSegment(
                             sourceMessageId = message.id,
@@ -1171,7 +1172,7 @@ open class MessageItemsController(
                             staticBlocks.forEach { block ->
                                 add(
                                     contentItem.copy(
-                                        staticBlock = block,
+                                        staticBlock = block.copy(attachmentMessageId = message.id),
                                         staticPageSources = if (block.isFirstNode) preparation?.pageSources.orEmpty() else emptyList(),
                                     ),
                                 )
