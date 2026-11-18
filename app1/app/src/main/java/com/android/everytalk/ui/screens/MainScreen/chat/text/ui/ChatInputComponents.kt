@@ -577,16 +577,26 @@ internal fun PendingMessageQueue(
                             modifier = Modifier.size(16.dp),
                         )
                     }
-                    IconButton(
-                        onClick = { onSendNow(message.id) },
-                        enabled = editable,
-                        modifier = Modifier.size(30.dp),
-                    ) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_gpt_play),
-                            contentDescription = stringResource(R.string.pending_message_send_now),
-                            modifier = Modifier.size(16.dp),
-                        )
+                    if (editable) {
+                        IconButton(
+                            onClick = { onSendNow(message.id) },
+                            enabled = editable,
+                            modifier = Modifier.size(30.dp),
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_gpt_play),
+                                contentDescription = stringResource(R.string.pending_message_send_now),
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
+                    } else {
+                        Box(Modifier.size(30.dp), contentAlignment = Alignment.Center) {
+                            com.android.everytalk.ui.components.EveryTalkLoadingIndicator(
+                                size = 16.dp,
+                                strokeWidth = 2.dp,
+                                contentDescription = stringResource(R.string.pending_message_dispatching),
+                            )
+                        }
                     }
                 }
             }

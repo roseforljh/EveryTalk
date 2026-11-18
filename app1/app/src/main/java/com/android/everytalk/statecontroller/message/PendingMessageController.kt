@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -89,6 +90,7 @@ internal class PendingMessageController(
     private val submissionInProgress = AtomicBoolean(false)
     private val _composerMode = MutableStateFlow<ComposerMode>(ComposerMode.Normal)
     private val _isDispatchingPending = MutableStateFlow(false)
+    private val manualDispatchIds = MutableStateFlow<Set<String>>(emptySet())
     private val activeDispatchIds = mutableMapOf<String, String>()
     private val blockedPendingIds = mutableMapOf<String, String>()
     private val dispatchingPendingByConversation = mutableMapOf<String, Boolean>()
@@ -105,9 +107,11 @@ internal class PendingMessageController(
     val visiblePendingMessages: StateFlow<List<PendingMessageEntity>> = combine(
         pendingMessages,
         composerMode,
-    ) { messages, mode ->
+        manualDispatchIds,
+    ) { messages, mode, manual ->
         val editingId = (mode as? ComposerMode.EditingPending)?.pendingId
-        messages.filter { it.status == PENDING_MESSAGE_STATUS_PENDING && it.id != editingId }
+        messages.filter { it.id != editingId && it.status != PENDING_MESSAGE_STATUS_EDITING }
+            .map { if (it.id in manual) it.copy(status = PENDING_MESSAGE_STATUS_DISPATCHING) else it }
     }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
     val runState: StateFlow<ChatRunState> = combine(
@@ -304,44 +308,53 @@ internal class PendingMessageController(
 
     /** 原子抢占 Pending，优先 steering；没有可 steer 的 AgentRun 时直接复用普通发送链路。 */
     fun sendNow(id: String) {
+        if (id in manualDispatchIds.value || pendingMessages.value.none {
+                it.id == id && it.status == PENDING_MESSAGE_STATUS_PENDING
+            }) return
+        // 位置先保留并显示正在提交；不等 Room、图片编码或服务器回执，也不提前显示已发送。
+        manualDispatchIds.update { it + id }
         scope.launch {
-            operationMutex.withLock {
-                val pending = pendingMessages.value.firstOrNull {
-                    it.id == id && it.status == PENDING_MESSAGE_STATUS_PENDING
-                } ?: return@withLock
-                val conversationId = pending.conversationId
-                if (currentConversationId.value != conversationId) return@withLock
-                val claimed = withContext(Dispatchers.IO) { chatDao.claimPendingMessage(id) }
-                if (claimed != 1) return@withLock
-                if (currentConversationId.value != conversationId) {
-                    withContext(Dispatchers.IO) { chatDao.restorePendingDispatch(id) }
-                    return@withLock
+            try {
+                operationMutex.withLock {
+                    val pending = pendingMessages.value.firstOrNull {
+                        it.id == id && it.status == PENDING_MESSAGE_STATUS_PENDING
+                    } ?: return@withLock
+                    val conversationId = pending.conversationId
+                    if (currentConversationId.value != conversationId) return@withLock
+                    val claimed = withContext(Dispatchers.IO) { chatDao.claimPendingMessage(id) }
+                    if (claimed != 1) return@withLock
+                    if (currentConversationId.value != conversationId) {
+                        withContext(Dispatchers.IO) { chatDao.restorePendingDispatch(id) }
+                        return@withLock
+                    }
+                    blockedPendingIds.remove(conversationId, id)
+                    activeDispatchIds[conversationId] = id
+                    dispatchingPendingByConversation[conversationId] = true
+                    syncDispatchingState(conversationId)
+                    val steered = try { steerCurrentRun(pending) }
+                    catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                    catch (rejected: com.android.everytalk.data.agent.CloudSteerNotAccepted) {
+                        // 云端任务还在运行，只是这条调整没被确认收下：留在队列，不另开一轮撞上运行中的任务。
+                        withContext(Dispatchers.IO) { chatDao.restorePendingDispatch(id) }
+                        clearDispatch(pending.conversationId, id)
+                        // 结果未知的调整可能已被云端消费：自动派发前会先对账正式轨迹，用过的不再重发。
+                        showMessage(rejected.message.orEmpty())
+                        return@withLock
+                    }
+                    catch (_: Exception) { false }
+                    if (steered) {
+                        val recorded = runCatching { recordSteeredMessage(pending) }.isSuccess
+                        if (!recorded) showMessage("调整方向已发送，但消息气泡显示失败")
+                        withContext(Dispatchers.IO) { chatDao.finishPendingDispatch(id) }
+                        clearDispatch(pending.conversationId, id)
+                    } else {
+                        // 普通聊天流或空闲会话没有 AgentRun 可接收 steering，
+                        // 直接走同一条 MessageSender 链路。该链路会在新请求开始前保存并结束旧流。
+                        dispatchClaimed(pending)
+                    }
                 }
-                blockedPendingIds.remove(conversationId, id)
-                activeDispatchIds[conversationId] = id
-                dispatchingPendingByConversation[conversationId] = true
-                syncDispatchingState(conversationId)
-                val steered = try { steerCurrentRun(pending) }
-                catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-                catch (rejected: com.android.everytalk.data.agent.CloudSteerNotAccepted) {
-                    // 云端任务还在运行，只是这条调整没被确认收下：留在队列，不另开一轮撞上运行中的任务。
-                    withContext(Dispatchers.IO) { chatDao.restorePendingDispatch(id) }
-                    clearDispatch(pending.conversationId, id)
-                    // 结果未知的调整可能已被云端消费：自动派发前会先对账正式轨迹，用过的不再重发。
-                    showMessage(rejected.message.orEmpty())
-                    return@withLock
-                }
-                catch (_: Exception) { false }
-                if (steered) {
-                    val recorded = runCatching { recordSteeredMessage(pending) }.isSuccess
-                    if (!recorded) showMessage("调整方向已发送，但消息气泡显示失败")
-                    withContext(Dispatchers.IO) { chatDao.finishPendingDispatch(id) }
-                    clearDispatch(pending.conversationId, id)
-                } else {
-                    // 普通聊天流或空闲会话没有 AgentRun 可接收 steering，
-                    // 直接走同一条 MessageSender 链路。该链路会在新请求开始前保存并结束旧流。
-                    dispatchClaimed(pending)
-                }
+            } finally {
+                manualDispatchIds.update { it - id }
             }
         }
     }

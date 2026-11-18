@@ -806,6 +806,7 @@
     <string name="pending_message_edit">Edit queued message</string>
     <string name="pending_message_delete">Delete queued message</string>
     <string name="pending_message_send_now">Adjust plan now</string>
+    <string name="pending_message_dispatching">Submitting queued message</string>
     <string name="pending_message_empty">Message cannot be empty</string>
     <string name="pending_message_finish_current_draft">Finish the current draft first</string>
     <string name="pending_message_attachments_only">Attachments</string>

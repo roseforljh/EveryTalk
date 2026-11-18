@@ -804,6 +804,7 @@
     <string name="pending_message_edit">编辑队列消息</string>
     <string name="pending_message_delete">删除队列消息</string>
     <string name="pending_message_send_now">立即调整方案</string>
+    <string name="pending_message_dispatching">正在提交队列消息</string>
     <string name="pending_message_empty">消息内容不能为空</string>
     <string name="pending_message_finish_current_draft">请先处理当前输入内容</string>
     <string name="pending_message_attachments_only">附件消息</string>
