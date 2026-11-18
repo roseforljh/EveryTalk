@@ -806,6 +806,7 @@
     <string name="pending_message_edit">Edit queued message</string>
     <string name="pending_message_delete">Delete queued message</string>
     <string name="pending_message_send_now">Adjust plan now</string>
+    <string name="pending_message_dispatching">Submitting queued message</string>
     <string name="pending_message_empty">Message cannot be empty</string>
     <string name="pending_message_finish_current_draft">Finish the current draft first</string>
     <string name="pending_message_attachments_only">Attachments</string>
@@ -2137,6 +2138,11 @@
     <string name="agent_task_reject">Reject</string>
     <string name="agent_task_allow">Allow once</string>
     <string name="ui_file_actions_content_description">File actions: %1$s</string>
+    <string name="ui_apk_saved">APK saved. Open it in Files if you want to install it.</string>
+    <string name="ui_apk_save_failed">Could not save the APK.</string>
+    <string name="ui_file_downloading">Downloading this attachment…</string>
+    <string name="ui_file_download_unavailable">This attachment isn’t available yet. Try again after syncing.</string>
+    <string name="ui_file_download_failed">Could not download this attachment. Check your connection and try again.</string>
     <string name="ui_file_action_preview">Preview file</string>
     <string name="ui_file_action_open">Open file</string>
     <string name="ui_file_action_open_with">Open with another app</string>

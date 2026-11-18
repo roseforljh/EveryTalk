@@ -88,8 +88,10 @@ internal class CloudAgentCoordinator(
     /** 发现其它设备创建的任务；本机未收到 POST 响应的记录也按原 run 恢复。 */
     suspend fun discover() {
         if (!permitted()) return
-        for (run in database.agentDao().getActiveRuns()) {
-            if (run.executionOwner != "CLOUD" || run.cloudAccountId != accountId) continue
+        val localRuns = database.agentDao().getActiveRuns().filter {
+            it.executionOwner == "CLOUD" && it.cloudAccountId == accountId
+        }
+        for (run in localRuns) {
             // 从未开始执行、气泡也已被删掉的任务没有可显示、可提交的东西：直接结束，侧栏不再一直转圈。
             if (run.cloudCursor == 0L && database.chatDao().getMessage(run.sessionId, run.visibleAssistantMessageId) == null) {
                 database.agentDao().upsertRun(run.copy(status = AgentRunStatus.CANCELLED.name, loopState = AgentRunStatus.CANCELLED.name,
@@ -106,6 +108,14 @@ internal class CloudAgentCoordinator(
         for (view in remote) {
             accept(view)
             if (!view.terminal) track(view.id)
+        }
+        val remoteIds = remote.mapTo(hashSetOf()) { it.id }
+        // 已提交但从活跃列表消失：长连接可能漏掉终态。列表缺席不是终态，必须取权威快照。
+        for (run in localRuns) {
+            if (run.cloudCursor == 0L || run.id in remoteIds) continue
+            try { fetch(run.id) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { /* 断网、撤销或列表/详情竞争：保留本地状态，继续由订阅与后续轮询核对。 */ }
         }
     }
 
@@ -166,7 +176,9 @@ internal class CloudAgentCoordinator(
         check(input["id"]?.jsonPrimitive?.content == run.id) { "冻结输入身份不匹配" }
         try { client.create(input) } catch (stopped: CloudAgentHttpException) {
             // 输入被后端拒收（合同不符、过大）：重发同一份输入也只会再被拒，直接结束并显示原因，不能一直转圈。
-            if (stopped.status in setOf(400, 413, 422)) return localTerminal(run, "FAILED", "云端拒绝了这次任务（${stopped.code ?: stopped.status}），请重新发送")
+            if (stopped.status in setOf(400, 413, 422) || stopped.status == 409 && stopped.code == "IMMUTABLE_FIELD") {
+                return localTerminal(run, "FAILED", "云端拒绝了这次任务（${stopped.code ?: stopped.status}），请重新发送")
+            }
             if (stopped.code != "AGENT_STOPPED_BEFORE_CREATE") throw stopped
             localTerminal(run, "CANCELLED", null)
         }

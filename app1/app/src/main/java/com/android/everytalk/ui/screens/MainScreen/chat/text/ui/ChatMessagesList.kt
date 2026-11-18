@@ -957,6 +957,7 @@ fun ChatMessagesList(
                                 messageOutputType = item.message.outputType,
                                 viewModel = viewModel,
                                 streamingRenderStateOverride = item.renderState,
+                                attachmentMessageId = item.sourceMessageId,
                                 onImageClick = { url ->
                                     val now = SystemClock.elapsedRealtime()
                                     if (now - lastImagePreviewAt > 500) {

@@ -127,6 +127,7 @@ fun AiMessageItem(
     staticPageSources: List<WebSearchResult> = emptyList(),
     staticPreparedMessage: PreparedMessage? = null,
     streamingRenderStateOverride: StreamingRenderState? = null,
+    attachmentMessageId: String = message.id,
     onImageClick: ((String) -> Unit)? = null
 ) {
     val shape = RectangleShape
@@ -403,7 +404,7 @@ fun AiMessageItem(
                 }
 
                 if (effectiveRenderBlocks.isNotEmpty()) {
-                    com.android.everytalk.ui.components.markdown.MessageFileAttachmentScope(message.attachments, message.conversationId, message.id) {
+                    com.android.everytalk.ui.components.markdown.MessageFileAttachmentScope(message.attachments, message.conversationId, attachmentMessageId) {
                         UnifiedMarkdownRenderer(
                             preparedMessage = preparedMessage,
                             sender = displayMessage.sender,
