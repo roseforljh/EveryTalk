@@ -403,7 +403,7 @@ fun AiMessageItem(
                 }
 
                 if (effectiveRenderBlocks.isNotEmpty()) {
-                    com.android.everytalk.ui.components.markdown.MessageFileAttachmentScope(message.attachments) {
+                    com.android.everytalk.ui.components.markdown.MessageFileAttachmentScope(message.attachments, message.conversationId, message.id) {
                         UnifiedMarkdownRenderer(
                             preparedMessage = preparedMessage,
                             sender = displayMessage.sender,

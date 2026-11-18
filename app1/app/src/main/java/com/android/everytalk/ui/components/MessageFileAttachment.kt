@@ -27,7 +27,7 @@ import com.android.everytalk.R
 import com.android.everytalk.ui.theme.chatColors
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.util.AppToast
-import com.android.everytalk.util.storage.FileManager
+import androidx.core.content.FileProvider
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -74,7 +74,7 @@ internal fun attachmentIconTint(icon: Int): Color =
 /** 打开和预览共用本机 URI；本函数没有网络或保存操作，重复打开不会创建新副本。 */
 internal fun localAttachmentUri(context: Context, file: SelectedMediaItem.GenericFile): Uri {
     val local = file.filePath?.let(::File)?.takeIf(File::isFile)
-    val uri = if (local != null) FileManager(context).getFileProviderUri(local) else file.uri
+    val uri = if (local != null) FileProvider.getUriForFile(context, "${context.packageName}.provider", local, file.displayName) else file.uri
     require(uri.scheme == "content") { "本地文件不可用，请重新接收文件" }
     return uri
 }
@@ -82,8 +82,10 @@ internal fun localAttachmentUri(context: Context, file: SelectedMediaItem.Generi
 /** 优先使用附件已经持有的 MIME，仅在未知时补全，外部应用据此选择对应文件类型。 */
 internal fun attachmentOpenMime(file: SelectedMediaItem.GenericFile): String =
     file.mimeType.takeUnless { it.isBlank() || it == "application/octet-stream" }
-        ?: MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.displayName.substringAfterLast('.', "").lowercase())
-        ?: "application/octet-stream"
+        ?: when (val extension = file.displayName.substringAfterLast('.', "").lowercase()) {
+            "apk" -> "application/vnd.android.package-archive"
+            else -> MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "application/octet-stream"
+        }
 
 internal fun attachmentViewIntent(uri: Uri, mime: String): Intent = Intent(Intent.ACTION_VIEW).apply {
     require(uri.scheme == "content") { "只允许通过内容提供器共享附件" }

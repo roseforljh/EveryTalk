@@ -325,6 +325,21 @@ class MarkdownFileAttachmentsTest {
     }
 
     @Test
+    fun `同步的安装包从专用目录共享并保留文件名但不会暴露分块缓存`() {
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        val directory = File(context.filesDir, "sync-media/test-account").apply { mkdirs() }
+        val source = File(directory, "assembled-test").apply { writeBytes(byteArrayOf(1, 2, 3)) }
+        val apk = sheet.copy(displayName = "release.apk", filePath = source.absolutePath)
+        val uri = localAttachmentUri(context, apk)
+        assertEquals("content", uri.scheme)
+        assertEquals("release.apk", uri.getQueryParameter("displayName"))
+        assertEquals("application/vnd.android.package-archive", com.android.everytalk.ui.components.attachmentOpenMime(apk))
+        val cache = File(context.filesDir, "sync-resources/test-account").apply { mkdirs() }
+        val part = File(cache, "unverified.part").apply { writeText("not shared") }
+        assertThrows(IllegalArgumentException::class.java) { localAttachmentUri(context, sheet.copy(filePath = part.absolutePath)) }
+    }
+
+    @Test
     fun `文本预览有大小上限且不能回源下载`() {
         val context = ApplicationProvider.getApplicationContext<Application>()
         val provider = DownloadTestProvider.install(context)

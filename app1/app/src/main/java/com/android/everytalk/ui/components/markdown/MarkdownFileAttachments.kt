@@ -26,7 +26,11 @@ import org.intellij.markdown.MarkdownTokenTypes
 import org.intellij.markdown.ast.ASTNode
 import androidx.compose.ui.res.stringResource
 import com.android.everytalk.R
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import com.android.everytalk.data.database.AppDatabase
+import com.android.everytalk.service.SyncScheduler
 
 internal const val MESSAGE_FILE_SCHEME = "everytalk-file:"
 internal val LocalMessageFileAttachments = compositionLocalOf<List<SelectedMediaItem.GenericFile>> { emptyList() }
@@ -36,21 +40,36 @@ internal fun resolveMessageFile(uri: String, files: List<SelectedMediaItem.Gener
     uri.takeIf { it.startsWith(MESSAGE_FILE_SCHEME) }?.removePrefix(MESSAGE_FILE_SCHEME)?.let { id -> files.singleOrNull { it.id == id } }
 
 @Composable
-fun MessageFileAttachmentScope(attachments: List<SelectedMediaItem>, content: @Composable () -> Unit) {
+fun MessageFileAttachmentScope(
+    attachments: List<SelectedMediaItem>,
+    sessionId: String? = null,
+    messageId: String? = null,
+    content: @Composable () -> Unit,
+) {
     val files = remember(attachments) { attachments.filterIsInstance<SelectedMediaItem.GenericFile>() }
     val fallback = LocalUriHandler.current
     val context = LocalContext.current
     val open = rememberMessageFileOpener()
     val scope = rememberCoroutineScope()
-    val handler = remember(files, fallback, context, open, scope) {
+    val handler = remember(files, fallback, context, open, scope, sessionId, messageId) {
         object : UriHandler {
             override fun openUri(uri: String) {
                 if (openCloudPreview(context, scope, uri)) return
                 if (!uri.startsWith(MESSAGE_FILE_SCHEME)) { fallback.openUri(uri); return }
                 val file = resolveMessageFile(uri, files)
-                // 缺少消息附件映射不能推断磁盘文件已被删除，提示应与实际失败阶段一致。
-                if (file == null) AppToast.show(context, "此回复未关联到该文件，请重新接收文件")
-                else open(file)
+                if (file != null) { open(file); return }
+                scope.launch {
+                    // 只查当前会话中的当前消息；不按链接 ID 查全库，更不从链接推导磁盘路径。
+                    val latest = if (sessionId != null && messageId != null) withContext(Dispatchers.IO) {
+                        AppDatabase.getDatabase(context).chatDao().getMessage(sessionId, messageId)?.attachments.orEmpty()
+                    } else emptyList()
+                    val restored = resolveMessageFile(uri, latest.filterIsInstance<SelectedMediaItem.GenericFile>())
+                    if (restored != null) open(restored)
+                    else {
+                        SyncScheduler.requestNow(context)
+                        AppToast.show(context, "附件尚未可用，请等同步完成后再试")
+                    }
+                }
             }
         }
     }

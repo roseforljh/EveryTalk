@@ -282,7 +282,7 @@ internal fun StaticAiMarkdownNodeItem(
             ) {
                 // 完成回复和历史回复走分段入口，必须与流式正文共享原消息附件。
                 // 否则页脚已去重隐藏文件，正文却只剩普通文件名，两个入口都会消失。
-                com.android.everytalk.ui.components.markdown.MessageFileAttachmentScope(item.message.attachments) {
+                com.android.everytalk.ui.components.markdown.MessageFileAttachmentScope(item.message.attachments, item.message.conversationId, item.message.id) {
                     UnifiedMarkdownNodesRenderer(
                         preparedMessage = item.preparedMessage,
                         preparedMarkdownDocument = item.preparedMarkdownDocument,

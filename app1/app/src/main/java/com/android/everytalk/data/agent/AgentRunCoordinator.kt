@@ -82,6 +82,23 @@ internal fun projectBackgroundLiveMetadata(
     else -> message
 }
 
+/** 云端只收纯文本；普通输入也会被编辑器包装成 Text，不算引用。 */
+internal fun buildCloudSteerFields(
+    messageUuid: String,
+    content: String,
+    contentParts: List<MessageContentPart>,
+    attachments: List<SelectedMediaItem>,
+) = buildJsonObject {
+    val text = if (attachments.isEmpty() && contentParts.all { it is MessageContentPart.Text }) {
+        contentParts.toApiText(content)
+    } else ""
+    if (text.isBlank()) {
+        throw CloudSteerNotAccepted("云端任务的方向调整只支持文字，这条消息会在本轮结束后发送", unknown = false)
+    }
+    put("messageUuid", messageUuid)
+    put("text", text)
+}
+
 /** 消费队列时才读取附件文件并生成多模态消息，Room 永远只保存稳定文件引用。 */
 internal suspend fun materializeAndroidQueuedMessage(
     context: Context,
@@ -1293,19 +1310,13 @@ class AgentRunCoordinator(
         if (consumed) return true
         val run = agentDao.getLatestSteerableRun(sessionId) ?: return false
         if (run.executionOwner == "CLOUD") {
-            // 云端方向调整只收文字；带附件或引用的调整留在队列，等这一轮结束后作为新消息发送。
-            if (attachments.isNotEmpty() || contentParts.isNotEmpty() || content.isBlank()) {
-                throw CloudSteerNotAccepted("云端任务的方向调整只支持文字，这条消息会在本轮结束后发送", unknown = false)
-            }
+            // 与随后写入的用户消息共用同步 UUID；附件和引用留在队列，不静默丢弃。
+            val fields = buildCloudSteerFields(messageUuid, content, contentParts, attachments)
             // 网络请求之前就持久绑定原 Run：请求已送达但响应未回时被杀，重启也先向服务器核对。
             // 标记只在核对出权威结论（已消费或任务已结束）时清除，不在命令成功时清。
             cloudRunContexts.edit().putString(unknownSteerKey(steeringId), run.id).commit()
             val accepted = try {
-                commandCloudRun(run.id, "steer", kotlinx.serialization.json.buildJsonObject {
-                    // 与随后 recordSteeredUserMessage 写入的用户消息同一个同步 UUID，各设备都能定位这条调整。
-                    put("messageUuid", kotlinx.serialization.json.JsonPrimitive(messageUuid))
-                    put("text", kotlinx.serialization.json.JsonPrimitive(content))
-                })
+                commandCloudRun(run.id, "steer", fields)
             } catch (cancelled: CancellationException) { throw cancelled
             } catch (_: Exception) { false }
             // 后端按 messageUuid 去重，重试同一条调整不会重复生效。结果未知时持久记下发给了哪个任务，

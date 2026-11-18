@@ -412,16 +412,18 @@ class PendingMessageControllerTest {
         val dao = database.chatDao()
         dao.enqueuePendingMessage(pending("adjust", "调整方案", 1))
         val recorded = CompletableDeferred<String>()
+        val isRunning = MutableStateFlow(true)
         val controller = controller(
-            isRunning = MutableStateFlow(false),
+            isRunning = isRunning,
             alreadySteered = { it.id == "adjust" },
             recordSteered = { recorded.complete(it.id) },
             dispatch = { _, _, _, _ -> fail("已被云端消费的调整不能再作为新消息发送") },
         )
         controller.pendingMessages.first { it.size == 1 }
+        isRunning.value = false
         assertEquals("adjust", recorded.await())
-        advanceUntilIdle()
-        assertTrue(dao.observePendingMessages("conversation").first().isEmpty())
+        // 补气泡的回调先于 Dispatchers.IO 上删除队列记录，等待数据库发出完成状态。
+        dao.observePendingMessages("conversation").first { it.isEmpty() }
     }
 
     @Test
@@ -429,15 +431,16 @@ class PendingMessageControllerTest {
         val dao = database.chatDao()
         dao.enqueuePendingMessage(pending("adjust", "调整方案", 1))
         val checked = CompletableDeferred<Unit>()
+        val isRunning = MutableStateFlow(true)
         val controller = controller(
-            isRunning = MutableStateFlow(false),
+            isRunning = isRunning,
             alreadySteered = { checked.complete(Unit); error("云端尚未连接，暂不发送") },
             dispatch = { _, _, _, _ -> fail("核对失败不代表没用过，不能另开一轮") },
         )
         controller.pendingMessages.first { it.size == 1 }
+        isRunning.value = false
         checked.await()
-        advanceUntilIdle()
-        assertEquals(listOf("PENDING"), dao.observePendingMessages("conversation").first().map { it.status })
+        dao.observePendingMessages("conversation").first { it.singleOrNull()?.status == "PENDING" }
     }
 
     @Test
@@ -445,15 +448,17 @@ class PendingMessageControllerTest {
         val dao = database.chatDao()
         dao.enqueuePendingMessage(pending("adjust", "调整方案", 1))
         val tried = CompletableDeferred<Unit>()
+        val showRejected = CompletableDeferred<String>()
         val controller = controller(
             isRunning = MutableStateFlow(true),
+            showMessage = { showRejected.complete(it) },
             steer = { tried.complete(Unit); throw com.android.everytalk.data.agent.CloudSteerNotAccepted("核对中", unknown = true) },
             dispatch = { _, _, _, _ -> fail("结果未知的调整不能降级成普通发送") },
         )
         controller.pendingMessages.first { it.size == 1 }
         controller.sendNow("adjust")
         tried.await()
-        advanceUntilIdle()
+        assertEquals("核对中", showRejected.await())
         assertEquals(listOf("PENDING"), dao.observePendingMessages("conversation").first().map { it.status })
     }
 
@@ -606,6 +611,7 @@ class PendingMessageControllerTest {
         replaceQuotes: (List<com.android.everytalk.data.DataClass.MessageContentPart>) -> Unit = {},
         steer: suspend () -> Boolean = { true },
         recordSteered: suspend (PendingMessageEntity) -> Unit = {},
+        showMessage: (String) -> Unit = {},
         alreadySteered: suspend (PendingMessageEntity) -> Boolean = { false },
         isAbortInProgress: MutableStateFlow<Boolean> = MutableStateFlow(false),
         agentRunControlState: kotlinx.coroutines.flow.StateFlow<AgentRunControlState?> =
@@ -627,7 +633,7 @@ class PendingMessageControllerTest {
         steerCurrentRun = { steer() },
         recordSteeredMessage = recordSteered,
         isAlreadySteered = alreadySteered,
-        showMessage = {},
+        showMessage = showMessage,
         dispatch = dispatch,
     )
 
