@@ -40,6 +40,13 @@ internal suspend fun CloudRunView.toMessage(base: Message, resolve: suspend (Str
                     detail = part.arguments?.toString(),
                     isError = part.isError,
                     fileChange = if (part.isError || !completed || !part.started) null else part.arguments?.let { executionFileChange(part.name, it) },
+                    // 服务端按真实内容比对，脚本改的文件也在内；失败的调用不算改动。
+                    fileChanges = if (part.isError || !completed || !part.started) emptyList() else part.files.map { change ->
+                        com.android.everytalk.data.DataClass.ExecutionFileChange(
+                            path = change.path, written = change.written,
+                            edits = change.edits.map { edit -> com.android.everytalk.data.DataClass.ExecutionFileEdit(edit.oldText, edit.newText) },
+                        )
+                    },
                     computerId = part.arguments?.get("computer_id")?.jsonPrimitive?.content,
                     resultPreview = part.result?.toString()?.take(4_000),
                     durationMs = part.finishedAt?.takeIf { part.started }?.let { (it - part.startedAt).coerceAtLeast(0) },

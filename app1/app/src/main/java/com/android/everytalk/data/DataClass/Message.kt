@@ -73,6 +73,8 @@ data class ExecutionStep(
     val reasoningBefore: String? = null,
     /** write_file / edit 的改动内容；其它工具和旧消息为 null。 */
     val fileChange: ExecutionFileChange? = null,
+    /** 服务端按真实文件内容比对出的改动（含用脚本改的文件）；旧消息为空。 */
+    val fileChanges: List<ExecutionFileChange> = emptyList(),
     /** 多服务器过程使用稳定 ID 分组，显示名称从本轮冻结目标读取。 */
     val computerId: String? = null,
     val started: Boolean = false,

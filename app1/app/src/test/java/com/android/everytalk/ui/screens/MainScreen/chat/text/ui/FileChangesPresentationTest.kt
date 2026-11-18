@@ -101,6 +101,24 @@ class FileChangesPresentationTest {
         rule.onNodeWithText("before-1").assertDoesNotExist()
     }
 
+    @Test fun `服务端比对出的脚本改动与没有参数的步骤同样显示在胶囊里`() {
+        // 模拟用 exec 跑脚本改文件：步骤本身没有 write_file/edit 参数，只有服务端比对结果。
+        val step = ExecutionStep("script-1", ExecutionStepType.Agent, "exec", completed = true, started = true,
+            fileChanges = listOf(
+                ExecutionFileChange("src/a.kt", false, listOf(ExecutionFileEdit("old", "new"))),
+                ExecutionFileChange("src/b.kt", true, listOf(ExecutionFileEdit("", "added line"))),
+            ))
+        val message = Message(id = "scripted", text = "改完了", sender = Sender.AI, executionSteps = listOf(step))
+        rule.setContent { MaterialTheme { Column {
+            FileChangesCapsule(listOf(message), message.id, true)
+            MessageFileChangesSummary(message, true)
+        } } }
+        rule.onNodeWithText("2 个文件已更改").assertIsDisplayed()
+        rule.onNodeWithText("2 个文件已更改").performClick()
+        rule.onNodeWithText("src/b.kt").assertIsDisplayed()
+        rule.onNodeWithText("added line").assertIsDisplayed()
+    }
+
     @Test fun `无改动及失败未完成步骤不显示总结旧trace仍能恢复`() {
         val original = reply("old")
         val message = mutableStateOf(original.copy(executionSteps = emptyList()))

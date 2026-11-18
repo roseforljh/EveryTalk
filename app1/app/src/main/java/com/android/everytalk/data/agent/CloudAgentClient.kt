@@ -102,7 +102,20 @@ internal data class CloudRunTrace(
     val result: JsonElement? = null,
     val isError: Boolean = false,
     val messageUuid: String = "",
+    /** 服务端比对出的真实文件改动；旧服务端没有该字段。 */
+    val files: List<CloudObservedFileChange> = emptyList(),
 )
+
+/** 与 ToolResult 里 files 的形状一致：路径 + 前后文本，交给现有改动胶囊展示。 */
+@Serializable
+internal data class CloudObservedFileChange(
+    val path: String,
+    val written: Boolean = false,
+    val edits: List<CloudObservedEdit> = emptyList(),
+)
+
+@Serializable
+internal data class CloudObservedEdit(val oldText: String = "", val newText: String = "")
 
 @Serializable
 internal data class CloudRunWaiting(val kind: String, val toolCallId: String, val toolName: String, val arguments: JsonElement)

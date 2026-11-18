@@ -127,7 +127,7 @@ fun Message.toolSteps(): List<ExecutionStep> = executionSteps.ifEmpty {
 
 /** 一次 Agent Run 只有一个可见气泡，按路径合并它的全部文件改动。 */
 fun fileChangeSummaries(steps: List<ExecutionStep>): List<FileChangeSummary> =
-    steps.mapNotNull { it.fileChange }
+    steps.flatMap { step -> step.fileChanges.ifEmpty { listOfNotNull(step.fileChange) } }
         .groupBy { it.path }
         .map { (path, changes) ->
             FileChangeSummary(

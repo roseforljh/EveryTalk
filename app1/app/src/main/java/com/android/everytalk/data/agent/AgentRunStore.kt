@@ -1626,6 +1626,7 @@ class AgentRunStore(
                                     json.decodeFromString(AgentContentBlock.ToolResult.serializer(), entry.payloadJson).durationMs
                                 }.getOrNull(),
                                 fileChange = tool.step.fileChange.takeUnless { failed },
+                                fileChanges = tool.step.fileChanges.takeUnless { failed }.orEmpty(),
                             ),
                             finishedAtMillis = entry.finalizedAt ?: entry.createdAt,
                         )
@@ -1672,7 +1673,10 @@ class AgentRunStore(
             if (event is ExecutionTraceEvent.UserMessageBoundary && storedBoundaries.isNotEmpty()) storedBoundaries[boundaryIndex++]
             else if (event !is ExecutionTraceEvent.Tool) event else {
                 val previous = stored[event.step.id]
-                if (previous == null) event.copy(step = event.step.copy(fileChange = event.step.fileChange.takeIf { event.step.completed && !event.step.isError }))
+                if (previous == null) event.copy(step = event.step.copy(
+                    fileChange = event.step.fileChange.takeIf { event.step.completed && !event.step.isError },
+                    fileChanges = event.step.fileChanges.filter { event.step.completed && !event.step.isError },
+                ))
                 else {
                     val oldEvent = message.executionTrace.filterIsInstance<ExecutionTraceEvent.Tool>().firstOrNull { it.step.id == event.step.id }
                     event.copy(step = previous.copy(toolName = event.step.toolName ?: previous.toolName,
