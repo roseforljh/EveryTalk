@@ -578,7 +578,7 @@ internal class SyncResourceSynchronizer(
         if (cleared > 0) syncDiagnostic("resource stale failures cleared=$cleared")
         // 上一轮已全部落地且附件表没有任何变化：不必再把几千条元数据逐条查表、解析一遍。
         val stampKey = "sync_resource_restore_stamp:$user"
-        val stamp = "2:" + db.syncAttachmentDao().stamp()
+        val stamp = "$RESOURCE_RESTORE_VERSION:" + db.syncAttachmentDao().stamp()
         if (cleared == 0 && settings.getValue(stampKey) == stamp) return
         var allSettled = true
         val records = settings.getByPrefix("sync_resource_meta:").mapNotNull { row ->
@@ -597,7 +597,7 @@ internal class SyncResourceSynchronizer(
             val receivedMarker = "sync_resource_received:$messageId"
             // 旧版本只保存笼统的下载失败，升级后重查一次并记录真实错误码；
             // 同一版本仍然只尝试一次永久错误，不能让坏附件无限请求服务器。
-            val version = "2:" + entries.joinToString { "${it.first.id}:${it.first.updatedAt}" }
+            val version = "$RESOURCE_RESTORE_VERSION:" + entries.joinToString { "${it.first.id}:${it.first.updatedAt}" }
             if (settings.getValue(failureMarker) == version) continue
             // 归档标记被旧版本改写过（非第 4 版）时仍要重新应用。
             if (settings.getValue(receivedMarker) == "$user:$version" &&
@@ -763,19 +763,30 @@ internal class SyncResourceSynchronizer(
             }
             val media = entries.filter { it.second["role"]?.jsonPrimitive?.contentOrNull in setOf(null, "media") && it.first.fileId != null }
             if (media.isNotEmpty()) {
-                val items = media.groupBy { it.second["mediaId"]?.jsonPrimitive?.contentOrNull ?: it.first.id }.values
-                    .sortedBy { it.first().first.position }.map { parts ->
+                val groups = media.groupBy { it.second["mediaId"]?.jsonPrimitive?.contentOrNull ?: it.first.id }.values
+                val items = groups.sortedBy { it.first().first.position }.mapNotNull { parts ->
                     val (attachment, metadata) = parts.maxBy { it.first.updatedAt }
+                    // 只将已通过完整性校验的普通附件放进 FileProvider 目录，不共享同步密文或临时文件。
+                    val fileAttachment = attachment.kind !in setOf("image", "thumbnail", "audio")
+                    val directory = if (fileAttachment) File(context.filesDir, "sync-media/${root.name}") else root
                     val local = if (metadata["chunkCount"] != null) {
-                        val matchingParts = parts.filter { it.second["originalDigest"] == metadata["originalDigest"] && it.second["resourceVersion"] == metadata["resourceVersion"] }.sortedBy { it.second.getValue("chunkIndex").jsonPrimitive.int }
-                        val infos = matchingParts.map { (record, _) ->
-                            SyncFileInfo(requireNotNull(record.fileId), record.size, record.sha256, record.mime)
+                        val count = metadata.getValue("chunkCount").jsonPrimitive.int
+                        require(count in 1..1024)
+                        val matchingParts = parts.filter { it.second["originalDigest"] == metadata["originalDigest"] && it.second["resourceVersion"] == metadata["resourceVersion"] }
+                        // 老客户端可能将同一云端产物再推一次：记录 ID 不同，但每个分块索引只取一份。
+                        val byIndex = matchingParts.groupBy { it.second.getValue("chunkIndex").jsonPrimitive.int }
+                        require(byIndex.keys.all { it in 0 until count })
+                        if (byIndex.size != count) return@mapNotNull null
+                        val infos = (0 until count).map { index ->
+                            val chunk = byIndex.getValue(index).maxBy { it.first.updatedAt }.first
+                            SyncFileInfo(requireNotNull(chunk.fileId), chunk.size, chunk.sha256, chunk.mime)
                         }
-                        require(infos.size == metadata.getValue("chunkCount").jsonPrimitive.int)
-                        assemble(infos, metadata.getValue("originalSize").jsonPrimitive.long, metadata.getValue("originalDigest").jsonPrimitive.content).also {
-                            // 多块媒体已拼接为完整原件 assembled-<hash>，原始分块可立即释放。
+                        assemble(infos, metadata.getValue("originalSize").jsonPrimitive.long, metadata.getValue("originalDigest").jsonPrimitive.content, directory).also {
                             deleteConfirmedAttachmentFiles(matchingParts.map { it.first.id })
                         }
+                    } else if (fileAttachment) {
+                        assemble(listOf(SyncFileInfo(requireNotNull(attachment.fileId), attachment.size, attachment.sha256, attachment.mime)),
+                            attachment.size, attachment.sha256, directory)
                     } else file(attachment)
                     val mediaId = metadata["mediaId"]?.jsonPrimitive?.contentOrNull ?: attachment.id
                     when (attachment.kind) {
@@ -784,11 +795,19 @@ internal class SyncResourceSynchronizer(
                         else -> SelectedMediaItem.GenericFile(Uri.fromFile(local), mediaId, attachment.name, attachment.mime, local.absolutePath)
                     }
                 }
-                db.withTransaction {
+                if (items.size != groups.size) settled = false
+                else db.withTransaction {
                     val current = chat.getMessageByUuid(messageId)?.takeUnless { it.deleted } ?: return@withTransaction
-                    // 原设备已有可读原件时保留路径；本机文件丢失或本机根本没有（云端任务产物）则用云端原件补回。
-                    if ((current.id.startsWith("cloud:") || current.attachments.isEmpty() || current.attachments.any { materialize(it) == null }) && current.attachments != items) {
-                        val restored = current.toMessage().copy(attachments = items).toEntity(current.sessionId).copy(
+                    // 保留原机路径和保存回执；补齐缺失项，替换已失效或旧版不可共享的缓存路径。
+                    val next = if (current.id.startsWith("cloud:")) items else {
+                        val readable = current.attachments.filter { item ->
+                            val oldSyncFile = item is SelectedMediaItem.GenericFile && item.filePath?.startsWith(root.path + File.separator) == true
+                            !oldSyncFile && materialize(item) != null
+                        }
+                        readable + items.filter { item -> readable.none { it.id == item.id } }
+                    }
+                    if (current.attachments != next) {
+                        val restored = current.toMessage().copy(attachments = next).toEntity(current.sessionId).copy(
                             uuid = current.uuid, updatedAt = current.updatedAt, syncStatus = current.syncStatus, everSynced = current.everSynced)
                         chat.writeMessages(listOf(restored))
                         // 这里只换成本机可读路径，不代表内容改变；已确认版本跟随新指纹，避免无意义回传。
@@ -829,7 +848,7 @@ internal class SyncResourceSynchronizer(
                 } else throw error
             }
         }
-        if (allSettled && !moreWork && "2:" + db.syncAttachmentDao().stamp() == stamp) settings.insertSetting(SystemSettingEntity(stampKey, stamp))
+        if (allSettled && !moreWork && "$RESOURCE_RESTORE_VERSION:" + db.syncAttachmentDao().stamp() == stamp) settings.insertSetting(SystemSettingEntity(stampKey, stamp))
         if (touched) SyncLocalChanges.notifyChanged()
     }
 
@@ -911,11 +930,12 @@ internal class SyncResourceSynchronizer(
         JsonArray(listOf("everytalk-tool-result", user, session, message, path, "0").map(::JsonPrimitive)).toString().toByteArray(Charsets.UTF_8)
 
     /** 所有分块完成且整体哈希一致后才发布原文件，不能把半个文件交给图片或 Skill 加载器。 */
-    private suspend fun assemble(parts: List<SyncFileInfo>, size: Long, hash: String): File {
+    private suspend fun assemble(parts: List<SyncFileInfo>, size: Long, hash: String, destination: File = root): File {
         require(parts.size <= 1024 && size >= 0 && hash.matches(Regex("[0-9a-f]{64}")))
         require(size == 0L || parts.isNotEmpty())
-        val target = File(root, "assembled-$hash")
+        val target = File(destination, "assembled-$hash")
         if (target.isFile && target.length() == size && syncFileHash(target) == hash) return target
+        destination.mkdirs()
         val temporary = File(root, "assembled-$hash.part")
         try {
             temporary.outputStream().use { output ->
@@ -1054,5 +1074,6 @@ internal class SyncResourceSynchronizer(
     private companion object {
         const val CHUNK_BYTES = 4L * 1024 * 1024
         const val RESTORE_DOWNLOADS_PER_RUN = 40
+        const val RESOURCE_RESTORE_VERSION = 3 // 重试旧版被重复分块挡住的附件。
     }
 }

@@ -8,6 +8,7 @@
 
     <!-- Path for general chat attachments (saved to context.filesDir/chat_attachments/) -->
     <files-path name="my_chat_attachments" path="chat_attachments/" />
+    <files-path name="synced_chat_files" path="sync-media/" />
     <!-- 仅暴露已通过用户保存审批的 Workspace 产物，禁止开放整个 filesDir。 -->
     <files-path name="agent_workspaces" path="agent-workspaces/" />
 

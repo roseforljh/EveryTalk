@@ -647,6 +647,50 @@ class SyncResourceSynchronizerTest {
         assertEquals(0, b.settingsDao().syncRejectedCount())
     }
 
+    @Test fun `恢复云端文件时容忍重复与迟到的分块并重试旧错误`() = runBlocking {
+        val source = database(); val target = database(); val cs = context(); val ct = context()
+        val api = FakeSyncApi().apply { chunkSize = 1024 }
+        val session = ChatSessionEntity("artifact-session", 1, 1, false)
+        val file = File(cs.filesDir, "release.apk").apply { writeBytes(ByteArray(2600) { (it % 251).toByte() }) }
+        val artifact = SelectedMediaItem.GenericFile(android.net.Uri.fromFile(file), "release-id", file.name,
+            "application/octet-stream", file.absolutePath)
+        val message = Message(id = "artifact-answer", text = "[安装包](everytalk-file:${artifact.id})", sender = Sender.AI,
+            timestamp = 2, attachments = listOf(artifact)).toEntity(session.id)
+        source.chatDao().writeSession(session); source.chatDao().writeMessages(listOf(message))
+        SyncResourceSynchronizer(cs, source, api, user).use { it.synchronize() }; sync(source, api)
+        val rows = api.rows.values.filter { it.entity == "attachments" }.sortedBy { it.payload.getValue("chunkIndex").jsonPrimitive.int }
+        assertEquals(3, rows.size)
+        // 先只收到正文和部分分块，再收到晚到的最后一块与来自旧客户端的重复记录。
+        val last = rows.last()
+        api.rows.remove(last.entity to last.id)
+        sync(target, api)
+        SyncResourceSynchronizer(ct, target, api, user).use { it.synchronize() }
+        assertTrue(target.chatDao().getMessageByUuid(message.uuid)!!.attachments.isEmpty())
+        assertEquals(0, target.settingsDao().syncRejectedCount())
+        api.rows[last.entity to last.id] = last.copy(serverSeq = ++api.seq)
+        for (row in rows) {
+            val duplicate = row.copy(id = UUID.randomUUID().toString(), serverSeq = ++api.seq)
+            api.rows[duplicate.entity to duplicate.id] = duplicate
+        }
+        sync(target, api)
+        val marker = "sync_resource_receive_failed:${message.uuid}"
+        val chunkKeys = target.settingsDao().getByPrefix("sync_resource_meta:").map { it.key.substringAfter(':') }
+        val oldVersion = "2:" + chunkKeys.map { target.syncAttachmentDao().get(it)!! }.joinToString { "${it.id}:${it.updatedAt}" }
+        target.settingsDao().insertSetting(SystemSettingEntity(marker, oldVersion))
+        target.settingsDao().insertSetting(SystemSettingEntity("sync_resource_restore_stamp:$user", "2:" + target.syncAttachmentDao().stamp()))
+        target.settingsDao().insertSetting(SystemSettingEntity("sync_rejected:attachments:${chunkKeys.first()}", "RESOURCE_VALIDATION_FAILED"))
+        val uploads = api.fileUploads
+        SyncResourceSynchronizer(ct, target, api, user).use { it.synchronize() }
+        val restored = target.chatDao().getMessageByUuid(message.uuid)!!.attachments.single() as SelectedMediaItem.GenericFile
+        assertEquals(artifact.id, restored.id)
+        assertEquals(file.name, restored.displayName)
+        assertArrayEquals(file.readBytes(), File(restored.filePath!!).readBytes())
+        assertTrue(File(restored.filePath!!).toPath().startsWith(File(ct.filesDir, "sync-media").toPath()))
+        assertEquals(0, target.settingsDao().syncRejectedCount())
+        assertEquals(uploads, api.fileUploads)
+        assertTrue(RoomSyncStore(target).pendingBatch().isEmpty())
+    }
+
     @Test fun `分块上限变化和中断重试不会混合旧块或复活附件墓碑`() = runBlocking {
         val a = database(); val b = database(); val ca = context(); val cb = context()
         val api = FakeSyncApi().apply { chunkSize = 8192 }
@@ -753,7 +797,7 @@ class SyncResourceSynchronizerTest {
         repeat(2) { SyncResourceSynchronizer(cb, b, unavailable, user).use { it.synchronize() } }
         assertEquals(1, downloads)
         assertEquals("FILE_NOT_FOUND", b.settingsDao().getValue("sync_rejected:attachments:${attachment.id}"))
-        assertTrue(b.settingsDao().getValue("sync_resource_receive_failed:${source.uuid}")!!.startsWith("2:"))
+        assertTrue(b.settingsDao().getValue("sync_resource_receive_failed:${source.uuid}")!!.startsWith("3:"))
         // 原设备补传新版本后自动恢复，不能让旧失败标记永久挡住新文件。
         b.syncAttachmentDao().upsert(attachment.copy(updatedAt = attachment.updatedAt + 1))
         SyncResourceSynchronizer(cb, b, cloud, user).use { it.synchronize() }
