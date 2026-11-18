@@ -8,6 +8,8 @@ import android.os.Build
 import android.view.WindowManager
 import android.widget.MediaController
 import android.widget.VideoView
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -64,15 +66,44 @@ internal fun attachmentPreviewKind(file: SelectedMediaItem.GenericFile): Attachm
     }
 }
 
-/** 在所属消息组件内持有预览，不生成下载任务；不支持的格式直接使用已有系统打开入口。 */
+/** 已校验的 APK 由用户选择保存位置，再从系统文件管理器安装；应用不申请安装权限。 */
 @Composable
 internal fun rememberMessageFileOpener(): (SelectedMediaItem.GenericFile) -> Unit {
     var preview by remember { mutableStateOf<SelectedMediaItem.GenericFile?>(null) }
+    var savingApk by remember { mutableStateOf<SelectedMediaItem.GenericFile?>(null) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val savedLabel = stringResource(R.string.ui_apk_saved)
+    val saveFailedLabel = stringResource(R.string.ui_apk_save_failed)
+    val saveApk = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/vnd.android.package-archive")) { target ->
+        val file = savingApk
+        savingApk = null
+        if (target != null && file != null) scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    val resolver = context.contentResolver
+                    val source = localAttachmentUri(context, file)
+                    check(source != target)
+                    val input = checkNotNull(resolver.openInputStream(source))
+                    input.use { bytes -> checkNotNull(resolver.openOutputStream(target, "w")).use { bytes.copyTo(it) } }
+                }
+                com.android.everytalk.util.AppToast.show(context, savedLabel)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { com.android.everytalk.util.AppToast.show(context, saveFailedLabel) }
+        }
+    }
     preview?.let { MessageFilePreview(it) { preview = null } }
-    return remember(context, scope) { { file ->
-        if (attachmentPreviewKind(file) != null) preview = file
+    return remember(context, scope, saveApk, saveFailedLabel) { { file ->
+        if (attachmentOpenMime(file) == "application/vnd.android.package-archive") {
+            if (savingApk == null) {
+                savingApk = file
+                try { saveApk.launch(file.displayName) }
+                catch (_: android.content.ActivityNotFoundException) {
+                    savingApk = null
+                    com.android.everytalk.util.AppToast.show(context, saveFailedLabel)
+                }
+            }
+        } else if (attachmentPreviewKind(file) != null) preview = file
         else scope.launch { openMessageAttachment(context, file) }
     } }
 }

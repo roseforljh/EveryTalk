@@ -475,10 +475,7 @@ fun OptimizedMediaItemsList(
     modifier: Modifier = Modifier
 ) {
     val openFile = rememberMessageFileOpener()
-    var previewImageIndex by remember { mutableStateOf<Int?>(null) }
-    val imageUrls = remember(selectedMediaItems) {
-        selectedMediaItems.mapNotNull(::previewableImageUrl)
-    }
+    var previewImages by remember { mutableStateOf<Pair<List<String>, Int>?>(null) }
 
     if (selectedMediaItems.isNotEmpty()) {
         LazyRow(
@@ -495,9 +492,11 @@ fun OptimizedMediaItemsList(
                     mediaItem = media,
                     onRemoveClicked = { onRemoveMediaItemAtIndex(index) },
                     onItemClicked = {
-                        val clickedImageUrl = previewableImageUrl(media)
-                        if (clickedImageUrl != null) {
-                            previewImageIndex = imageUrls.indexOf(clickedImageUrl).coerceAtLeast(0)
+                        // 输入框传入的是原地修改的 SnapshotStateList，点击时读取最新顺序，不按列表对象缓存。
+                        if (previewableImageUrl(media) != null) {
+                            val images = selectedMediaItems.mapNotNull { item -> previewableImageUrl(item)?.let { item.id to it } }
+                            val clicked = images.indexOfFirst { it.first == media.id }
+                            if (clicked >= 0) previewImages = images.map { it.second } to clicked
                         } else if (media is SelectedMediaItem.GenericFile) {
                             openFile(media)
                         }
@@ -507,13 +506,8 @@ fun OptimizedMediaItemsList(
         }
     }
 
-    val activePreviewIndex = previewImageIndex
-    if (activePreviewIndex != null && imageUrls.isNotEmpty()) {
-        ImagePreviewDialog(
-            urls = imageUrls,
-            initialIndex = activePreviewIndex.coerceIn(0, imageUrls.lastIndex),
-            onDismiss = { previewImageIndex = null },
-        )
+    previewImages?.let { (urls, index) ->
+        ImagePreviewDialog(urls = urls, initialIndex = index, onDismiss = { previewImages = null })
     }
 }
 

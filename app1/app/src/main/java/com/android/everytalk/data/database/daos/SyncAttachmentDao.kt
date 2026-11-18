@@ -25,6 +25,17 @@ interface SyncAttachmentDao {
     @Query("SELECT * FROM sync_attachments WHERE id = :id LIMIT 1")
     suspend fun get(id: String): SyncAttachmentEntity?
 
+    /** 只能从被点击的、未删除的消息查文件，不能拿链接 ID 跨会话查附件。 */
+    @Query("""
+        SELECT a.* FROM sync_attachments a
+        JOIN messages m ON m.uuid = a.messageId
+        JOIN chat_sessions s ON s.id = m.sessionId AND s.uuid = a.sessionId
+        WHERE s.id = :sessionId AND s.deleted = 0 AND m.deleted = 0
+          AND (m.id = :messageId OR 'cloud:' || m.uuid = :messageId)
+          AND a.deleted = 0 AND a.sync_status = 'SYNCED' AND a.kind = 'file' AND a.fileId IS NOT NULL
+    """)
+    suspend fun getMessageFiles(sessionId: String, messageId: String): List<SyncAttachmentEntity>
+
     /** 恢复快路径的粗粒度戳；权威行/metadata 变化另由 RoomSyncStore 同事务失效，不能单独作内容版本。 */
     @Query("SELECT COUNT(*) || ':' || COALESCE(MAX(updated_at), 0) || ':' || COALESCE(SUM(deleted), 0) || ':' || COALESCE(SUM(sync_status = 'SYNCED'), 0) FROM sync_attachments")
     suspend fun stamp(): String
