@@ -72,7 +72,6 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
@@ -878,7 +877,7 @@ internal fun createPreparedMessageMarkdownAnnotator(
             append('\u2060')
             // 文件是可执行的打开入口，不能继承普通正文的灰阶链接样式。
             pushLink(LinkAnnotation.Url(MESSAGE_FILE_SCHEME + mention.file.id, TextLinkStyles(SpanStyle(
-                color = messageFileLinkColor, fontWeight = FontWeight.SemiBold, textDecoration = TextDecoration.Underline))))
+                color = messageFileLinkColor, fontWeight = FontWeight.SemiBold))))
             append(mention.label)
             pop()
             offset = mention.end

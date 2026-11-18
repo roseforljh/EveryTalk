@@ -4,6 +4,7 @@ import com.android.everytalk.util.image.encodeImageForModel
 import android.content.Context
 import androidx.room.withTransaction
 import com.android.everytalk.data.DataClass.ApiConfig
+import com.android.everytalk.data.DataClass.ApiContentPart
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.DataClass.MessageContentPart
@@ -65,6 +66,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.util.concurrent.ConcurrentHashMap
@@ -82,21 +84,41 @@ internal fun projectBackgroundLiveMetadata(
     else -> message
 }
 
-/** 云端只收纯文本；普通输入也会被编辑器包装成 Text，不算引用。 */
-internal fun buildCloudSteerFields(
+/** 云端方向调整不降级丢附件；只有服务器声明支持时才编码图片。 */
+internal suspend fun buildCloudSteerFields(
     messageUuid: String,
     content: String,
     contentParts: List<MessageContentPart>,
     attachments: List<SelectedMediaItem>,
+    imagesSupported: Boolean = false,
+    encodeImage: suspend (SelectedMediaItem) -> ApiContentPart.InlineData? = { null },
 ) = buildJsonObject {
-    val text = if (attachments.isEmpty() && contentParts.all { it is MessageContentPart.Text }) {
-        contentParts.toApiText(content)
-    } else ""
-    if (text.isBlank()) {
-        throw CloudSteerNotAccepted("云端任务的方向调整只支持文字，这条消息会在本轮结束后发送", unknown = false)
+    if (contentParts.any { it !is MessageContentPart.Text } ||
+        attachments.isNotEmpty() && (!imagesSupported || attachments.size > 8 || attachments.any {
+            it !is SelectedMediaItem.ImageFromUri && it !is SelectedMediaItem.ImageFromBitmap
+        })) {
+        throw CloudSteerNotAccepted("本轮无法接收这些附件或引用，结束后会按队列发送", unknown = false)
+    }
+    val text = contentParts.toApiText(content)
+    if (text.isBlank() && attachments.isEmpty()) {
+        throw CloudSteerNotAccepted("方向调整内容为空", unknown = false)
     }
     put("messageUuid", messageUuid)
     put("text", text)
+    if (attachments.isNotEmpty()) {
+        var encodedLength = 0L
+        val images = attachments.map { attachment ->
+            val image = encodeImage(attachment)?.takeIf {
+                it.base64Data.isNotBlank() && it.mimeType in setOf("image/jpeg", "image/png", "image/gif", "image/webp")
+            } ?: throw CloudSteerNotAccepted("这张图片无法加入当前任务，仍保留在队列中", unknown = false)
+            encodedLength += image.base64Data.length
+            if (encodedLength > 1_500_000) {
+                throw CloudSteerNotAccepted("图片超过本轮调整大小限制，结束后会按队列发送", unknown = false)
+            }
+            buildJsonObject { put("type", "image"); put("data", image.base64Data); put("mimeType", image.mimeType) }
+        }
+        put("images", JsonArray(images))
+    }
 }
 
 /** 消费队列时才读取附件文件并生成多模态消息，Room 永远只保存稳定文件引用。 */
@@ -1310,8 +1332,25 @@ class AgentRunCoordinator(
         if (consumed) return true
         val run = agentDao.getLatestSteerableRun(sessionId) ?: return false
         if (run.executionOwner == "CLOUD") {
-            // 与随后写入的用户消息共用同步 UUID；附件和引用留在队列，不静默丢弃。
-            val fields = buildCloudSteerFields(messageUuid, content, contentParts, attachments)
+            // 与随后写入的用户消息共用同步 UUID；保留原图，模型副本走与普通发送相同的图片编码。
+            val supportsImages = attachments.isNotEmpty() && cloudCoordinator?.let { coordinator ->
+                try {
+                    coordinator.ensureSupported()
+                    "steer_images" in coordinator.serverFeatures
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { false }
+            } == true
+            val fields = buildCloudSteerFields(messageUuid, content, contentParts, attachments, supportsImages) { image ->
+                withContext(Dispatchers.IO) {
+                    when (image) {
+                        is SelectedMediaItem.ImageFromUri -> encodeImageForModel(appContext, image.uri)
+                        is SelectedMediaItem.ImageFromBitmap -> image.filePath?.let { path ->
+                            encodeImageForModel(appContext, android.net.Uri.fromFile(java.io.File(path)))
+                        } ?: ApiContentPart.InlineData(image.bitmapData, image.mimeType)
+                        else -> null
+                    }
+                }
+            }
             // 网络请求之前就持久绑定原 Run：请求已送达但响应未回时被杀，重启也先向服务器核对。
             // 标记只在核对出权威结论（已消费或任务已结束）时清除，不在命令成功时清。
             cloudRunContexts.edit().putString(unknownSteerKey(steeringId), run.id).commit()

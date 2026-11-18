@@ -72,8 +72,9 @@ internal fun markdownLinkUnderlineBounds(layout: TextLayoutResult): List<Rect> =
     val text = layout.layoutInput.text
     text.getLinkAnnotations(0, text.length).forEach { range ->
         val link = range.item as? LinkAnnotation.Url ?: return@forEach
-        if (!isExternalMarkdownLink(link.url)) return@forEach
-        val end = if (text.text.regionMatches(range.end - EXTERNAL_LINK_SUFFIX.length, EXTERNAL_LINK_SUFFIX, 0, EXTERNAL_LINK_SUFFIX.length)) {
+        val external = isExternalMarkdownLink(link.url)
+        if (!external && !link.url.startsWith(MESSAGE_FILE_SCHEME)) return@forEach
+        val end = if (external && text.text.regionMatches(range.end - EXTERNAL_LINK_SUFFIX.length, EXTERNAL_LINK_SUFFIX, 0, EXTERNAL_LINK_SUFFIX.length)) {
             range.end - EXTERNAL_LINK_SUFFIX.length
         } else {
             range.end
