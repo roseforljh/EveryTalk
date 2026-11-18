@@ -69,6 +69,8 @@ internal data class LiveRemoteRun(
     val runId: String = messageUuid,
     /** 仅表示本机接收进度的连接情况，不属于服务器执行状态，也不参与持久化消息。 */
     val connectionStatus: String? = null,
+    /** 其他设备发起的云任务对应的原问题；本机发起时由原发送流程管理问题和滚动。 */
+    val remoteQuestionUuid: String? = null,
 )
 
 @Serializable

@@ -162,6 +162,32 @@ class MessageItemsControllerStatusTest {
     }
 
     @Test
+    fun `同步的问题在实时回复前面并可复用发送置顶`() = runBlocking {
+        val controller = MessageItemsControllerTestAccess.newController()
+        val state = controller.stateHolder
+        val session = state._currentConversationId.value
+        val old = Message(id = "old", text = "旧问题", sender = Sender.User, timestamp = 1, conversationId = session)
+        val question = old.copy(id = "new", text = "本轮问题", timestamp = 30)
+        // 发起设备时钟略快，服务器的回复开始时间可能比问题早。
+        val reply = Message(id = "cloud:answer", text = "实时回答", sender = Sender.AI, timestamp = 20,
+            conversationId = session, executionTrace = listOf(ExecutionTraceEvent.Content("实时回答")))
+        state.messages.add(old)
+        state.updateRemoteLiveRun(com.android.everytalk.statecontroller.RemoteLiveRun("uuid", reply, true, "run"))
+        assertEquals(listOf("旧问题", "实时回答"), timelineTexts(controller.chatListItemsForTest()))
+        assertNull(state._lastSentUserMessageId.value)
+
+        state.updateRemoteLiveRun(com.android.everytalk.statecontroller.RemoteLiveRun("uuid", reply, true, "run", question))
+        Snapshot.sendApplyNotifications()
+        val expectedTimeline = listOf("旧问题", "本轮问题", "实时回答")
+        val items = withTimeout(5_000) { controller.chatListItems.first { timelineTexts(it) == expectedTimeline } }
+        val turn = com.android.everytalk.ui.topanchor.resolveActiveTopAnchorTurn(
+            com.android.everytalk.ui.topanchor.mapChatItemsToTopAnchorItems(items) { null }, state._lastSentUserMessageId.value, session, 1,
+        )
+        assertEquals(question.id, turn?.anchorMessageId)
+        assertTrue(turn?.targetItemId?.startsWith(reply.id) == true)
+    }
+
+    @Test
     fun `远端模型标签和用量单独到达也刷新页脚`() = runBlocking {
         val controller = MessageItemsControllerTestAccess.newController()
         val session = controller.stateHolder._currentConversationId.value
@@ -1524,7 +1550,7 @@ class MessageItemsControllerStatusTest {
 
         // 首字等待、旁白和工具归入同一个总执行区，耗时从请求开始算到最后一个过程结束。
         assertEquals(
-            listOf("execution_-1", "process_-1", "content_0", "process_1", "content_2", "footer"),
+            listOf("execution_-1", "content_0", "process_1", "content_2", "footer"),
             items.map { it.stableId.removePrefix("ordered-output-initial-duration_") },
         )
         val group = items.filterIsInstance<ChatListItem.AiMessageExecutionGroup>().single()
@@ -1720,9 +1746,9 @@ class MessageItemsControllerStatusTest {
         val items = controller.chatListItemsForTest()
         val processItems = items.filterIsInstance<ChatListItem.AiMessageProcessSegment>()
 
-        // 各过程段保留自己的耗时，总执行区标题从请求开始算到最后一个过程结束。
-        assertEquals(listOf(50L, 200L, 700L), processItems.map { it.executionStartedAtMillis })
-        assertEquals(listOf(100L, 500L, 900L), processItems.map { it.executionFinishedAtMillis })
+        // 首字时间仍算进总耗时，但不再渲染一个空过程项；两个实际过程段保留各自时间。
+        assertEquals(listOf(200L, 700L), processItems.map { it.executionStartedAtMillis })
+        assertEquals(listOf(500L, 900L), processItems.map { it.executionFinishedAtMillis })
         val group = items.filterIsInstance<ChatListItem.AiMessageExecutionGroup>().single()
         assertEquals(50L, group.executionStartedAtMillis)
         assertEquals(900L, group.executionFinishedAtMillis)

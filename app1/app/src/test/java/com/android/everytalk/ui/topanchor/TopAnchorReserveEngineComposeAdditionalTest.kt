@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.topanchor
 
+import android.app.Application
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -37,13 +38,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.koin.core.context.stopKoin
 import org.robolectric.annotation.Config
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
 @RunWith(AndroidJUnit4::class)
-@Config(sdk = [34])
+@Config(sdk = [34], application = Application::class)
 class TopAnchorReserveEngineComposeAdditionalTest {
     @get:Rule
     val composeRule = createComposeRule()
@@ -52,11 +52,6 @@ class TopAnchorReserveEngineComposeAdditionalTest {
         val id: String,
         val heightDp: Dp
     )
-
-    @org.junit.After
-    fun tearDown() {
-        stopKoin()
-    }
 
     @Test
     fun `historical regeneration waits for committed move before pinning distant user`() {

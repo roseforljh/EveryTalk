@@ -355,10 +355,13 @@ class AgentRunCoordinator(
         if (!cloudPermitted(accountId)) return
         cloudViews[view.id] = view
         cloudStatuses.update { it + (view.id to view.status) }
+        // 在终态清理发起设备标记前读取；本机运行（含重启恢复）不用重复执行发送置顶。
+        val remoteQuestionUuid = view.userMessageUuid.takeUnless { ownsCloudRun(view.id) }
         message.conversationId?.let { projectCloudWaiting(view, it) }
         if (view.terminal || view.status == "PAUSED") cloudPauseRequested.update { it - view.id }
         _cloudRuns.update { current -> current + (view.sessionUuid to com.android.everytalk.data.sync.LiveRemoteRun(
-            view.assistantMessageUuid, message, !view.answered, view.id)) }
+            view.assistantMessageUuid, message, !view.answered, view.id, remoteQuestionUuid = remoteQuestionUuid,
+        )) }
     }
 
     /** 复用既有认证和账号绑定；发现与重连均在应用级作用域，页面生命周期不拥有执行权。 */

@@ -119,10 +119,12 @@ internal fun overlayRemoteMessage(messages: List<Message>, remote: com.android.e
             contextUsageSnapshot = snapshot.contextUsageSnapshot ?: stored.contextUsageSnapshot,
         ) }
     }
-    val position = messages.indexOfFirst {
+    val timestampPosition = messages.indexOfFirst {
         it.timestamp > snapshot.timestamp || (it.timestamp == snapshot.timestamp && it.sender !in setOf(Sender.System, Sender.User))
     }.takeIf { it >= 0 } ?: messages.size
-    return messages.toMutableList().apply { add(position, snapshot) }
+    // 服务器和发起手机的时钟可能有偏差；本轮回复不能跑到它自己的问题前面。
+    val questionPosition = remote.syncedQuestion?.let { question -> messages.indexOfFirst { it.id == question.id } } ?: -1
+    return messages.toMutableList().apply { add(maxOf(timestampPosition, questionPosition + 1), snapshot) }
 }
 
 /**
@@ -1102,7 +1104,10 @@ open class MessageItemsController(
                 pendingGroupHeaders.remove(key)?.let(::add)
                 return key
             }
-            processItemsBySegmentIndex[-1]?.let { add(it.copy(executionGroupKey = groupKeyFor(-1))) }
+            processItemsBySegmentIndex[-1]?.let {
+                // 有总执行区时，首字耗时已计入组标题，不再渲染只有留白的空过程项。
+                if (groupKeyFor(-1).isEmpty()) add(it)
+            }
             segments.forEachIndexed { segmentIndex, segment ->
                 processItemsBySegmentIndex[segmentIndex]?.let {
                     add(it.copy(executionGroupKey = groupKeyFor(segmentIndex)))

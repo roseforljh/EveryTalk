@@ -112,6 +112,7 @@ import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.components.dialog.appDialogSubtextColor
 import com.android.everytalk.ui.components.scrollFadeEdge
 import com.android.everytalk.ui.components.markdown.FootnoteNavigationState
+import com.android.everytalk.ui.components.markdown.LocalAiExecutionSegmentSpacing
 import com.android.everytalk.ui.components.streaming.PreparedMessage
 import com.android.everytalk.ui.components.streaming.StreamBlock
 import com.android.everytalk.ui.components.streaming.MathBlockState
@@ -725,6 +726,7 @@ fun ChatMessagesList(
             ) {
               androidx.compose.runtime.CompositionLocalProvider(
                   com.android.everytalk.ui.components.markdown.LocalTextFlash provides textFlash,
+                  LocalAiExecutionSegmentSpacing provides (item is ChatListItem.AiMessageContentSegment),
               ) {
                 val executionGroupKey = when (item) {
                     is ChatListItem.AiMessageContentSegment -> item.executionGroupKey
@@ -982,7 +984,7 @@ fun ChatMessagesList(
                                     if (!expanded && !item.active) scrollStateManager.lockAutoScroll(untilUserScroll = true)
                                     expandedExecutionGroups[item.stableId] = !expanded
                                 },
-                                modifier = Modifier.padding(top = ChatMarkdownTextStyle.SPACING_PARAGRAPH_DP.dp),
+                                modifier = Modifier.padding(top = ChatMarkdownTextStyle.AI_EXECUTION_SEGMENT_GAP_DP.dp),
                             )
                         }
 
@@ -1017,9 +1019,7 @@ fun ChatMessagesList(
                             ReasoningToggleAndContent(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    // 每段 Markdown 正文开头自带 16dp 块间距。
-                                    // 过程段只补同样的顶部间距，底部交给下一段正文，保证两边一致。
-                                    .padding(top = ChatMarkdownTextStyle.SPACING_PARAGRAPH_DP.dp),
+                                    .padding(top = ChatMarkdownTextStyle.AI_EXECUTION_SEGMENT_GAP_DP.dp),
                                 currentMessageId = "${item.messageId}_process_${item.segmentIndex}",
                                 displayedReasoningText = reasoningText,
                                 activityStatusText = item.activityStatusText,
