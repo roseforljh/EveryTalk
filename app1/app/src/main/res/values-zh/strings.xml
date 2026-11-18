@@ -804,6 +804,7 @@
     <string name="pending_message_edit">编辑队列消息</string>
     <string name="pending_message_delete">删除队列消息</string>
     <string name="pending_message_send_now">立即调整方案</string>
+    <string name="pending_message_dispatching">正在提交队列消息</string>
     <string name="pending_message_empty">消息内容不能为空</string>
     <string name="pending_message_finish_current_draft">请先处理当前输入内容</string>
     <string name="pending_message_attachments_only">附件消息</string>
@@ -2107,6 +2108,11 @@
     <string name="agent_task_reject">拒绝</string>
     <string name="agent_task_allow">允许本次</string>
     <string name="ui_file_actions_content_description">文件操作：%1$s</string>
+    <string name="ui_apk_saved">APK 已保存，如需安装请从系统文件管理器打开</string>
+    <string name="ui_apk_save_failed">无法保存 APK</string>
+    <string name="ui_file_downloading">正在下载这个附件…</string>
+    <string name="ui_file_download_unavailable">该附件尚未到达，待同步后可再点开</string>
+    <string name="ui_file_download_failed">附件下载失败，请检查网络后重试</string>
     <string name="ui_file_action_preview">预览文件</string>
     <string name="ui_file_action_open">打开文件</string>
     <string name="ui_file_action_open_with">用其他应用打开</string>

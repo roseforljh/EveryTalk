@@ -99,6 +99,21 @@ class MarkdownLinkStyleTest {
     }
 
     @Test
+    fun `尚未同步的APK附件链接也显示点状下划线而不显示外链箭头`() {
+        val url = "${MESSAGE_FILE_SCHEME}10000000-0000-4000-8000-000000000001"
+        val rendered = "[下载 APK]($url)".buildMarkdownAnnotatedString(
+            style = TextStyle.Default, annotatorSettings = settings(), flavour = EveryTalkMarkdownFlavourDescriptor,
+        )
+        assertEquals("下载 APK", rendered.text)
+        assertEquals(url, (rendered.getLinkAnnotations(0, rendered.length).single().item as LinkAnnotation.Url).url)
+        lateinit var layout: TextLayoutResult
+        composeRule.setContent { Text(rendered, onTextLayout = { layout = it }) }
+        composeRule.waitForIdle()
+        val line = markdownLinkUnderlineBounds(layout).single()
+        assertEquals(layout.getBoundingBox(rendered.length - 1).right, line.right, 0.1f)
+    }
+
+    @Test
     fun `行内健康检查链接不包含后续JSON和冒号`() {
         val rendered = "主站 https://www.imjos.com/health： `{" + "\"ok\":true}`"
         val annotated = rendered.buildMarkdownAnnotatedString(

@@ -151,6 +151,27 @@ class PendingMessageControllerTest {
     }
 
     @Test
+    fun `等待云端确认期间保留队列位置并显示提交中`() = runTest {
+        val dao = database.chatDao()
+        dao.enqueuePendingMessage(pending("adjust", "调整方案", 1))
+        val submitted = CompletableDeferred<Unit>()
+        val confirm = CompletableDeferred<Unit>()
+        val controller = controller(isRunning = MutableStateFlow(true), steer = {
+            submitted.complete(Unit)
+            confirm.await()
+            true
+        }, dispatch = { _, _, _, _ -> fail("不应另开任务") })
+        controller.visiblePendingMessages.first { it.singleOrNull()?.status == "PENDING" }
+        controller.sendNow("adjust")
+        assertEquals("adjust", controller.visiblePendingMessages.first {
+            it.singleOrNull()?.status == "DISPATCHING"
+        }.single().id)
+        submitted.await()
+        confirm.complete(Unit)
+        controller.visiblePendingMessages.first { it.isEmpty() }
+    }
+
+    @Test
     fun `Safe Pause期间Pending不会自动派发`() = runTest {
         val dao = database.chatDao()
         dao.enqueuePendingMessage(pending("one", "一", 1))

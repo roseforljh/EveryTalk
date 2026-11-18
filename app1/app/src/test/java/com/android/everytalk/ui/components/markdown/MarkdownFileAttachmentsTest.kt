@@ -242,16 +242,15 @@ class MarkdownFileAttachmentsTest {
         val body = paragraph.fetchSemanticsNode().config[SemanticsProperties.Text].first()
         val link = body.getLinkAnnotations(0, body.length).first().item as LinkAnnotation.Url
         assertEquals("everytalk-file:${file.id}", link.url)
-        assertEquals(androidx.compose.ui.text.style.TextDecoration.Underline, link.styles?.style?.textDecoration)
         assertEquals(com.android.everytalk.ui.theme.lightChatColors.loadingIndicator, link.styles?.style?.color)
-        // 截图使用深色主题：切换主题后仍应有蓝色下划线，不能被默认白色正文样式覆盖。
+        // 截图使用深色主题：切换主题后仍应有主题链接颜色，不能被默认白色正文样式覆盖。
         composeRule.runOnIdle { darkTheme.value = true }
         val darkBody = paragraph.fetchSemanticsNode().config[SemanticsProperties.Text].first()
         val darkLink = darkBody.getLinkAnnotations(0, darkBody.length).first().item as LinkAnnotation.Url
         assertEquals(com.android.everytalk.ui.theme.darkChatColors.loadingIndicator, darkLink.styles?.style?.color)
-        assertEquals(androidx.compose.ui.text.style.TextDecoration.Underline, darkLink.styles?.style?.textDecoration)
         val layouts = mutableListOf<TextLayoutResult>()
         paragraph.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        assertTrue(markdownLinkUnderlineBounds(layouts.single()).isNotEmpty())
         paragraph.performTouchInput { click(layouts.single().getBoundingBox(body.text.indexOf(file.displayName) + file.displayName.length / 2).center) }
         composeRule.waitUntil(5_000) { composeRule.onAllNodesWithText("序号,主机\n1,服务器").fetchSemanticsNodes().isNotEmpty() }
         composeRule.onNodeWithText(text(R.string.ui_file_preview_local)).assertIsDisplayed()

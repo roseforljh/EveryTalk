@@ -647,6 +647,61 @@ class SyncResourceSynchronizerTest {
         assertEquals(0, b.settingsDao().syncRejectedCount())
     }
 
+    @Test fun `点击云端APK只下载当前消息的五个分块不需要历史归档`() = runBlocking {
+        val db = database(); val ctx = context(); val api = FakeSyncApi()
+        val session = ChatSessionEntity("apk-session", 1, 1, false)
+        val other = ChatSessionEntity("other-session", 1, 1, false)
+        val id = UUID.randomUUID().toString()
+        val message = Message(id = "apk-reply", text = "[安装包](everytalk-file:$id)", sender = Sender.AI, timestamp = 2).toEntity(session.id)
+        db.chatDao().writeSession(session); db.chatDao().writeSession(other); db.chatDao().writeMessages(listOf(message))
+        val bytes = ByteArray(19_304_140) { ((it % 251) + it / 4_194_304).toByte() }
+        val apk = File(ctx.filesDir, "release.apk").apply { writeBytes(bytes) }
+        val digest = syncFileHash(apk)
+        val downloaded = mutableListOf<String>()
+        val directOnly = object : SyncApi by api {
+            override suspend fun recoverHistoryKey(): AccountSyncKey = error("不应读取历史密钥")
+            override suspend fun downloadFile(info: SyncFileInfo, target: File) {
+                downloaded += info.fileId
+                api.downloadFile(info, target)
+            }
+        }
+        val records = (0..4).map { index ->
+            val start = index * 4_194_304
+            val part = File(ctx.filesDir, "part").apply { writeBytes(bytes.copyOfRange(start, minOf(start + 4_194_304, bytes.size))) }
+            val info = api.uploadFile(part, "application/octet-stream")
+            val row = SyncAttachmentEntity(UUID.randomUUID().toString(), session.uuid, message.uuid, apk.name,
+                info.mime, info.size, info.sha256, info.fileId, "file", index, updatedAt = 2, syncStatus = SyncStatus.SYNCED)
+            val metadata = SyncPayloadMapper.attachment(row).payload + buildJsonObject {
+                put("origin", "cloud_agent"); put("role", "media"); put("mediaId", id)
+                put("chunkIndex", index); put("chunkCount", 5); put("resourceVersion", "$digest:4194304")
+                put("originalSize", bytes.size); put("originalDigest", digest)
+            }
+            row to JsonObject(metadata)
+        }
+        suspend fun insert(record: Pair<SyncAttachmentEntity, JsonObject>) {
+            val (row, metadata) = record
+            db.syncAttachmentDao().upsert(row)
+            db.settingsDao().insertSetting(SystemSettingEntity("sync_resource_meta:${row.id}", metadata.toString()))
+        }
+        records.dropLast(1).forEach { insert(it) }
+        SyncResourceSynchronizer(ctx, db, directOnly, user).use { resources ->
+            assertNull(resources.downloadMessageFile(session.id, message.id, id))
+            insert(records.last())
+            assertNull(resources.downloadMessageFile(other.id, message.id, id))
+            assertNull(resources.downloadMessageFile(session.id, "different-reply", id))
+            assertNull(resources.downloadMessageFile(session.id, message.id, "different-file"))
+            assertTrue(downloaded.isEmpty())
+            val restored = requireNotNull(resources.downloadMessageFile(session.id, "cloud:${message.uuid}", id))
+            assertEquals(apk.name, restored.displayName)
+            assertEquals(digest, syncFileHash(File(restored.filePath!!)))
+            assertEquals(records.map { it.first.fileId }, downloaded)
+            assertEquals(restored, resources.downloadMessageFile(session.id, message.id, id))
+            assertEquals(5, downloaded.size)
+            db.chatDao().writeMessages(listOf(message.copy(deleted = true)))
+            assertNull(resources.downloadMessageFile(session.id, message.id, id))
+        }
+    }
+
     @Test fun `恢复云端文件时容忍重复与迟到的分块并重试旧错误`() = runBlocking {
         val source = database(); val target = database(); val cs = context(); val ct = context()
         val api = FakeSyncApi().apply { chunkSize = 1024 }
