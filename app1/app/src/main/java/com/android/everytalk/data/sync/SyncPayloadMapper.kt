@@ -87,9 +87,20 @@ internal object SyncPayloadMapper {
                     } }))
                 }
                 // 工具调用前后的白话和思考也是用户可见文字。只传文字片段，不传命令、参数、工具结果。
+                // 工具只留一个占位（工具名、状态和时间）：完整历史还没下完时，别的设备也能按正确的折叠样式显示。
+                // 不传标题：旧记录的标题里可能带命令原文，接收端按工具名自己生成显示名。
                 var contentOffset = 0
                 var reasoningOffset = 0
                 val segments = message.executionTrace.mapNotNull { event ->
+                    if (event is ExecutionTraceEvent.Tool) return@mapNotNull buildJsonObject {
+                        val step = event.step
+                        put("type", "tool"); put("stepType", step.type.name)
+                        step.toolName?.let { put("tool", it) }
+                        put("started", step.started); put("completed", step.completed); put("isError", step.isError)
+                        event.startedAtMillis?.let { put("startedAt", it) }
+                        event.finishedAtMillis?.let { put("finishedAt", it) }
+                        step.durationMs?.let { put("durationMs", it) }
+                    }
                     val type = when (event) {
                         is ExecutionTraceEvent.Content -> "content"
                         is ExecutionTraceEvent.Reasoning -> "reasoning"

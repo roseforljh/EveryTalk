@@ -976,7 +976,11 @@ fun ChatMessagesList(
                                 executionFinishedAtMillis = item.executionFinishedAtMillis,
                                 active = item.active,
                                 expanded = expanded,
-                                onClick = { expandedExecutionGroups[item.stableId] = !expanded },
+                                onClick = {
+                                    // 展开已结束的过程是用户在看内容：即使原本贴底也停止跟随，展开内容向下铺开，不把视图拽回底部。
+                                    if (!expanded && !item.active) scrollStateManager.lockAutoScroll(untilUserScroll = true)
+                                    expandedExecutionGroups[item.stableId] = !expanded
+                                },
                                 modifier = Modifier.padding(top = ChatMarkdownTextStyle.SPACING_PARAGRAPH_DP.dp),
                             )
                         }

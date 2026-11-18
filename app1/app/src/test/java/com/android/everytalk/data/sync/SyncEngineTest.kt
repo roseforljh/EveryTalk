@@ -1112,7 +1112,9 @@ class SyncEngineTest {
         val restored = b.chatDao().getMessageByUuid(old.uuid)!!
         assertEquals(old.text, restored.text); assertEquals("补充思考", restored.reasoning)
         assertEquals(updated.tokenUsage, restored.tokenUsage); assertEquals(listOf("mcp"), restored.enabledToolIds)
-        assertEquals(3, restored.executionTrace.size)
+        // 工具只同步占位（没有工具名时显示通用名），命令原文不随标题上传。
+        assertEquals(4, restored.executionTrace.size)
+        assertFalse(restored.executionTrace.toString().contains("不可上传的工具命令"))
         assertTrue(RoomSyncStore(b).pendingBatch().isEmpty())
     }
 
@@ -1600,6 +1602,29 @@ class SyncEngineTest {
         val restored = b.chatDao().getMessageByUuid(msg.uuid)!!
         assertEquals(thought, restored.reasoning); assertEquals(trace, restored.executionTrace)
         assertEquals(0, a.settingsDao().syncRejectedCount())
+        assertTrue(RoomSyncStore(b).pendingBatch().isEmpty())
+    }
+
+    @Test fun `简版回复带工具占位，另一台设备在完整历史下完前也按正确步骤显示且不含命令`() = runBlocking {
+        val a = device(); val b = device(); val api = FakeSyncApi(); val s = seed(a)
+        val step = com.android.everytalk.data.DataClass.executionToolStep("call-1", "exec",
+            buildJsonObject { put("command", "cat /root/secret-token.txt") }).copy(completed = true, started = true, durationMs = 2_000)
+        val trace = listOf(
+            com.android.everytalk.data.DataClass.ExecutionTraceEvent.Content("先查一下。"),
+            com.android.everytalk.data.DataClass.ExecutionTraceEvent.Tool(step, 1_000, 3_000),
+            com.android.everytalk.data.DataClass.ExecutionTraceEvent.Content("结论"),
+        )
+        val msg = message("with-tool", s, "先查一下。结论").copy(executionTrace = trace, executionSteps = listOf(step))
+        a.chatDao().writeMessages(listOf(msg))
+        val payload = RoomSyncStore(a).pendingBatch().single { it.change.id == msg.uuid }.change.payload
+        assertFalse(payload.toString().contains("secret-token"))
+        run(a, api); run(b, api)
+        val restored = b.chatDao().getMessageByUuid(msg.uuid)!!
+        assertEquals(listOf("Content", "Tool", "Content"), restored.executionTrace.map { it::class.simpleName })
+        val placeholder = (restored.executionTrace[1] as com.android.everytalk.data.DataClass.ExecutionTraceEvent.Tool)
+        assertEquals("执行命令", placeholder.step.title); assertTrue(placeholder.step.completed)
+        assertEquals(2_000L, placeholder.step.durationMs); assertEquals(3_000L, placeholder.finishedAtMillis)
+        assertEquals(1, restored.executionSteps.size)
         assertTrue(RoomSyncStore(b).pendingBatch().isEmpty())
     }
 
