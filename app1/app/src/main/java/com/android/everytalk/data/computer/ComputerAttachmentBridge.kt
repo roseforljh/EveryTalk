@@ -7,18 +7,14 @@ import android.util.Base64InputStream
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
 import com.android.everytalk.models.SelectedMediaItem
-import com.android.everytalk.util.storage.FileManager
 import com.android.everytalk.util.image.ImageHandlingLimits
 import com.android.everytalk.util.image.decodedBase64SizeOrNull
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileInputStream
-import java.io.FileOutputStream
 import java.io.ByteArrayInputStream
 import java.io.InputStream
-import java.io.OutputStream
-import java.util.UUID
 
 data class ComputerUploadSource(
     val displayName: String,
@@ -27,22 +23,12 @@ data class ComputerUploadSource(
     val openStream: () -> InputStream,
 )
 
-data class ComputerDownloadedAttachment(
-    val attachment: SelectedMediaItem.GenericFile,
-    val transfer: ComputerStreamTransferResult,
-    val savedDownload: ComputerSavedDownload,
-)
-
-/** 只解析当前会话已有附件；完整下载后同时交付聊天附件和公共下载副本。 */
+/** 上传工具只解析当前会话已有的附件。SSH 下载链接不会进入附件库。 */
 class ComputerAttachmentBridge(
     context: Context,
     private val attachmentsForConversation: suspend (String) -> List<SelectedMediaItem>,
-    private val onDownloaded: suspend (String, String, SelectedMediaItem.GenericFile) -> Unit = { _, _, _ -> },
-    private val beforeDownload: suspend () -> Unit = {},
 ) {
     private val applicationContext = context.applicationContext
-    private val fileManager = FileManager(applicationContext)
-    private val downloadStore = ComputerDownloadStore(applicationContext)
 
     suspend fun resolveUpload(conversationId: String, attachmentId: String): ComputerUploadSource? =
         withContext(Dispatchers.IO) {
@@ -75,54 +61,6 @@ class ComputerAttachmentBridge(
                 )
             }
         }
-
-    suspend fun receiveDownload(
-        conversationId: String,
-        runId: String,
-        suggestedName: String,
-        writer: suspend (OutputStream) -> ComputerStreamTransferResult,
-    ): ComputerDownloadedAttachment = withContext(Dispatchers.IO) {
-        beforeDownload()
-        val directory = File(applicationContext.filesDir, FileManager.CHAT_ATTACHMENTS_DIR).apply { mkdirs() }
-        val safeName = sanitizeName(suggestedName)
-        val finalFile = File(directory, "computer_${UUID.randomUUID()}_$safeName")
-        val temporaryFile = File(directory, ".${finalFile.name}.part")
-        var publicDownload: ComputerSavedDownload? = null
-        try {
-            val transfer = FileOutputStream(temporaryFile).use { output ->
-                val result = writer(output)
-                output.fd.sync()
-                result
-            }
-            if (temporaryFile.length() != transfer.bytes || !temporaryFile.renameTo(finalFile)) {
-                throw ComputerException(ComputerErrorCodes.DOWNLOAD_INTERRUPTED, "本地下载文件校验失败", retryable = true)
-            }
-            val mime = MimeTypeMap.getSingleton()
-                .getMimeTypeFromExtension(finalFile.extension.lowercase())
-                ?: "application/octet-stream"
-            val saved = downloadStore.save(finalFile, safeName, mime)
-            publicDownload = saved
-            val attachment = SelectedMediaItem.GenericFile(
-                uri = fileManager.getFileProviderUri(finalFile),
-                id = "attachment_${UUID.randomUUID()}",
-                displayName = safeName,
-                mimeType = mime,
-                filePath = finalFile.absolutePath,
-                savedDownloadPath = saved.path,
-            )
-            onDownloaded(conversationId, runId, attachment)
-            ComputerDownloadedAttachment(attachment, transfer, saved)
-        } catch (error: Exception) {
-            publicDownload?.let { saved ->
-                runCatching { downloadStore.delete(saved) }.exceptionOrNull()?.let(error::addSuppressed)
-            }
-            // 只有附件真正绑定到原消息才算交付成功；失败时不留下失联的完整文件。
-            if (finalFile.exists()) finalFile.delete()
-            throw error
-        } finally {
-            if (temporaryFile.exists()) temporaryFile.delete()
-        }
-    }
 
     private fun querySize(uri: Uri): Long? {
         applicationContext.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
@@ -202,14 +140,6 @@ class ComputerAttachmentBridge(
         .getExtensionFromMimeType(this)
         ?.takeIf(String::isNotBlank)
         ?: fallback
-
-    private fun sanitizeName(name: String): String {
-        val base = name.substringAfterLast('/').substringAfterLast('\\')
-            .filter { it.isLetterOrDigit() || it in "._- " }
-            .trim()
-            .take(120)
-        return base.takeUnless { it.isBlank() || it == "." || it == ".." } ?: "download.bin"
-    }
 
     private companion object {
         const val MAX_AUDIO_UPLOAD_BYTES = 64L * 1024L * 1024L

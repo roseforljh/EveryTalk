@@ -11,7 +11,7 @@ import kotlinx.serialization.json.booleanOrNull
  */
 internal object ComputerToolCallSafety {
     fun isReadOnly(toolName: String, arguments: JsonObject): Boolean = when (toolName) {
-        ComputerToolNames.READ_FILE, ComputerToolNames.DOWNLOAD,
+        ComputerToolNames.READ_FILE,
         ComputerToolNames.WORKER_LIST, ComputerToolNames.WORKER_READ,
         "computer_worker_status", "computer_worker_logs", ComputerToolNames.WORKER_HEALTH,
         "computer_kv_list_keys", "computer_kv_get",
@@ -32,6 +32,7 @@ internal object ComputerToolCallSafety {
         arguments: JsonObject,
         permissionMode: ComputerPermissionMode,
     ): Boolean {
+        if (toolName == ComputerToolNames.DOWNLOAD) return true
         if (isReadOnly(toolName, arguments)) return false
         return when (permissionMode) {
             ComputerPermissionMode.FULL -> false

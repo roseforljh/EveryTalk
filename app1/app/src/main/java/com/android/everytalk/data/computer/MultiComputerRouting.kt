@@ -15,7 +15,7 @@ internal fun buildMultiComputerSessionPrompt(
     appendLine("The app connects and authenticates with saved settings; never ask for passwords or private keys because several servers are involved. What you can actually do depends on each target's permissions and tool results.")
     appendLine("Choose servers and steps from the user's goal; independent read-only checks may run together, dependent steps wait for earlier results. Finally report each server's result in plain language.")
     if (targets.count { it.first.provider == ComputerProvider.SSH } > 1) {
-        appendLine("To move files between selected SSH servers, call download on the source to get attachment_id from the successful result, then call upload on the target with that attachment_id. This works in either direction and needs no direct link between the servers. Pack directories with exec first and unpack on the target. Paths follow each server's file tools; prepare files with exec when needed; never paste file contents or credentials into the chat.")
+        appendLine("For an explicitly requested server-to-server transfer, use a direct connection between those selected servers if already authorized; do not stage the bytes through chat attachments or R2. If a direct transfer is unavailable, tell the user.")
     }
     targets.forEach { (target, prompt) ->
         appendLine("Server ID=${target.computerId}, name=${JsonPrimitive(target.displayName)}:")

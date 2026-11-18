@@ -212,25 +212,9 @@ class ComputerManager(
     context: Context,
     private val scope: CoroutineScope,
     attachmentsForConversation: suspend (String) -> List<SelectedMediaItem>,
-    onDownloaded: suspend (String, String, SelectedMediaItem.GenericFile) -> Unit,
     private val additionalComputerIds: (String) -> List<String> = { emptyList() },
 ) : AutoCloseable {
     private val appContext = context.applicationContext
-
-    /** 仅旧版安卓首次交付文件时请求系统存储权限；状态留在 ViewModel，旋转屏幕不会丢失等待者。 */
-    val downloadPermissionRequest = MutableStateFlow<CompletableDeferred<Boolean>?>(null)
-    private val downloadPermissionMutex = Mutex()
-
-    private suspend fun ensureDownloadPermission() {
-        downloadPermissionMutex.withLock {
-            if (!com.android.everytalk.data.computer.ComputerDownloadStore.needsPermission(appContext)) return@withLock
-            val decision = CompletableDeferred<Boolean>()
-            downloadPermissionRequest.value = decision
-            try {
-                check(decision.await()) { "未获得存储权限，文件未保存；请在应用权限中允许存储后重试" }
-            } finally { downloadPermissionRequest.value = null }
-        }
-    }
 
     /** 选择器只调用本地固定的列表工具；不接受模型提供的 URL、工具名或 Account 覆盖。 */
     suspend fun cloudflareResourceOptions(pending: com.android.everytalk.data.agent.PendingIntervention): List<com.android.everytalk.data.computer.ResourceOption> {
@@ -376,8 +360,6 @@ class ComputerManager(
     private val attachmentBridge = ComputerAttachmentBridge(
         context = context.applicationContext,
         attachmentsForConversation = attachmentsForConversation,
-        onDownloaded = onDownloaded,
-        beforeDownload = ::ensureDownloadPermission,
     )
     private val previewConfirmationMutex = Mutex()
     private val hostCommandConfirmationMutex = Mutex()
@@ -1087,7 +1069,6 @@ class ComputerManager(
         clearRequestPreparations()
         publicPreviewDecision?.complete(false)
         hostCommandDecision?.complete(false)
-        downloadPermissionRequest.value?.complete(false)
         toolExecutor.close()
         previewManager.close()
         runCatching { connectivityManager?.unregisterNetworkCallback(networkCallback) }
@@ -1133,7 +1114,7 @@ internal fun buildComputerEnvironmentPrompt(computer: Computer, workspace: Compu
         "There is no sandbox or app-specific directory; these facts supersede any container or /workspace rules in earlier conversation history. " +
         "For long-running services use the server's own tools (systemd, tmux, nohup). " +
         ComputerToolCatalog.PHONE_FILE_POLICY +
-        "download saves it to the phone under Download/App/AppTalk and returns saved_path, attachment_id and file_link; only tell the user it is saved after success. " +
+        ComputerToolCatalog.SERVER_FILE_DELIVERY_POLICY +
         "Link each deliverable where you describe it as a Markdown link [file name](actual file_link), not as a bare path or a pile of links at the end. " +
         "$permissionInstruction " +
         "File, upload and download paths may be absolute or relative to the SSH user's home; exec and terminal start in home, set cwd as needed. " +

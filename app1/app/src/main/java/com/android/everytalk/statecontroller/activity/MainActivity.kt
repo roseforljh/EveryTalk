@@ -251,13 +251,6 @@ class MainActivity : AppCompatActivity() {
                     )
                     val currentAccent by appViewModel.accentColor.collectAsStateWithLifecycle()
                     SideEffect { accentState.value = currentAccent }
-                    val downloadPermission by appViewModel.computerManager.downloadPermissionRequest.collectAsStateWithLifecycle()
-                    val downloadPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-                        appViewModel.computerManager.downloadPermissionRequest.value?.complete(granted)
-                    }
-                    LaunchedEffect(downloadPermission) {
-                        if (downloadPermission != null) downloadPermissionLauncher.launch(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
-                    }
                     val authState by appViewModel.authRepository.state.collectAsStateWithLifecycle()
                     val subscriptionLocked = remember(authState) {
                         appViewModel.featureGate.isLocked(Feature.MEMBERSHIP)

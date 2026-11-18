@@ -115,6 +115,7 @@ class ComputerToolExecutor(
 
         return when (toolName) {
             ComputerToolNames.EXEC -> hostCommandApproval(arguments, toolCallId, context, computer)
+            ComputerToolNames.DOWNLOAD -> downloadApproval(arguments, toolCallId, context, computer)
             ComputerToolNames.OPEN_PORT -> publicPreviewApproval(arguments, toolCallId, context, computer)
             else -> null
         }
@@ -329,7 +330,7 @@ class ComputerToolExecutor(
         ComputerToolNames.EDIT -> editFile(arguments, requestContext, executionId)
         ComputerToolNames.TERMINAL -> terminal(arguments, requestContext, workspace)
         ComputerToolNames.UPLOAD -> upload(arguments, requestContext, executionId)
-        ComputerToolNames.DOWNLOAD -> download(arguments, requestContext)
+        ComputerToolNames.DOWNLOAD -> download(arguments, toolCallId, requestContext)
         ComputerToolNames.OPEN_PORT -> openPort(arguments, toolCallId, requestContext)
         else -> throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "Computer Tool 不存在")
     }
@@ -598,31 +599,41 @@ class ComputerToolExecutor(
 
     private suspend fun download(
         arguments: JsonObject,
+        toolCallId: String,
         context: ComputerRequestContext,
     ): JsonElement {
-        val bridge = attachmentBridge
-            ?: throw ComputerException(ComputerErrorCodes.DOWNLOAD_INTERRUPTED, "当前请求没有下载桥接器")
-        val runId = context.runId
-            ?: throw ComputerException(ComputerErrorCodes.DOWNLOAD_INTERRUPTED, "当前请求没有 Agent 任务 ID")
-        val sourcePath = arguments.requiredString("source_path")
-        val name = arguments.optionalString("suggested_name")
-            ?: sourcePath.substringAfterLast('/').ifBlank { "download.bin" }
-        val downloaded = bridge.receiveDownload(context.conversationId, runId, name) { output ->
-            repository.withConnection(context.computerId) { connection, _ ->
-                fileTransfer.download(connection, sourcePath, output)
+        if (context.approvedToolCallId != toolCallId) {
+            val computer = repository.getComputer(context.computerId)
+                ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
+            if (!hostCommandConfirmer(downloadApproval(arguments, toolCallId, context, computer).request)) {
+                throw ComputerException(ComputerErrorCodes.HOST_COMMAND_REJECTED, "未授权创建服务器下载链接")
             }
         }
-        return buildJsonObject {
-            put("attachment_id", downloaded.attachment.id)
-            put("file_link", "everytalk-file:${downloaded.attachment.id}")
-            put("name", downloaded.attachment.displayName)
-            put("mime", downloaded.attachment.mimeType)
-            put("size", downloaded.transfer.bytes)
-            put("sha256", downloaded.transfer.sha256)
-            put("saved_path", downloaded.savedDownload.path)
-            put("saved_name", downloaded.savedDownload.name)
+        val command = SshDownloadLink.command(arguments.requiredString("source_path"), arguments.optionalString("suggested_name"))
+        return repository.withConnection(context.computerId) { connection, _ ->
+            val response = connection.execute(command, timeoutMillis = 60_000, maxOutputBytes = 8192)
+            SshDownloadLink.parse(response.exitCode, response.stdout)
         }
     }
+
+    private fun downloadApproval(
+        arguments: JsonObject,
+        toolCallId: String,
+        context: ComputerRequestContext,
+        computer: Computer,
+    ) = ComputerToolApprovalRequest.HostCommand(
+        toolCallId = toolCallId,
+        request = ComputerHostCommandConfirmationRequest(
+            requestId = toolCallId,
+            context = context,
+            computerName = computer.displayName,
+            command = "文件：${arguments.requiredString("source_path")}\n链接有效期：1 小时",
+            cwd = "~",
+            requestsPrivilege = false,
+            reason = "在这台服务器上发布单个文件。有效期内，拿到链接的人可以下载。不会写入聊天附件或 R2。",
+            risks = emptySet(),
+        ),
+    )
 
     private suspend fun openPort(
         arguments: JsonObject,
@@ -727,7 +738,7 @@ class ComputerToolExecutor(
         ComputerToolNames.EDIT -> "edit 已修改文件"
         ComputerToolNames.TERMINAL -> "terminal 操作已完成"
         ComputerToolNames.UPLOAD -> "upload 已完成"
-        ComputerToolNames.DOWNLOAD -> "download 已保存到下载/App/AppTalk，并添加聊天附件"
+        ComputerToolNames.DOWNLOAD -> "download 已在所选服务器创建限时 HTTPS 链接"
         ComputerToolNames.OPEN_PORT -> "open_port 已创建 Preview"
         else -> "Computer Tool 已完成"
     }
@@ -794,7 +805,7 @@ class ComputerToolExecutor(
         ComputerToolNames.READ_FILE, ComputerToolNames.WRITE_FILE, ComputerToolNames.EDIT ->
             arguments.optionalString("path").orEmpty()
         ComputerToolNames.UPLOAD -> arguments.optionalString("destination_path").orEmpty()
-        ComputerToolNames.DOWNLOAD -> arguments.optionalString("path").orEmpty()
+        ComputerToolNames.DOWNLOAD -> arguments.optionalString("source_path").orEmpty()
         ComputerToolNames.OPEN_PORT -> arguments.optionalLong("port")?.toString().orEmpty()
         else -> toolName
     }

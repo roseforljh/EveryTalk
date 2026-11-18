@@ -20,7 +20,7 @@ import com.android.everytalk.data.database.entities.toModel
  * 服务器声明支持的能力全集；与后端 /v1/agent/capabilities 保持一致。
  * 旧后端没有这个入口时集合为空，提交时退回旧版设备执行，不会因为能力不认识而报错。
  */
-internal val ALL_FEATURES = setOf("submission", "secret", "control", "memory", "cloudflare", "ssh_ops", "artifacts", "mcp_enable", "workspace")
+internal val ALL_FEATURES = setOf("submission", "secret", "control", "memory", "cloudflare", "ssh_ops", "ssh_download_links", "artifacts", "mcp_enable", "workspace")
 
 /**
  * 将已授权工具转换为后端执行绑定。连接信息只进入加密任务输入，绝不混入模型工具描述。
@@ -80,12 +80,12 @@ internal suspend fun cloudAgentTools(
         val root = File(context.filesDir, "agent-workspaces/$workspace")
         if (root.isDirectory) LocalWorkspaceFileBridge().load(root) else emptyMap()
     } else emptyMap()
-    // 8 个 SSH 工具全部可由后端直连执行：终端会话在服务器进程里，下载成为云端产物挂到回复，上传读取本任务附件或下载产物。
+    // 新下载只发布所选服务器的临时链接。旧后端没有该能力时禁止调用原来写入 R2 的下载操作。
     val baseSsh = setOf(ComputerToolNames.EXEC, ComputerToolNames.READ_FILE, ComputerToolNames.WRITE_FILE, ComputerToolNames.EDIT)
     val sshNative = if (supports("ssh_ops")) baseSsh + setOf(ComputerToolNames.TERMINAL, ComputerToolNames.UPLOAD,
-        ComputerToolNames.DOWNLOAD, ComputerToolNames.OPEN_PORT) else baseSsh
+        ComputerToolNames.OPEN_PORT) else baseSsh
     // 服务器在云端可直连（公网 IPv4、已记录主机密钥）时，四个基础工具由后端直接执行；否则和其他手机能力一样交给发起设备。
-    val sshTargets = if (names.any { it in sshNative || it in setOf(AgentControlToolNames.REQUEST_SKILL_SECRET,
+    val sshTargets = if (names.any { it == ComputerToolNames.DOWNLOAD && supports("ssh_download_links") || it in sshNative || it in setOf(AgentControlToolNames.REQUEST_SKILL_SECRET,
         AgentControlToolNames.REQUEST_PROTECTED_SECRET) }) cloudSshTargets(context, request.localComputerRequestContext) else null
     // Cloudflare 工具由后端直接调 Cloudflare API：提交前在手机上续期一次 access token，冻结进加密输入；拿不到授权就如实说明。
     val cloudflare = if (names.any { it in ComputerToolNames.cloudflare }) runCatching { cloudflareTargets(context, request.localComputerRequestContext) }
@@ -116,6 +116,7 @@ internal suspend fun cloudAgentTools(
                 AgentControlToolNames.REQUEST_USER_INPUT -> buildJsonObject { put("kind", "question") }
                 // 保存到手机：先等用户确认，再由持有该 Workspace 的手机执行写入并回传结果。
                 ComputerToolNames.LOCAL_FILE_SAVE -> buildJsonObject { put("kind", "device") }
+                ComputerToolNames.DOWNLOAD -> sshDownloadBinding(supports("ssh_download_links"), sshTargets?.first)
                 in sshNative -> sshTargets?.let { targets -> buildJsonObject {
                     put("kind", "ssh"); put("operation", name); put("targets", targets.first)
                 } } ?: buildJsonObject {
@@ -155,7 +156,7 @@ internal suspend fun cloudAgentTools(
             }
             val approval = when {
                 name == ComputerToolNames.LOCAL_FILE_SAVE -> "always"
-                name == ComputerToolNames.DOWNLOAD -> "never"
+                name == ComputerToolNames.DOWNLOAD && binding["kind"]?.jsonPrimitive?.content == "ssh" -> "always"
                 name != ComputerToolNames.READ_FILE && name in sshNative && binding["kind"]?.jsonPrimitive?.content == "ssh" -> checkNotNull(sshTargets).second
                 else -> "never"
             }
@@ -169,10 +170,20 @@ internal suspend fun cloudAgentTools(
                     binding["kind"]?.jsonPrimitive?.content == "cloudflare" &&
                         !com.android.everytalk.data.computer.ComputerToolCallSafety.isReadOnly(name, JsonObject(emptyMap())) ||
                     name in setOf(ComputerToolNames.EXEC, ComputerToolNames.WRITE_FILE, ComputerToolNames.EDIT, ComputerToolNames.TERMINAL,
-                        ComputerToolNames.UPLOAD, ComputerToolNames.OPEN_PORT)) "never" else "safe")
+                        ComputerToolNames.UPLOAD, ComputerToolNames.DOWNLOAD, ComputerToolNames.OPEN_PORT)) "never" else "safe")
                 if (name.startsWith("mcp_") && name !in direct) put("deferred", true)
             })
         }
+    }
+}
+
+internal fun sshDownloadBinding(supported: Boolean, targets: JsonObject?): JsonObject = buildJsonObject {
+    if (supported && targets != null && targets.isNotEmpty()) {
+        put("kind", "ssh"); put("operation", "download_link"); put("targets", targets)
+    } else {
+        put("kind", "unsupported")
+        put("message", if (!supported) "后端不支持服务器直链，请更新后端；不会上传到同步存储"
+            else "没有可直连的已选 SSH 服务器，无法生成下载链接；不会上传到同步存储")
     }
 }
 

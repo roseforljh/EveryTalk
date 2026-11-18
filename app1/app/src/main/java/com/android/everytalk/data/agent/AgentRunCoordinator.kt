@@ -728,7 +728,10 @@ class AgentRunCoordinator(
                     computerName = (args["computer_id"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: "云端任务",
                     toolName = call.name, detail = (args["command"] ?: args["path"] ?: args).toString().take(500),
                     isWriteOperation = call.name != com.android.everytalk.data.computer.ComputerToolNames.READ_FILE,
-                ) else if (!ownsCloudRun(view.id)) confirm("云端任务请求执行这项操作，请确认后再执行")
+                ) else if (waiting.toolName == com.android.everytalk.data.computer.ComputerToolNames.DOWNLOAD) {
+                    cloudToolRuntime.approvalRequest(call, context)
+                        ?: confirm("所选服务器将创建 1 小时 HTTPS 链接；有效期内拿到链接的人可下载")
+                } else if (!ownsCloudRun(view.id)) confirm("云端任务请求执行这项操作，请确认后再执行")
                 else cloudToolRuntime.approvalRequest(call, context)
             } catch (cancelled: CancellationException) { throw cancelled
             } catch (_: Exception) {

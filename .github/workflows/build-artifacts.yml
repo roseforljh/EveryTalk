@@ -162,6 +162,14 @@ jobs:
           EOF
           echo "local.properties created."
 
+      - name: Test SSH file delivery and chat attachment regression
+        if: github.event_name == 'pull_request'
+        working-directory: ${{ env.APP_DIR }}
+        run: |
+          ./gradlew :app:testDebugUnitTest \
+            --tests '*SshDownloadLinkTest' --tests '*ComputerToolCatalogTest' \
+            --tests '*ComputerToolCallSafetyTest' --tests '*ComputerAttachmentBridgeTest'
+
       - name: Build Android APK
         working-directory: ${{ env.APP_DIR }}
         env:

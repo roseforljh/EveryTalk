@@ -96,6 +96,9 @@ object ComputerToolCatalog {
     const val PHONE_FILE_POLICY = "Do not create, save, download or export files on the phone unless the user explicitly requests it. " +
         "Answer in chat by default; generating code, reports or server files is not permission to save them on the phone. " +
         "Do not proactively offer phone files or request save approval for ordinary answers. "
+    const val SERVER_FILE_DELIVERY_POLICY = "For APKs, reports and other SSH server output, use download on the selected source server to create a temporary HTTPS link. " +
+        "The user downloads directly from that server; do not use EveryTalk previews, chat attachments, R2 or other server storage as a fallback. " +
+        "If no selected server can publish the link, explain the failure. Do not say it was saved to the phone. "
     /** Cloudflare 工具单独声明，避免把 VPS exec schema 暴露给云端目标。 */
     fun cloudflareDefinitions(
         workerWriteEnabled: Boolean = true,
@@ -275,7 +278,7 @@ object ComputerToolCatalog {
         ),
         function(
             name = ComputerToolNames.UPLOAD,
-            description = "Upload a conversation attachment to the selected SSH server. Accepts attachment_id returned by download from another selected server in this conversation; no session switch or server-to-server SSH credentials are needed.",
+            description = "Upload an existing conversation attachment to the selected SSH server. A direct server download link is not a conversation attachment.",
             properties = mapOf(
                 "attachment_id" to string("Local attachment ID from the current conversation."),
                 "destination_path" to string("Absolute destination path, or a path relative to the SSH user's home."),
@@ -285,7 +288,7 @@ object ComputerToolCatalog {
         ),
         function(
             name = ComputerToolNames.DOWNLOAD,
-            description = PHONE_FILE_POLICY + "Download a server file to the phone under Download/App/AppTalk and attach it to chat only when explicitly requested. After success, link it as [file name](returned file_link). For an explicitly requested server-to-server transfer, pass the returned attachment_id to the other server's upload.",
+            description = SERVER_FILE_DELIVERY_POLICY + "Use only when the user asks to receive or download a file. Requires confirmation; link the result as [file name](returned file_link).",
             properties = mapOf(
                 "source_path" to string("Absolute source path, or a path relative to the SSH user's home."),
                 "suggested_name" to string("Optional local file name."),
