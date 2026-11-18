@@ -53,4 +53,6 @@ data class RemoteLiveRun(
     val running: Boolean,
     /** 非空时由后端执行，停止直接发送持久命令，不再找原手机转发。 */
     val cloudRunId: String? = null,
+    /** 从本机正式表读到的原问题，不使用快照拼凑气泡；可能比运行状态晚到。 */
+    val syncedQuestion: com.android.everytalk.data.DataClass.Message? = null,
 )

@@ -24,6 +24,7 @@ import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.safety.AiContentReportRepository
 import com.android.everytalk.data.auth.AccountSwitchProtection
 import com.android.everytalk.data.auth.DataStoreSyncAccountBindingStore
+import com.android.everytalk.data.database.entities.toMessage
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
 import com.android.everytalk.ui.components.math.MathJaxSvgRenderer
@@ -1416,13 +1417,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         val cloudRunId = run.runId.takeIf { cloud[sessionUuid]?.runId == it }
                         // 正式消息已有时以其 ID 为准，兼容旧版同步曾把草稿换成 cloud:UUID 的情况；
                         // 尚未定稿则沿用云端 Run 的草稿 ID，不能在首个快照到达前另造气泡。
-                        val localId = chatDao.getMessageByUuid(run.messageUuid)?.id
+                        val localId = chatDao.getMessageIdByUuid(run.messageUuid)
                             ?: if (cloudRunId != null) run.message.id else "cloud:${run.messageUuid}"
                         val message = com.android.everytalk.data.sync.mapLiveMessageReferences(run.message, chatDao::resolveLocalMessageReference)
+                        // 实时快照与消息同步是两条通道。整页刷新在回答期间会暂停，但本轮问题一落库就单独合入。
+                        val question = run.remoteQuestionUuid?.let { uuid ->
+                            chatDao.getMessageByUuid(uuid)
+                                ?.takeIf { !it.deleted && it.sessionId == currentId && it.sender == Sender.User }
+                                ?.toMessage()
+                        }
                         com.android.everytalk.statecontroller.RemoteLiveRun(sessionUuid, message.copy(id = localId, conversationId = currentId,
                             executionStatus = if (run.running) listOfNotNull(message.executionStatus, run.connectionStatus)
                                 .joinToString("\n").takeIf(String::isNotEmpty) else message.executionStatus.takeIf { message.isError }), run.running,
-                            cloudRunId = cloudRunId)
+                            cloudRunId = cloudRunId, syncedQuestion = question)
                     }
                     // 先交接终稿再放开下一轮发送；读取期间切页则丢弃旧会话结果。
                     if (stateHolder._currentConversationId.value == currentId) stateHolder.updateRemoteLiveRun(live)

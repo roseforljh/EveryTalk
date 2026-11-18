@@ -1,6 +1,16 @@
 package com.android.everytalk.ui.components.markdown
 
 import android.app.Application
+import androidx.activity.compose.LocalActivityResultRegistryOwner
+import androidx.activity.result.ActivityResultRegistry
+import androidx.activity.result.ActivityResultRegistryOwner
+import androidx.activity.result.contract.ActivityResultContract
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.core.app.ActivityOptionsCompat
+import com.android.everytalk.data.database.AppDatabase
+import com.android.everytalk.data.database.entities.ChatSessionEntity
+import com.android.everytalk.data.database.entities.toEntity
+import kotlinx.coroutines.runBlocking
 import android.content.Intent
 import android.net.Uri
 import android.provider.DocumentsContract
@@ -242,16 +252,15 @@ class MarkdownFileAttachmentsTest {
         val body = paragraph.fetchSemanticsNode().config[SemanticsProperties.Text].first()
         val link = body.getLinkAnnotations(0, body.length).first().item as LinkAnnotation.Url
         assertEquals("everytalk-file:${file.id}", link.url)
-        assertEquals(androidx.compose.ui.text.style.TextDecoration.Underline, link.styles?.style?.textDecoration)
         assertEquals(com.android.everytalk.ui.theme.lightChatColors.loadingIndicator, link.styles?.style?.color)
-        // 截图使用深色主题：切换主题后仍应有蓝色下划线，不能被默认白色正文样式覆盖。
+        // 截图使用深色主题：切换主题后仍应有主题链接颜色，不能被默认白色正文样式覆盖。
         composeRule.runOnIdle { darkTheme.value = true }
         val darkBody = paragraph.fetchSemanticsNode().config[SemanticsProperties.Text].first()
         val darkLink = darkBody.getLinkAnnotations(0, darkBody.length).first().item as LinkAnnotation.Url
         assertEquals(com.android.everytalk.ui.theme.darkChatColors.loadingIndicator, darkLink.styles?.style?.color)
-        assertEquals(androidx.compose.ui.text.style.TextDecoration.Underline, darkLink.styles?.style?.textDecoration)
         val layouts = mutableListOf<TextLayoutResult>()
         paragraph.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        assertTrue(markdownLinkUnderlineBounds(layouts.single()).isNotEmpty())
         paragraph.performTouchInput { click(layouts.single().getBoundingBox(body.text.indexOf(file.displayName) + file.displayName.length / 2).center) }
         composeRule.waitUntil(5_000) { composeRule.onAllNodesWithText("序号,主机\n1,服务器").fetchSemanticsNodes().isNotEmpty() }
         composeRule.onNodeWithText(text(R.string.ui_file_preview_local)).assertIsDisplayed()
@@ -259,6 +268,65 @@ class MarkdownFileAttachmentsTest {
         composeRule.onNodeWithText(text(R.string.ui_file_preview_close)).performClick()
         composeRule.onAllNodesWithContentDescription(text(R.string.ui_file_actions_content_description, file.displayName), useUnmergedTree = true)[0].performClick()
         composeRule.onNodeWithText(text(R.string.ui_file_action_show_folder)).assertIsDisplayed()
+    }
+
+    @Test
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    fun `历史回复列表里的APK链接使用原消息并打开系统保存窗口`() {
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        val session = ChatSessionEntity("apk-click-session", 1, 1, false)
+        val db = AppDatabase.getDatabase(context)
+        val cached = File(context.filesDir, "sync-media").apply { mkdirs() }
+        val source = File.createTempFile("artifact-", ".apk", cached).apply { writeText("fake signed APK bytes") }
+        val apk = SelectedMediaItem.GenericFile(Uri.fromFile(source), "apk-artifact-id", "EveryTalk-test.apk",
+            "application/octet-stream", source.absolutePath)
+        val content = "- 真机测试：[下载聊天 APK（19.3 MB）](everytalk-file:${apk.id})。\n- 备用：[直链](https://example.com/download)"
+        val message = Message(id = "apk-click-reply", text = content, sender = Sender.AI, contentStarted = true,
+            conversationId = session.id, executionTrace = listOf(ExecutionTraceEvent.Content(content)))
+        // 数据库已有文件，但是屏幕还在显示附件到达前的快照，必须回查原回复。
+        runBlocking {
+            db.chatDao().writeSession(session)
+            db.chatDao().writeMessages(listOf(message.copy(attachments = listOf(apk)).toEntity(session.id)))
+        }
+        val controller = MessageItemsControllerTestAccess.newController()
+        controller.stateHolder._currentConversationId.value = session.id
+        controller.stateHolder.messages.add(message)
+        val viewModel = mockk<AppViewModel>(relaxed = true)
+        val request = java.util.concurrent.atomic.AtomicReference<Intent>()
+        val owner = object : ActivityResultRegistryOwner {
+            override val activityResultRegistry = object : ActivityResultRegistry() {
+                override fun <I, O> onLaunch(requestCode: Int, contract: ActivityResultContract<I, O>, input: I,
+                    options: ActivityOptionsCompat?) { request.set(contract.createIntent(context, input)) }
+            }
+        }
+        try {
+            composeRule.setContent {
+                CompositionLocalProvider(LocalActivityResultRegistryOwner provides owner) {
+                    MaterialTheme {
+                        val items by controller.chatListItems.collectAsState()
+                        items.filterIsInstance<ChatListItem.AiMessageContentSegment>().firstOrNull()?.staticBlock?.let { block ->
+                            StaticAiMarkdownNodeItem(block, 360.dp, viewModel, FootnoteNavigationState(), null)
+                        }
+                    }
+                }
+            }
+            composeRule.waitUntil(5_000) { composeRule.onAllNodesWithText("下载聊天 APK", substring = true).fetchSemanticsNodes().isNotEmpty() }
+            val segment = controller.chatListItems.value.filterIsInstance<ChatListItem.AiMessageContentSegment>().first()
+            assertEquals(session.id, segment.message.conversationId)
+            val staticBlock = requireNotNull(segment.staticBlock)
+            assertNotEquals(message.id, staticBlock.message.id)
+            assertEquals(message.id, staticBlock.attachmentMessageId)
+            val paragraph = composeRule.onNodeWithText("下载聊天 APK", substring = true)
+            val body = paragraph.fetchSemanticsNode().config[SemanticsProperties.Text].first()
+            val layouts = mutableListOf<TextLayoutResult>()
+            paragraph.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+            paragraph.performTouchInput { click(layouts.single().getBoundingBox(body.text.indexOf("下载聊天 APK") + 2).center) }
+            composeRule.waitUntil(5_000) { request.get() != null }
+            val intent = request.get()
+            assertEquals(Intent.ACTION_CREATE_DOCUMENT, intent.action)
+            assertEquals("application/vnd.android.package-archive", intent.type)
+            assertEquals(apk.displayName, intent.getStringExtra(Intent.EXTRA_TITLE))
+        } finally { source.delete() }
     }
 
     @Test

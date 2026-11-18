@@ -708,6 +708,20 @@ class AgentLoop(
                     requestOrdinal = ordinal,
                 )
                 runStore.saveUsage(requestId, finalUsage)
+                // 同一 Run 内拿到实测就立刻刷新校准。Run 开始时的校准可能为 0（刚压缩过、之前的 Run 被停止），
+                // 长会话的原始估算可能比实测高出数倍，只用开局校准会在实测远低于触发线时误压缩。
+                usage?.takeIf { it.source != TokenUsageSource.ESTIMATED }
+                    ?.inputTokens
+                    ?.takeIf { it >= 0L && prepared.snapshot.estimatedPromptTokens > 0L }
+                    ?.let { measured ->
+                        val window = input.tokenLimits.maxContextTokens.toLong().coerceAtLeast(1L)
+                        val calibration = (measured - prepared.snapshot.estimatedPromptTokens)
+                            .coerceIn(-window, window)
+                        input = input.copy(request = input.request.copy(
+                            contextManagement = input.request.contextManagement
+                                ?.copy(inputTokenCalibration = calibration),
+                        ))
+                    }
                 requestFact = runStore.updateRequest(
                     request = requestFact,
                     status = AgentRequestStatus.COMPLETED,

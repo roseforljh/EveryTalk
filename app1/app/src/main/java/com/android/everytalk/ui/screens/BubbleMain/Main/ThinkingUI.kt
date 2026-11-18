@@ -697,11 +697,11 @@ private fun ExecutionProcessContent(
     } else {
         -1
     }
-    val horizontalPadding = if (indentContent) 12.dp else 0.dp
+    // 总执行区的段间距由列表统一处理，不再叠加过程卡片自己的外边距。
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = horizontalPadding, end = horizontalPadding, top = 2.dp, bottom = 6.dp)
+            .then(if (indentContent) Modifier.padding(start = 12.dp, end = 12.dp, top = 2.dp, bottom = 6.dp) else Modifier)
             .testTag("reasoning-chain-summaries"),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {

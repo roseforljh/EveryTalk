@@ -72,7 +72,6 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
@@ -222,6 +221,9 @@ fun MikePenzMarkdownNodesRenderer(
         footnoteNavigationState = footnoteNavigationState,
     )
 }
+
+/** 有序 AI 正文切片使用紧凑的首段间距；同一切片后续段落仍使用文档自身的段距。 */
+internal val LocalAiExecutionSegmentSpacing = compositionLocalOf { false }
 
 internal val LocalMarkdownHorizontalRuleTopPadding = compositionLocalOf {
     ChatMarkdownTextStyle.HORIZONTAL_RULE_VERTICAL_PADDING_DP.dp
@@ -396,6 +398,12 @@ private fun MarkdownNodesColumn(
             if (extraTopSpacing.value > 0f) {
                 Spacer(modifier = Modifier.height(extraTopSpacing))
             }
+            val includeSpacer = shouldIncludeMarkdownNodeSpacer(spacingNodes, spacingIndex)
+            val compactLeadingSpacer = includeSpacer && LocalAiExecutionSegmentSpacing.current &&
+                previousVisibleMarkdownNode(spacingNodes, spacingIndex) == null
+            if (compactLeadingSpacer) {
+                Spacer(modifier = Modifier.height(ChatMarkdownTextStyle.AI_EXECUTION_SEGMENT_GAP_DP.dp))
+            }
             CompositionLocalProvider(
                 LocalMarkdownHorizontalRuleTopPadding provides
                     markdownHorizontalRuleTopPadding(spacingNodes, spacingIndex),
@@ -404,7 +412,7 @@ private fun MarkdownNodesColumn(
                     node = node,
                     components = components,
                     content = content,
-                    includeSpacer = shouldIncludeMarkdownNodeSpacer(spacingNodes, spacingIndex),
+                    includeSpacer = includeSpacer && !compactLeadingSpacer,
                 )
             }
         }
@@ -878,7 +886,7 @@ internal fun createPreparedMessageMarkdownAnnotator(
             append('\u2060')
             // 文件是可执行的打开入口，不能继承普通正文的灰阶链接样式。
             pushLink(LinkAnnotation.Url(MESSAGE_FILE_SCHEME + mention.file.id, TextLinkStyles(SpanStyle(
-                color = messageFileLinkColor, fontWeight = FontWeight.SemiBold, textDecoration = TextDecoration.Underline))))
+                color = messageFileLinkColor, fontWeight = FontWeight.SemiBold))))
             append(mention.label)
             pop()
             offset = mention.end

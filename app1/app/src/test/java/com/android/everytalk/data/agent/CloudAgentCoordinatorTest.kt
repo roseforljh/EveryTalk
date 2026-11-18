@@ -242,6 +242,60 @@ class CloudAgentCoordinatorTest {
         }
     }
 
+    @Test fun `订阅半开时后台发现从详情补齐已完成任务`() = runBlocking {
+        val db = database(); val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val initial = prepare(db)
+        CloudAgentStore(db).apply(account, initial)
+        val connected = CompletableDeferred<Unit>()
+        val finished = CompletableDeferred<Unit>()
+        var details = initial
+        val http = HttpClient(MockEngine { request ->
+            when {
+                request.url.parameters["active"] == "true" -> respond("{\"runs\":[]}")
+                request.url.encodedPath.endsWith("/events") -> { connected.complete(Unit); awaitCancellation() }
+                else -> { assertEquals("GET", request.method.value); respond(raw(details)) }
+            }
+        })
+        try {
+            val coordinator = CloudAgentCoordinator(account, db,
+                CloudAgentClient("https://example.com", { "access" }, { true }, http), credentials(), scope,
+                { true }, { view, _ -> if (view.terminal) finished.complete(Unit) })
+            coordinator.track(initial.id)
+            withTimeout(10_000) { connected.await() }
+            coordinator.discover()
+            assertEquals(AgentRunStatus.WAITING_MODEL.name, db.agentDao().getRun(initial.id)!!.status)
+            details = initial.copy(status = "COMPLETED", cursor = 2, snapshot = initial.snapshot.copy(finishedAt = 4))
+            coordinator.discover()
+            withTimeout(10_000) { finished.await() }
+            assertEquals(AgentRunStatus.COMPLETED.name, db.agentDao().getRun(initial.id)!!.status)
+            assertTrue(db.agentDao().getActiveRuns().isEmpty())
+        } finally { scope.cancel(); scope.coroutineContext[Job]!!.join(); http.close(); db.close() }
+    }
+
+    @Test fun `提交被不可变字段冲突拒绝时结束本地任务`() = runBlocking {
+        val db = database(); val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val credentials = credentials(); val initial = prepare(db)
+        val finished = CompletableDeferred<Message>()
+        val http = HttpClient(MockEngine { request ->
+            if (request.method.value == "POST") respond("{\"error\":{\"code\":\"IMMUTABLE_FIELD\"}}", HttpStatusCode.Conflict)
+            else respond("{\"error\":{\"code\":\"AGENT_NOT_FOUND\"}}", HttpStatusCode.NotFound)
+        })
+        try {
+            val coordinator = CloudAgentCoordinator(account, db,
+                CloudAgentClient("https://example.com", { "access" }, { true }, http), credentials, scope,
+                { true }, { view, message -> if (view.terminal) finished.complete(message) })
+            coordinator.submit(db.agentDao().getRun(initial.id)!!, buildJsonObject { put("id", initial.id) })
+            val message = withTimeout(10_000) { finished.await() }
+            assertTrue(message.isError)
+            assertTrue(message.executionStatus.orEmpty().contains("IMMUTABLE_FIELD"))
+            assertEquals(AgentRunStatus.FAILED.name, db.agentDao().getRun(initial.id)!!.status)
+            assertTrue(db.agentDao().getActiveRuns().isEmpty())
+        } finally {
+            scope.cancel(); scope.coroutineContext[Job]!!.join()
+            credentials.deleteCloudAgentInput(account, initial.id); http.close(); db.close()
+        }
+    }
+
     @Test fun `已提交任务鉴权恢复后前台刷新重接订阅且不覆盖执行状态`() = runBlocking {
         val db = database(); val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val initial = prepare(db)

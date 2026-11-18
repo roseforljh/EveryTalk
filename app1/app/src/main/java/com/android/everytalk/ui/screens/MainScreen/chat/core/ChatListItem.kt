@@ -96,6 +96,7 @@ sealed interface ChatListItem {
         val blockIndex: Int,
         val targetBlockIndexByUri: Map<String, Int>,
         val hasSourcesBefore: Boolean,
+        val attachmentMessageId: String = message.id,
     ) : ChatListItem {
         init {
             require(nodes.isNotEmpty()) { "Markdown 分块至少包含一个节点" }

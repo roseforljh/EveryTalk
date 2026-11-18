@@ -474,8 +474,13 @@ internal class SyncResourceSynchronizer(
         }
     }
 
-    /** 已存在的本地图片 URL 也转为附件，设备路径不会作为云端图片地址复制。 */
-    private fun mediaItems(message: MessageEntity): List<SelectedMediaItem> = message.attachments + message.imageUrls.orEmpty().mapNotNull { raw ->
+    /**
+     * 已存在的本地图片 URL 也转为附件，设备路径不会作为云端图片地址复制。
+     * 从 SSH 服务器下载的文件只留在本机，不上传云端：只有 ComputerAttachmentBridge 会写 savedDownloadPath。
+     */
+    private fun mediaItems(message: MessageEntity): List<SelectedMediaItem> = message.attachments.filterNot {
+        it is SelectedMediaItem.GenericFile && it.savedDownloadPath != null
+    } + message.imageUrls.orEmpty().mapNotNull { raw ->
         val uri = Uri.parse(raw)
         val local = when (uri.scheme) { "file" -> uri.path?.let(::File); null -> File(raw); else -> null }
         if (local?.isFile != true || message.attachments.any { (it as? SelectedMediaItem.ImageFromUri)?.filePath == local.absolutePath }) null
@@ -765,35 +770,9 @@ internal class SyncResourceSynchronizer(
             if (media.isNotEmpty()) {
                 val groups = media.groupBy { it.second["mediaId"]?.jsonPrimitive?.contentOrNull ?: it.first.id }.values
                 val items = groups.sortedBy { it.first().first.position }.mapNotNull { parts ->
-                    val (attachment, metadata) = parts.maxBy { it.first.updatedAt }
-                    // 只将已通过完整性校验的普通附件放进 FileProvider 目录，不共享同步密文或临时文件。
-                    val fileAttachment = attachment.kind !in setOf("image", "thumbnail", "audio")
-                    val directory = if (fileAttachment) File(context.filesDir, "sync-media/${root.name}") else root
-                    val local = if (metadata["chunkCount"] != null) {
-                        val count = metadata.getValue("chunkCount").jsonPrimitive.int
-                        require(count in 1..1024)
-                        val matchingParts = parts.filter { it.second["originalDigest"] == metadata["originalDigest"] && it.second["resourceVersion"] == metadata["resourceVersion"] }
-                        // 老客户端可能将同一云端产物再推一次：记录 ID 不同，但每个分块索引只取一份。
-                        val byIndex = matchingParts.groupBy { it.second.getValue("chunkIndex").jsonPrimitive.int }
-                        require(byIndex.keys.all { it in 0 until count })
-                        if (byIndex.size != count) return@mapNotNull null
-                        val infos = (0 until count).map { index ->
-                            val chunk = byIndex.getValue(index).maxBy { it.first.updatedAt }.first
-                            SyncFileInfo(requireNotNull(chunk.fileId), chunk.size, chunk.sha256, chunk.mime)
-                        }
-                        assemble(infos, metadata.getValue("originalSize").jsonPrimitive.long, metadata.getValue("originalDigest").jsonPrimitive.content, directory).also {
-                            deleteConfirmedAttachmentFiles(matchingParts.map { it.first.id })
-                        }
-                    } else if (fileAttachment) {
-                        assemble(listOf(SyncFileInfo(requireNotNull(attachment.fileId), attachment.size, attachment.sha256, attachment.mime)),
-                            attachment.size, attachment.sha256, directory)
-                    } else file(attachment)
-                    val mediaId = metadata["mediaId"]?.jsonPrimitive?.contentOrNull ?: attachment.id
-                    when (attachment.kind) {
-                        "image", "thumbnail" -> SelectedMediaItem.ImageFromUri(Uri.fromFile(local), mediaId, attachment.mime, local.absolutePath)
-                        "audio" -> SelectedMediaItem.Audio(mediaId, attachment.mime, filePath = local.absolutePath)
-                        else -> SelectedMediaItem.GenericFile(Uri.fromFile(local), mediaId, attachment.name, attachment.mime, local.absolutePath)
-                    }
+                    val restored = restoreMedia(parts) ?: return@mapNotNull null
+                    if (parts.any { it.second["chunkCount"] != null }) deleteConfirmedAttachmentFiles(parts.map { it.first.id })
+                    restored
                 }
                 if (items.size != groups.size) settled = false
                 else db.withTransaction {
@@ -852,6 +831,53 @@ internal class SyncResourceSynchronizer(
         if (touched) SyncLocalChanges.notifyChanged()
     }
 
+    /** 只查选中消息的普通附件，不依赖执行轨迹、历史解密或整账号资源恢复。 */
+    suspend fun downloadMessageFile(sessionId: String, messageId: String, mediaId: String): SelectedMediaItem.GenericFile? {
+        val parts = db.syncAttachmentDao().getMessageFiles(sessionId, messageId).mapNotNull { row ->
+            val metadata = settings.getValue("sync_resource_meta:${row.id}")?.let { syncJson.parseToJsonElement(it).jsonObject }
+                ?: return@mapNotNull null
+            val role = metadata["role"]?.jsonPrimitive?.contentOrNull
+            val id = metadata["mediaId"]?.jsonPrimitive?.contentOrNull ?: row.id
+            if (role in setOf(null, "media") && id == mediaId) row to metadata else null
+        }
+        if (parts.isEmpty()) return null
+        // 与后台同步使用不同的临时文件；只在完整校验通过后原子发布到同一 FileProvider 目录。
+        val staging = java.nio.file.Files.createTempDirectory(root.toPath(), "open-").toFile()
+        return try {
+            val restored = restoreMedia(parts, staging) as? SelectedMediaItem.GenericFile ?: return null
+            restored.takeIf { db.syncAttachmentDao().getMessageFiles(sessionId, messageId).containsAll(parts.map { it.first }) }
+        } finally { staging.deleteRecursively() }
+    }
+
+    private suspend fun restoreMedia(parts: List<Pair<SyncAttachmentEntity, JsonObject>>, staging: File = root): SelectedMediaItem? {
+        val (attachment, metadata) = parts.maxBy { it.first.updatedAt }
+        val fileAttachment = attachment.kind !in setOf("image", "thumbnail", "audio")
+        val directory = if (fileAttachment) File(context.filesDir, "sync-media/${root.name}") else root
+        val local = if (metadata["chunkCount"] != null) {
+            val count = metadata.getValue("chunkCount").jsonPrimitive.int
+            require(count in 1..1024)
+            val matching = parts.filter { it.second["originalDigest"] == metadata["originalDigest"] && it.second["resourceVersion"] == metadata["resourceVersion"] }
+            // 老客户端可能回传同一产物，每个索引只取一份；不混用不同版本的分片。
+            val byIndex = matching.groupBy { it.second.getValue("chunkIndex").jsonPrimitive.int }
+            require(byIndex.keys.all { it in 0 until count })
+            if (byIndex.size != count) return null
+            val infos = (0 until count).map { index ->
+                val chunk = byIndex.getValue(index).maxBy { it.first.updatedAt }.first
+                SyncFileInfo(requireNotNull(chunk.fileId), chunk.size, chunk.sha256, chunk.mime)
+            }
+            assemble(infos, metadata.getValue("originalSize").jsonPrimitive.long, metadata.getValue("originalDigest").jsonPrimitive.content, directory, staging)
+        } else if (fileAttachment) {
+            assemble(listOf(SyncFileInfo(requireNotNull(attachment.fileId), attachment.size, attachment.sha256, attachment.mime)),
+                attachment.size, attachment.sha256, directory, staging)
+        } else file(attachment)
+        val mediaId = metadata["mediaId"]?.jsonPrimitive?.contentOrNull ?: attachment.id
+        return when (attachment.kind) {
+            "image", "thumbnail" -> SelectedMediaItem.ImageFromUri(Uri.fromFile(local), mediaId, attachment.mime, local.absolutePath)
+            "audio" -> SelectedMediaItem.Audio(mediaId, attachment.mime, filePath = local.absolutePath)
+            else -> SelectedMediaItem.GenericFile(Uri.fromFile(local), mediaId, attachment.name, attachment.mime, local.absolutePath)
+        }
+    }
+
     private suspend fun file(attachment: SyncAttachmentEntity): File = cached(SyncFileInfo(requireNotNull(attachment.fileId), attachment.size, attachment.sha256, attachment.mime))
 
     /** 分块解密写临时压缩文件，GCM 验证完成才解析；解压流计数防止压缩炸弹耗尽内存。 */
@@ -892,8 +918,8 @@ internal class SyncResourceSynchronizer(
             return history
         } finally { encrypted.delete(); compressed.delete() }
     }
-    private suspend fun cached(info: SyncFileInfo): File {
-        val target = File(root, "${info.fileId}-${info.sha256}")
+    private suspend fun cached(info: SyncFileInfo, staging: File = root): File {
+        val target = File(staging, "${info.fileId}-${info.sha256}")
         if (!target.isFile || target.length() != info.size || syncFileHash(target) != info.sha256) { api.downloadFile(info, target); downloads++ }
         return target
     }
@@ -930,17 +956,17 @@ internal class SyncResourceSynchronizer(
         JsonArray(listOf("everytalk-tool-result", user, session, message, path, "0").map(::JsonPrimitive)).toString().toByteArray(Charsets.UTF_8)
 
     /** 所有分块完成且整体哈希一致后才发布原文件，不能把半个文件交给图片或 Skill 加载器。 */
-    private suspend fun assemble(parts: List<SyncFileInfo>, size: Long, hash: String, destination: File = root): File {
+    private suspend fun assemble(parts: List<SyncFileInfo>, size: Long, hash: String, destination: File = root, staging: File = root): File {
         require(parts.size <= 1024 && size >= 0 && hash.matches(Regex("[0-9a-f]{64}")))
         require(size == 0L || parts.isNotEmpty())
         val target = File(destination, "assembled-$hash")
         if (target.isFile && target.length() == size && syncFileHash(target) == hash) return target
         destination.mkdirs()
-        val temporary = File(root, "assembled-$hash.part")
+        val temporary = File(staging, "assembled-$hash.part")
         try {
             temporary.outputStream().use { output ->
                 var total = 0L
-                for (part in parts) { total += part.size; require(total <= size); cached(part).inputStream().use { it.copyTo(output) } }
+                for (part in parts) { total += part.size; require(total <= size); cached(part, staging).inputStream().use { it.copyTo(output) } }
                 require(total == size)
             }
             require(syncFileHash(temporary) == hash)

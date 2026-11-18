@@ -501,6 +501,26 @@ class AgentContextManagerTest {
     }
 
     @Test
+    fun `Responses 协议只回传加密思考，同源思考原文也不计入压缩预算`() {
+        val thinking = "思".repeat(10_000)
+        val assistant = AgentAssistantApiMessage(
+            id = "same-thinking", reasoning = thinking,
+            contentParts = listOf(com.android.everytalk.data.DataClass.AgentAssistantContentApiPart.Reasoning(thinking)),
+            sourceProvider = "OpenAI", sourceEndpoint = "https://example.test", sourceModel = "gpt-test",
+        )
+        val messages = listOf(
+            SimpleTextApiMessage(id = "old-user", role = "user", content = "旧问题"),
+            assistant,
+            SimpleTextApiMessage(id = "latest-user", role = "user", content = "继续"),
+        )
+        val request = request(messages, maxContextTokens = 8_192, compactThresholdTokens = 6_553, channel = "Codex")
+        val prepared = manager.prepare("responses", request, ModelTokenLimits(maxOutputTokens = 512, maxContextTokens = 8_192))
+        assertTrue(prepared.snapshot.activeContextTokens < 100)
+        assertNull(prepared.compactionPlan)
+        assertEquals("发送内容不能被预算投影改写", assistant, prepared.messages[1])
+    }
+
+    @Test
     fun `失效检查点不能用旧触发规模绕过当前压缩线`() {
         val stale = AgentCompactionEntryEntity(
             id = "stale", sessionId = "session-1", configIdSnapshot = "old-config", summary = "旧分支摘要",

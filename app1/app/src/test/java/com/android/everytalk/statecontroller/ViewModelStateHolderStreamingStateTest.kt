@@ -112,6 +112,36 @@ class ViewModelStateHolderStreamingStateTest {
     }
 
     @Test
+    fun `远端运行先到时等原问题同步入库再插入气泡并置顶一次`() {
+        val sessionId = "cloud-session"
+        stateHolder.setCurrentConversationId(sessionId)
+        val oldQuestion = Message(id = "old-q", text = "上轮问题", sender = Sender.User, timestamp = 1)
+        val oldAnswer = Message(id = "old-a", text = "上轮答案", sender = Sender.AI, timestamp = 2)
+        val question = Message(id = "new-q", text = "本轮问题", sender = Sender.User, timestamp = 3,
+            conversationId = sessionId)
+        val draft = Message(id = "new-a", text = "", sender = Sender.AI, timestamp = 3, conversationId = sessionId)
+        val partial = draft.copy(text = "正在回答")
+        val live = RemoteLiveRun("session-uuid", partial, true, cloudRunId = "run-1")
+        stateHolder.messages.addAll(listOf(oldQuestion, oldAnswer, draft))
+
+        stateHolder.updateRemoteLiveRun(live)
+        assertEquals(listOf(oldQuestion, oldAnswer, draft), stateHolder.messages.toList())
+        assertNull(stateHolder._lastSentUserMessageId.value)
+
+        stateHolder.updateRemoteLiveRun(live.copy(syncedQuestion = question))
+        assertEquals(listOf(oldQuestion, oldAnswer, question, draft), stateHolder.messages.toList())
+        assertEquals(question.id, stateHolder._lastSentUserMessageId.value)
+        assertEquals(partial, stateHolder._remoteLiveRun.value?.message)
+        assertFalse(stateHolder.isTextConversationDirty.value)
+
+        // 界面消费置顶信号后，后续流式帧不插重复气泡，也不再次拽回用户的滚动位置。
+        stateHolder._lastSentUserMessageId.value = null
+        stateHolder.updateRemoteLiveRun(live.copy(syncedQuestion = question, message = partial.copy(text = "继续回答")))
+        assertEquals(1, stateHolder.messages.count { it.id == question.id })
+        assertNull(stateHolder._lastSentUserMessageId.value)
+    }
+
+    @Test
     fun `思考分片按批提交且终态同步不丢尾部`() {
         val messageId = "reasoning-batched"
         stateHolder.createStreamingBuffer(messageId)

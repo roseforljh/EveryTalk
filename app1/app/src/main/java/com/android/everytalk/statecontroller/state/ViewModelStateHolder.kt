@@ -10,6 +10,7 @@ import androidx.compose.runtime.snapshots.SnapshotStateMap
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.MessageQuoteReference
+import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.data.DataClass.VoiceBackendConfig
 import com.android.everytalk.models.SelectedMediaItem
@@ -140,6 +141,8 @@ import java.util.concurrent.ConcurrentHashMap
     val _currentImageStreamingAiMessageId = MutableStateFlow<String?>(null)
     /** 当前会话在同账号另一台设备上运行中的回复（消息 ID 已换成本机 ID），本机没在运行时才显示。 */
     val _remoteLiveRun = MutableStateFlow<RemoteLiveRun?>(null)
+    /** 每个会话已经置顶的远端任务，切到另一会话再回来也不抢回滚动位置。 */
+    private val anchoredRemoteRuns = mutableMapOf<String, String>()
 
 // 仅用于冻结渲染的镜像；AgentRunPauseController 才是 Safe Pause 的运行事实。
 val _isStreamingPaused = MutableStateFlow(false)
@@ -206,9 +209,11 @@ val _isStreamingPaused = MutableStateFlow(false)
             textMessageConversationIds.clear()
             migratedConversationIds.clear()
             seenTextMessageIds.clear()
+            anchoredRemoteRuns.clear()
         } else {
             textConversationMessages.remove(sessionId)
             textMessageConversationIds.entries.removeAll { it.value == sessionId }
+            anchoredRemoteRuns.remove(sessionId)
         }
     }
 
@@ -227,7 +232,30 @@ val _isStreamingPaused = MutableStateFlow(false)
      */
     fun updateRemoteLiveRun(run: RemoteLiveRun?) {
         if (run != null) {
-            if (run.message.conversationId != _currentConversationId.value) return
+            val sessionId = _currentConversationId.value
+            if (run.message.conversationId != sessionId) return
+            val question = run.syncedQuestion
+            val cloudRunId = run.cloudRunId
+            if (cloudRunId != null && question?.sender == Sender.User && question.conversationId == sessionId) {
+                // 不整页重载，也不覆盖已有问题（例如本机刚补齐了附件）。按原时间补入实际同步的消息。
+                if (messages.none { it.id == question.id }) {
+                    val index = messages.indexOfFirst {
+                        it.id == run.message.id || it.timestamp > question.timestamp ||
+                            (it.timestamp == question.timestamp && it.sender == Sender.AI)
+                    }
+                    messages.add(if (index == -1) messages.size else index, question)
+                    textMessageConversationIds[question.id] = sessionId
+                    rememberSeenTextMessages(listOf(question))
+                    notifyTextConversationLoaded()
+                }
+                // 先补真实气泡才交付置顶信号；旧轮次不得抢走新问题的锚点。
+                if (run.running && anchoredRemoteRuns[sessionId] != cloudRunId &&
+                    messages.lastOrNull { it.sender == Sender.User }?.id == question.id
+                ) {
+                    anchoredRemoteRuns[sessionId] = cloudRunId
+                    _lastSentUserMessageId.value = question.id
+                }
+            }
             if (!run.running) {
                 val index = messages.indexOfFirst { it.id == run.message.id }
                 if (index >= 0) {

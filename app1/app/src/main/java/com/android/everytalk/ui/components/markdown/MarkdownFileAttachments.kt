@@ -29,7 +29,17 @@ import com.android.everytalk.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.android.everytalk.BuildConfig
+import com.android.everytalk.data.auth.AuthRuntime
+import com.android.everytalk.data.auth.AuthState
 import com.android.everytalk.data.database.AppDatabase
+import com.android.everytalk.data.sync.KtorSyncApi
+import com.android.everytalk.data.sync.SyncLocalChanges
+import com.android.everytalk.data.sync.SyncResourceSynchronizer
+import com.android.everytalk.data.sync.SyncStateStore
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import com.android.everytalk.service.SyncScheduler
 
 internal const val MESSAGE_FILE_SCHEME = "everytalk-file:"
@@ -51,29 +61,68 @@ fun MessageFileAttachmentScope(
     val context = LocalContext.current
     val open = rememberMessageFileOpener()
     val scope = rememberCoroutineScope()
-    val handler = remember(files, fallback, context, open, scope, sessionId, messageId) {
+    val opening = remember(sessionId, messageId) { mutableSetOf<String>() }
+    val downloading = stringResource(R.string.ui_file_downloading)
+    val unavailable = stringResource(R.string.ui_file_download_unavailable)
+    val failed = stringResource(R.string.ui_file_download_failed)
+    val handler = remember(files, fallback, context, open, scope, sessionId, messageId, opening, downloading, unavailable, failed) {
         object : UriHandler {
             override fun openUri(uri: String) {
                 if (openCloudPreview(context, scope, uri)) return
                 if (!uri.startsWith(MESSAGE_FILE_SCHEME)) { fallback.openUri(uri); return }
                 val file = resolveMessageFile(uri, files)
                 if (file != null) { open(file); return }
+                if (sessionId == null || messageId == null) { AppToast.show(context, unavailable); return }
+                if (!opening.add(uri)) return
                 scope.launch {
-                    // 只查当前会话中的当前消息；不按链接 ID 查全库，更不从链接推导磁盘路径。
-                    val latest = if (sessionId != null && messageId != null) withContext(Dispatchers.IO) {
-                        AppDatabase.getDatabase(context).chatDao().getMessage(sessionId, messageId)?.attachments.orEmpty()
-                    } else emptyList()
-                    val restored = resolveMessageFile(uri, latest.filterIsInstance<SelectedMediaItem.GenericFile>())
-                    if (restored != null) open(restored)
-                    else {
-                        SyncScheduler.requestNow(context)
-                        AppToast.show(context, "附件尚未可用，请等同步完成后再试")
-                    }
+                    try {
+                        // 先查当前消息的本地附件；只有缺失时才按当前账号、当前消息定向下载。
+                        val latest = withContext(Dispatchers.IO) {
+                            AppDatabase.getDatabase(context).chatDao().getMessage(sessionId, messageId)?.attachments.orEmpty()
+                        }
+                        val restored = resolveMessageFile(uri, latest.filterIsInstance<SelectedMediaItem.GenericFile>())
+                        if (restored != null) { open(restored); return@launch }
+                        AppToast.show(context, downloading)
+                        val downloaded = withContext(Dispatchers.IO) {
+                            downloadLinkedMessageFile(context, sessionId, messageId, uri.removePrefix(MESSAGE_FILE_SCHEME))
+                        }
+                        if (downloaded != null) open(downloaded) else AppToast.show(context, unavailable)
+                    } catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: Exception) { AppToast.show(context, failed) }
+                    finally { opening.remove(uri) }
                 }
             }
         }
     }
     CompositionLocalProvider(LocalMessageFileAttachments provides files, LocalUriHandler provides handler, content = content)
+}
+
+private suspend fun downloadLinkedMessageFile(context: android.content.Context, sessionId: String, messageId: String,
+    mediaId: String): SelectedMediaItem.GenericFile? {
+    val runtime = AuthRuntime.get(context)
+    val user = (runtime.auth.state.value as? AuthState.SignedIn)?.user ?: return null
+    val db = AppDatabase.getDatabase(context)
+    val state = SyncStateStore(db)
+    suspend fun permitted(): Boolean = (runtime.auth.state.value as? AuthState.SignedIn)?.user?.id == user.id &&
+        !runtime.account.state.value.sessionExpired && runtime.binding.readBoundAccountId() == user.id && state.isEnabled()
+    if (!permitted()) return null
+    KtorSyncApi(BuildConfig.EVERYTALK_SYNC_BASE_URL, runtime.account,
+        isLocalOnly = { runtime.auth.state.value !is AuthState.SignedIn }, canRequest = ::permitted).use { api ->
+        SyncResourceSynchronizer(context, db, api, user.id).use { resources ->
+            // SSE 终稿可能先于同步元数据到达。等元数据，不把整份 APK 下载限制在这段等待时间内。
+            val deadline = android.os.SystemClock.elapsedRealtime() + 12_000
+            var requested = false
+            while (permitted()) {
+                val revision = SyncLocalChanges.revision.value
+                val file = resources.downloadMessageFile(sessionId, messageId, mediaId)
+                if (file != null) return file.takeIf { permitted() }
+                if (!requested) { SyncScheduler.requestNow(context); requested = true }
+                val left = deadline - android.os.SystemClock.elapsedRealtime()
+                if (left <= 0 || withTimeoutOrNull(left) { SyncLocalChanges.revision.first { it != revision } } == null) break
+            }
+            return null
+        }
+    }
 }
 
 /**

@@ -1,10 +1,16 @@
 package com.android.everytalk.ui.components.markdown
 
 import android.app.Application
+import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.unit.Density
@@ -41,6 +47,7 @@ class MarkdownStrongSectionSpacingComposeTest {
             contentVersion = 47L,
         )
         lateinit var density: Density
+        val compact = mutableStateOf(false)
 
         composeRule.setContent {
             density = LocalDensity.current
@@ -74,12 +81,16 @@ class MarkdownStrongSectionSpacingComposeTest {
                         block = ChatMarkdownTextStyle.SPACING_PARAGRAPH_DP.dp,
                     ),
                     success = { state, components, modifier ->
-                        MarkdownNodesSuccess(
-                            state = state,
-                            components = components,
-                            modifier = modifier,
-                            nodes = state.node.children,
-                        )
+                        Box(Modifier.testTag("markdown-document")) {
+                            CompositionLocalProvider(LocalAiExecutionSegmentSpacing provides compact.value) {
+                                MarkdownNodesSuccess(
+                                    state = state,
+                                    components = components,
+                                    modifier = modifier,
+                                    nodes = state.node.children,
+                                )
+                            }
+                        }
                     },
                     immediate = true,
                 )
@@ -114,5 +125,20 @@ class MarkdownStrongSectionSpacingComposeTest {
             "编号标题下方间距发生变化：实际 ${bottomGapPx}px，预期 ${expectedBottomGapPx}px",
             kotlin.math.abs(bottomGapPx - expectedBottomGapPx) <= 0.5f,
         )
+
+        fun documentTop() = composeRule.onNodeWithTag("markdown-document").fetchSemanticsNode("").boundsInRoot.top
+        fun firstParagraphTop() = composeRule.onNodeWithText("1. 红卫兵运动").fetchSemanticsNode("").boundsInRoot.top
+        fun lastParagraphTop() = composeRule.onNodeWithText("第二段正文。").fetchSemanticsNode("").boundsInRoot.top
+        val normalLeadingGap = firstParagraphTop() - documentTop()
+        val normalTextSpan = lastParagraphTop() - firstParagraphTop()
+        composeRule.runOnIdle { compact.value = true }
+        val compactLeadingGap = firstParagraphTop() - documentTop()
+        val compactTextSpan = lastParagraphTop() - firstParagraphTop()
+        val removedSpace = with(density) { 8.dp.toPx() }
+        // 有序切片只少掉首段的 8dp；其余标题/段落保持同一套间距。
+        assertTrue("首段从 ${normalLeadingGap}px 收紧到 ${compactLeadingGap}px",
+            kotlin.math.abs(normalLeadingGap - compactLeadingGap - removedSpace) <= 0.5f)
+        assertTrue("段间距不变：${normalTextSpan}px 对 ${compactTextSpan}px",
+            kotlin.math.abs(normalTextSpan - compactTextSpan) <= 0.5f)
     }
 }
