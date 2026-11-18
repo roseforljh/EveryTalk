@@ -333,6 +333,13 @@ fun ChatScreen(
         LazyListState(firstVisibleItemIndex = initialListIndex ?: 0)
     }
     val scrollStateManager = rememberChatScrollStateManager(listState, coroutineScope)
+    // 每个会话一份置顶状态。切换会话时消息列表会整个卸载，两个会话都在回复时来回切，
+    // 底部空间不能随列表一起丢；没有保留价值的旧状态在切换时顺手清掉。
+    val topAnchorEngines = remember { mutableMapOf<String, com.android.everytalk.ui.topanchor.TopAnchorReserveEngineState>() }
+    val topAnchorEngine = remember(scrollSessionKey) {
+        topAnchorEngines.entries.removeAll { (key, engine) -> key != scrollSessionKey && !engine.keepsReserveOnReattach }
+        topAnchorEngines.getOrPut(scrollSessionKey) { com.android.everytalk.ui.topanchor.TopAnchorReserveEngineState() }
+    }
 
     val suppressScrollButtonForHostCard =
         currentHostCommand != null ||
@@ -380,7 +387,10 @@ fun ChatScreen(
     LaunchedEffect(scrollSessionKey, listState, initialReadyToken) {
         val readyToken = initialReadyToken ?: return@LaunchedEffect
         if (chatListItemsState.value.isNotEmpty()) {
-            scrollStateManager.pinToRealBottomUntilUserScroll()
+            // 切回仍保留底部空间的会话时由置顶引擎把问题放回顶部；这里再钉底部会和它互相拉扯。
+            if (!topAnchorEngine.keepsReserveOnReattach) {
+                scrollStateManager.pinToRealBottomUntilUserScroll()
+            }
             val layoutReadyGeneration = snapshotFlow {
                 val currentGeneration = historyLoadGenerationState.value
                 if (currentGeneration != readyToken.first) {
@@ -681,6 +691,7 @@ fun ChatScreen(
                                 scrollStateManager = scrollStateManager,
                                 scrollSessionKey = scrollSessionKey,
                                 conversationId = conversationId,
+                                topAnchorEngineState = topAnchorEngine,
                                 bubbleMaxWidth = bubbleMaxWidth,
                                 onShowAiMessageOptions = { msg ->
                                     selectedMessageForOptions = msg

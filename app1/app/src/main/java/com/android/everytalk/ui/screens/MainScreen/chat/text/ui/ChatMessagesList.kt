@@ -400,7 +400,9 @@ fun ChatMessagesList(
     onShowAiMessageOptions: (Message) -> Unit,
     onImageLoaded: () -> Unit,
     onImageClick: (String) -> Unit,
-    additionalBottomPadding: Dp = 0.dp
+    additionalBottomPadding: Dp = 0.dp,
+    /** 由 ChatScreen 按会话保存；切换会话时列表会整个卸载，置顶和底部空间不能跟着丢。 */
+    topAnchorEngineState: TopAnchorReserveEngineState? = null,
 ) {
     // 防止 AnimatedItems 等状态在重组时被重复触发
     val context = LocalContext.current
@@ -497,7 +499,7 @@ fun ChatMessagesList(
     val statusBarTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val topPadding = statusBarTop + 72.dp
     val topPaddingPx = with(density) { topPadding.toPx().toInt() }
-    val topAnchorEngine = remember(scrollSessionKey) { TopAnchorReserveEngineState() }
+    val topAnchorEngine = topAnchorEngineState ?: remember(scrollSessionKey) { TopAnchorReserveEngineState() }
     val lastSentUserMessageId by viewModel.lastSentUserMessageId.collectAsState()
     val topAnchorItems = remember(chatItems) {
         mapChatItemsToTopAnchorItems(
@@ -531,9 +533,12 @@ fun ChatMessagesList(
         }.firstOrNull()
     }
 
-    LaunchedEffect(scrollSessionKey) {
-        topAnchorEngine.clearRuntime()
-        scrollStateManager.updateTopAnchorBottomScrollSuppression(false)
+    LaunchedEffect(topAnchorEngine) {
+        // 切回仍在回复的会话时沿用该会话的置顶与底部空间，没有可保留的空间才清掉。
+        topAnchorEngine.prepareForReattach()
+        scrollStateManager.updateTopAnchorBottomScrollSuppression(
+            topAnchorEngine.runtime.suppressesBottomScroll
+        )
     }
 
     DisposableEffect(scrollStateManager, topAnchorEngine, chatItems.lastIndex) {
@@ -554,7 +559,7 @@ fun ChatMessagesList(
         }
     }
 
-    LaunchedEffect(topAnchorEngine.runtime.suppressesBottomScroll) {
+    LaunchedEffect(topAnchorEngine, topAnchorEngine.runtime.suppressesBottomScroll) {
         scrollStateManager.updateTopAnchorBottomScrollSuppression(
             topAnchorEngine.runtime.suppressesBottomScroll
         )
@@ -583,6 +588,11 @@ fun ChatMessagesList(
     }
 
     val fadeBackgroundColor = MaterialTheme.colorScheme.background
+    // 云端任务交接后本机的 isTextApiCalling 会清空，但回答仍在写入；不算进来会被当成已答完，
+    // 用户一滑就把底部空间收回，整段会话往下掉。
+    val remoteLiveRun by viewModel.stateHolder._remoteLiveRun.collectAsState()
+    val isTopAnchorRunning = isApiCalling ||
+        remoteLiveRun?.let { it.running && it.message.conversationId == conversationId } == true
     val listBottomPadding = additionalBottomPadding + 12.dp
     // 与 LazyColumn 的 afterContentPadding 同帧取值，输入法开合时 reserve 同步抵消。
     val appliedTopAnchorReservePx = topAnchorEngine.runtime.reserveForBottomPadding(
@@ -601,7 +611,10 @@ fun ChatMessagesList(
                     anchorKey = anchorKey,
                     targetAnchorY = topPaddingPx,
                     trailingRealItemIndex = chatItems.lastIndex,
-                    isRunning = isApiCalling,
+                    isRunning = isTopAnchorRunning,
+                    anchorIsLatestUser = topAnchorItems.lastOrNull {
+                        it.role == com.android.everytalk.ui.topanchor.TopAnchorItemRole.User
+                    }?.id == anchorKey,
                     config = TopAnchorConfig(
                         tallAnchorThresholdPx = pinnedUserBubbleMaxHeightPx,
                         tallAnchorVisibleHeightPx = with(density) { 96.dp.toPx().toInt() },
