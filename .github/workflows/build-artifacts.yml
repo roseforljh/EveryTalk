@@ -168,7 +168,8 @@ jobs:
         run: |
           ./gradlew :app:testDebugUnitTest \
             --tests '*SshDownloadLinkTest' --tests '*ComputerToolCatalogTest' \
-            --tests '*ComputerToolCallSafetyTest' --tests '*ComputerAttachmentBridgeTest'
+            --tests '*ComputerToolCallSafetyTest' --tests '*ComputerAttachmentBridgeTest' \
+            --tests '*GitWorkingTreeTest' --tests '*FileChangesPresentationTest'
 
       - name: Build Android APK
         working-directory: ${{ env.APP_DIR }}

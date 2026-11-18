@@ -344,6 +344,12 @@ class ComputerToolExecutor(
         updateStatus: suspend (String?) -> Unit,
     ): JsonElement {
         val request = parseExecRequest(arguments, context, loadSecrets = true)
+        // 执行前后各比一次工作树；命令本身、审批和超时都不受影响，取不到就当作没有改动。
+        val treeBefore = runCatching {
+            repository.withConnection(context.computerId) { connection, _ ->
+                GitWorkingTree.tree(connection.execute(GitWorkingTree.command(request.cwd), timeoutMillis = 30_000, maxOutputBytes = 8_192).stdout)
+            }
+        }.getOrDefault("")
         val readOnlyRequest = ComputerToolCallSafety.isReadOnly(ComputerToolNames.EXEC, arguments)
         val runRequest: suspend (ComputerExecRequest) -> ComputerExecResult = { frozenRequest ->
             executeDirectRequestWithRetry(
@@ -378,7 +384,15 @@ class ComputerToolExecutor(
         } else {
             runRequest(request)
         }
+        val fileChanges = if (treeBefore.isEmpty()) emptyList() else runCatching {
+            repository.withConnection(context.computerId) { connection, _ ->
+                GitWorkingTree.parse(connection.execute(
+                    GitWorkingTree.command(request.cwd, treeBefore), timeoutMillis = 30_000, maxOutputBytes = 512 * 1024,
+                ).stdout)
+            }
+        }.getOrDefault(emptyList())
         return buildJsonObject {
+            if (fileChanges.isNotEmpty()) put("file_changes", GitWorkingTree.toJson(fileChanges))
             val status = result.remoteStatus ?: when {
                 result.timedOut -> ComputerRemoteStatus.TIMED_OUT
                 result.exitCode == 0 -> ComputerRemoteStatus.SUCCEEDED

@@ -1,5 +1,6 @@
 package com.android.everytalk.data.agent
 
+import com.android.everytalk.data.computer.GitWorkingTree
 import com.android.everytalk.data.database.daos.AgentDao
 import com.android.everytalk.data.database.entities.AgentContextSnapshotEntity
 import com.android.everytalk.data.database.entities.AgentCompactionEntryEntity
@@ -1626,6 +1627,8 @@ class AgentRunStore(
                                     json.decodeFromString(AgentContentBlock.ToolResult.serializer(), entry.payloadJson).durationMs
                                 }.getOrNull(),
                                 fileChange = tool.step.fileChange.takeUnless { failed },
+                                // exec 改没改文件由执行期的工作树差异决定；非零退出也可能已落盘，所以不看退出码。
+                                fileChanges = GitWorkingTree.fromResult(decodeToolResultEntry(entry)?.content),
                             ),
                             finishedAtMillis = entry.finalizedAt ?: entry.createdAt,
                         )

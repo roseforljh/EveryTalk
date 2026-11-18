@@ -5,6 +5,7 @@ import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.executionFileChange
+import com.android.everytalk.data.computer.GitWorkingTree
 import com.android.everytalk.data.database.AppDatabase
 import com.android.everytalk.data.database.entities.AgentRunEntity
 import com.android.everytalk.data.database.entities.AgentRunSnapshotChunkEntity
@@ -40,6 +41,7 @@ internal suspend fun CloudRunView.toMessage(base: Message, resolve: suspend (Str
                     detail = part.arguments?.toString(),
                     isError = part.isError,
                     fileChange = if (part.isError || !completed || !part.started) null else part.arguments?.let { executionFileChange(part.name, it) },
+                    fileChanges = if (!part.started) emptyList() else GitWorkingTree.fromResult(part.result),
                     computerId = part.arguments?.get("computer_id")?.jsonPrimitive?.content,
                     resultPreview = part.result?.toString()?.take(4_000),
                     durationMs = part.finishedAt?.takeIf { part.started }?.let { (it - part.startedAt).coerceAtLeast(0) },

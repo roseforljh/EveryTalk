@@ -7,6 +7,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import com.android.everytalk.data.DataClass.*
+import com.android.everytalk.data.DataClass.ExecutionFileChange
+import com.android.everytalk.data.DataClass.ExecutionFileEdit
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -82,6 +84,27 @@ class FileChangesPresentationTest {
         // 多文件总览默认收起；点开第二项后检查同步来的完整差异。
         rule.onNode(hasText("remote-2.kt") and hasText("已编辑")).performClick()
         rule.onNodeWithText("after-2").assertIsDisplayed()
+    }
+
+    @Test fun `exec按工作树差异报告的多文件改动同样显示胶囊`() {
+        val message = reply("exec", 0).copy(executionSteps = listOf(
+            ExecutionStep("exec-1", ExecutionStepType.Agent, "exec", toolName = "exec", completed = true,
+                fileChanges = listOf(
+                    ExecutionFileChange("src/a.kt", false, listOf(ExecutionFileEdit("old-a", "new-a"))),
+                    ExecutionFileChange("src/b.kt", false, listOf(ExecutionFileEdit("old-b", "new-b"))),
+                )),
+        ))
+        val running = mutableStateOf(true)
+        rule.setContent { MaterialTheme { Column {
+            FileChangesCapsule(listOf(message), message.id, running.value)
+            MessageFileChangesSummary(message, running.value)
+        } } }
+        // 不看工具名与命令：只要工作树差异存在，运行中和结束后都显示。
+        rule.onNodeWithText("2 个文件已更改").assertIsDisplayed()
+        rule.runOnIdle { running.value = false }
+        rule.onNodeWithText("查看变更").performClick()
+        rule.onNodeWithText("src/b.kt").assertIsDisplayed()
+        rule.onNodeWithText("new-b").assertIsDisplayed()
     }
 
     @Test fun `多文件总结默认三项展开收起并可打开指定文件差异`() {
