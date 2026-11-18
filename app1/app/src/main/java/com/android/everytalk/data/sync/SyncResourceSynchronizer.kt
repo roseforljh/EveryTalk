@@ -474,8 +474,13 @@ internal class SyncResourceSynchronizer(
         }
     }
 
-    /** 已存在的本地图片 URL 也转为附件，设备路径不会作为云端图片地址复制。 */
-    private fun mediaItems(message: MessageEntity): List<SelectedMediaItem> = message.attachments + message.imageUrls.orEmpty().mapNotNull { raw ->
+    /**
+     * 已存在的本地图片 URL 也转为附件，设备路径不会作为云端图片地址复制。
+     * 从 SSH 服务器下载的文件只留在本机，不上传云端：只有 ComputerAttachmentBridge 会写 savedDownloadPath。
+     */
+    private fun mediaItems(message: MessageEntity): List<SelectedMediaItem> = message.attachments.filterNot {
+        it is SelectedMediaItem.GenericFile && it.savedDownloadPath != null
+    } + message.imageUrls.orEmpty().mapNotNull { raw ->
         val uri = Uri.parse(raw)
         val local = when (uri.scheme) { "file" -> uri.path?.let(::File); null -> File(raw); else -> null }
         if (local?.isFile != true || message.attachments.any { (it as? SelectedMediaItem.ImageFromUri)?.filePath == local.absolutePath }) null
