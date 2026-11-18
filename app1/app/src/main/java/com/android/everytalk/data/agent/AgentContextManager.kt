@@ -2,6 +2,7 @@ package com.android.everytalk.data.agent
 
 import com.android.everytalk.data.DataClass.AbstractApiMessage
 import com.android.everytalk.data.DataClass.AgentAssistantApiMessage
+import com.android.everytalk.data.DataClass.AgentAssistantContentApiPart
 import com.android.everytalk.data.DataClass.AgentToolResultApiMessage
 import com.android.everytalk.data.DataClass.ApiContentPart
 import com.android.everytalk.data.DataClass.ChatRequest
@@ -307,16 +308,26 @@ class AgentContextManager(
     }
 
     /** 只估算目标模型实际会收到的块；原始历史与检查点指纹不受投影影响。 */
-    private fun estimateForTarget(messages: List<AbstractApiMessage>, request: ChatRequest) =
-        RequestTokenEstimator.estimate(
+    private fun estimateForTarget(messages: List<AbstractApiMessage>, request: ChatRequest): com.android.everytalk.statecontroller.RequestTokenEstimate {
+        // Responses 只回传加密 reasoning item，思考摘要原文从不发送，旧轮次的思考也不计入输入。
+        val dropsReasoningText = com.android.everytalk.data.DataClass.modelParameterProtocol(request.channel) ==
+            com.android.everytalk.data.DataClass.ModelParameterProtocol.CODEX
+        return RequestTokenEstimator.estimate(
             PiMessageTransformer.transform(messages, request).map { message ->
-                // Transformer 可能删光跨模型思考；空 contentParts 此时不是旧记录，不能再回读旧汇总。
-                if (message is AgentAssistantApiMessage && message.contentParts.isEmpty()) {
-                    message.copy(text = "", reasoning = "", toolCalls = emptyList())
+                val projected = if (dropsReasoningText && message is AgentAssistantApiMessage) {
+                    message.copy(
+                        reasoning = "",
+                        contentParts = message.contentParts.filterNot { it is AgentAssistantContentApiPart.Reasoning },
+                    )
                 } else message
+                // Transformer 可能删光跨模型思考；空 contentParts 此时不是旧记录，不能再回读旧汇总。
+                if (projected is AgentAssistantApiMessage && projected.contentParts.isEmpty()) {
+                    projected.copy(text = "", reasoning = "", toolCalls = emptyList())
+                } else projected
             },
             request.tools,
         )
+    }
 
     /**
      * 统一预算公式：
