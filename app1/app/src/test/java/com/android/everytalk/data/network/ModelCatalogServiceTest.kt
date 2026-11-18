@@ -405,6 +405,40 @@ class ModelCatalogServiceTest {
         }
     }
 
+    @Test
+    fun `大目录获取：详情只重复列表时只试探一次，详情有新参数才给缺参数的模型补`() = runTest {
+        for (richDetail in listOf(false, true)) {
+            val detailCalls = mutableListOf<String>()
+            val engine = testEngine { request ->
+                when (request.url.host) {
+                    "models.dev", "pi.dev" -> jsonResponse("{}")
+                    else -> when (val path = request.url.encodedPath) {
+                        "/v1/models" -> jsonResponse("""{"data":[${(0 until 200).joinToString(",") { i ->
+                            // 前 50 个列表里已带上下文和输出上限，不需要详情。
+                            if (i < 50) """{"id":"m$i","context_length":128000,"max_output_tokens":8000}""" else """{"id":"m$i"}"""
+                        }}]}""")
+                        else -> {
+                            val id = path.removePrefix("/v1/models/")
+                            detailCalls += id
+                            jsonResponse(if (richDetail) """{"id":"$id","context_length":64000,"max_output_tokens":4000}""" else """{"id":"$id"}""")
+                        }
+                    }
+                }
+            }
+            withService(engine) { service ->
+                val catalog = service.getCatalogWithCapabilities("https://relay.example/v1", "key", "OpenAI兼容")
+                assertEquals(200, catalog.map { it.modelId }.distinct().size)
+                if (richDetail) {
+                    assertEquals(150, detailCalls.size)
+                    assertTrue(detailCalls.none { it.removePrefix("m").toInt() < 50 })
+                    assertEquals(64_000, catalog.first { it.modelId == "m199" && it.contextWindowTokens != null }.contextWindowTokens)
+                } else {
+                    assertEquals(listOf("m50"), detailCalls)
+                }
+            }
+        }
+    }
+
     /** 让模拟网络与超时共享测试时钟，避免虚拟时间先于真实 IO 线程跳到截止时间。 */
     private fun TestScope.testEngine(
         handler: suspend MockRequestHandleScope.(HttpRequestData) -> HttpResponseData,
