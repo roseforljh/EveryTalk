@@ -72,7 +72,8 @@ fun MessageFileAttachmentScope(
                 if (!uri.startsWith(MESSAGE_FILE_SCHEME)) { fallback.openUri(uri); return }
                 val file = resolveMessageFile(uri, files)
                 if (file != null) { open(file); return }
-                if (sessionId == null || messageId == null || !opening.add(uri)) return
+                if (sessionId == null || messageId == null) { AppToast.show(context, unavailable); return }
+                if (!opening.add(uri)) return
                 scope.launch {
                     try {
                         // 先查当前消息的本地附件；只有缺失时才按当前账号、当前消息定向下载。
