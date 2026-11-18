@@ -228,7 +228,9 @@ class McpManager(private val context: Context) {
             val tools = state.tools.filter { it.enable && buildMcpToolAlias(config.id, it.name) in toolNames }
             if (tools.isEmpty()) continue
             val headers = config.headers.toMutableMap()
-            (mail.accessTokenFor(config) ?: oauth.accessTokenFor(config))?.let { token ->
+            val provider = McpOAuthProvider.forConfig(config)
+            val oauthToken = if (provider != null) oauth.currentTokenFor(config) else null
+            (mail.accessTokenFor(config) ?: oauthToken?.first)?.let { token ->
                 headers.keys.filter { it.equals("Authorization", true) }.forEach(headers::remove)
                 headers["Authorization"] = "Bearer $token"
             }
@@ -238,6 +240,12 @@ class McpManager(private val context: Context) {
                 put("transport", kotlinx.serialization.json.JsonPrimitive(if (config is McpServerConfig.SseTransportServer) "sse" else "streamable_http"))
                 put("headers", JsonObject(headers.mapValues { kotlinx.serialization.json.JsonPrimitive(it.value) }))
                 put("remoteName", kotlinx.serialization.json.JsonPrimitive(tool.name))
+                // 内置 OAuth 服务：只给服务器凭据位置与到期时间，续期由服务器做并写回账号同步。
+                if (provider != null && oauthToken != null) put("oauth", kotlinx.serialization.json.buildJsonObject {
+                    put("provider", kotlinx.serialization.json.JsonPrimitive(provider.key))
+                    put("localId", kotlinx.serialization.json.JsonPrimitive(config.id))
+                    oauthToken.second?.let { put("expiresAt", kotlinx.serialization.json.JsonPrimitive(it)) }
+                })
             }
         }
         check(toolNames.all { it in bindings }) { "本轮 MCP 工具连接已变化，请重新发送" }

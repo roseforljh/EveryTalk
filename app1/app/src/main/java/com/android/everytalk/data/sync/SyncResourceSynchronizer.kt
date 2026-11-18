@@ -62,13 +62,7 @@ internal class SyncResourceSynchronizer(
     override fun close() { historyDek?.fill(0); historyDek = null }
 
     suspend fun synchronize() {
-        val recovered = api.recoverHistoryKey()
-        require(recovered.version == 1L && recovered.secretsEpoch == 0L)
-        historyDek?.fill(0)
-        historyDek = SyncCrypto.decodeCanonicalBase64(recovered.dek).also { require(it.size == 32) }
-        // 已拿到历史密钥就清理旧配置缺失提示；后面的暂时限流不能继续显示“未配置主密钥”。
-        settings.deleteSetting("sync_rejected:services:resources")
-        chunkBytes = api.fileChunkBytes()
+        unlock()
         finalizeQueuedResources()
         repairRejectedResources()
         restoreAttachments()
@@ -119,6 +113,54 @@ internal class SyncResourceSynchronizer(
         settings.deleteSetting("sync_resource_republish")
     }
 
+    private suspend fun unlock() {
+        val recovered = api.recoverHistoryKey()
+        require(recovered.version == 1L && recovered.secretsEpoch == 0L)
+        historyDek?.fill(0)
+        historyDek = SyncCrypto.decodeCanonicalBase64(recovered.dek).also { require(it.size == 32) }
+        // 已拿到历史密钥就清理旧配置缺失提示；后面的暂时限流不能继续显示“未配置主密钥”。
+        settings.deleteSetting("sync_rejected:services:resources")
+        chunkBytes = api.fileChunkBytes()
+    }
+
+    /**
+     * 云端任务提交前定向封存这些消息的原始资源（媒体原文件、超长正文与执行轨迹归档），不等整账号同步积压。
+     * [required] 是本轮问题：每次都重新确认文件就绪，失败直接抛出；其它待上传消息失败只跳过，留给常规同步。
+     * 附件行和 queued 标记照常落盘，任务提交后常规同步只会得到 unchanged 并收尾。返回已就绪的消息 UUID 与附件 ID。
+     */
+    suspend fun prepareSubmission(uuids: List<String>, required: String): Pair<Set<String>, List<String>> {
+        val ready = linkedSetOf<String>()
+        val attachments = mutableListOf<String>()
+        var unlocked = false
+        for (uuid in uuids) {
+            val message = chat.getMessageByUuid(uuid)?.takeUnless { it.deleted } ?: continue
+            val session = chat.getStoredSession(message.sessionId)?.takeUnless { it.deleted } ?: continue
+            val revision = "$user:${message.storageFingerprint}"
+            val confirmed = settings.getValue("sync_resource_source:$uuid") == revision
+            val queued = settings.getValue("sync_resource_queued:$uuid")?.let { syncJson.decodeFromString<SyncQueuedResource>(it).revision } == revision
+            // 已确认的不重传；仅排队未确认的本轮问题要重新确认文件仍就绪（排队可能跨过服务端未引用文件的回收期）。
+            if (!(needsArchive(message) || mediaItems(message).isNotEmpty()) || confirmed || queued && uuid != required) { ready += uuid; continue }
+            try {
+                if (!unlocked) { unlock(); unlocked = true }
+                queuedAttachments.clear(); retiringAttachments.clear()
+                uploadMessage(message, session)
+            } catch (cancelled: CancellationException) { throw cancelled
+            } catch (error: Exception) {
+                if (uuid == required) throw IllegalStateException("问题附件未能上传到云端，请检查网络后重发", error)
+                continue
+            }
+            if (chat.getMessageByUuid(uuid)?.storageFingerprint != message.storageFingerprint) {
+                check(uuid != required) { "问题在提交过程中被修改，请重发" }
+                continue
+            }
+            settings.insertSetting(SystemSettingEntity("sync_resource_queued:$uuid", syncJson.encodeToString(
+                SyncQueuedResource.serializer(), SyncQueuedResource(revision, queuedAttachments.toMap(), retiringAttachments.toList()))))
+            ready += uuid
+            attachments += queuedAttachments.keys
+        }
+        return ready to attachments
+    }
+
     /** 只有本版本的全部引用已获确认才收尾；排队完成不能当成同步完成。 */
     private suspend fun finalizeQueuedResources() {
         // 摘要不随锚点消息正文变化失效；全部块确认后再退休旧版本，并回收它自己的密文。
@@ -135,6 +177,7 @@ internal class SyncResourceSynchronizer(
                 settings.deleteSetting(entry.key)
             }
             root.listFiles()?.filter { it.name.startsWith("compaction-${hashBytes(queued.revision.toByteArray())}-") }?.forEach { it.delete() }
+            deleteConfirmedAttachmentFiles(queued.attachments.keys + queued.retired)
         }
         for (entry in settings.getByPrefix("sync_resource_queued:")) {
             val messageId = entry.key.substringAfter(':')
@@ -158,6 +201,38 @@ internal class SyncResourceSynchronizer(
                 settings.deleteSetting(entry.key)
             }
             root.listFiles()?.filter { it.name.startsWith("out-$messageId-") || it.name.startsWith("tool-$messageId-") }?.forEach { it.delete() }
+            deleteConfirmedAttachmentFiles(queued.attachments.keys + queued.retired)
+        }
+    }
+
+    /**
+     * 引用已获服务端确认后，清理上传阶段缓存在 sync-resources 下的加密分块文件。
+     * 若单块媒体附件直接以该缓存文件作为本机展示路径，则保留。
+     */
+    private suspend fun deleteConfirmedAttachmentFiles(attachmentIds: Collection<String>) {
+        if (settings.getByPrefix("sync_rejected:").any { it.value == "FILE_NOT_READY" }) return
+        for (id in attachmentIds) {
+            val row = db.syncAttachmentDao().get(id) ?: continue
+            val fileId = row.fileId ?: continue
+            val cached = File(root, "$fileId-${row.sha256}")
+            if (!cached.isFile) continue
+            val meta = settings.getValue("sync_resource_meta:$id")?.let {
+                runCatching { syncJson.parseToJsonElement(it).jsonObject }.getOrNull()
+            }
+            val role = meta?.get("role")?.jsonPrimitive?.contentOrNull
+            if (!row.deleted && role in setOf(null, "media") && meta?.get("chunkCount") == null) {
+                val message = chat.getMessageByUuid(row.messageId)
+                val referenced = message?.attachments.orEmpty().any { item ->
+                    when (item) {
+                        is SelectedMediaItem.ImageFromUri -> item.filePath == cached.absolutePath
+                        is SelectedMediaItem.GenericFile -> item.filePath == cached.absolutePath
+                        is SelectedMediaItem.Audio -> item.filePath == cached.absolutePath
+                        else -> false
+                    }
+                }
+                if (referenced) continue
+            }
+            cached.delete()
         }
     }
 
@@ -280,9 +355,12 @@ internal class SyncResourceSynchronizer(
         fun collectResults(element: JsonElement) {
             when (element) {
                 is JsonObject -> {
-                    element["fullResultPath"]?.jsonPrimitive?.contentOrNull?.let { path ->
-                        val file = safeResultFile(path)
-                        if (file.isFile && file.length() > 0) results[path] = file
+                    // 仅同步发生过截断的工具结果文件；未截断结果已在 AgentEntryEntity.payloadJson 内完整随历史归档同步。
+                    if (element["truncated"]?.jsonPrimitive?.booleanOrNull != false) {
+                        element["fullResultPath"]?.jsonPrimitive?.contentOrNull?.let { path ->
+                            val file = safeResultFile(path)
+                            if (file.isFile && file.length() > 0) results[path] = file
+                        }
                     }
                     element.values.forEach(::collectResults)
                 }
@@ -565,16 +643,7 @@ internal class SyncResourceSynchronizer(
                     settings.insertSetting(SystemSettingEntity(marker, "true"))
                 }
                 if (settings.getValue(marker) == null) settled = false
-            }
-            val toolFiles = entries.filter { it.second["role"]?.jsonPrimitive?.contentOrNull == "tool_result" }
-                .groupBy { it.second.getValue("resultPath").jsonPrimitive.content }
-            for ((path, parts) in toolFiles) {
-                val metadata = parts.maxBy { it.first.updatedAt }.second
-                val chosen = parts.filter { it.second["originalDigest"] == metadata["originalDigest"] && it.second["resourceVersion"] == metadata["resourceVersion"] }.sortedBy { it.second.getValue("chunkIndex").jsonPrimitive.int }
-                if (chosen.size != metadata.getValue("chunkCount").jsonPrimitive.int) continue
-                val encrypted = assemble(chosen.map { (record, _) -> SyncFileInfo(requireNotNull(record.fileId), record.size, record.sha256, record.mime) },
-                    metadata.getValue("originalSize").jsonPrimitive.long, metadata.getValue("originalDigest").jsonPrimitive.content)
-                decryptResult(encrypted, safeResultFile(path), entries.first().first.sessionId, messageId, path)
+                else deleteConfirmedAttachmentFiles(parts.map { it.first.id })
             }
             val archives = entries.filter { it.second["role"]?.jsonPrimitive?.contentOrNull == "message_archive" &&
                 it.second["keyVersion"]?.jsonPrimitive?.longOrNull == 1L }
@@ -665,6 +734,32 @@ internal class SyncResourceSynchronizer(
                     com.android.everytalk.data.computer.ComputerCredentialStore(context).deleteCloudAgentInput(user, archived.id)
                 }
                 if (settings.getValue(marker) != restoredRevision) settled = false
+                else deleteConfirmedAttachmentFiles(archives.map { it.first.id })
+            }
+            val toolFiles = entries.filter { it.second["role"]?.jsonPrimitive?.contentOrNull == "tool_result" }
+                .groupBy { it.second.getValue("resultPath").jsonPrimitive.content }
+            val existingEntries = if (toolFiles.isNotEmpty()) {
+                db.agentDao().getRunByVisibleMessage(message.id)?.let { db.agentDao().getEntries(it.id) }.orEmpty()
+            } else emptyList()
+            for ((path, parts) in toolFiles) {
+                val metadata = parts.maxBy { it.first.updatedAt }.second
+                val chosen = parts.filter { it.second["originalDigest"] == metadata["originalDigest"] && it.second["resourceVersion"] == metadata["resourceVersion"] }.sortedBy { it.second.getValue("chunkIndex").jsonPrimitive.int }
+                if (chosen.size != metadata.getValue("chunkCount").jsonPrimitive.int) continue
+                // 旧版曾将未截断的短工具结果也作为独立附件上传；正文已在 agent_entries 内时跳过下载和落盘。
+                if (existingEntries.any { it.payloadJson.contains(path) && it.payloadJson.contains("\"truncated\":false") }) {
+                    deleteConfirmedAttachmentFiles(chosen.map { it.first.id })
+                    continue
+                }
+                val target = safeResultFile(path)
+                val digest = metadata.getValue("originalDigest").jsonPrimitive.content
+                if (!target.isFile || target.length() == 0L) {
+                    val encrypted = assemble(chosen.map { (record, _) -> SyncFileInfo(requireNotNull(record.fileId), record.size, record.sha256, record.mime) },
+                        metadata.getValue("originalSize").jsonPrimitive.long, digest)
+                    decryptResult(encrypted, target, entries.first().first.sessionId, messageId, path)
+                }
+                // 工具结果已解密落盘到 agent_tool_results，立即删除拼接密文与加密分块，避免同一工具结果在本地保存三份。
+                File(root, "assembled-$digest").delete()
+                deleteConfirmedAttachmentFiles(chosen.map { it.first.id })
             }
             val media = entries.filter { it.second["role"]?.jsonPrimitive?.contentOrNull in setOf(null, "media") && it.first.fileId != null }
             if (media.isNotEmpty()) {
@@ -672,11 +767,15 @@ internal class SyncResourceSynchronizer(
                     .sortedBy { it.first().first.position }.map { parts ->
                     val (attachment, metadata) = parts.maxBy { it.first.updatedAt }
                     val local = if (metadata["chunkCount"] != null) {
-                        val infos = parts.filter { it.second["originalDigest"] == metadata["originalDigest"] && it.second["resourceVersion"] == metadata["resourceVersion"] }.sortedBy { it.second.getValue("chunkIndex").jsonPrimitive.int }.map { (record, _) ->
+                        val matchingParts = parts.filter { it.second["originalDigest"] == metadata["originalDigest"] && it.second["resourceVersion"] == metadata["resourceVersion"] }.sortedBy { it.second.getValue("chunkIndex").jsonPrimitive.int }
+                        val infos = matchingParts.map { (record, _) ->
                             SyncFileInfo(requireNotNull(record.fileId), record.size, record.sha256, record.mime)
                         }
                         require(infos.size == metadata.getValue("chunkCount").jsonPrimitive.int)
-                        assemble(infos, metadata.getValue("originalSize").jsonPrimitive.long, metadata.getValue("originalDigest").jsonPrimitive.content)
+                        assemble(infos, metadata.getValue("originalSize").jsonPrimitive.long, metadata.getValue("originalDigest").jsonPrimitive.content).also {
+                            // 多块媒体已拼接为完整原件 assembled-<hash>，原始分块可立即释放。
+                            deleteConfirmedAttachmentFiles(matchingParts.map { it.first.id })
+                        }
                     } else file(attachment)
                     val mediaId = metadata["mediaId"]?.jsonPrimitive?.contentOrNull ?: attachment.id
                     when (attachment.kind) {
@@ -687,8 +786,8 @@ internal class SyncResourceSynchronizer(
                 }
                 db.withTransaction {
                     val current = chat.getMessageByUuid(messageId)?.takeUnless { it.deleted } ?: return@withTransaction
-                    // 原设备已有可读原件时保留路径；本机文件丢失则允许用云端原件补回。
-                    if ((current.id.startsWith("cloud:") || current.attachments.any { materialize(it) == null }) && current.attachments != items) {
+                    // 原设备已有可读原件时保留路径；本机文件丢失或本机根本没有（云端任务产物）则用云端原件补回。
+                    if ((current.id.startsWith("cloud:") || current.attachments.isEmpty() || current.attachments.any { materialize(it) == null }) && current.attachments != items) {
                         val restored = current.toMessage().copy(attachments = items).toEntity(current.sessionId).copy(
                             uuid = current.uuid, updatedAt = current.updatedAt, syncStatus = current.syncStatus, everSynced = current.everSynced)
                         chat.writeMessages(listOf(restored))
@@ -890,7 +989,12 @@ internal class SyncResourceSynchronizer(
                 val hash = entry.getValue("sha256").jsonPrimitive.content
                 val parts = entry["chunks"]?.let { syncJson.decodeFromJsonElement(ListSerializer(SyncFileInfo.serializer()), it) }
                     ?: listOf(SyncFileInfo(entry.getValue("fileId").jsonPrimitive.content, size, hash, "application/octet-stream"))
-                target.parentFile?.mkdirs(); assemble(parts, size, hash).copyTo(target, overwrite = true)
+                target.parentFile?.mkdirs()
+                val assembledExisted = File(root, "assembled-$hash").isFile
+                val assembled = assemble(parts, size, hash)
+                assembled.copyTo(target, overwrite = true)
+                if (!assembledExisted) assembled.delete()
+                parts.forEach { part -> File(root, "${part.fileId}-${part.sha256}").delete() }
             }
             val validated = SkillPackageValidator.validate(directory)
             require(validated.contentHash == skill.currentHash) { "Skill 文件版本校验失败" }

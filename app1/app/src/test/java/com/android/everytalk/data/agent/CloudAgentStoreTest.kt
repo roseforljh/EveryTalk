@@ -57,11 +57,25 @@ class CloudAgentStoreTest {
             assertEquals(28 + controls.size, withControls.size)
             assertEquals("\"question\"", kind(AgentControlToolNames.REQUEST_USER_INPUT))
             assertEquals("\"device\"", kind(com.android.everytalk.data.computer.ComputerToolNames.LOCAL_FILE_SAVE))
-            assertEquals("\"device\"", kind(AgentControlToolNames.REQUEST_AGENT))
-            assertEquals("\"device\"", kind(AgentControlToolNames.REQUEST_SKILL_SECRET))
+            assertEquals("\"agent_request\"", kind(AgentControlToolNames.REQUEST_AGENT))
+            // 凭据与 MCP 开启由服务器处理：不再回发起手机准备执行环境。
+            assertEquals("\"secret\"", kind(AgentControlToolNames.REQUEST_SKILL_SECRET))
+            assertEquals("\"secret\"", kind(AgentControlToolNames.REQUEST_PROTECTED_SECRET))
+            assertEquals("\"mcp_request\"", kind(AgentControlToolNames.REQUEST_MCP))
+            assertEquals("\"capability\"", kind(AgentControlToolNames.REQUEST_CAPABILITY))
+            // 旧后端（未声明能力）自动退回设备执行，不会因为能力不认识而失败。
+            suspend fun legacy(name: String) = (cloudAgentTools(context, request.copy(tools = listOf(tool(name))), emptyList(), skills, null, emptySet())
+                .single { it.jsonObject["name"].toString() == "\"$name\"" }.jsonObject.getValue("binding").jsonObject)["kind"].toString()
+            assertEquals("\"device\"", legacy(AgentControlToolNames.REQUEST_SKILL_SECRET))
+            assertEquals("\"device\"", legacy(AgentControlToolNames.REQUEST_AGENT))
             assertEquals(listOf("\"${AgentToolResultReadTool.NAME}\""), cloudAgentTools(context,
                 request.copy(tools = listOf(mapOf("googleSearch" to emptyMap<String, Any>()))), emptyList(), skills).map { it.jsonObject["name"].toString() })
-            assertEquals("\"device\"", only("everytalk_memory", cloudAgentTools(context, request.copy(tools = listOf(tool("everytalk_memory"))), emptyList(), skills)))
+            // 记忆由服务器读写：绑定只带本轮问题原文作为写入依据，手机离线也不影响。
+            val snapshot = com.android.everytalk.data.memory.MemoryRequestSnapshot(com.android.everytalk.data.memory.MemoryWriteContext(1, "s", "u",
+                com.android.everytalk.data.memory.MemoryOrigin.CHAT_EXPLICIT), "请记住：喜欢绿茶", "")
+            val memory = cloudAgentTools(context, request.copy(tools = listOf(tool("everytalk_memory")), localMemorySnapshot = snapshot), emptyList(), skills)
+                .single { it.jsonObject["name"].toString() == "\"everytalk_memory\"" }.jsonObject.getValue("binding").jsonObject
+            assertEquals("\"memory\"", memory["kind"].toString()); assertEquals("\"请记住：喜欢绿茶\"", memory["userText"].toString())
         } finally { db.close() }
     }
 
@@ -91,11 +105,14 @@ class CloudAgentStoreTest {
                     session.id, "a", "workspace-a", selectedTargets = targets))
             val input = AgentLoopRequest(request, session.id, user.id, "missing-ai", ModelTokenLimits(512, 8_000))
             var submitted = false
+            val manifest = buildJsonObject { put("version", 1) }
             val run = prepareCloudAgentSubmission(context, db, AgentRunStore(db.agentDao()),
                 com.android.everytalk.data.skill.SkillRepository(context, db.skillDao()),
                 com.android.everytalk.data.memory.MemoryCoordinator(db, scope), input, account, epochs, null, { true },
-                compact = { _, _, _, _ -> fail("小请求不需要压缩") }, beforePersist = { _, _ -> }) { pending, frozen, _ ->
+                submission = manifest, beforePersist = { _, _ -> }) { pending, frozen, _ ->
                 submitted = true
+                // 清单随输入一起冻结，重试 POST 的字节不变。
+                assertEquals(manifest, frozen["submission"])
                 val draft = checkNotNull(chat.getDraft(session.id, input.visibleAssistantMessageId)).message
                 assertEquals(draft.uuid, frozen["assistantMessageUuid"]?.jsonPrimitive?.content)
                 assertEquals(pending.id, frozen["id"]?.jsonPrimitive?.content)
@@ -140,7 +157,7 @@ class CloudAgentStoreTest {
                 com.android.everytalk.data.skill.SkillRepository(context, db.skillDao()),
                 com.android.everytalk.data.memory.MemoryCoordinator(db, scope),
                 AgentLoopRequest(request, session.id, user.id, "budget-ai", ModelTokenLimits(512, 8_000)),
-                account, 0L to 0L, null, { true }, compact = { _, _, _, _ -> fail("未声明工具不能触发压缩") },
+                account, 0L to 0L, null, { true },
                 beforePersist = { _, _ -> }) { _, frozen, original ->
                 submitted = true
                 assertEquals(tools, original.tools)
@@ -164,6 +181,49 @@ class CloudAgentStoreTest {
         val answering = view.copy(snapshot = view.snapshot.copy(text = "回答", trace = view.snapshot.trace +
             CloudRunTrace("content", 3, text = "回答"))).toMessage(base) { it }
         assertTrue(answering.contentStarted)
+    }
+
+    @Test fun `云端恢复沿用持久起止时间而不采用重建气泡时间`() = runBlocking {
+        val view = CloudRunView(1, account, account, account, account, "COMPLETED", 1, 5,
+            CloudRunSnapshot("结果", "", listOf(CloudRunTrace("content", 1_500, text = "结果")), null, 1_000, 8_000))
+        for (rebuiltAt in listOf(1_100L, 60_000L, 9_000_000L)) {
+            val message = view.toMessage(Message(id = "ai", text = "", sender = Sender.AI, timestamp = rebuiltAt)) { it }
+            assertEquals(1_000L, message.timestamp)
+            assertEquals(7_000L, message.executionFinishedAt!! - message.timestamp)
+        }
+    }
+
+    @Test fun `归档先于最后SSE时完整终稿交回当前会话且无需重新进页面`() = runBlocking {
+        val db = database()
+        try {
+            val chat = db.chatDao()
+            val session = ChatSessionEntity("archive-handoff", 1, 1, false)
+            val question = Message(id = "question", text = "问题", sender = Sender.User, timestamp = 10).toEntity(session.id)
+            val placeholder = Message(id = "answer", text = "", sender = Sender.AI, timestamp = 20,
+                conversationId = session.id, executionStatus = "正在请求模型")
+            chat.writeSession(session); chat.writeMessages(listOf(question)); chat.writeDrafts(listOf(MessageDraftEntity(placeholder.toEntity(session.id))))
+            val store = CloudAgentStore(db)
+            val run = store.prepare(account, session.id, question.id, placeholder.id, null)
+            assertNull(store.completedMessage(account, run.id))
+            val final = placeholder.copy(text = "后台完整回答", reasoning = "完整思考", executionStatus = null,
+                executionFinishedAt = 500, executionTrace = listOf(ExecutionTraceEvent.Reasoning("完整思考", 30),
+                    ExecutionTraceEvent.Content("后台完整回答", 400)))
+            chat.writeMessages(listOf(final.toEntity(session.id))); chat.deleteDrafts(session.id, listOf(final.id))
+            db.agentDao().upsertRun(run.copy(status = "COMPLETED", terminalReason = "SYNC_HISTORY_ONLY"))
+            assertNull(store.read(run.id))
+            assertNull(store.completedMessage("aeff1b26-d0fb-4ee9-98c7-d2cab5418672", run.id))
+            val completed = checkNotNull(CloudAgentStore(db).completedMessage(account, run.id))
+            val state = com.android.everytalk.statecontroller.ViewModelStateHolder()
+            state.setCurrentConversationId(session.id)
+            state.messages.addAll(listOf(question.toMessage(), placeholder))
+            state.updateRemoteLiveRun(com.android.everytalk.statecontroller.RemoteLiveRun(session.uuid, completed, false, run.id))
+            assertEquals(final.text, state.messages.last().text)
+            assertEquals(final.executionTrace, state.messages.last().executionTrace)
+            assertEquals(480L, state.messages.last().executionFinishedAt!! - state.messages.last().timestamp)
+            assertFalse(state._remoteLiveRun.value!!.running)
+            chat.writeMessages(listOf(final.toEntity(session.id).copy(deleted = true)))
+            assertNull(store.completedMessage(account, run.id))
+        } finally { db.close() }
     }
 
     @Test fun `云端未开始工具保持原序不生成耗时和成功改动`() = runBlocking {

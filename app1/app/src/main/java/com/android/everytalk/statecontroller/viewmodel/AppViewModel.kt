@@ -320,7 +320,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         stateHolder = stateHolder,
         historyManager = historyManager,
         scope = viewModelScope,
-        onTextHistoryLoaded = { apiHandler.restoreVisibleAgentState() },
+        onTextHistoryLoaded = {
+            apiHandler.restoreVisibleAgentState()
+            apiHandler.refreshCloudRuns()
+        },
         loadHistorySession = persistenceManager::loadHistorySession,
     )
 
@@ -1417,7 +1420,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                             ?: if (cloudRunId != null) run.message.id else "cloud:${run.messageUuid}"
                         val message = com.android.everytalk.data.sync.mapLiveMessageReferences(run.message, chatDao::resolveLocalMessageReference)
                         com.android.everytalk.statecontroller.RemoteLiveRun(sessionUuid, message.copy(id = localId, conversationId = currentId,
-                            executionStatus = message.executionStatus.takeIf { run.running || message.isError }), run.running,
+                            executionStatus = if (run.running) listOfNotNull(message.executionStatus, run.connectionStatus)
+                                .joinToString("\n").takeIf(String::isNotEmpty) else message.executionStatus.takeIf { message.isError }), run.running,
                             cloudRunId = cloudRunId)
                     }
                     // 先交接终稿再放开下一轮发送；读取期间切页则丢弃旧会话结果。

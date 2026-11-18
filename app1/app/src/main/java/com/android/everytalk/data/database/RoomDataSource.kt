@@ -405,6 +405,7 @@ class RoomDataSource(context: Context, private val database: AppDatabase = AppDa
             chatDao.clearAllSessions(isImageGen = false)
             chatDao.clearAllSessions(isImageGen = true)
         }
+        java.io.File(applicationContext.filesDir, "agent_tool_results").deleteRecursively()
     }
 
     suspend fun clearImageGenerationHistory() {

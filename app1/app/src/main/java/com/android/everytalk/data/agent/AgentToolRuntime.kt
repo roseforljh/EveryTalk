@@ -110,11 +110,16 @@ class AgentToolRuntime(
                 ?.let { emit(AppStreamEvent.WebSearchResults(it)) }
             val images = extractToolResultImages(raw)
             val modelRaw = stripUiOnlyFields(raw)
-            val archive = runId?.let { resultStore?.archive(it, preparedCall.id, modelRaw) }
             val bounded = if (forScript) scriptResult(execution.scriptContent ?: modelRaw) else boundModelToolResult(
                 result = modelRaw,
                 maxTokens = maxModelResultTokens.coerceIn(64L, MAX_AGENT_TOOL_RESULT_TOKENS),
             )
+            // 仅当发给模型的工具结果发生截断时才写入本地完整归档，避免短结果产生大量 4KB 小文件与云同步附件。
+            val archive = if (!forScript && bounded.truncated && runId != null) {
+                resultStore?.archive(runId, preparedCall.id, modelRaw)
+            } else {
+                null
+            }
             val isError = execution.isError ?: modelRaw.isToolFailureEnvelope()
             val budget = maxModelResultTokens.coerceIn(64L, MAX_AGENT_TOOL_RESULT_TOKENS)
             val hint = "\n[Full result: tool_result_read({\"tool_call_id\":" + JsonPrimitive(preparedCall.id).toString() + "})]"

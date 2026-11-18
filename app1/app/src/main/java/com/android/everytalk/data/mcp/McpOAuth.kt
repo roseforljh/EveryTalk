@@ -271,6 +271,19 @@ class McpOAuthManager(
         }
     }
 
+    /**
+     * 登录后的云端任务只冻结当前令牌和到期时间，不在手机上续期：续期由服务器做并经同步写回，
+     * 避免手机和服务器同时拿同一个 refresh token 互相把对方作废。
+     */
+    suspend fun currentTokenFor(config: McpServerConfig): Pair<String, Long?>? {
+        val provider = McpOAuthProvider.forConfig(config) ?: return null
+        return locks.getValue(provider).withLock {
+            val token = secrets.read("token:${provider.key}")?.let { json.decodeFromString<McpAuthorizationSecret>(it) }
+                ?: error("请先登录 ${provider.displayName}")
+            token.accessToken to token.expiresAtMillis
+        }
+    }
+
     suspend fun logout(provider: McpOAuthProvider) = locks.getValue(provider).withLock {
         secrets.remove("pending:${provider.key}")
         secrets.remove("token:${provider.key}")

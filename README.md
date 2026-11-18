@@ -50,6 +50,8 @@ When a sync server is configured, signing in automatically merges local and acco
 
 Encrypted server backups may remain for up to 7 days after deletion. The client is open source; final permission, membership, and quota decisions are made by the server.
 
+When signed in, a whole Agent task runs on the EveryTalk server. On send, the phone submits, encrypted, the conversation's not-yet-synced original question and attachments, the model endpoint and key, connection details for the tools selected this turn (SSH credentials and the current Cloudflare and built-in MCP access tokens), and the Workspace files when deploy or upload tools are available. After that, switching screens, locking, losing network, rebooting or even uninstalling does not affect the task; any device on the same account can follow it and handle confirmations or unknown-result decisions. Memory reads and writes, background memory consolidation, server commands, terminal sessions, Cloudflare operations, enabling MCP, Skill secrets and server environment variables all run in the cloud, and expiring provider tokens are refreshed by the server and written back through account sync. Files downloaded from a server become cloud attachments on the reply that any device can open or export, so the task never waits for the phone to save them. Private port previews go through a cloud proxy (the backend needs `PUBLIC_BASE_URL`) to the target server's local port, with an expiring, revocable link. Private-network servers the cloud cannot reach are reported as unreachable instead of falling back to the phone; re-authorizing Cloudflare or signing in to an MCP service again still has to be done on a phone before resending.
+
 ---
 
 ## 📚 Document Index

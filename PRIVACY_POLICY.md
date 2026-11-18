@@ -41,6 +41,8 @@ When a sync server is configured, signing in automatically merges local and acco
 
 The sync service stores this data on servers in Germany. If you use the app in mainland China, signing in involves cross border transfer of the listed data. Encrypted server backups may remain for up to 7 days after deletion. The Android client is open source; server side permission, membership, and quota decisions are made by the server.
 
+When signed in, Agent tasks run on the EveryTalk server. On send, the app submits, encrypted, the conversation's not-yet-synced original question and attachments, the model endpoint and key, connection details for the tools selected this turn (SSH credentials of the selected servers and a renewed Cloudflare access token, never the refresh token), and the Workspace files when deploy or upload tools are available. The server uses them to call the model, run tools, read and write your account memory, and store downloaded files as cloud attachments on your account; afterwards the encrypted task input stays with the task record on the server and is removed when you clear your account's cloud data. Terminal sessions during a task exist only in server memory and are lost if the service restarts.
+
 ### 3. Permissions
 
 - **Internet:** Connects to AI, speech, image, search, MCP, and report services.
@@ -144,6 +146,8 @@ EveryTalk 本身不提供 AI 模型。当你主动使用联网功能时，应用
 配置同步服务器时，登录后会自动合并本地与账号的会话、消息文字、思考过程、长期记忆、置顶和分组，不需要另外开启同步。退出后停止账号同步并保留本机副本；重新登录同一账号时，会同步游客期间的新数据。换成另一个账号时，会先询问如何处理已有本地数据，再决定是否上传。账号同步包括模型、语音和搜索配置及 Key、MCP headers 和授权、远程电脑设置及 SSH 凭据、Skill 文件与变量值、聊天图片和附件，以及文字会话的完整正文、思考、工具轨迹和结果。凭据和完整历史归档会先用 AES-GCM 加密。服务端以独立部署密钥包裹账号恢复密钥，具有解密这些同步机密的能力，不是只有你能解密。新设备通过账号鉴权自动恢复，再存入该设备自己的 Android Keystore。生图对话、草稿、待执行命令、端口转发和实时连接状态不复制。第三方可撤销授权，恢复凭据不代表远程连接此刻可用。
 
 同步数据存储在德国的服务器上。中国大陆用户登录后会涉及上述数据的跨境传输。服务器的加密备份在删除后最多保留 7 天。客户端代码开源，但具体权限、会员资格和额度由服务器判断。
+
+登录后，Agent 任务在 EveryTalk 服务器上执行。发送时，应用把本会话尚未同步的原问题与附件、模型接口地址与 Key、本轮选中工具的连接信息（所选服务器的 SSH 凭据、Cloudflare 与内置 MCP 的当前访问令牌），以及可用部署或上传工具时的 Workspace 文件加密后提交到服务器。服务器用这些信息调用模型、执行工具、读写并自动整理你的账号记忆、在需要时续期平台令牌并写回账号同步、把下载的文件存为账号云端附件；私有端口预览通过云端代理转发，链接带有效期并可撤销。任务结束后，加密的任务输入随任务记录保存在服务器，清空账号云端数据时一并删除。任务执行期间的终端会话只存在于服务器内存，服务重启即丢失。
 
 ### 3. 权限用途
 

@@ -21,6 +21,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.io.IOException
@@ -149,6 +150,20 @@ internal class CloudAgentClient(
         return decode(request("/$id/commands", HttpMethod.Post, command.toString())).also { check(it.id == id) { "云端任务响应身份不匹配" } }
     }
 
+    /** 服务器声明支持的能力；旧后端没有这个入口时返回空集，调用方按旧绑定回退。 */
+    suspend fun capabilities(): Set<String> = try {
+        val root = cloudAgentJson.parseToJsonElement(request("/capabilities")).jsonObject
+        root["features"]?.jsonArray?.map { it.jsonPrimitive.content }.orEmpty().toSet()
+    } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled
+    } catch (_: Exception) { emptySet() }
+
+    /** 受保护 Secret 走独立入口：正文只在这一次请求里出现，不进命令回放，也不进历史。 */
+    suspend fun secret(id: String, command: JsonObject): CloudRunView {
+        requireCloudUuid(id)
+        requireCloudUuid(command.getValue("commandId").jsonPrimitive.content)
+        return decode(request("/$id/secret", HttpMethod.Post, command.toString())).also { check(it.id == id) { "云端任务响应身份不匹配" } }
+    }
+
     /**
      * 一个连接先收完整快照，再接递增事件；断线交给调用方带持久游标重连。
      * SSE 与等待工具/审批均无 120 秒限制；90 秒只用于发现半开连接。
@@ -201,7 +216,7 @@ internal class CloudAgentClient(
 
     private suspend fun access(force: Boolean): String {
         check(permitted()) { "云端任务账号授权已变更" }
-        return token(force) ?: throw IOException("登录已失效，云端任务等待重新连接")
+        return token(force) ?: throw IOException("登录已失效，请重新登录以查看云端进度")
     }
 
     private suspend fun request(path: String, method: HttpMethod = HttpMethod.Get, body: String? = null): String {

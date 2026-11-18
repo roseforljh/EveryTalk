@@ -66,4 +66,19 @@ class AgentToolResultStoreTest {
         store.deleteRun("run-archive")
         assertFalse(file.exists())
     }
+
+    @Test
+    fun `未发生截断的短工具结果不落盘生成归档文件`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val store = AgentToolResultStore(context)
+        val runtime = AgentToolRuntime(
+            executorProvider = { { _, _, _, _, _ -> com.android.everytalk.data.network.AppToolExecutionResult(JsonPrimitive("短结果")) } },
+            approvalProvider = { null },
+            resultStore = store,
+        )
+        val call = AgentContentBlock.ToolCall("short-call", "exec", kotlinx.serialization.json.buildJsonObject {})
+        val result = runtime.execute(call, null, maxModelResultTokens = 512L, runId = "short-run", emit = {})
+        assertFalse(result.truncated)
+        assertEquals(null, result.fullResultPath)
+    }
 }

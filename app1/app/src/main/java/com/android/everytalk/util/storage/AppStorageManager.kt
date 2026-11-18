@@ -4,9 +4,11 @@ import android.app.usage.StorageStatsManager
 import android.content.Context
 import android.os.Build
 import android.os.storage.StorageManager
+import com.android.everytalk.data.database.AppDatabase
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.security.MessageDigest
 
 /** 数据管理页展示的占用类型。 */
 enum class StorageDetailType {
@@ -72,7 +74,8 @@ class AppStorageManager(context: Context) {
         ).sumOf(::directorySize)
         val skillBytes = directorySize(File(appContext.filesDir, "skills"))
         val toolResultBytes = directorySize(File(appContext.filesDir, "agent_tool_results"))
-        val temporaryBytes = directorySize(File(appContext.filesDir, "chat_images_temp"))
+        val reclaimableSyncBytes = reclaimableSyncCacheFiles(appContext).sumOf(::directorySize)
+        val temporaryBytes = directorySize(File(appContext.filesDir, "chat_images_temp")) + reclaimableSyncBytes
 
         // dataDir 里同时包含 cache 与 code_cache，这两项已经单独归类，需要扣掉。
         val fallbackDataBytes = (directorySize(dataRoot) - directorySize(appContext.cacheDir) - codeCacheBytes)
@@ -100,16 +103,24 @@ class AppStorageManager(context: Context) {
         )
     }
 
-    /** 清理安全的垃圾文件，并返回实际释放的字节数。 */
+    /** 清理安全的垃圾文件、已落地同步分块缓存与数据库孤儿碎片，并返回实际释放的字节数。 */
     suspend fun clearJunk(): Long = withContext(Dispatchers.IO) {
-        clearTargets(
+        val dbDir = File(appContext.dataDir, "databases")
+        val toolDir = File(appContext.filesDir, "agent_tool_results")
+        val syncDir = File(appContext.filesDir, "sync-resources")
+        val beforeExtra = directorySize(dbDir) + directorySize(toolDir) + directorySize(syncDir)
+
+        val clearedCache = clearTargets(
             listOfNotNull(
-            appContext.cacheDir,
-            appContext.codeCacheDir,
-            appContext.externalCacheDir,
-            File(appContext.filesDir, "chat_images_temp"),
+                appContext.cacheDir,
+                appContext.codeCacheDir,
+                appContext.externalCacheDir,
+                File(appContext.filesDir, "chat_images_temp"),
             ),
         )
+        reclaimSyncAndToolStorage(appContext)
+        val afterExtra = directorySize(dbDir) + directorySize(toolDir) + directorySize(syncDir)
+        clearedCache + (beforeExtra - afterExtra).coerceAtLeast(0L)
     }
 
     /**
@@ -117,13 +128,19 @@ class AppStorageManager(context: Context) {
      * 会话与 Skills 需要同步业务状态，由各自现有业务层处理，不在这里直接删库。
      */
     suspend fun clearCategory(type: StorageDetailType): Long = withContext(Dispatchers.IO) {
+        if (type == StorageDetailType.TEMPORARY_FILES) {
+            val syncFiles = reclaimableSyncCacheFiles(appContext)
+            val syncBefore = syncFiles.sumOf(::directorySize)
+            syncFiles.forEach { file -> runCatching { file.delete() } }
+            val syncReleased = (syncBefore - syncFiles.sumOf(::directorySize)).coerceAtLeast(0L)
+            return@withContext syncReleased + clearTargets(listOf(File(appContext.filesDir, "chat_images_temp")))
+        }
         val targets = when (type) {
             StorageDetailType.ATTACHMENTS -> listOf(
                 File(appContext.filesDir, FileManager.CHAT_ATTACHMENTS_DIR),
                 File(appContext.filesDir, "chat_images"),
             )
             StorageDetailType.TOOL_RESULTS -> listOf(File(appContext.filesDir, "agent_tool_results"))
-            StorageDetailType.TEMPORARY_FILES -> listOf(File(appContext.filesDir, "chat_images_temp"))
             else -> emptyList()
         }
         clearTargets(targets)
@@ -174,3 +191,101 @@ internal fun deleteDirectoryContents(directory: File) {
 private fun List<File>.distinctFiles(): List<File> = distinctBy { file ->
     runCatching(file::getCanonicalPath).getOrElse { file.absolutePath }
 }
+
+/**
+ * 扫描 sync-resources 中已落地且不再被活跃消息附件引用的加密分块与拼接临时文件。
+ * 若当前存在待上传确认或 FILE_NOT_READY 待修复项，则跳过对应账号目录，确保断点续传安全。
+ */
+internal fun reclaimableSyncCacheFiles(context: Context): List<File> {
+    val syncRoot = File(context.filesDir, "sync-resources")
+    if (!syncRoot.isDirectory) return emptyList()
+    return runCatching {
+        val db = AppDatabase.getDatabase(context).openHelper.readableDatabase
+        val hasPendingQueue = db.query(
+            "SELECT 1 FROM system_settings WHERE key LIKE 'sync_resource_queued:%' OR key LIKE 'sync_compaction_queued:%' OR (key LIKE 'sync_rejected:%' AND value = 'FILE_NOT_READY') LIMIT 1",
+        ).use { it.moveToFirst() }
+        if (hasPendingQueue) return emptyList()
+
+        // 收集所有未删除消息中仍在引用的 sync-resources 本地媒体文件路径或文件名。
+        val referencedNames = hashSetOf<String>()
+        db.query(
+            "SELECT attachments, imageUrls FROM messages WHERE deleted = 0 AND (attachments LIKE '%sync-resources%' OR imageUrls LIKE '%sync-resources%')",
+        ).use { cursor ->
+            val regex = Regex("""sync-resources/[^"\\]+/([^"\\/]+)""")
+            while (cursor.moveToNext()) {
+                for (col in 0..1) {
+                    val raw = cursor.getString(col) ?: continue
+                    regex.findAll(raw).forEach { match -> referencedNames += match.groupValues[1] }
+                }
+            }
+        }
+
+        syncRoot.listFiles().orEmpty()
+            .filter(File::isDirectory)
+            .flatMap { accountDir ->
+                accountDir.listFiles().orEmpty().filter { child ->
+                    child.isFile && !child.name.startsWith("skill-") && child.name !in referencedNames
+                }
+            }
+    }.getOrDefault(emptyList())
+}
+
+/**
+ * 回收同步临时缓存、未截断或孤儿工具归档，并清理软删除会话残留的 Agent 表记录与 SQLite 空闲页。
+ */
+internal fun reclaimSyncAndToolStorage(context: Context) {
+    reclaimableSyncCacheFiles(context).forEach { file -> runCatching { file.delete() } }
+    runCatching {
+        val writable = AppDatabase.getDatabase(context).openHelper.writableDatabase
+        // 清理已软删除会话遗留的本地 Agent 运行记录（级联删除 agent_entries / agent_requests 等）。
+        writable.execSQL("DELETE FROM computer_executions WHERE runId IN (SELECT id FROM agent_runs WHERE sessionId NOT IN (SELECT id FROM chat_sessions WHERE deleted = 0))")
+        writable.execSQL("DELETE FROM agent_runs WHERE sessionId NOT IN (SELECT id FROM chat_sessions WHERE deleted = 0)")
+        writable.execSQL("DELETE FROM agent_compactions WHERE sessionId NOT IN (SELECT id FROM chat_sessions WHERE deleted = 0)")
+        writable.execSQL("DELETE FROM provider_continuation_states WHERE sessionId NOT IN (SELECT id FROM chat_sessions WHERE deleted = 0)")
+
+        // 仅保留仍被截断工具结果引用的本地归档文件，清理旧版无条件归档产生的上万个短结果小文件。
+        val activeToolFiles = hashSetOf<String>()
+        val activeRunHashes = hashSetOf<String>()
+        writable.query("SELECT id FROM agent_runs").use { cursor ->
+            while (cursor.moveToNext()) {
+                activeRunHashes += sha256Hex(cursor.getString(0))
+            }
+        }
+        writable.query(
+            "SELECT payloadJson FROM agent_entries WHERE kind = 'TOOL_RESULT' AND payloadJson LIKE '%fullResultPath%' AND payloadJson NOT LIKE '%\"truncated\":false%'",
+        ).use { cursor ->
+            val pathRegex = Regex(""""fullResultPath"\s*:\s*"([^"]+)"""")
+            while (cursor.moveToNext()) {
+                val payload = cursor.getString(0) ?: continue
+                pathRegex.find(payload)?.groupValues?.getOrNull(1)?.let { activeToolFiles += it }
+            }
+        }
+
+        val toolRoot = File(context.filesDir, "agent_tool_results")
+        if (toolRoot.isDirectory) {
+            toolRoot.listFiles().orEmpty().forEach { runDir ->
+                if (!runDir.isDirectory || ( runDir.name !in activeRunHashes && runDir.name != sha256Hex("continuation") )) {
+                    runCatching { runDir.deleteRecursively() }
+                } else {
+                    runDir.listFiles().orEmpty().forEach { file ->
+                        val relPath = "agent_tool_results/${runDir.name}/${file.name}"
+                        if (relPath !in activeToolFiles) {
+                            runCatching { file.delete() }
+                        }
+                    }
+                    if (runDir.listFiles().isNullOrEmpty()) {
+                        runCatching { runDir.delete() }
+                    }
+                }
+            }
+        }
+
+        // 触发 WAL 截断检查点并执行 VACUUM，将 SQLite 空闲页立即归还给手机文件系统。
+        writable.query("PRAGMA wal_checkpoint(TRUNCATE)").close()
+        writable.execSQL("VACUUM")
+    }
+}
+
+private fun sha256Hex(value: String): String = MessageDigest.getInstance("SHA-256")
+    .digest(value.toByteArray(Charsets.UTF_8))
+    .joinToString("") { byte -> (byte.toInt() and 0xff).toString(16).padStart(2, '0') }
