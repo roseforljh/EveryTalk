@@ -412,16 +412,18 @@ class PendingMessageControllerTest {
         val dao = database.chatDao()
         dao.enqueuePendingMessage(pending("adjust", "调整方案", 1))
         val recorded = CompletableDeferred<String>()
+        val isRunning = MutableStateFlow(true)
         val controller = controller(
-            isRunning = MutableStateFlow(false),
+            isRunning = isRunning,
             alreadySteered = { it.id == "adjust" },
             recordSteered = { recorded.complete(it.id) },
             dispatch = { _, _, _, _ -> fail("已被云端消费的调整不能再作为新消息发送") },
         )
         controller.pendingMessages.first { it.size == 1 }
+        isRunning.value = false
         assertEquals("adjust", recorded.await())
-        advanceUntilIdle()
-        assertTrue(dao.observePendingMessages("conversation").first().isEmpty())
+        // 补气泡的回调先于 Dispatchers.IO 上删除队列记录，等待数据库发出完成状态。
+        dao.observePendingMessages("conversation").first { it.isEmpty() }
     }
 
     @Test
