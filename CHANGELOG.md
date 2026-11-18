@@ -1,5 +1,40 @@
 # Changelog
 
+## [1.31.0](https://github.com/roseforljh/EveryTalk/compare/v1.30.0...v1.31.0) (2026-11-18)
+
+
+### Features
+
+* **agent:** 支持把 Agent 任务交给后端执行并恢复快照 ([9e9fdd3](https://github.com/roseforljh/EveryTalk/commit/9e9fdd3359b1b61ba14536b040910baffa5b6a1c))
+* **agent:** 登录后云端独立执行全部工具，凭据、记忆与预览不再依赖手机 ([eef997a](https://github.com/roseforljh/EveryTalk/commit/eef997a1b03572311947c429953b32862cc9bb4e))
+* **agent:** 登录用户的整轮任务交给云端执行，本机可随时接管控制 ([9bc4148](https://github.com/roseforljh/EveryTalk/commit/9bc4148504d36400b275ce8b70e9317ab145f6d7))
+* **db:** agent_runs 增加云端执行归属与续接游标 ([4ecfe44](https://github.com/roseforljh/EveryTalk/commit/4ecfe446ca331ae791d1efd59b215315bdefed31))
+* **sync:** 多设备实时快照保留变更卡片、来源与用量 ([39f521f](https://github.com/roseforljh/EveryTalk/commit/39f521fe285850267dfd33d49a3a0c79bf1eda65))
+
+
+### Bug Fixes
+
+* **agent:** 压缩与主请求的有界重试，首事件超时按可重试处理 ([8f2e0f5](https://github.com/roseforljh/EveryTalk/commit/8f2e0f549e57c9c2e9d27c32aac6d2b29c9c9823))
+* **agent:** 完善云端任务与同步交互，升级技术栈并修复 Release 打包 ([918245a](https://github.com/roseforljh/EveryTalk/commit/918245a4c6ff3b2e4b19961b1f245d2edcdb1dbd))
+* **agent:** 真实展示执行操作并修复过程与任务抽屉云同步 ([dae8215](https://github.com/roseforljh/EveryTalk/commit/dae8215f07902943939a9a5013e2560489d0f836))
+* **agent:** 超窗时不再本地裁剪历史，交给服务商报错 ([0d46417](https://github.com/roseforljh/EveryTalk/commit/0d46417192f19cadea601ecfac7b1fc59d4b34a9))
+* **agent:** 超窗自动压缩、长历史分段滚动摘要、压缩请求不写缓存 ([2dddc82](https://github.com/roseforljh/EveryTalk/commit/2dddc82c8e046989143698332a97f633e2b4ea93))
+* **attachment:** 本地读不出文字的附件按原文件发给上游 ([aec5e89](https://github.com/roseforljh/EveryTalk/commit/aec5e89db5ed80361a44d97733d4fab61c307af2))
+* **chat:** 云端任务流式输出恢复自动滚动，登录后续期与私有预览交给服务器 ([48f3c36](https://github.com/roseforljh/EveryTalk/commit/48f3c36bc5544b06eaf40e9eb28e4a250b2c32f6))
+* **chat:** 云端回复完整历史恢复前不闪错乱版式，展开耗时不再拽回底部 ([da494e9](https://github.com/roseforljh/EveryTalk/commit/da494e98205d999aea60c9b2c223700f27e01c31))
+* **chat:** 云端回复完整历史恢复前不闪错乱版式，展开耗时不再拽回底部 ([0823f69](https://github.com/roseforljh/EveryTalk/commit/0823f6978b5750e1314a0c9c6bc9ec851c432909))
+* **chat:** 修复云端回复完成后连续发送导致 Debug 闪退 ([ce0eda1](https://github.com/roseforljh/EveryTalk/commit/ce0eda14a27bdc6a22516ca0f357133fd2821b1d))
+* **chat:** 根治长会话卡顿、误触发压缩与骨架屏卡住，会话和侧栏分页加载 ([cbf8838](https://github.com/roseforljh/EveryTalk/commit/cbf8838a2a59cf856322009aa72febe0889b8678))
+* **chat:** 重答不再重复旧消息，编辑队列清空后按钮回到运行态 ([36d2f56](https://github.com/roseforljh/EveryTalk/commit/36d2f564cad35d142926018d5af374d0df14f2e4))
+* **computer:** 手机文件只在用户明确要求时保存 ([9bf48aa](https://github.com/roseforljh/EveryTalk/commit/9bf48aa3b1a7bb650f41d25625cf9f1ae4341502))
+* **drawer:** 侧栏按会话 ID 而不是列表下标标识当前会话 ([6320960](https://github.com/roseforljh/EveryTalk/commit/632096067ca09678850ec17749659fe9c82809d0))
+* **selection:** 询问 EveryTalk 前先释放选区焦点 ([0b055b7](https://github.com/roseforljh/EveryTalk/commit/0b055b716a93ea586bdb32f04cdddef430395c9f))
+
+
+### Performance Improvements
+
+* **models:** 获取商家模型列表不再逐个请求详情，补参数三路并发 ([55f8c92](https://github.com/roseforljh/EveryTalk/commit/55f8c9252f6d6c1227ce524cf6f2629c753f2a20))
+
 ## [1.30.0](https://github.com/roseforljh/EveryTalk/compare/v1.29.0...v1.30.0) (2026-11-13)
 
 
