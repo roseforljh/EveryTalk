@@ -154,6 +154,42 @@ class TopAnchorReserveEngineState {
         }
     }
 
+    /** 切回仍留有底部空间的会话时沿用原状态；没有空间可保留的旧状态直接清掉。 */
+    val keepsReserveOnReattach: Boolean
+        get() = runtime.hasRuntime && runtime.reservePx > 0
+
+    /**
+     * 列表重新挂载（切换会话回来）时调用：用户上次的滑动已经结束，重新回到置顶；
+     * 回答已结束的轮次保持 Retained，等用户滑到底部再收回空间。
+     */
+    fun prepareForReattach() {
+        reserveReleaseRequested = false
+        if (!keepsReserveOnReattach) {
+            clearRuntime()
+            return
+        }
+        if (runtime.phase == TopAnchorPhase.UserControlled) {
+            runtime = runtime.copy(
+                phase = if (runtime.activeTurn != null) TopAnchorPhase.AnchoredRunning else TopAnchorPhase.Retained,
+            )
+        }
+    }
+
+    /**
+     * 运行态短暂断开又恢复（本机交接给云端任务时）不能算回答结束：
+     * 把已转为保留的同一轮恢复为进行中，用户下滑时才不会把底部空间当成可收回。
+     */
+    internal fun resumeRetainedTurn() {
+        val turn = runtime.retainedTurn ?: return
+        if (runtime.activeTurn != null) return
+        reserveReleaseRequested = false
+        runtime = runtime.copy(
+            phase = if (runtime.phase == TopAnchorPhase.Retained) TopAnchorPhase.AnchoredRunning else runtime.phase,
+            activeTurn = turn,
+            retainedTurn = null,
+        )
+    }
+
     fun releaseForUserScroll() {
         if (!runtime.hasRuntime) return
         if (runtime.reservePx <= 0) {
@@ -232,6 +268,8 @@ fun RunTopAnchorReserveEngine(
     config: TopAnchorConfig,
     enabled: Boolean,
     hasResponseTarget: Boolean = false,
+    /** 锚点仍是最后一个用户问题时，运行态恢复才算同一轮继续；新问题由 activateTurn 接管。 */
+    anchorIsLatestUser: Boolean = false,
 ) {
     val currentTurn = state.runtime.currentTurn
     val currentTurnKey = currentTurn?.let { turn ->
@@ -314,12 +352,19 @@ fun RunTopAnchorReserveEngine(
 
     LaunchedEffect(
         isRunning,
+        anchorIsLatestUser,
         hasResponseTarget,
         state.runtime.phase,
         currentTurnKey,
         config.keepReserveAfterRunEnd,
     ) {
         if (isRunning) {
+            if (
+                hasObservedRunning && anchorIsLatestUser && currentTurn != null &&
+                isTopAnchorCorrectionCurrent(state.runtime, currentTurn)
+            ) {
+                state.resumeRetainedTurn()
+            }
             hasObservedRunning = true
             return@LaunchedEffect
         }
