@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.32.0](https://github.com/roseforljh/EveryTalk/compare/v1.31.0...v1.32.0) (2026-11-18)
+
+
+### Features
+
+* **chat:** 显示服务端比对出的真实文件改动 ([799df35](https://github.com/roseforljh/EveryTalk/commit/799df3512167ba71b0f5c1e0b1a9786e6b0136d4))
+
+
+### Bug Fixes
+
+* **agent:** 同一 Run 内按实测刷新校准，Responses 不再把思考原文计入压缩预算 ([b8692b1](https://github.com/roseforljh/EveryTalk/commit/b8692b1dda24a09faa68ff7354563dcecca91ab3))
+* **android:** acknowledge manual queue dispatch immediately ([30a2105](https://github.com/roseforljh/EveryTalk/commit/30a21053a6ad422e50565dd56d7a7d459be0fcce))
+* **android:** allow plain-text steering in cloud runs ([672d6b6](https://github.com/roseforljh/EveryTalk/commit/672d6b6b5eb150c970fe7c070b35f6c91d943c2c))
+* **android:** clear stale cloud run status after completion or rejection ([8772c94](https://github.com/roseforljh/EveryTalk/commit/8772c94419c4c0ad9d4ea4f4a8e9803091178359))
+* **android:** download linked chat files directly and preview draft images ([f351966](https://github.com/roseforljh/EveryTalk/commit/f3519662db7808e1a2dcd86120b3a937af00dc63))
+* **android:** resolve attachment clicks against the original agent reply ([06ca094](https://github.com/roseforljh/EveryTalk/commit/06ca094fdf734815e7ab5486a0c23913930804f2))
+* **android:** restore and open synced cloud attachments ([e962e6f](https://github.com/roseforljh/EveryTalk/commit/e962e6fcf85111c29647feefe1d6dff574ad2789))
+* **android:** route segmented Agent reply attachment clicks to the source message ([d35f409](https://github.com/roseforljh/EveryTalk/commit/d35f4096c86600797ab304d71b4fccf76f8c1959))
+* **android:** show dotted attachment links and send queued images to cloud runs ([5a93296](https://github.com/roseforljh/EveryTalk/commit/5a932969070f53dcd79a4618f32f659b50147c8e))
+* **android:** 修复云端附件恢复与打开 ([091b707](https://github.com/roseforljh/EveryTalk/commit/091b707252262d826d378497339e21fb975b1d29))
+* **chat:** 同步本轮用户气泡与置顶，收紧执行段间距 ([c28392d](https://github.com/roseforljh/EveryTalk/commit/c28392dfadb05c0a04a593bd63d25b6efd05fdcd))
+* **chat:** 回复中下滑不再收回置顶底部空间，切换会话后保留底部空间 ([aea8090](https://github.com/roseforljh/EveryTalk/commit/aea8090978bb4c0189adc4bf382a6025b311dde3))
+* **chat:** 回复中下滑不再收回置顶空间，切换会话保留底部空间 ([f0ad00c](https://github.com/roseforljh/EveryTalk/commit/f0ad00c3eb38f725d2e1e6bfa122deffe089fe87))
+* **sync:** 从服务器下载到本机的文件不再上传云端 ([f656331](https://github.com/roseforljh/EveryTalk/commit/f656331ac9380ba536f027404f09f484cfa5c4e1))
+
 ## [1.31.0](https://github.com/roseforljh/EveryTalk/compare/v1.30.0...v1.31.0) (2026-11-18)
 
 
