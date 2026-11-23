@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.32.1](https://github.com/roseforljh/EveryTalk/compare/v1.32.0...v1.32.1) (2026-11-23)
+
+
+### Bug Fixes
+
+* 优化登录页布局交互并整合本地设置改动 ([4f578fe](https://github.com/roseforljh/EveryTalk/commit/4f578fe18a1c6380d03b7ba68d2bb9c3a0d0cd26))
+* 整合 Android 与 Web 同步、流式性能及邮件服务修复 ([59e0ba7](https://github.com/roseforljh/EveryTalk/commit/59e0ba7aa3c1a9398546b10d0fa6874090f7d650))
+
 ## [1.32.0](https://github.com/roseforljh/EveryTalk/compare/v1.31.0...v1.32.0) (2026-11-18)
 
 
