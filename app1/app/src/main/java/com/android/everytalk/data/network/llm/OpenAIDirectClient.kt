@@ -90,8 +90,10 @@ object OpenAIDirectClient {
                         send(AppStreamEvent.Finish("connection_failed"))
                         return@streamModel
                     }
-                    // 发了缓存键被拒：记下这个上游不收，交给 Agent 不带缓存键原样重发一次。
-                    if (response.status.value in setOf(400, 422) && effectiveRequest.conversationId?.isNotBlank() == true &&
+                    // 仅当上游明确拒绝 prompt_cache_key 时才拉黑并重试，避免上下文超长/参数错误误杀前缀缓存。
+                    val rejectedCacheKey = response.status.value in setOf(400, 422) &&
+                        errorBody?.contains("prompt_cache_key", ignoreCase = true) == true
+                    if (rejectedCacheKey && effectiveRequest.conversationId?.isNotBlank() == true &&
                         !PromptCachePolicy.isOfficialOpenAIEndpoint(resolvedOpenAIApiAddress(effectiveRequest)) &&
                         unsupportedPromptCacheKey.add(streamUsageCapabilityKey(effectiveRequest))) {
                         terminalSent = true

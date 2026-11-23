@@ -16,6 +16,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
@@ -234,9 +235,9 @@ fun ChatInputArea(
             ?: ImageGenCapabilities.ModelFamily.UNKNOWN
     }
     val imageFields = imageParameterKeys(imageFormat ?: "openai")
-    val storedImageRatio by viewModel.stateHolder._selectedImageRatio.collectAsState()
+    val storedImageRatio by viewModel.stateHolder._selectedImageRatio.collectAsStateWithLifecycle()
     val imageRatio = ImageRatio.DEFAULT_RATIOS.firstOrNull { it.displayName == selectedApiConfig?.modelParameters?.imageAspectRatio } ?: storedImageRatio
-    val storedImageQuality by viewModel.stateHolder._gptImageQuality.collectAsState()
+    val storedImageQuality by viewModel.stateHolder._gptImageQuality.collectAsStateWithLifecycle()
     val imageQuality = ImageGenCapabilities.GptImageQuality.entries.firstOrNull { it.apiValue == selectedApiConfig?.modelParameters?.imageQuality } ?: storedImageQuality
     val supportsReferenceImage = selectedApiConfig?.let { config ->
         if (config.modelParameters.inputModalities != null || !config.modelParameters.resolvedCapability?.inputModalities.isNullOrEmpty()) "image" in config.inputModalities()
@@ -256,13 +257,13 @@ fun ChatInputArea(
     var showComputerSelectionPopup by remember { mutableStateOf(false) }
     var enableAgentAfterComputerSelection by remember { mutableStateOf(false) }
     var tempCameraImageUri by remember { mutableStateOf<Uri?>(null) }
-    val isMcpEnabled by viewModel.stateHolder._isMcpEnabledForNextRequest.collectAsState()
-    val isAgentEnabled by viewModel.isAgentEnabled.collectAsState()
-    val isAgentPreparing by viewModel.isAgentPreparing.collectAsState()
-    val computers by viewModel.computers.collectAsState()
-    val computerSelections by viewModel.computerSelections.collectAsState()
-    val currentConversationId by viewModel.currentConversationId.collectAsState()
-    val pendingInterventions by viewModel.pendingInterventions.collectAsState()
+    val isMcpEnabled by viewModel.stateHolder._isMcpEnabledForNextRequest.collectAsStateWithLifecycle()
+    val isAgentEnabled by viewModel.isAgentEnabled.collectAsStateWithLifecycle()
+    val isAgentPreparing by viewModel.isAgentPreparing.collectAsStateWithLifecycle()
+    val computers by viewModel.computers.collectAsStateWithLifecycle()
+    val computerSelections by viewModel.computerSelections.collectAsStateWithLifecycle()
+    val currentConversationId by viewModel.currentConversationId.collectAsStateWithLifecycle()
+    val pendingInterventions by viewModel.pendingInterventions.collectAsStateWithLifecycle()
     // Fork 分支的问答和审批属于分支会话；Agent 与服务器设置仍跟随所在页面。
     val runConversationId = forkTarget?.conversationId ?: currentConversationId
     val currentIntervention = pendingInterventions
@@ -302,18 +303,18 @@ fun ChatInputArea(
     var pendingCloudflareReauthorization by remember { mutableStateOf<PendingIntervention?>(null) }
     var cloudflareReauthRunning by remember { mutableStateOf(false) }
     val queueController = if (forkTarget == null) viewModel.pendingMessageController else viewModel.forkPendingMessageController
-    val pendingMessages by queueController.visiblePendingMessages.collectAsState()
-    val composerMode by queueController.composerMode.collectAsState()
-    val chatRunState by queueController.runState.collectAsState()
-    val controlSnapshots by viewModel.apiHandler.agentRunControlSnapshots.collectAsState()
-    val pageControlledMessageId by viewModel.stateHolder._currentTextStreamingAiMessageId.collectAsState()
+    val pendingMessages by queueController.visiblePendingMessages.collectAsStateWithLifecycle()
+    val composerMode by queueController.composerMode.collectAsStateWithLifecycle()
+    val chatRunState by queueController.runState.collectAsStateWithLifecycle()
+    val controlSnapshots by viewModel.apiHandler.agentRunControlSnapshots.collectAsStateWithLifecycle()
+    val pageControlledMessageId by viewModel.stateHolder._currentTextStreamingAiMessageId.collectAsStateWithLifecycle()
     // 当前会话在另一台设备上运行、本机空闲且没有草稿时，主按钮用来远程停止；云端任务按同一套暂停/继续控制。
-    val remoteLiveRun by viewModel.stateHolder._remoteLiveRun.collectAsState()
+    val remoteLiveRun by viewModel.stateHolder._remoteLiveRun.collectAsStateWithLifecycle()
     val controlledMessageId = if (forkTarget == null) {
         pageControlledMessageId ?: remoteLiveRun?.takeIf { it.running && it.cloudRunId != null }?.message?.id
     } else forkTarget.runningMessageId
     val runControlState = controlledMessageId?.let { controlSnapshots[it]?.state }
-    val conversationFunctionStates by viewModel.stateHolder.conversationFunctionToggleStates.collectAsState()
+    val conversationFunctionStates by viewModel.stateHolder.conversationFunctionToggleStates.collectAsStateWithLifecycle()
     val currentAgentResourceState = conversationFunctionStates[currentConversationId]?.agentResourceState
     val detachedComputerName = conversationFunctionStates[currentConversationId]?.detachedComputerName
     val detachedWorkspacePath = conversationFunctionStates[currentConversationId]?.detachedWorkspacePath
@@ -645,9 +646,9 @@ fun ChatInputArea(
         }
     }
     
-    val restoredDraft by viewModel.restoredMessageDraft.collectAsState()
-    val isRestoringMessage by viewModel.isRestoringMessage.collectAsState()
-    val pageMessageEditSession by viewModel.messageEditSession.collectAsState()
+    val restoredDraft by viewModel.restoredMessageDraft.collectAsStateWithLifecycle()
+    val isRestoringMessage by viewModel.isRestoringMessage.collectAsStateWithLifecycle()
+    val pageMessageEditSession by viewModel.messageEditSession.collectAsStateWithLifecycle()
     val messageEditSession = pageMessageEditSession.takeIf { forkTarget == null }
     LaunchedEffect(restoredDraft) {
         if (forkTarget != null) return@LaunchedEffect

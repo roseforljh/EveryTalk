@@ -16,6 +16,8 @@ import com.android.everytalk.data.database.AppDatabase
 import com.android.everytalk.data.database.entities.*
 import com.android.everytalk.data.skill.SkillPackageValidator
 import com.android.everytalk.models.SelectedMediaItem
+import com.android.everytalk.util.storage.findReclaimableSyncCacheFiles
+import com.android.everytalk.util.storage.runPackageStorageCleanup
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.runBlocking
@@ -50,6 +52,44 @@ class SyncResourceSynchronizerTest {
     }
     private suspend fun sync(db: AppDatabase, api: SyncApi) = SyncEngine(api, RoomSyncStore(db), SyncStateStore(db)).runOnce()
     @After fun close() { databases.forEach { it.close() }; directories.forEach { it.deleteRecursively() } }
+
+    @Test fun `升级清理失败可重试且保留对话草稿和上传输入`() = runBlocking {
+        val db = database(); val ctx = context()
+        val cache = File(ctx.filesDir, "sync-resources/${UUID.nameUUIDFromBytes(user.toByteArray())}").apply { mkdirs() }
+        fun file(name: String) = File(cache, name).apply { writeText("data") }
+        val obsolete = file("assembled-${"0".repeat(64)}")
+        val messageFile = file("assembled-${"1".repeat(64)}")
+        val draftFile = file("assembled-${"2".repeat(64)}")
+        val chunkHash = "3".repeat(64)
+        val uploaded = file("confirmed-$chunkHash")
+        val uploadSource = file("out-not-confirmed")
+        val receiptOnly = file("receipt-${"4".repeat(64)}")
+        val session = ChatSessionEntity("clean-test", 1, 1, false)
+        db.chatDao().writeSession(session)
+        fun message(id: String, target: File) = Message(id = id, text = id, sender = Sender.User,
+            imageUrls = listOf(target.toURI().toString())).toEntity(session.id)
+        val visible = message("visible", messageFile)
+        db.chatDao().writeMessages(listOf(visible))
+        db.chatDao().writeDrafts(listOf(MessageDraftEntity(message("draft", draftFile))))
+        db.syncAttachmentDao().upsert(SyncAttachmentEntity("known", session.uuid, visible.uuid, "file", "image/png",
+            uploaded.length(), chunkHash, "confirmed", "image", syncStatus = SyncStatus.SYNCED))
+        val pending = SystemSettingEntity("sync_rejected:attachments:known", "FILE_NOT_READY")
+        db.settingsDao().insertSetting(pending)
+        fun reclaimable() = findReclaimableSyncCacheFiles(ctx, db.openHelper.readableDatabase).toSet()
+        assertEquals(setOf(obsolete), reclaimable())
+        db.settingsDao().deleteSetting(pending.key)
+        assertEquals(setOf(obsolete, uploaded), reclaimable())
+
+        val preferences = ctx.getSharedPreferences("test-storage-$user", Context.MODE_PRIVATE)
+        runPackageStorageCleanup(preferences, 1L) { false }
+        runPackageStorageCleanup(preferences, 1L) { reclaimable().all(File::delete) }
+        runPackageStorageCleanup(preferences, 1L) { error("同一次安装不得重复清理") }
+        var reran = false
+        runPackageStorageCleanup(preferences, 2L) { reran = true; true }
+        assertTrue(reran)
+        assertFalse(obsolete.exists()); assertFalse(uploaded.exists())
+        assertTrue(listOf(messageFile, draftFile, uploadSource, receiptOnly).all(File::isFile))
+    }
 
     @Test fun `跨设备恢复完整历史时同步摘要边界而不重新压缩旧原文`() = runBlocking {
         val a = database(); val b = database(); val ca = context(); val cb = context(); val api = FakeSyncApi()
@@ -625,6 +665,9 @@ class SyncResourceSynchronizerTest {
         a.skillDao().saveVersion(skill, SkillVersionEntity(skill.skillId, skill.currentHash, null, root.absolutePath, "[]", "{}", 1))
         SyncResourceSynchronizer(ca, a, api, user).use { it.synchronize() }
         sync(a, api); sync(b, api)
+        SyncResourceSynchronizer(ca, a, api, user).use { it.synchronize() }
+        // 原设备已有原图，不能再生成一份拼接副本；新设备仍须能恢复图片和 Skill。
+        assertTrue(File(ca.filesDir, "sync-resources").walkTopDown().none { it.name.startsWith("assembled-") })
         SyncStateStore(b).markAllLocalDataPending()
         // 模拟新登录的自动初始化，但拉到资源后不能重新上传同一份原件。
         SyncResourceSynchronizer(cb, b, api, user).use { it.synchronize() }
@@ -744,6 +787,38 @@ class SyncResourceSynchronizerTest {
         assertEquals(0, target.settingsDao().syncRejectedCount())
         assertEquals(uploads, api.fileUploads)
         assertTrue(RoomSyncStore(target).pendingBatch().isEmpty())
+    }
+
+    @Test fun `图片分块分批到达时不标记失败且补齐后完整恢复`() = runBlocking {
+        val a = database(); val b = database(); val ca = context(); val cb = context()
+        val api = FakeSyncApi().apply { chunkSize = 4096 }
+        val session = ChatSessionEntity("source", 1, 1, false)
+        a.chatDao().writeSession(session)
+        val image = File(ca.filesDir, "split.png").apply { writeBytes(ByteArray(5000) { (it % 251).toByte() }) }
+        val source = Message(id = "split", text = "图片", sender = Sender.User, attachments = listOf(
+            SelectedMediaItem.ImageFromUri(android.net.Uri.fromFile(image), "split-media", "image/png", image.absolutePath))).toEntity(session.id)
+        a.chatDao().writeMessages(listOf(source))
+        SyncResourceSynchronizer(ca, a, api, user).use { it.synchronize() }
+        sync(a, api)
+
+        val (parts, other) = api.rows.values.partition { it.entity == "attachments" }
+        assertEquals(2, parts.size)
+        val first = parts.minBy { it.serverSeq }
+        val last = parts.maxBy { it.serverSeq }
+        val store = RoomSyncStore(b)
+        val firstPage = other + first
+        store.applyPullPage(PullResponse(firstPage, firstPage.maxOf { it.serverSeq }, true, 0))
+        SyncResourceSynchronizer(cb, b, api, user).use { it.synchronize() }
+        assertTrue(b.chatDao().getMessageByUuid(source.uuid)!!.attachments.isEmpty())
+        assertNull(b.settingsDao().getValue("sync_resource_received:${source.uuid}"))
+        assertNull(b.settingsDao().getValue("sync_resource_receive_failed:${source.uuid}"))
+        assertEquals(0, b.settingsDao().syncRejectedCount())
+
+        store.applyPullPage(PullResponse(listOf(last), last.serverSeq, false, 0))
+        SyncResourceSynchronizer(cb, b, api, user).use { it.synchronize() }
+        val restored = b.chatDao().getMessageByUuid(source.uuid)!!.attachments.single() as SelectedMediaItem.ImageFromUri
+        assertArrayEquals(image.readBytes(), File(restored.filePath!!).readBytes())
+        assertNotNull(b.settingsDao().getValue("sync_resource_received:${source.uuid}"))
     }
 
     @Test fun `分块上限变化和中断重试不会混合旧块或复活附件墓碑`() = runBlocking {

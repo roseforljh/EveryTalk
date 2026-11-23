@@ -61,6 +61,7 @@ internal fun syncServerConfigured(raw: String): Boolean = runCatching {
  * 只发送合同 JSON 和当前账号 token；禁用重定向以防凭据发往别的服务器。
  * 每次取 token 和发送请求前复查登录态、账号绑定和云端清空暂停状态。
  * 401 仅强制刷新一次，刷新网络故障继续向外抛出供 WorkManager 重试。
+ * 同步、实时状态和云端任务各自关闭客户端；不能共用预配置的 OkHttp 实例，因为 Ktor 关闭引擎时会关掉它的请求线程池。
  */
 internal class KtorSyncApi(
     baseUrl: String,

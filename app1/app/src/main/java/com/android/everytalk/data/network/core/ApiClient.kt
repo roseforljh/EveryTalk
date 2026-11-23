@@ -167,7 +167,23 @@ object ApiClient {
         }
     }
 
+    @Volatile
+    private var appContext: Context? = null
+
+    /** 记录 Application Context，冷启动异步初始化尚未完成时可按需同步兜底初始化。 */
+    fun bindContext(context: Context) {
+        appContext = context.applicationContext
+    }
+
+    private fun ensureInitialized(): Boolean {
+        if (isInitialized) return true
+        val ctx = appContext ?: return false
+        initialize(ctx)
+        return isInitialized
+    }
+
     fun initialize(context: Context) {
+        appContext = context.applicationContext
         if (isInitialized) return
         synchronized(this) {
             if (isInitialized) return
@@ -175,8 +191,8 @@ object ApiClient {
                 engine {
                     // 跨境延迟优化配置
                     config {
-                        // 超时配置：跨境场景适当增加
-                        connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                        // 超时配置：跨境链路正常 1 秒内建连，10 秒未完成说明丢包或路由异常，快速失败交给重试。
+                        connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
                         readTimeout(300, java.util.concurrent.TimeUnit.SECONDS)   // 5分钟，适合长时间流式响应
                         writeTimeout(120, java.util.concurrent.TimeUnit.SECONDS)  // 2分钟，适合大文件上传
                         
@@ -196,8 +212,21 @@ object ApiClient {
                 }
                 install(HttpTimeout) {
                     requestTimeoutMillis = 1800_000
-                    connectTimeoutMillis = 60_000  // VPN环境下增加连接超时到120秒
+                    // 建连超时从 60 秒降到 10 秒：丢包时不再卡半分钟，失败后由下面的重试接管。
+                    connectTimeoutMillis = 10_000
                     socketTimeoutMillis = 1800_000
+                }
+                // 跨境访问常见连上就断、TLS 握手失败；只重试幂等的 GET/HEAD，
+                // POST 可能已到达服务端，重复提交交给业务幂等键处理。
+                install(HttpRequestRetry) {
+                    maxRetries = 2
+                    retryIf { request, response ->
+                        (request.method == HttpMethod.Get || request.method == HttpMethod.Head) && response.status.value in 500..599
+                    }
+                    retryOnExceptionIf { request, error ->
+                        (request.method == HttpMethod.Get || request.method == HttpMethod.Head) && error is IOException
+                    }
+                    delayMillis { (it + 1) * 1000L }
                 }
                 // WebSocket 支持（用于阿里云实时语音识别等）
                 install(WebSockets) {
@@ -212,7 +241,11 @@ object ApiClient {
                             android.util.Log.d("ApiClient-HTTP", NetworkUtils.sanitizeMessage(message))
                         }
                     }
-                    level = io.ktor.client.plugins.logging.LogLevel.INFO
+                    level = if (com.android.everytalk.BuildConfig.DEBUG) {
+                        io.ktor.client.plugins.logging.LogLevel.INFO
+                    } else {
+                        io.ktor.client.plugins.logging.LogLevel.NONE
+                    }
                     sanitizeHeader { header ->
                         header.equals(HttpHeaders.Authorization, ignoreCase = true) ||
                             header.equals("x-api-key", ignoreCase = true) ||
@@ -480,7 +513,7 @@ object ApiClient {
 
     /** AgentLoop 专用的一次模型请求入口。这里不会执行工具或启动下一轮。 */
     fun streamModelTurn(request: ChatRequest): Flow<AppStreamEvent> {
-        if (!isInitialized) {
+        if (!ensureInitialized()) {
             return flowOf(
                 AppStreamEvent.Error("ApiClient 尚未初始化"),
                 AppStreamEvent.Finish("client_not_initialized"),
@@ -508,7 +541,7 @@ object ApiClient {
         apiKey: String,
         channel: String? = null,
     ): List<ModelCapabilityCandidate> {
-        if (!isInitialized) {
+        if (!ensureInitialized()) {
             throw IllegalStateException("ApiClient not initialized. Call initialize() first.")
         }
         return modelCatalogService.getCatalogWithCapabilities(apiUrl, apiKey, channel)

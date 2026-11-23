@@ -11,6 +11,7 @@ import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import com.android.everytalk.data.network.ApiClient
 import com.android.everytalk.di.allModules
 import com.android.everytalk.util.DynamicIconSwitcher
+import com.android.everytalk.util.storage.AppStorageManager
 import com.android.everytalk.util.theme.AppThemeController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -39,6 +40,7 @@ class EveryTalkApplication : Application(), SingletonImageLoader.Factory {
 
         AppThemeController.applySavedTheme(this)
 
+        ApiClient.bindContext(this)
         startupScope.launch {
             ApiClient.initialize(this@EveryTalkApplication)
         }
@@ -51,6 +53,9 @@ class EveryTalkApplication : Application(), SingletonImageLoader.Factory {
 
         startupScope.launch {
             DynamicIconSwitcher.syncIcon(this@EveryTalkApplication)
+        }
+        startupScope.launch {
+            AppStorageManager(this@EveryTalkApplication).reclaimAfterPackageUpdate()
         }
         startupScope.launch {
             com.android.everytalk.service.SyncScheduler.start(this@EveryTalkApplication)

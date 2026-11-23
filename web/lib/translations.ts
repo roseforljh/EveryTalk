@@ -22,6 +22,7 @@ export const englishTranslations: Readonly<Record<string, string>> = {
   '模型由你选择。想法不设边界。': 'Your models. Your ideas. No boundaries.',
   '把聊天、搜索和创作，装进口袋。':
     'Chat, search and create. Right in your pocket.',
+  '打开网页版': 'Open Web App',
   '下载 EveryTalk': 'Get EveryTalk',
   查看源码: 'View source',
   查看关键源码: 'View key source',

@@ -2,6 +2,7 @@ package com.android.everytalk.util.storage
 
 import android.content.Context
 import com.android.everytalk.data.database.AppDatabase
+import com.android.everytalk.data.sync.SyncRuntimeLock
 import com.android.everytalk.data.skill.SkillRepository
 import java.io.File
 import java.security.MessageDigest
@@ -98,26 +99,35 @@ class StorageContentManager(context: Context) {
     /** 删除用户勾选的文件明细，并返回实际释放的字节数。 */
     suspend fun deleteFiles(type: StorageDetailType, entries: List<StorageContentEntry>): Long =
         withContext(Dispatchers.IO) {
-            val allowedRoots = when (type) {
-                StorageDetailType.ATTACHMENTS -> attachmentRoots()
-                StorageDetailType.TOOL_RESULTS -> toolResultRoots()
-                StorageDetailType.TEMPORARY_FILES -> temporaryRoots()
-                else -> emptyList()
-            }.mapNotNull { root -> runCatching { root.canonicalFile }.getOrNull() }
-
-            val targets = entries
-                .asSequence()
-                .filter { it.type == type && it.selectable }
-                .mapNotNull(StorageContentEntry::absolutePath)
-                .map(::File)
-                .mapNotNull { target -> safeChildOf(target, allowedRoots) }
-                .distinctBy(File::getPath)
-                .toList()
-
-            val before = targets.sumOf(::directorySize)
-            targets.forEach { target -> runCatching { target.deleteRecursively() } }
-            (before - targets.sumOf(::directorySize)).coerceAtLeast(0L)
+            if (type == StorageDetailType.TEMPORARY_FILES) {
+                // 详情打开后同步状态可能已变：删除前持锁复查，不能按旧名单直接删同步目录。
+                SyncRuntimeLock.withIdleResourceFiles { deleteSelectedFiles(type, entries) }
+            } else deleteSelectedFiles(type, entries)
         }
+
+    private fun deleteSelectedFiles(type: StorageDetailType, entries: List<StorageContentEntry>): Long {
+        val allowedRoots = when (type) {
+            StorageDetailType.ATTACHMENTS -> attachmentRoots()
+            StorageDetailType.TOOL_RESULTS -> toolResultRoots()
+            StorageDetailType.TEMPORARY_FILES -> listOf(File(appContext.filesDir, "chat_images_temp"))
+            else -> emptyList()
+        }.mapNotNull { root -> runCatching { root.canonicalFile }.getOrNull() }
+        val syncFiles = if (type == StorageDetailType.TEMPORARY_FILES) reclaimableSyncCacheFiles(appContext)
+            .mapNotNull { runCatching { it.canonicalFile }.getOrNull() }.toSet() else emptySet()
+        val targets = entries.asSequence()
+            .filter { it.type == type && it.selectable }
+            .mapNotNull(StorageContentEntry::absolutePath)
+            .map(::File)
+            .mapNotNull { target ->
+                safeChildOf(target, allowedRoots) ?: runCatching { target.canonicalFile }.getOrNull()?.takeIf { it in syncFiles }
+            }
+            .distinct()
+            .toList()
+
+        val before = targets.sumOf(::directorySize)
+        targets.forEach { target -> runCatching { target.deleteRecursively() } }
+        return (before - targets.sumOf(::directorySize)).coerceAtLeast(0L)
+    }
 
     private fun scanConversations(totalBytes: Long): List<StorageContentEntry> {
         val databaseDirectory = File(dataRoot, "databases")

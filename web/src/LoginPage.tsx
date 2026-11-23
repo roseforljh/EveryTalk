@@ -112,11 +112,11 @@ export function LoginPage({ onLogin, error: initialError = '' }: { onLogin: (ses
           <button
             type="button"
             className="et-outline et-login-submit"
-            style={{ marginTop: 4 }}
+            style={{ marginTop: 4, opacity: 0.85, fontSize: 13 }}
             onClick={() => onLogin(LOCAL_PREVIEW_SESSION)}
           >
-            <Sparkles size={18} />
-            免登录直接进入工作区预览
+            <Sparkles size={16} />
+            免登录体验演示（数据仅存本地不同步）
           </button>
           {sent && (
             <div className="et-inline">

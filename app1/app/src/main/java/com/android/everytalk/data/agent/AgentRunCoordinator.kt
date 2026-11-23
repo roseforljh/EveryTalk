@@ -399,16 +399,20 @@ class AgentRunCoordinator(
                     launch { com.android.everytalk.data.sync.SyncLocalChanges.revision.collect { reconcileCloudOverlays() } }
                     try {
                         while (isActive) {
-                            reconcileCloudOverlays()
-                            if (cloudPermitted(accountId)) {
-                                try { coordinator.discover() }
-                                catch (cancelled: CancellationException) { throw cancelled }
-                                catch (_: Exception) { /* 服务未升级或临时断网：保留持久任务，后续再次发现。 */ }
-                            } else {
-                                cloudViews.clear()
-                                _cloudRuns.value = emptyMap(); clearCloudWaiting()
+                            val activeForeground = com.android.everytalk.data.sync.LiveSync.isForegroundActive() ||
+                                _cloudRuns.value.values.any { it.running }
+                            if (activeForeground) {
+                                reconcileCloudOverlays()
+                                if (cloudPermitted(accountId)) {
+                                    try { coordinator.discover() }
+                                    catch (cancelled: CancellationException) { throw cancelled }
+                                    catch (_: Exception) { /* 服务未升级或临时断网：保留持久任务，后续再次发现。 */ }
+                                } else {
+                                    cloudViews.clear()
+                                    _cloudRuns.value = emptyMap(); clearCloudWaiting()
+                                }
                             }
-                            delay(15_000)
+                            delay(if (activeForeground) 15_000 else 60_000)
                         }
                     } finally {
                         if (CloudAccountClient.current === client) CloudAccountClient.current = null
@@ -668,7 +672,7 @@ class AgentRunCoordinator(
 
     /** 先落盘再发：送达失败或重启后，同一等待点直接重发这份结果，不重复要用户输入。 */
     private fun saveAndSendCloudDeviceResult(runId: String, toolCallId: String, text: String, isError: Boolean) {
-        cloudRunContexts.edit().putString(deviceResultKey(runId, toolCallId), (if (isError) "1" else "0") + text).commit()
+        cloudRunContexts.edit().putString(deviceResultKey(runId, toolCallId), (if (isError) "1" else "0") + text).apply()
         sendCloudDeviceResult(runId, toolCallId, text, isError) { cloudDeviceHandled.removeIf { it.startsWith("$runId:$toolCallId:") } }
     }
 
@@ -1185,7 +1189,7 @@ class AgentRunCoordinator(
                 saveCloudRunContext(run.id, request.localComputerRequestContext, request.localMemorySnapshot)
                 _cloudRuns.update { it + (session.uuid to com.android.everytalk.data.sync.LiveRemoteRun(
                     assistant.uuid, assistant.toMessage().copy(executionStatus = "正在提交云端任务"), true, run.id)) }
-                coordinator.submit(run, frozen)
+                coordinator.submit(run, frozen, alreadySaved = true)
             }
         } finally { api.close() }
     }

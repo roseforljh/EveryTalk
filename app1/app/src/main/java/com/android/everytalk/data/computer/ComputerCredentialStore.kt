@@ -422,12 +422,19 @@ class ComputerCredentialStore private constructor(private val context: Context, 
         }
     }
 
-    internal suspend fun deleteCloudAgentInput(accountId: String, runId: String) = withContext(Dispatchers.IO) {
+    internal suspend fun deleteCloudAgentInput(accountId: String, runId: String): Boolean = withContext(Dispatchers.IO) {
         requireCloudAgentIdentity(accountId, runId)
         val scope = "cloud-agent:$accountId:$runId"
         // 固定最多 24 块，也覆盖进程在写清单前退出留下的密文碎片。
-        repeat(24) { cryptoShred(fileForScope("$scope:$it")) }
-        cryptoShred(fileForScope(scope))
+        var complete = true
+        fun remove(scope: String) {
+            val file = fileForScope(scope)
+            cryptoShred(file)
+            if (file.exists()) complete = false
+        }
+        repeat(24) { remove("$scope:$it") }
+        remove(scope)
+        complete
     }
 
     private fun requireCloudAgentIdentity(accountId: String, runId: String) {

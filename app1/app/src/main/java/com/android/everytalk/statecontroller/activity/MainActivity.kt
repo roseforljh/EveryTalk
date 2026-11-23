@@ -216,7 +216,8 @@ class MainActivity : AppCompatActivity() {
             App1Theme(dynamicColor = false, accentColor = accentState.value) {
                 // 根据当前主题动态设置状态栏和导航栏图标颜色
                 var showAnimatedSplash by remember { mutableStateOf(savedInstanceState == null) }
-                var mainContentStarted by remember { mutableStateOf(savedInstanceState != null) }
+                // 主界面与开屏动画并行初始化，避免等待 GIF 播完才创建 ViewModel 与加载首屏数据。
+                var mainContentStarted by remember { mutableStateOf(true) }
                 val isDarkTheme = isSystemInDarkTheme()
                 val windowInsetsController = WindowInsetsControllerCompat(window, window.decorView)
                 val useDarkSystemBarIcons = showAnimatedSplash || !isDarkTheme

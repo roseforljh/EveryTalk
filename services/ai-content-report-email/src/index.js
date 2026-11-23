@@ -37,8 +37,13 @@ export async function handleRequest(request, env) {
 
   let rateLimitResult;
   try {
-    const clientKey = request.headers.get("CF-Connecting-IP") || "unknown";
-    rateLimitResult = await env.REPORT_RATE_LIMITER.limit({ key: clientKey });
+    const ipKey = request.headers.get("CF-Connecting-IP") || "unknown";
+    const reporterKey = request.headers.get("X-EveryTalk-Reporter-Key");
+    // 举报标识由客户端提供；只能作为额外限制，不能替代 IP 总额度。
+    rateLimitResult = await env.REPORT_RATE_LIMITER.limit({ key: ipKey });
+    if (rateLimitResult.success && reporterKey && /^[a-f0-9]{16,64}$/i.test(reporterKey)) {
+      rateLimitResult = await env.REPORT_RATE_LIMITER.limit({ key: `${ipKey}:${reporterKey.toLowerCase()}` });
+    }
   } catch (error) {
     console.error("举报限流检查失败", safeErrorMessage(error));
     return jsonResponse(503, { error: "service_unavailable" });

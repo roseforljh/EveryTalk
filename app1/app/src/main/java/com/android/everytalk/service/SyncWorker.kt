@@ -50,8 +50,10 @@ class SyncWorker(context: Context, parameters: WorkerParameters) : CoroutineWork
         val credentials = SyncCredentialSynchronizer(applicationContext, db, api, secrets, user.id)
         // 文件传输被限流时只暂停文件这条线：文字、配置照常同步，不能跟着停一分钟。
         var resourcesWaitMillis: Long? = null
+        SyncScheduler.syncInProgress = true
         return try {
-            syncTimed("inventory") { SyncInventoryDiagnostic.log(db) }
+            // 全表消息 SHA-256 盘点仅限 Debug 排障，避免 Release 每次同步全扫 SQLite。
+            if (BuildConfig.DEBUG) syncTimed("inventory") { SyncInventoryDiagnostic.log(db) }
             when (SyncEngine(
                 api = api,
                 beforePull = { credentials.captureLocal() },
@@ -94,14 +96,16 @@ class SyncWorker(context: Context, parameters: WorkerParameters) : CoroutineWork
                         it.value.takeIf { code -> code.matches(Regex("[A-Za-z_]{1,64}")) } ?: "UNKNOWN"
                     }.eachCount()
                     if (rejectionCodes.isNotEmpty()) syncDiagnostic("rejected codes=$rejectionCodes")
-                    withContext(Dispatchers.IO) {
-                        db.openHelper.readableDatabase.query("""
-                            SELECT COUNT(*), SUM(CASE WHEN reasoning IS NOT NULL AND reasoning != '' THEN 1 ELSE 0 END)
-                            FROM messages WHERE deleted = 0 AND sessionId IN
-                            (SELECT id FROM chat_sessions WHERE deleted = 0
-                            AND id NOT IN ('last_open_chat_v1', 'last_open_image_generation_v1'))
-                        """.trimIndent()).use { cursor ->
-                            if (cursor.moveToFirst()) syncDiagnostic("complete messages=${cursor.getLong(0)} withReasoning=${cursor.getLong(1)} sessions=${db.chatDao().getAllSessions(false).size + db.chatDao().getAllSessions(true).size} settings=${db.settingsDao().getSyncableUserSettings().size} rejected=${db.settingsDao().syncRejectedCount()}")
+                    if (BuildConfig.DEBUG) {
+                        withContext(Dispatchers.IO) {
+                            db.openHelper.readableDatabase.query("""
+                                SELECT COUNT(*), SUM(CASE WHEN reasoning IS NOT NULL AND reasoning != '' THEN 1 ELSE 0 END)
+                                FROM messages WHERE deleted = 0 AND sessionId IN
+                                (SELECT id FROM chat_sessions WHERE deleted = 0
+                                AND id NOT IN ('last_open_chat_v1', 'last_open_image_generation_v1'))
+                            """.trimIndent()).use { cursor ->
+                                if (cursor.moveToFirst()) syncDiagnostic("complete messages=${cursor.getLong(0)} withReasoning=${cursor.getLong(1)} sessions=${db.chatDao().getAllSessions(false).size + db.chatDao().getAllSessions(true).size} settings=${db.settingsDao().getSyncableUserSettings().size} rejected=${db.settingsDao().syncRejectedCount()}")
+                            }
                         }
                     }
                     Result.success()
@@ -130,7 +134,7 @@ class SyncWorker(context: Context, parameters: WorkerParameters) : CoroutineWork
             if (com.android.everytalk.BuildConfig.DEBUG) AppLogger.error("Sync", "同步失败", error)
             AppLogger.warn("Sync", "同步暂未完成，等待重试")
             if (permitted()) Result.retry() else Result.success()
-        } finally { resources.close(); api.close() }
+        } finally { SyncScheduler.syncInProgress = false; resources.close(); api.close() }
     }
 
     private companion object { const val RESOURCES_RESUME_AT = "sync_resource_resume_at" }
@@ -153,6 +157,7 @@ class SyncWorker(context: Context, parameters: WorkerParameters) : CoroutineWork
 object SyncScheduler {
     private const val NOW = "everytalk-cloud-sync"
     private const val PERIODIC = "everytalk-cloud-sync-periodic"
+    @Volatile internal var syncInProgress = false
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var debounceJob: Job? = null
     private var observer: InvalidationTracker.Observer? = null
@@ -172,7 +177,9 @@ object SyncScheduler {
             "mcp_server_configs", "computers", "computer_workspaces", "system_settings", "skill_installations", "agent_compactions",
         ) {
             // 手动压缩没有普通 PENDING；直接调度，不能被后续表变更取消防抖后漏掉。
+            // 同步执行期间自身写入 system_settings 游标/时间戳引起的单表失效不再自触发回声。
             override fun onInvalidated(tables: Set<String>) {
+                if (syncInProgress && tables == setOf("system_settings")) return
                 if ("agent_compactions" in tables) requestNow(app) else request(app, dataChanged = true)
             }
         }.also { db.invalidationTracker.addObserver(it) }

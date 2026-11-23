@@ -259,8 +259,30 @@ internal object LiveSync {
         return Base64.encodeToString(compressed, Base64.NO_WRAP)
     }
 
-    internal fun decode(body: String): LiveSnapshot = GZIPInputStream(Base64.decode(body, Base64.NO_WRAP).inputStream()).use {
-        json.decodeFromString(LiveSnapshot.serializer(), it.readBytes().decodeToString())
+    private const val MAX_DECODED_SNAPSHOT_BYTES = 8 * 1024 * 1024
+    private const val MAX_ENDED_REMOTE_RUNS = 16
+
+    /** 解压实时快照并强制 8MB 上限，防止高压缩比异常载荷引发 OOM。 */
+    internal fun decode(body: String): LiveSnapshot = GZIPInputStream(Base64.decode(body, Base64.NO_WRAP).inputStream()).use { stream ->
+        val out = ByteArrayOutputStream()
+        val buf = ByteArray(8192)
+        var total = 0
+        while (true) {
+            val n = stream.read(buf)
+            if (n < 0) break
+            total += n
+            if (total > MAX_DECODED_SNAPSHOT_BYTES) throw IllegalStateException("Live snapshot exceeds max decoded size")
+            out.write(buf, 0, n)
+        }
+        json.decodeFromString(LiveSnapshot.serializer(), out.toByteArray().decodeToString())
+    }
+
+    /** 裁剪已结束的历史实时快照，防止长驻进程内存无限堆积。 */
+    private fun pruneRemoteRuns(map: Map<String, LiveRemoteRun>): Map<String, LiveRemoteRun> {
+        val endedKeys = map.entries.filter { !it.value.running }.map { it.key }
+        if (endedKeys.size <= MAX_ENDED_REMOTE_RUNS) return map
+        val toDrop = endedKeys.take(endedKeys.size - MAX_ENDED_REMOTE_RUNS).toSet()
+        return map.filterKeys { it !in toDrop }
     }
 
     // ---------- 观看端：接收 ----------
@@ -276,6 +298,9 @@ internal object LiveSync {
      */
     private fun wanted() = foreground || publishers.isNotEmpty() ||
         System.currentTimeMillis() - backgroundSince < BACKGROUND_GRACE_MS
+
+    /** 供云端任务轮询复用前后台活跃判断，退到后台超过宽限期后暂停高频发现。 */
+    fun isForegroundActive(): Boolean = wanted()
 
     fun setForeground(context: Context, foreground: Boolean) {
         app = context.applicationContext
@@ -369,7 +394,7 @@ internal object LiveSync {
                     val session = value.getValue("session").jsonPrimitive.content
                     val snapshot = decode(value.getValue("body").jsonPrimitive.content)
                     val runId = value["runId"]?.jsonPrimitive?.content ?: snapshot.messageUuid
-                    _remote.update { it + (session to LiveRemoteRun(snapshot.messageUuid, snapshot.message, snapshot.running, runId)) }
+                    _remote.update { pruneRemoteRuns(it + (session to LiveRemoteRun(snapshot.messageUuid, snapshot.message, snapshot.running, runId))) }
                 }
                 "end" -> {
                     val value = json.parseToJsonElement(data).jsonObject
@@ -377,7 +402,7 @@ internal object LiveSync {
                     val ended = _remote.value[session] ?: return@runCatching
                     if (value["runId"]?.jsonPrimitive?.content?.let { it != ended.runId } == true) return@runCatching
                     val final = ended.copy(running = false)
-                    _remote.update { current -> if (current[session] === ended) current + (session to final) else current }
+                    _remote.update { current -> if (current[session] === ended) pruneRemoteRuns(current + (session to final)) else current }
                     // 完整归档可能仍在下载；不能按 60 秒定时器删掉唯一完整的正文、边界和变更卡片。
                     // 消息列表在正式历史追平后采用 Room，新运行和账号切换会替换这份快照。
                     SyncScheduler.request(requireNotNull(app))

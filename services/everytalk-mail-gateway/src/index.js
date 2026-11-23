@@ -1,4 +1,5 @@
 import http from "node:http";
+import { timingSafeEqual } from "node:crypto";
 import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
 import nodemailer from "nodemailer";
@@ -78,9 +79,14 @@ async function withMailbox(credentials, action) {
   const provider = providerFor(credentials.email); const client = new ImapFlow({ host: provider.imap, port: 993, secure: true, auth: { user: credentials.email, pass: credentials.authorizationCode }, logger: false });
   try { await client.connect(); await client.mailboxOpen("INBOX", { readOnly: true }); return await action(client); } finally { await client.logout().catch(() => client.close()); }
 }
+function sameKey(a, b) {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  const left = Buffer.from(a), right = Buffer.from(b);
+  return left.length === right.length && timingSafeEqual(left, right);
+}
 function decodeCredentials(token) {
   let value; try { value = JSON.parse(Buffer.from(token, "base64url").toString("utf8")); } catch { throw status(401, "invalid_credentials"); }
-  if (value.gatewayKey !== SHARED_KEY || typeof value.email !== "string" || typeof value.authorizationCode !== "string") throw status(401, "invalid_credentials");
+  if (!sameKey(value.gatewayKey, SHARED_KEY) || typeof value.email !== "string" || typeof value.authorizationCode !== "string") throw status(401, "invalid_credentials");
   providerFor(value.email); return value;
 }
 function providerFor(email) { const provider = PROVIDERS[email.toLowerCase().split("@")[1]]; if (!provider) throw status(400, "unsupported_mailbox"); return provider; }
@@ -90,7 +96,25 @@ function safeUid(value) { if (!/^[1-9][0-9]{0,15}$/.test(String(value))) throw n
 function result(value) { return { content: [{ type: "text", text: JSON.stringify(value) }] }; }
 function event(response, payload) { response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" }); response.end(`event: message\ndata: ${JSON.stringify(payload)}\n\n`); }
 function send(response, status, body) { response.writeHead(status, body ? { "content-type": "application/json", "cache-control": "no-store" } : {}); response.end(body ? JSON.stringify(body) : undefined); }
-function readBody(request) { return new Promise((resolve, reject) => { let data = ""; request.on("data", chunk => { data += chunk; if (Buffer.byteLength(data) > MAX_BODY) reject(status(413, "payload_too_large")); }); request.on("end", () => resolve(data)); request.on("error", reject); }); }
+function readBody(request) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let bytes = 0;
+    request.on("data", (chunk) => {
+      if (bytes > MAX_BODY) return;
+      bytes += chunk.length;
+      if (bytes > MAX_BODY) {
+        // 停止缓存但不先断开连接，让调用方能收到 413。
+        chunks.length = 0;
+        reject(status(413, "payload_too_large"));
+      } else chunks.push(chunk);
+    });
+    request.on("end", () => {
+      if (bytes <= MAX_BODY) resolve(Buffer.concat(chunks, bytes).toString("utf8"));
+    });
+    request.on("error", reject);
+  });
+}
 function status(code, message) { const error = new Error(message); error.status = code; return error; }
 function safe(error) { return /^(Invalid |Unknown |Message not found|unsupported_)/.test(error?.message || "") ? error.message : "Mail gateway request failed"; }
 

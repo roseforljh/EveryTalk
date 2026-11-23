@@ -57,6 +57,14 @@ export class SyncStore {
     });
   }
 
+  /** 轻量读取同步状态，避免在每次网络请求里全表扫描 records。 */
+  async state(): Promise<SyncState> {
+    return this.transaction("readonly", async (tx) => {
+      const row = await read(tx.objectStore("meta").get("state")) as { value: SyncState } | undefined;
+      return row?.value ?? { cursor: 0 };
+    });
+  }
+
   async setState(patch: Partial<SyncState>): Promise<void> {
     await this.transaction("readwrite", async (tx) => {
       const table = tx.objectStore("meta");
@@ -79,7 +87,7 @@ export class SyncStore {
     });
   }
 
-  /** 已校验附件只保留在当前账号本机，不进入同步队列；重开网页可继续离线预览。 */
+  /** 已校验附件只保留在当前账号本机，按数量上限淘汰最旧缓存，避免撑爆浏览器配额阻断同步。 */
   async cachedAttachment(key: string): Promise<Blob | undefined> {
     return this.transaction('readonly', async tx => {
       const row = await read(tx.objectStore('meta').get(`attachment:${key}`)) as { value: Blob } | undefined;
@@ -87,31 +95,74 @@ export class SyncStore {
     });
   }
 
-  async cacheAttachment(key: string, value: Blob): Promise<void> {
-    await this.transaction('readwrite', async tx => {
-      await read(tx.objectStore('meta').put({ key: `attachment:${key}`, value }));
-    });
+  async cacheAttachment(key: string, value: Blob, maxEntries = 60): Promise<void> {
+    try {
+      await this.transaction('readwrite', async tx => {
+        const meta = tx.objectStore('meta');
+        const indexRow = await read(meta.get('attachment-cache-index')) as { value: string[] } | undefined;
+        const order = (indexRow?.value ?? []).filter(item => item !== key);
+        order.push(key);
+        while (order.length > maxEntries) {
+          const evicted = order.shift();
+          if (evicted) meta.delete(`attachment:${evicted}`);
+        }
+        meta.put({ key: `attachment:${key}`, value });
+        meta.put({ key: 'attachment-cache-index', value: order });
+      });
+    } catch {
+      /* 附件缓存配额不足时静默降级，不影响主同步事务。 */
+    }
   }
 
   /** 一次业务操作可以同时更新会话时间和消息，失败时一起回滚。 */
   async saveLocal(records: StoredRecord[]): Promise<void> {
     await this.transaction("readwrite", async (tx) => {
       const table = tx.objectStore("records");
+      const queue = tx.objectStore("pending");
+      const deletedSessions = new Set<string>();
+      const deletedMessages = new Set<string>();
       for (const candidate of records) {
         const old = await read(table.get(candidate.key)) as StoredRecord | undefined;
         if (old?.deleted && candidate.entity !== "user_settings") throw new Error("这条记录已经删除，不能恢复旧版本");
         if (candidate.entity === "messages" && old && !candidate.deleted) throw new Error("修改消息必须创建新消息，不能覆盖原记录");
+        // 若父会话或父消息已在本地删除，则直接以墓碑落库，不再入队上传。
+        const parentSessionId = typeof candidate.payload.sessionId === "string" ? candidate.payload.sessionId : undefined;
+        const parentMessageId = typeof candidate.payload.messageId === "string" ? candidate.payload.messageId : undefined;
+        let parentDeleted = false;
+        if (parentSessionId) {
+          const parentSession = deletedSessions.has(parentSessionId)
+            ? { deleted: true }
+            : await read(table.get(syncKey("sessions", parentSessionId))) as StoredRecord | undefined;
+          if (parentSession?.deleted) parentDeleted = true;
+        }
+        if (!parentDeleted && parentMessageId) {
+          const parentMessage = deletedMessages.has(parentMessageId)
+            ? { deleted: true }
+            : await read(table.get(syncKey("messages", parentMessageId))) as StoredRecord | undefined;
+          if (parentMessage?.deleted) parentDeleted = true;
+        }
+        if (parentDeleted) {
+          table.put({ ...candidate, deleted: true, pending: false });
+          queue.delete(candidate.key);
+          continue;
+        }
         const record = { ...candidate, pending: true };
         table.put(record);
-        tx.objectStore("pending").put(pendingChange(record));
+        queue.put(pendingChange(record));
+        if (candidate.deleted && candidate.entity === "sessions") deletedSessions.add(candidate.id);
+        if (candidate.deleted && candidate.entity === "messages") deletedMessages.add(candidate.id);
       }
-      const all = await read(table.getAll()) as StoredRecord[];
-      for (const child of all) {
-        const parent = all.find((item) => item.deleted && ((item.entity === "sessions" && item.id === child.payload.sessionId) ||
-          (item.entity === "messages" && item.id === child.payload.messageId)));
-        if (parent) {
-          table.put({ ...child, deleted: true, pending: false });
-          tx.objectStore("pending").delete(child.key);
+      // 仅当本次写入真正删除了会话或消息时，才做一次 O(N) 线性级联，彻底消除每次保存的 O(N^2) 扫描。
+      if (deletedSessions.size > 0 || deletedMessages.size > 0) {
+        const all = await read(table.getAll()) as StoredRecord[];
+        for (const child of all) {
+          if (child.deleted && !child.pending) continue;
+          const sid = typeof child.payload.sessionId === "string" ? child.payload.sessionId : "";
+          const mid = typeof child.payload.messageId === "string" ? child.payload.messageId : "";
+          if ((sid && deletedSessions.has(sid)) || (mid && deletedMessages.has(mid))) {
+            table.put({ ...child, deleted: true, pending: false });
+            queue.delete(child.key);
+          }
         }
       }
     });
@@ -170,6 +221,7 @@ export class SyncStore {
       const deletedSessions = new Set(all.filter((r) => r.entity === "sessions" && r.deleted).map((r) => r.id));
       const deletedMessages = new Set(all.filter((r) => r.entity === "messages" && r.deleted).map((r) => r.id));
       for (const child of all) {
+        if (child.deleted && !child.pending) continue;
         if (deletedSessions.has(String(child.payload.sessionId)) || deletedMessages.has(String(child.payload.messageId))) {
           table.put({ ...child, deleted: true, pending: false }); queue.delete(child.key);
         }

@@ -136,13 +136,24 @@ function ParticlesBackground({ forceWhite = false }: { forceWhite?: boolean }) {
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
+    const reducedMotion = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    if (reducedMotion) return
+
     let rafId = 0
+    let paused = typeof document !== 'undefined' && document.visibilityState === 'hidden'
+    let cssW = canvas.parentElement ? canvas.parentElement.clientWidth : window.innerWidth
+    let cssH = canvas.parentElement ? canvas.parentElement.clientHeight : window.innerHeight
+    const updateSize = () => {
+      const parent = canvas.parentElement
+      cssW = parent ? parent.clientWidth : window.innerWidth
+      cssH = parent ? parent.clientHeight : window.innerHeight
+    }
+    const observer = typeof ResizeObserver !== 'undefined' && canvas.parentElement ? new ResizeObserver(updateSize) : null
+    if (observer && canvas.parentElement) observer.observe(canvas.parentElement)
     const startMs = performance.now()
 
     const renderFrame = (nowMs: number) => {
-      const parent = canvas.parentElement
-      const cssW = parent ? parent.clientWidth : window.innerWidth
-      const cssH = parent ? parent.clientHeight : window.innerHeight
+      if (paused) return
       const dpr = Math.min(window.devicePixelRatio || 1, 2)
       const targetW = Math.max(1, Math.round(cssW * dpr))
       const targetH = Math.max(1, Math.round(cssH * dpr))
@@ -238,8 +249,23 @@ function ParticlesBackground({ forceWhite = false }: { forceWhite?: boolean }) {
       rafId = window.requestAnimationFrame(renderFrame)
     }
 
-    rafId = window.requestAnimationFrame(renderFrame)
-    return () => window.cancelAnimationFrame(rafId)
+    const onVisibility = () => {
+      paused = document.visibilityState === 'hidden'
+      if (paused) {
+        window.cancelAnimationFrame(rafId)
+        rafId = 0
+      } else if (!rafId) {
+        rafId = window.requestAnimationFrame(renderFrame)
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    if (!paused) rafId = window.requestAnimationFrame(renderFrame)
+    return () => {
+      paused = true
+      window.cancelAnimationFrame(rafId)
+      document.removeEventListener('visibilitychange', onVisibility)
+      observer?.disconnect()
+    }
   }, [forceWhite])
 
   return <canvas ref={canvasRef} className="et-particles-canvas" aria-hidden="true" />

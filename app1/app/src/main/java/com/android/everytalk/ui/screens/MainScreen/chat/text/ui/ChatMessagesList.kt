@@ -4,6 +4,7 @@ import com.android.everytalk.statecontroller.*
 import android.annotation.SuppressLint
 import com.android.everytalk.R
 import androidx.compose.ui.res.painterResource
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.AnimatedContent
@@ -411,9 +412,9 @@ fun ChatMessagesList(
     var contextMenuMessage by remember { mutableStateOf<Message?>(null) }
     var contextMenuPressOffset by remember { mutableStateOf(Offset.Zero) }
     var pendingAskEveryTalkQuote by remember { mutableStateOf<MessageQuoteReference?>(null) }
-    val quoteJump by viewModel.quoteJump.collectAsState()
+    val quoteJump by viewModel.quoteJump.collectAsStateWithLifecycle()
     // 长会话只渲染最近 10 轮；顶部“加载更多”或上滑到顶时再多渲染 10 轮。
-    val hiddenHistoryCount by viewModel.hiddenHistoryCount.collectAsState()
+    val hiddenHistoryCount by viewModel.hiddenHistoryCount.collectAsStateWithLifecycle()
     // 到顶后不自动加载：要顶着阻尼继续往下拉一段再松手，才多显示 10 轮。
     val historyPull = com.android.everytalk.ui.components.rememberEdgePullToLoadState(
         fromTop = true,
@@ -500,7 +501,7 @@ fun ChatMessagesList(
     val topPadding = statusBarTop + 72.dp
     val topPaddingPx = with(density) { topPadding.toPx().toInt() }
     val topAnchorEngine = topAnchorEngineState ?: remember(scrollSessionKey) { TopAnchorReserveEngineState() }
-    val lastSentUserMessageId by viewModel.lastSentUserMessageId.collectAsState()
+    val lastSentUserMessageId by viewModel.lastSentUserMessageId.collectAsStateWithLifecycle()
     val topAnchorItems = remember(chatItems) {
         mapChatItemsToTopAnchorItems(
             items = chatItems,

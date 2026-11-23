@@ -83,7 +83,10 @@ internal suspend fun buildCloudAgentSubmission(context: Context, database: AppDa
     // ponytail: 只带最近 500 条待上云消息（请求体与后端 2000 条上限内）；更早的积压留给常规同步，不影响本轮执行与恢复。
     val candidates = chat.getSubmissionMessageUuids(sessionId, userMessageId).takeLast(500)
         .let { if (user.uuid in it) it else it + user.uuid }
-    val (ready, attachmentIds) = SyncResourceSynchronizer(context, database, api, accountId).use { it.prepareSubmission(candidates, user.uuid) }
+    // 定向上传与清理互斥，但不等待无关会话的后台同步。
+    val (ready, attachmentIds) = SyncRuntimeLock.submissionFiles.withLock {
+        SyncResourceSynchronizer(context, database, api, accountId).use { it.prepareSubmission(candidates, user.uuid) }
+    }
     val changes = store.submissionChanges(sessionId, candidates.filter { it in ready }, attachmentIds, user.uuid)
     val files = attachmentIds.mapNotNull { database.syncAttachmentDao().get(it) }
         .mapNotNull { row -> row.fileId?.let { Triple(it, row.size, row.sha256) } }.distinctBy { it.first }

@@ -4,7 +4,7 @@ import { useLanguage } from '@/components/ui/LanguageProvider'
 
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
-import { ArrowDown, CodeXml, Download } from 'lucide-react'
+import { ArrowDown, CodeXml, Download, MessageSquare } from 'lucide-react'
 import DepthText from '@/components/ui/DepthText'
 
 const PixelPenguin = dynamic(() => import('@/components/3d/PixelPenguin'), {
@@ -35,7 +35,11 @@ export default function Hero() {
           {t('把聊天、搜索和创作，装进口袋。')}
         </p>
         <div className="actions hero-actions">
-          <Link href="/#download" className="hero-cta hero-cta-primary">
+          <Link href="/chat" className="hero-cta hero-cta-primary">
+            <MessageSquare size={18} aria-hidden="true" />
+            <span>{t('打开网页版')}</span>
+          </Link>
+          <Link href="/#download" className="hero-cta hero-cta-secondary">
             <Download size={18} aria-hidden="true" />
             <span>{t('下载 EveryTalk')}</span>
           </Link>

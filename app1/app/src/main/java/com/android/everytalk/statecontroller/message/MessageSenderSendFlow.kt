@@ -160,7 +160,12 @@ internal fun MessageSender.sendMessageInternal(
 
         val currentConfig = (if (isImageGeneration) stateHolder._selectedImageGenApiConfig.value else stateHolder._selectedApiConfig.value) ?: run {
             Log.e("MessageSender", "❌ No API config selected! isImageGeneration=$isImageGeneration")
-            viewModelScope.launch { showSnackbar(if (isImageGeneration) "请先选择 图像生成 的API配置" else "请先选择 API 配置") }
+            viewModelScope.launch {
+                showSnackbar(
+                    if (isImageGeneration) "请先在左上角抽屉 -> 设置 -> API 配置中添加图像生成模型"
+                    else "请先配置或选择模型（点左上角抽屉 -> 设置 -> API 配置，或登录账号同步）"
+                )
+            }
             onSendRejected?.invoke()
             return
         }

@@ -356,6 +356,10 @@ class CloudAgentCoordinatorTest {
             coordinator.track(initial.id)
             withTimeout(10_000) { done.await() }
             assertEquals(listOf(frozen), posted)
+            assertNull(credentials.loadCloudAgentInput(account, initial.id))
+            // 同一任务的迟到提交回调不再把已释放的密文写回来。
+            coordinator.submit(db.agentDao().getRun(initial.id)!!, cloudAgentJson.parseToJsonElement(frozen).jsonObject)
+            assertNull(credentials.loadCloudAgentInput(account, initial.id))
             coordinator.command(initial.id, "pause")
             assertEquals(2, commandIds.size)
             assertEquals(1, commandIds.toSet().size)

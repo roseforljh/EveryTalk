@@ -2,9 +2,14 @@ package com.android.everytalk.util.storage
 
 import android.app.usage.StorageStatsManager
 import android.content.Context
+import android.content.SharedPreferences
 import android.os.Build
 import android.os.storage.StorageManager
+import com.android.everytalk.data.computer.ComputerCredentialStore
 import com.android.everytalk.data.database.AppDatabase
+import com.android.everytalk.data.sync.SyncRuntimeLock
+import com.android.everytalk.util.AppLogger
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -49,11 +54,40 @@ data class AppStorageSnapshot(
 /**
  * 统计并清理 EveryTalk 自己的文件。
  *
- * 统计只读取 App 私有目录。清理只处理系统缓存目录和拍照产生的临时文件，
- * 会话、附件、技能、工具结果和连接凭据都不会被删除。
+ * 统计只读取 App 私有目录。升级清理比用户主动清理更保守：只回收已不再需要的同步缓存和云端重试副本。
  */
 class AppStorageManager(context: Context) {
     private val appContext = context.applicationContext
+
+    /** 升级或覆盖安装后首个进程启动时后台回收；不清空系统缓存、不改历史和数据库。 */
+    internal suspend fun reclaimAfterPackageUpdate() = withContext(Dispatchers.IO) {
+        try {
+            val updateTime = appContext.packageManager.getPackageInfo(appContext.packageName, 0).lastUpdateTime
+            val preferences = appContext.getSharedPreferences("storage_maintenance", Context.MODE_PRIVATE)
+            runPackageStorageCleanup(preferences, updateTime) {
+                val db = AppDatabase.getDatabase(appContext).openHelper.readableDatabase
+                var complete = SyncRuntimeLock.withIdleResourceFiles {
+                    findReclaimableSyncCacheFiles(appContext, db)
+                        .map { file -> file.delete() || !file.exists() }.all { it }
+                }
+                // 游标一旦落盘，重连只查服务器，不再用冻结输入补发 POST。精确按任务身份删除，不碰其他密钥信封。
+                val submitted = db.query("""
+                    SELECT cloudAccountId, id FROM agent_runs
+                    WHERE executionOwner = 'CLOUD' AND cloudAccountId IS NOT NULL AND cloudRunId = id AND cloudCursor > 0
+                """.trimIndent()).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getString(0) to cursor.getString(1)) } }
+                val credentials = ComputerCredentialStore(appContext)
+                for ((accountId, runId) in submitted) {
+                    if (!credentials.deleteCloudAgentInput(accountId, runId)) complete = false
+                }
+                complete
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // 不影响启动；未写完成标记，下次启动会重试。
+            AppLogger.warn("Storage", "升级存储清理未完成，下次启动重试")
+        }
+    }
 
     suspend fun scan(): AppStorageSnapshot = withContext(Dispatchers.IO) {
         val dataRoot = appContext.dataDir
@@ -118,7 +152,7 @@ class AppStorageManager(context: Context) {
                 File(appContext.filesDir, "chat_images_temp"),
             ),
         )
-        reclaimSyncAndToolStorage(appContext)
+        SyncRuntimeLock.withIdleResourceFiles { reclaimSyncAndToolStorage(appContext) }
         val afterExtra = directorySize(dbDir) + directorySize(toolDir) + directorySize(syncDir)
         clearedCache + (beforeExtra - afterExtra).coerceAtLeast(0L)
     }
@@ -129,10 +163,12 @@ class AppStorageManager(context: Context) {
      */
     suspend fun clearCategory(type: StorageDetailType): Long = withContext(Dispatchers.IO) {
         if (type == StorageDetailType.TEMPORARY_FILES) {
-            val syncFiles = reclaimableSyncCacheFiles(appContext)
-            val syncBefore = syncFiles.sumOf(::directorySize)
-            syncFiles.forEach { file -> runCatching { file.delete() } }
-            val syncReleased = (syncBefore - syncFiles.sumOf(::directorySize)).coerceAtLeast(0L)
+            val syncReleased = SyncRuntimeLock.withIdleResourceFiles {
+                val syncFiles = reclaimableSyncCacheFiles(appContext)
+                val syncBefore = syncFiles.sumOf(::directorySize)
+                syncFiles.forEach { file -> runCatching { file.delete() } }
+                (syncBefore - syncFiles.sumOf(::directorySize)).coerceAtLeast(0L)
+            }
             return@withContext syncReleased + clearTargets(listOf(File(appContext.filesDir, "chat_images_temp")))
         }
         val targets = when (type) {
@@ -192,42 +228,64 @@ private fun List<File>.distinctFiles(): List<File> = distinctBy { file ->
     runCatching(file::getCanonicalPath).getOrElse { file.absolutePath }
 }
 
-/**
- * 扫描 sync-resources 中已落地且不再被活跃消息附件引用的加密分块与拼接临时文件。
- * 若当前存在待上传确认或 FILE_NOT_READY 待修复项，则跳过对应账号目录，确保断点续传安全。
- */
-internal fun reclaimableSyncCacheFiles(context: Context): List<File> {
-    val syncRoot = File(context.filesDir, "sync-resources")
-    if (!syncRoot.isDirectory) return emptyList()
-    return runCatching {
-        val db = AppDatabase.getDatabase(context).openHelper.readableDatabase
-        val hasPendingQueue = db.query(
-            "SELECT 1 FROM system_settings WHERE key LIKE 'sync_resource_queued:%' OR key LIKE 'sync_compaction_queued:%' OR (key LIKE 'sync_rejected:%' AND value = 'FILE_NOT_READY') LIMIT 1",
-        ).use { it.moveToFirst() }
-        if (hasPendingQueue) return emptyList()
+/** 仅在全部已选文件清理成功时登记当前安装；中断或失败时允许下次启动补做。 */
+internal suspend fun runPackageStorageCleanup(
+    preferences: SharedPreferences,
+    updateTime: Long,
+    cleanup: suspend () -> Boolean,
+) {
+    val key = "cleaned_package_update_time"
+    if (updateTime > 0L && preferences.getLong(key, 0L) != updateTime && cleanup()) {
+        preferences.edit().putLong(key, updateTime).commit()
+    }
+}
 
-        // 收集所有未删除消息中仍在引用的 sync-resources 本地媒体文件路径或文件名。
-        val referencedNames = hashSetOf<String>()
-        db.query(
-            "SELECT attachments, imageUrls FROM messages WHERE deleted = 0 AND (attachments LIKE '%sync-resources%' OR imageUrls LIKE '%sync-resources%')",
-        ).use { cursor ->
-            val regex = Regex("""sync-resources/[^"\\]+/([^"\\/]+)""")
-            while (cursor.moveToNext()) {
-                for (col in 0..1) {
-                    val raw = cursor.getString(col) ?: continue
-                    regex.findAll(raw).forEach { match -> referencedNames += match.groupValues[1] }
-                }
+/** 供存储页预览使用；读库失败不能把业务文件推断为可清理。 */
+internal fun reclaimableSyncCacheFiles(context: Context): List<File> = runCatching {
+    if (!File(context.filesDir, "sync-resources").isDirectory) emptyList()
+    else findReclaimableSyncCacheFiles(context, AppDatabase.getDatabase(context).openHelper.readableDatabase)
+}.getOrDefault(emptyList())
+
+/**
+ * 拼接文件仅供下载恢复使用，脱离消息/草稿引用后可丢弃。
+ * 分块还用于断点续传：仅回收有已确认附件对应的块；有待确认或待修复工作时保留分块和上传中间产物。
+ * 调用方删除前须持有同步锁并重新扫描，防止清理正在使用的文件。
+ */
+internal fun findReclaimableSyncCacheFiles(context: Context, db: androidx.sqlite.db.SupportSQLiteDatabase): List<File> {
+    val syncRoot = File(context.filesDir, "sync-resources")
+    val accounts = syncRoot.listFiles().orEmpty().filter(File::isDirectory)
+    if (accounts.isEmpty()) return emptyList()
+    val hasPending = db.query("""
+        SELECT 1 FROM system_settings WHERE key LIKE 'sync_resource_queued:%' OR key LIKE 'sync_compaction_queued:%'
+            OR (key LIKE 'sync_rejected:%' AND value = 'FILE_NOT_READY')
+        UNION ALL SELECT 1 FROM sync_attachments WHERE deleted = 0 AND sync_status != 'SYNCED' AND fileId IS NOT NULL
+        UNION ALL SELECT 1 FROM user_settings WHERE kind = 'skills' AND deleted = 0 AND sync_status != 'SYNCED'
+        LIMIT 1
+    """.trimIndent()).use { it.moveToFirst() }
+    val confirmedChunks = if (hasPending) emptySet() else db.query(
+        "SELECT fileId, sha256 FROM sync_attachments WHERE deleted = 0 AND sync_status = 'SYNCED' AND fileId IS NOT NULL",
+    ).use { cursor -> buildSet { while (cursor.moveToNext()) add("${cursor.getString(0)}-${cursor.getString(1)}") } }
+
+    val referencedNames = hashSetOf<String>()
+    db.query("""
+        SELECT attachments, imageUrls FROM messages WHERE deleted = 0 AND (attachments LIKE '%sync-resources%' OR imageUrls LIKE '%sync-resources%')
+        UNION ALL
+        SELECT attachments, imageUrls FROM message_drafts WHERE attachments LIKE '%sync-resources%' OR imageUrls LIKE '%sync-resources%'
+    """.trimIndent()).use { cursor ->
+        val name = Regex("sync-resources/[-a-f0-9]+/([A-Za-z0-9_-]+)")
+        while (cursor.moveToNext()) {
+            for (column in 0..1) {
+                val raw = cursor.getString(column) ?: continue
+                name.findAll(raw).forEach { referencedNames += it.groupValues[1] }
             }
         }
-
-        syncRoot.listFiles().orEmpty()
-            .filter(File::isDirectory)
-            .flatMap { accountDir ->
-                accountDir.listFiles().orEmpty().filter { child ->
-                    child.isFile && !child.name.startsWith("skill-") && child.name !in referencedNames
-                }
-            }
-    }.getOrDefault(emptyList())
+    }
+    val assembled = Regex("assembled-[0-9a-f]{64}")
+    return accounts.flatMap { accountDir ->
+        accountDir.listFiles().orEmpty().filter { file ->
+            file.isFile && file.name !in referencedNames && (assembled.matches(file.name) || file.name in confirmedChunks)
+        }
+    }
 }
 
 /**

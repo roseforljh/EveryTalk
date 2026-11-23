@@ -767,8 +767,10 @@ internal class SyncResourceSynchronizer(
                 deleteConfirmedAttachmentFiles(chosen.map { it.first.id })
             }
             val media = entries.filter { it.second["role"]?.jsonPrimitive?.contentOrNull in setOf(null, "media") && it.first.fileId != null }
-            if (media.isNotEmpty()) {
-                val groups = media.groupBy { it.second["mediaId"]?.jsonPrimitive?.contentOrNull ?: it.first.id }.values
+                .groupBy { it.second["mediaId"]?.jsonPrimitive?.contentOrNull ?: it.first.id }
+            // 只有原机已持有全部可读原件时才跳过下载；缺一项仍走主线的补齐与缓存迁移。
+            if (media.isNotEmpty() && !hasReadableMedia(message, media.keys)) {
+                val groups = media.values
                 val items = groups.sortedBy { it.first().first.position }.mapNotNull { parts ->
                     val restored = restoreMedia(parts) ?: return@mapNotNull null
                     if (parts.any { it.second["chunkCount"] != null }) deleteConfirmedAttachmentFiles(parts.map { it.first.id })
@@ -779,10 +781,7 @@ internal class SyncResourceSynchronizer(
                     val current = chat.getMessageByUuid(messageId)?.takeUnless { it.deleted } ?: return@withTransaction
                     // 保留原机路径和保存回执；补齐缺失项，替换已失效或旧版不可共享的缓存路径。
                     val next = if (current.id.startsWith("cloud:")) items else {
-                        val readable = current.attachments.filter { item ->
-                            val oldSyncFile = item is SelectedMediaItem.GenericFile && item.filePath?.startsWith(root.path + File.separator) == true
-                            !oldSyncFile && materialize(item) != null
-                        }
+                        val readable = readableAttachments(current)
                         readable + items.filter { item -> readable.none { it.id == item.id } }
                     }
                     if (current.attachments != next) {
@@ -829,6 +828,19 @@ internal class SyncResourceSynchronizer(
         }
         if (allSettled && !moreWork && "$RESOURCE_RESTORE_VERSION:" + db.syncAttachmentDao().stamp() == stamp) settings.insertSetting(SystemSettingEntity(stampKey, stamp))
         if (touched) SyncLocalChanges.notifyChanged()
+    }
+
+    /** 旧消息可能只有 imageUrls；只有每个云端附件 ID 都有本机原件才无需恢复。 */
+    private fun hasReadableMedia(message: MessageEntity, mediaIds: Set<String>): Boolean {
+        if (message.id.startsWith("cloud:")) return false
+        val local = if (message.attachments.isEmpty()) mediaItems(message) else readableAttachments(message)
+        return local.map { it.id }.containsAll(mediaIds)
+    }
+
+    private fun readableAttachments(message: MessageEntity): List<SelectedMediaItem> = message.attachments.filter { item ->
+        // 旧版普通文件在不能对外分享的目录，仍需走迁移。
+        val oldSyncFile = item is SelectedMediaItem.GenericFile && item.filePath?.startsWith(root.path + File.separator) == true
+        !oldSyncFile && materialize(item) != null
     }
 
     /** 只查选中消息的普通附件，不依赖执行轨迹、历史解密或整账号资源恢复。 */

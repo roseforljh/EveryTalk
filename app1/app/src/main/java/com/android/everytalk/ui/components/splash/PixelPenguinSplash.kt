@@ -60,7 +60,6 @@ fun PixelPenguinSplash(
         ImageRequest.Builder(context)
             .data(R.drawable.pixel_penguin_splash)
             .memoryCachePolicy(CachePolicy.DISABLED)
-            .diskCachePolicy(CachePolicy.DISABLED)
             .repeatCount(0)
             .onAnimationEnd { animationFinished.value = true }
             .build()

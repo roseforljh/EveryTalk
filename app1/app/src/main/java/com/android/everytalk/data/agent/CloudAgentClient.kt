@@ -226,13 +226,15 @@ internal class CloudAgentClient(
     /**
      * 一个连接先收完整快照，再接递增事件；断线交给调用方带持久游标重连。
      * SSE 与等待工具/审批均无 120 秒限制；90 秒只用于发现半开连接。
+     * 返回 true 表示服务端主动下发 reconnect 平滑重连，false 表示到达终态或普通断流。
      */
-    suspend fun events(id: String, after: Long, apply: suspend (CloudRunView) -> Unit) {
+    suspend fun events(id: String, after: Long, apply: suspend (CloudRunView) -> Unit): Boolean {
         requireCloudUuid(id)
         require(after >= 0)
         var access = access(false)
         repeat(2) { attempt ->
             check(permitted()) { "云端任务账号授权已变更" }
+            var serverReconnect = false
             val retryAuth = client.prepareGet("$base/v1/agent/runs/$id/events") {
                 bearerAuth(access)
                 parameter("after", after)
@@ -255,7 +257,10 @@ internal class CloudAgentClient(
                                 apply(view)
                                 if (view.terminal) return@execute false
                             }
-                            if (event == "reconnect") return@execute false
+                            if (event == "reconnect") {
+                                serverReconnect = true
+                                return@execute false
+                            }
                             event = ""
                             data.clear()
                         }
@@ -268,9 +273,10 @@ internal class CloudAgentClient(
                 }
                 false
             }
-            if (!retryAuth) return
+            if (!retryAuth) return serverReconnect
             access = access(true)
         }
+        return false
     }
 
     private suspend fun access(force: Boolean): String {

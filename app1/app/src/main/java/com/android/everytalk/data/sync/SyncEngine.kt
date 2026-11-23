@@ -11,7 +11,14 @@ internal sealed interface SyncRunResult {
 }
 
 /** 所有 Worker、用户决定和退出共享此锁，禁止跨账号并发应用远端数据。 */
-internal object SyncRuntimeLock { val mutex = Mutex() }
+internal object SyncRuntimeLock {
+    val mutex = Mutex()
+    val submissionFiles = Mutex()
+
+    /** 清理需等常规同步与定向上传都不用文件；正常提交不等待整轮后台同步。 */
+    suspend fun <T> withIdleResourceFiles(block: () -> T): T =
+        mutex.withLock { submissionFiles.withLock { block() } }
+}
 
 /** Release 也保留的同步诊断；调用处只传阶段、数量、游标和错误类型，绝不传正文、地址或凭据。 */
 internal fun syncDiagnostic(message: String) {

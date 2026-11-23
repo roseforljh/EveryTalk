@@ -61,6 +61,19 @@ test("超过频率限制时返回 429", async () => {
   assert.equal(response.headers.get("Retry-After"), "60");
 });
 
+test("带举报标识的请求仍须通过 IP 总额度", async () => {
+  const request = createRequest(VALID_REPORT);
+  request.headers.set("X-EveryTalk-Reporter-Key", "aaaaaaaaaaaaaaaa");
+  const keys = [];
+  const response = await handleRequest(request, createEnv({
+    rateLimitSuccess: false,
+    onRateLimit: (key) => keys.push(key),
+    onSend: () => assert.fail("IP 额度已用完，不应发送邮件"),
+  }));
+  assert.equal(response.status, 429);
+  assert.deepEqual(keys, ["203.0.113.10"]);
+});
+
 test("超过请求体限制时返回 413", async () => {
   const response = await handleRequest(
     createRequest({ ...VALID_REPORT, messageText: "a".repeat(33_000) }),

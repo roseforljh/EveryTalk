@@ -33,14 +33,19 @@ describe('IndexedDB 同步事务', () => {
 
   test('同一页先收到子消息再收到会话墓碑时，子消息不会复活', async () => {
     const store = await SyncStore.open(`cascade-${crypto.randomUUID()}`); stores.push(store)
+    const sessionId = '11111111-1111-4111-8111-111111111111'
+    // 本机已排队的子消息删除也会被远端会话删除覆盖，无需再提交一次。
+    await store.saveLocal([record('messages', crypto.randomUUID(), { sessionId }, true)])
     const result = await store.applyPage({
       changes: [
-        { entity: 'messages', id: crypto.randomUUID(), payload: { sessionId: '11111111-1111-4111-8111-111111111111', text: '旧消息' }, deleted: false, server_seq: 1 },
-        { entity: 'sessions', id: '11111111-1111-4111-8111-111111111111', payload: { clientModifiedAt: 2, title: '已删除' }, deleted: true, server_seq: 2 },
+        { entity: 'messages', id: crypto.randomUUID(), payload: { sessionId, text: '旧消息' }, deleted: false, server_seq: 1 },
+        { entity: 'sessions', id: sessionId, payload: { clientModifiedAt: 2, title: '已删除' }, deleted: true, server_seq: 2 },
       ], next_cursor: 2, has_more: false, epoch: 0, secrets_epoch: 0,
     })
     expect(result).toBe('applied')
-    expect((await store.snapshot()).records.every(item => item.deleted)).toBe(true)
+    const snapshot = await store.snapshot()
+    expect(snapshot.records.every(item => item.deleted)).toBe(true)
+    expect(snapshot.pending).toHaveLength(0)
   })
 
   test('确认旧版本时，网络等待期间的新编辑仍然留在队列', async () => {
@@ -64,5 +69,35 @@ describe('IndexedDB 同步事务', () => {
     const snapshot = await store.snapshot()
     expect(snapshot.pending).toHaveLength(0)
     expect(snapshot.records.find(item => item.id === messageId)?.deleted).toBe(true)
+  })
+
+  test('state() 轻量读取同步状态，cacheAttachment 按容量淘汰最旧条目', async () => {
+    const store = await SyncStore.open(`lru-${crypto.randomUUID()}`); stores.push(store)
+    await store.setState({ cursor: 12, secretsEpoch: 3 })
+    expect(await store.state()).toEqual({ cursor: 12, secretsEpoch: 3 })
+    await store.cacheAttachment('a', new Blob(['1']), 2)
+    await store.cacheAttachment('b', new Blob(['2']), 2)
+    await store.cacheAttachment('c', new Blob(['3']), 2)
+    expect(await store.cachedAttachment('a')).toBeUndefined()
+    expect(await store.cachedAttachment('b')).toBeDefined()
+    expect(await store.cachedAttachment('c')).toBeDefined()
+  })
+
+  test('大量记录下 saveLocal 不再退化为 O(N^2)，且删除会话仍正确级联', async () => {
+    const store = await SyncStore.open(`perf-${crypto.randomUUID()}`); stores.push(store)
+    const sessionId = crypto.randomUUID()
+    const batch: StoredRecord[] = [record('sessions', sessionId, { clientModifiedAt: 1, title: '长会话' })]
+    for (let i = 0; i < 600; i++) {
+      batch.push(record('messages', crypto.randomUUID(), { sessionId, text: `msg-${i}`, timestamp: i }))
+    }
+    await store.saveLocal(batch)
+    const start = performance.now()
+    for (let i = 0; i < 10; i++) {
+      await store.saveLocal([record('messages', crypto.randomUUID(), { sessionId, text: `extra-${i}`, timestamp: 1000 + i })])
+    }
+    expect(performance.now() - start).toBeLessThan(1500)
+    await store.saveLocal([record('sessions', sessionId, { clientModifiedAt: 2000, title: '长会话' }, true)])
+    const afterDelete = await store.snapshot()
+    expect(afterDelete.records.every(item => item.deleted)).toBe(true)
   })
 })

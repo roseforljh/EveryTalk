@@ -658,7 +658,8 @@ fun ChatScreen(
                             onShowSystemPrompt = {
                                 viewModel.toggleSystemPromptExpanded()
                                 viewModel.showSystemPromptDialog()
-                            }
+                            },
+                            hasSelectedModel = selectedApiConfig != null,
                         )
                     }
                     !initialContentReady -> {

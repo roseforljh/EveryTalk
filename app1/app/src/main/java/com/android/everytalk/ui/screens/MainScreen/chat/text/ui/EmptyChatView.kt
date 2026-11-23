@@ -59,7 +59,8 @@ fun EmptyChatView(
     onNavigateToImageGen: () -> Unit,
     onNavigateToVoice: () -> Unit,
     onNavigateToSettings: () -> Unit,
-    onShowSystemPrompt: () -> Unit
+    onShowSystemPrompt: () -> Unit,
+    hasSelectedModel: Boolean = true,
 ) {
     Box(Modifier.fillMaxSize()) {
     ParticlesBackground()
@@ -132,7 +133,7 @@ fun EmptyChatView(
                         }
                     } catch (e: CancellationException) {
                         Log.d("Animation", "动画已取消")
-                        coroutineScope.launch { animY.forEach { launch { it.snapTo(0f) } } }
+                        throw e
                     }
                 }
 
@@ -155,8 +156,17 @@ fun EmptyChatView(
             Spacer(modifier = Modifier.height(spacerHeight))
 
             Column(
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
+                if (!hasSelectedModel) {
+                    PillCard(
+                        title = "尚未配置模型 · 点击前往设置或登录同步",
+                        iconRes = R.drawable.gpt_settings,
+                        iconTint = Color(0xFFFF9800),
+                        onClick = { if (!isImeVisible) onNavigateToSettings() }
+                    )
+                }
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {

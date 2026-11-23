@@ -72,14 +72,18 @@ internal class CloudAgentCoordinator(
     }
 
     /** POST 之前先原子封存输入。相同 run 的重复调用只能使用完全相同的字节。 */
-    suspend fun submit(run: AgentRunEntity, input: JsonObject) {
+    suspend fun submit(run: AgentRunEntity, input: JsonObject, alreadySaved: Boolean = false) {
         check(permitted()) { "云端任务账号授权已变更" }
         requireRun(run)
         check(input["id"]?.jsonPrimitive?.content == run.id) { "云端提交身份不匹配" }
-        submitMutex.withLock {
-            val bytes = input.toString().toByteArray(Charsets.UTF_8)
-            try { credentials.saveCloudAgentInput(accountId, run.id, bytes) }
-            finally { bytes.fill(0) }
+        if (!alreadySaved) {
+            submitMutex.withLock {
+                // 首个云端快照可能先于本机 submit 到达；已确认的任务不再生成重试副本。
+                if ((database.agentDao().getRun(run.id)?.cloudCursor ?: run.cloudCursor) > 0L) return@withLock
+                val bytes = input.toString().toByteArray(Charsets.UTF_8)
+                try { credentials.saveCloudAgentInput(accountId, run.id, bytes) }
+                finally { bytes.fill(0) }
+            }
         }
         blockedRuns.remove(run.id)
         track(run.id)
@@ -169,8 +173,12 @@ internal class CloudAgentCoordinator(
         if (error.status != 404 || error.code != "AGENT_NOT_FOUND" || run.cloudCursor > 0) throw error
         // 用户在服务器确认创建前停止的任务，永远不能再被发现扫描补发。
         check(run.status != AgentRunStatus.CANCELLED.name) { "任务已停止" }
-        val bytes = credentials.loadCloudAgentInput(accountId, run.id)
-            ?: return localTerminal(run, "FAILED", "任务未能提交到云端，请重新发送")
+        val bytes = submitMutex.withLock {
+            if ((database.agentDao().getRun(run.id)?.cloudCursor ?: 0L) > 0L) null
+            else credentials.loadCloudAgentInput(accountId, run.id)
+        } ?: return store.read(run.id)?.takeIf { it.cursor > 0L }
+            // 404 发出后可能已从别的回调拿到确认；此时以落盘快照为准，不能误标为提交失败。
+            ?: localTerminal(run, "FAILED", "任务未能提交到云端，请重新发送")
         val input = try { cloudAgentJson.parseToJsonElement(bytes.toString(Charsets.UTF_8)).jsonObject }
             finally { bytes.fill(0) }
         check(input["id"]?.jsonPrimitive?.content == run.id) { "冻结输入身份不匹配" }
@@ -209,11 +217,12 @@ internal class CloudAgentCoordinator(
             requireRun(run)
             // 已落下终态快照（含提交前停止、本机定稿的失败）就没有可跟随的东西。
             if (run.status in setOf(AgentRunStatus.COMPLETED.name, AgentRunStatus.FAILED.name, AgentRunStatus.CANCELLED.name)) return
+            var serverReconnect = false
             try {
                 val view = lookup(run)
                 accept(view)
                 if (view.terminal) return
-                client.events(runId, database.agentDao().getRun(runId)?.cloudCursor ?: 0L) { next ->
+                serverReconnect = client.events(runId, database.agentDao().getRun(runId)?.cloudCursor ?: 0L) { next ->
                     accept(next)
                     failures = 0
                 }
@@ -231,6 +240,10 @@ internal class CloudAgentCoordinator(
                 onConnection(run, if (run.cloudCursor == 0L) "正在核对云端是否收到任务，恢复连接后继续确认"
                     else "本机进度连接中断，正在重连；不影响云端执行")
             }
+            if (serverReconnect) {
+                wait(500L)
+                continue
+            }
             // 这里只重连订阅，不重试模型。模型的 120 秒与三次重试由后端独立计时。
             failures++
             wait(agentResumeRetryDelayMillis(failures))
@@ -238,14 +251,17 @@ internal class CloudAgentCoordinator(
     }
 
     /** 快照和游标先落盘，再通知 UI；相同游标也可因本机 UUID 映射新到而重新投影。 */
-    suspend fun accept(view: CloudRunView) = projectionMutex.withLock {
-        if (!permitted()) return@withLock
-        store.apply(accountId, view)
-        val current = store.read(view.id) ?: return@withLock
-        // 命令、发现和 SSE 可以并发返回，消息必须与本次读取的持久快照成对，不能混入较旧 apply 的返回值。
-        val message = store.project(accountId, current) ?: return@withLock
-        if (!permitted()) return@withLock
-        onSnapshot(current, message)
+    suspend fun accept(view: CloudRunView) {
+        val discardInput = projectionMutex.withLock {
+            if (!permitted()) return@withLock false
+            val awaitingConfirmation = view.cursor > 0L && database.agentDao().getRun(view.id)?.cloudCursor == 0L
+            store.apply(accountId, view)
+            val current = store.read(view.id) ?: return@withLock false
+            // 游标确认必须先落盘。先投影界面，再在投影锁外删除重试密文，不阻塞其他任务的界面更新。
+            if (permitted()) store.project(accountId, current)?.let { onSnapshot(current, it) }
+            awaitingConfirmation && current.cursor > 0L
+        }
+        if (discardInput) submitMutex.withLock { credentials.deleteCloudAgentInput(accountId, view.id) }
     }
 
     /**

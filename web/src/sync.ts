@@ -163,7 +163,7 @@ export class SyncClient {
 
   private async pull(session: AuthSession): Promise<SyncStatus> {
     for (let pageIndex = 0; pageIndex < 100; pageIndex++) {
-      const { state } = await this.requireStore().snapshot();
+      const state = await this.requireStore().state();
       const body = await this.request(session, `/sync/pull?since=${state.cursor}&limit=500`);
       const page = validatePull(body, state.cursor);
       const result = await this.requireStore().applyPage(page);
@@ -220,7 +220,7 @@ export class SyncClient {
     let current = session;
     let refreshed = false;
     for (;;) {
-      const secretsEpoch = (await this.requireStore().snapshot()).state.secretsEpoch ?? 0;
+      const secretsEpoch = (await this.requireStore().state()).secretsEpoch ?? 0;
       const response = await this.fetcher(`${this.baseUrl}${path}`, { ...init, redirect: "error", cache: "no-store",
         signal: AbortSignal.any([this.abort.signal, AbortSignal.timeout(30_000)]),
         headers: { Authorization: `Bearer ${current.access_token}`, "X-EveryTalk-Sync-Version": VERSION, "X-EveryTalk-Device": liveDevice,

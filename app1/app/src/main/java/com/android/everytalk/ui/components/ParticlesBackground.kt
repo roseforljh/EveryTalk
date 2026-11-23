@@ -49,15 +49,18 @@ fun ParticlesBackground(
             reveal.floatValue = 1f
             return@LaunchedEffect
         }
-        // 持续动画；页面离开组合或应用进入后台时帧时钟暂停，不会空耗。
         var last = 0L
+        var frameCount = 0
         while (true) {
-            // 声明这是无限动画，让 Compose 测试的帧策略能够暂停它，正常页面仍持续绘制。
+            // 声明这是无限动画，让 Compose 测试的帧策略能够暂停它；入场完成后隔帧更新以降低空页 GPU 功耗。
             withInfiniteAnimationFrameNanos { now ->
                 val dt = if (last == 0L) 1f / 60f else ((now - last) / 1e9f).coerceIn(0.0005f, 0.05f)
                 last = now
-                clock.floatValue += dt * SPEED
-                reveal.floatValue = (reveal.floatValue + dt / INTRO_SECONDS).coerceAtMost(1f)
+                val nextReveal = (reveal.floatValue + dt / INTRO_SECONDS).coerceAtMost(1f)
+                reveal.floatValue = nextReveal
+                if (nextReveal < 1f || frameCount++ % 2 == 0) {
+                    clock.floatValue += dt * SPEED * (if (nextReveal < 1f) 1f else 2f)
+                }
             }
         }
     }

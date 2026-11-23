@@ -585,6 +585,14 @@ class StreamingMessageStateManager {
                 val expiredId = retainedRenderStateIds.pollFirst() ?: break
                 if (!activeStreamingMessages.contains(expiredId)) {
                     streamingRenderStates.remove(expiredId)
+                    streamingStates.remove(expiredId)
+                    finalizedMessages.remove(expiredId)
+                    lastFlushTime.remove(expiredId)
+                    markdownHoldStartedAt.remove(expiredId)
+                    hasFirstFlushed.remove(expiredId)
+                    contentLengthTracker.remove(expiredId)
+                    incrementalParseCaches.remove(expiredId)
+                    contentVersions.remove(expiredId)
                 }
             }
         }

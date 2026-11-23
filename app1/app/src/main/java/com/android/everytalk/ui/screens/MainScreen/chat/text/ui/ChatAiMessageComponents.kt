@@ -5,6 +5,7 @@ import com.android.everytalk.statecontroller.*
 import android.annotation.SuppressLint
 import com.android.everytalk.R
 import androidx.compose.ui.res.painterResource
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.AnimatedContent
@@ -440,12 +441,12 @@ fun AiMessageFooterItem(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val shareFailedMessage = stringResource(R.string.chat_share_failed)
-    val availableModels by viewModel.apiConfigs.collectAsState()
-    val selectedModel by viewModel.selectedApiConfig.collectAsState()
-    val compactingContext by viewModel.isCompactingContext.collectAsState()
-    val activeMessageId by viewModel.currentTextStreamingAiMessageId.collectAsState()
-    val chatRunState by viewModel.chatRunState.collectAsState()
-    val remoteLiveRun by viewModel.stateHolder._remoteLiveRun.collectAsState()
+    val availableModels by viewModel.apiConfigs.collectAsStateWithLifecycle()
+    val selectedModel by viewModel.selectedApiConfig.collectAsStateWithLifecycle()
+    val compactingContext by viewModel.isCompactingContext.collectAsStateWithLifecycle()
+    val activeMessageId by viewModel.currentTextStreamingAiMessageId.collectAsStateWithLifecycle()
+    val chatRunState by viewModel.chatRunState.collectAsStateWithLifecycle()
+    val remoteLiveRun by viewModel.stateHolder._remoteLiveRun.collectAsStateWithLifecycle()
     val remoteRunning = remoteLiveRun?.let { it.running && it.message.id == message.id && it.message.conversationId == message.conversationId } == true
     val liveContextWindowTokens = remember(
         message.contextUsageSnapshot?.configId,
