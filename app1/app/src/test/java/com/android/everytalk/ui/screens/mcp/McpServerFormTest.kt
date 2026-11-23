@@ -10,24 +10,35 @@ import org.junit.Test
 class McpServerFormTest {
     @Test
     fun `通用表单自动命名并按地址选择传输方式`() {
-        val http = buildMcpServerConfig("https://mcp.context7.com/mcp", "", "CONTEXT7_API_KEY: k1\n\nX-Test:  v ")!!
+        val http = buildMcpServerConfig("https://mcp.context7.com/mcp", "", " k1 ")!!
         assertTrue(http is McpServerConfig.StreamableHTTPServer)
         assertEquals("Context7", http.name)
-        assertEquals(listOf("CONTEXT7_API_KEY" to "k1", "X-Test" to "v"), http.commonOptions.headers)
+        assertEquals(listOf("Authorization" to "Bearer k1"), http.commonOptions.headers)
+        assertEquals("k1", mcpApiKeyOf(http.commonOptions.headers))
 
         assertTrue(buildMcpServerConfig("https://example.com/sse/", "Demo", "") is McpServerConfig.SseTransportServer)
     }
 
     @Test
-    fun `非法地址或请求头不生成配置，编辑保留原ID与传输方式`() {
+    fun `非法地址不生成配置，编辑保留原ID、传输方式与非认证请求头`() {
         assertNull(buildMcpServerConfig("ftp://example.com", "", ""))
         assertNull(buildMcpServerConfig("example.com/mcp", "", ""))
-        assertNull(buildMcpServerConfig("https://example.com/mcp", "", "no-colon"))
 
-        val old = McpServerConfig.SseTransportServer(id = "keep", url = "https://example.com/events")
-        val edited = buildMcpServerConfig("https://example.com/events", "New", "", old)!!
+        val old = McpServerConfig.SseTransportServer(
+            id = "keep",
+            url = "https://example.com/events",
+            commonOptions = com.android.everytalk.data.mcp.McpCommonOptions(
+                headers = listOf("Authorization" to "Bearer old-k", "X-Workspace" to "team-a"),
+            ),
+        )
+        assertEquals("old-k", mcpApiKeyOf(old.commonOptions.headers))
+        val edited = buildMcpServerConfig("https://example.com/events", "New", "new-k", old)!!
         assertEquals("keep", edited.id)
         assertTrue(edited is McpServerConfig.SseTransportServer)
+        assertEquals(
+            listOf("Authorization" to "Bearer new-k", "X-Workspace" to "team-a"),
+            edited.commonOptions.headers,
+        )
     }
 
     @Test

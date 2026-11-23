@@ -696,6 +696,12 @@ class MainActivity : AppCompatActivity() {
                                             navController.popBackStack()
                                         },
                                         onPrivacy = { navController.navigate(Screen.PRIVACY_POLICY_SCREEN) },
+                                        onContinueWithoutAccount = {
+                                            appViewModel.authRepository.chooseLocalOnly()
+                                            appViewModel.featureGateCoordinator.cancel()
+                                            navController.popBackStack()
+                                        },
+                                        showBackButton = true,
                                         onSignedIn = {
                                             if (returnAfterLogin) {
                                                 navController.popBackStack()

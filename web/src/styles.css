@@ -275,6 +275,36 @@
   color: var(--muted);
   padding-left: 2px;
 }
+.et-secret-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+.et-secret-input-wrap input {
+  padding-right: 42px;
+}
+.et-app .et-secret-toggle-btn {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.et-app .et-secret-toggle-btn:hover {
+  color: var(--fg);
+  background: var(--soft);
+}
 .et-app .et-primary {
   background: var(--fg);
   color: var(--bg);

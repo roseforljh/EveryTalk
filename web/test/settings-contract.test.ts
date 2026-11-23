@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import {
   canonicalSettingKey,
+  extractMcpApiKey,
   isCanonicalUuid,
+  mergeMcpApiKeyHeaders,
   migrateLegacySettingRecords,
   settingContractToView,
   settingViewToContract,
@@ -62,6 +64,36 @@ describe('MCP 配置合同映射', () => {
     expect(view.url).toBe('')
     const { value } = settingViewToContract('mcp_configs', 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', view)
     expect(value.endpoint).toEqual(endpoint)
+  })
+
+  test('第三方自定义 MCP 支持独立 API Key 提取、合并及保留加密信封', () => {
+    const merged = mergeMcpApiKeyHeaders(' sk-secret ', [['Authorization', 'Bearer old'], ['X-Workspace', 'team-a']])
+    expect(merged).toEqual([
+      ['Authorization', 'Bearer sk-secret'],
+      ['X-Workspace', 'team-a'],
+    ])
+    expect(extractMcpApiKey(merged)).toEqual({
+      apiKey: 'sk-secret',
+      hasEncryptedHeaders: false,
+    })
+
+    // 加密信封在未修改密钥时原样保留，输入新 apiKey 时覆盖为新 Bearer 头。
+    const encrypted = { $enc: 1, alg: 'AES-256-GCM', nonce: 'AAAAAAAAAAAAAAAA', ct: 'AAAAAAAAAAAAAAAAAAAAAA==', keyVersion: 1 }
+    expect(extractMcpApiKey(encrypted)).toEqual({
+      apiKey: '',
+      hasEncryptedHeaders: true,
+    })
+    const kept = settingViewToContract('mcp_configs', 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', {
+      url: 'https://mcp.thirdparty.dev/mcp',
+      headers: encrypted,
+    })
+    expect(kept.value.headers).toEqual(encrypted)
+    const updated = settingViewToContract('mcp_configs', 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', {
+      url: 'https://mcp.thirdparty.dev/mcp',
+      headers: encrypted,
+      apiKey: 'sk-new-key',
+    })
+    expect(updated.value.headers).toEqual([['Authorization', 'Bearer sk-new-key']])
   })
 })
 

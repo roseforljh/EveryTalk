@@ -160,15 +160,60 @@ function mcpToView(value: JsonObject, key: string, extras: JsonObject): JsonObje
   }
 }
 
+/** 从已保存的请求头提取 `Authorization: Bearer <token>`，并标记是否为同步加密信封。 */
+export function extractMcpApiKey(headers: unknown): {
+  apiKey: string
+  hasEncryptedHeaders: boolean
+} {
+  if (isEnvelope(headers)) {
+    return { apiKey: '', hasEncryptedHeaders: true }
+  }
+  if (!Array.isArray(headers)) {
+    return { apiKey: '', hasEncryptedHeaders: false }
+  }
+  const auth = headers.find(
+    (entry): entry is [string, string] =>
+      Array.isArray(entry) &&
+      typeof entry[0] === 'string' &&
+      typeof entry[1] === 'string' &&
+      entry[0].toLowerCase() === 'authorization',
+  )
+  if (!auth) return { apiKey: '', hasEncryptedHeaders: false }
+  const rawVal = auth[1].trim()
+  if (!/^bearer\s+/i.test(rawVal)) return { apiKey: '', hasEncryptedHeaders: false }
+  return { apiKey: rawVal.replace(/^bearer\s+/i, '').trim(), hasEncryptedHeaders: false }
+}
+
+/** 合并独立 API Key 与原有非 Authorization 请求头，确保编辑时不会丢失历史头。 */
+export function mergeMcpApiKeyHeaders(apiKey: string, existingHeaders: unknown): [string, string][] {
+  const preserved: [string, string][] = Array.isArray(existingHeaders)
+    ? existingHeaders
+        .filter(
+          (entry): entry is [string, string] =>
+            Array.isArray(entry) &&
+            typeof entry[0] === 'string' &&
+            typeof entry[1] === 'string' &&
+            entry[0].toLowerCase() !== 'authorization',
+        )
+        .map(([k, v]) => [k, v])
+    : []
+  const trimmedKey = apiKey.trim()
+  return trimmedKey ? [['Authorization', `Bearer ${trimmedKey}`], ...preserved] : preserved
+}
+
 /** 网页形状 → 合同值；返回的 extras 是本机保留的网页独有字段。 */
 function mcpFromView(view: JsonObject, key: string): { value: JsonObject; extras: JsonObject } {
   const url = text(view.url).trim()
   const preservedEndpoint = isEnvelope(view.endpoint) ? view.endpoint : undefined
   const apiKey = text(view.apiKey).trim()
-  // 网页只提供单个密钥输入框；安卓 headers 是 [name, value] 数组。按 MCP HTTP 通行做法写入 Bearer。
-  const headers = view.headers !== undefined
+  // 显式数组（包括清空后的 []）优先；否则若有新 apiKey 则覆盖为 Bearer；无新密钥时保留原同步加密信封。
+  const headers = Array.isArray(view.headers)
     ? view.headers
-    : apiKey ? [['Authorization', `Bearer ${apiKey}`]] : undefined
+    : apiKey
+      ? [['Authorization', `Bearer ${apiKey}`]]
+      : view.headers !== undefined
+        ? view.headers
+        : undefined
   const value: JsonObject = {
     localId: text(view.id, text(view.localId, key)),
     name: text(view.name),

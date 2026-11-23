@@ -163,9 +163,15 @@ class AccountEntryGateTest {
         composeRule.onNodeWithContentDescription("Email address").performTextInput("hello@example.com")
         composeRule.runOnIdle { darkTheme.value = true }
         composeRule.onNodeWithText("hello@example.com").assertIsDisplayed()
-        // Robolectric 下不依赖键盘和滚动后的触摸坐标，直接执行按钮的无障碍点击动作。
+        // 首次登录先弹条款确认框，取消不会发起请求，同意后再发送验证码。
         composeRule.onNodeWithText("Send code").performScrollTo().assertIsDisplayed().assertIsEnabled()
             .performSemanticsAction(SemanticsActions.OnClick) { it() }
+        composeRule.onNodeWithText("Privacy & sync terms").assertIsDisplayed()
+        composeRule.onNodeWithText("Cancel").performSemanticsAction(SemanticsActions.OnClick) { it() }
+        composeRule.runOnIdle { verify(exactly = 0) { manager.sendEmailCode(any()) } }
+        composeRule.onNodeWithText("Send code").performScrollTo().assertIsEnabled()
+            .performSemanticsAction(SemanticsActions.OnClick) { it() }
+        composeRule.onNodeWithText("Agree and continue").performSemanticsAction(SemanticsActions.OnClick) { it() }
         composeRule.runOnIdle { verify(exactly = 1) { manager.sendEmailCode("hello@example.com") } }
         composeRule.runOnIdle { state.value = state.value.copy(pendingEmail = "hello@example.com") }
         composeRule.onNodeWithText("Verify and continue").assertIsNotEnabled()
@@ -175,7 +181,7 @@ class AccountEntryGateTest {
         composeRule.runOnIdle { verify(exactly = 1) { manager.verifyEmailCode("123456") } }
     }
 
-    @Test fun `第三方图标选择正确提供方且等待授权时禁用邮箱和重复登录`() {
+    @Test fun `第三方图标同意条款后选择正确提供方且等待授权时禁用邮箱和重复登录`() {
         val state = MutableStateFlow(AccountUiState(configured = true, initialized = true))
         val manager = mockk<AccountManager>(relaxed = true)
         every { manager.state } returns state.asStateFlow()
@@ -185,22 +191,23 @@ class AccountEntryGateTest {
             }
         }
         composeRule.onNodeWithContentDescription("Email address").performTextInput("hello@example.com")
-        // 两个入口只显示图标；其读屏名称和点击操作仍需完整保留。
+        // 底部第三方入口仅显示图标，保留完整读屏名称，点击先弹条款确认框。
         composeRule.onNodeWithText("Continue with Google").assertDoesNotExist()
         composeRule.onNodeWithText("Continue with GitHub").assertDoesNotExist()
-        for ((label, provider) in listOf("Continue with Google" to AccountOAuthProvider.Google,
-            "Continue with GitHub" to AccountOAuthProvider.GitHub)) {
-            composeRule.onNodeWithContentDescription(label).performScrollTo().assertIsEnabled()
-                .performSemanticsAction(SemanticsActions.OnClick) { it() }
-            composeRule.runOnIdle { verify(exactly = 1) { manager.startOAuthLogin(provider, any()) } }
-        }
+        composeRule.onNodeWithContentDescription("Continue with Google").performScrollTo().assertIsEnabled()
+            .performSemanticsAction(SemanticsActions.OnClick) { it() }
+        composeRule.onNodeWithText("Privacy & sync terms").assertIsDisplayed()
+        composeRule.onNodeWithText("Agree and continue").performSemanticsAction(SemanticsActions.OnClick) { it() }
+        composeRule.runOnIdle { verify(exactly = 1) { manager.startOAuthLogin(AccountOAuthProvider.Google, any()) } }
+        composeRule.onNodeWithContentDescription("Continue with GitHub").performScrollTo().assertIsEnabled()
+            .performSemanticsAction(SemanticsActions.OnClick) { it() }
+        composeRule.runOnIdle { verify(exactly = 1) { manager.startOAuthLogin(AccountOAuthProvider.GitHub, any()) } }
+
         composeRule.runOnIdle { state.value = state.value.copy(awaitingOAuth = true,
             message = "请在浏览器中完成第三方登录") }
         composeRule.onNodeWithText("Waiting for browser sign-in").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithText("Complete third-party sign-in in your browser").assertDoesNotExist()
-        // 隐私与游客入口必须随同一滚动内容可达，不能再被独立底栏遮住。
-        composeRule.onNodeWithText("Privacy policy").performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithText("Continue without an account").assertIsDisplayed()
+        composeRule.onNodeWithText("Continue as guest").performScrollTo().assertIsDisplayed()
         composeRule.runOnIdle { state.value = state.value.copy(message = "登录回调不属于本次授权") }
         composeRule.onNodeWithText("This sign-in callback belongs to another authorization request")
             .performScrollTo().assertIsDisplayed()
@@ -264,18 +271,27 @@ class AccountEntryGateTest {
             MaterialTheme { AccountEntryGate(manager) { Text("Main app") } }
         }
         composeRule.onNodeWithText("Main app").assertDoesNotExist()
-        composeRule.onNodeWithText("Continue without an account").assertDoesNotExist()
+        composeRule.onNodeWithText("Continue as guest").assertDoesNotExist()
 
         // 恢复已登录会话后直接挂载主界面；失效或退出后才显示注册/登录表单。
         composeRule.runOnIdle {
             state.value = state.value.copy(initialized = true, user = AccountUser("user-1", "hello@example.com"))
         }
         composeRule.onNodeWithText("Main app").assertIsDisplayed()
-        composeRule.onNodeWithText("Continue without an account").assertDoesNotExist()
+        composeRule.onNodeWithText("Continue as guest").assertDoesNotExist()
         composeRule.runOnIdle { state.value = state.value.copy(user = null) }
         composeRule.onNodeWithText("Main app").assertDoesNotExist()
-        composeRule.onNodeWithText("Continue without an account").performScrollTo().assertIsDisplayed()
+
+        // 点击游客入口先弹出本地说明对话框，取消留在登录页，确认后进入主界面。
+        composeRule.onNodeWithText("Continue as guest").performScrollTo().assertIsDisplayed()
             .performSemanticsAction(SemanticsActions.OnClick) { it() }
+        composeRule.onNodeWithText("Guest mode").assertIsDisplayed()
+        composeRule.onNodeWithText("Cancel").performSemanticsAction(SemanticsActions.OnClick) { it() }
+        composeRule.onNodeWithText("Main app").assertDoesNotExist()
+
+        composeRule.onNodeWithText("Continue as guest").performScrollTo().assertIsDisplayed()
+            .performSemanticsAction(SemanticsActions.OnClick) { it() }
+        composeRule.onNodeWithText("Continue locally").performSemanticsAction(SemanticsActions.OnClick) { it() }
         composeRule.onNodeWithText("Main app").assertIsDisplayed()
 
         // 游客后来登录，再退出时应重新显示登录页，不能沿用先前的游客选择。
@@ -283,6 +299,6 @@ class AccountEntryGateTest {
         composeRule.waitForIdle()
         composeRule.runOnIdle { state.value = state.value.copy(user = null) }
         composeRule.onNodeWithText("Main app").assertDoesNotExist()
-        composeRule.onNodeWithText("Continue without an account").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Continue as guest").performScrollTo().assertIsDisplayed()
     }
 }

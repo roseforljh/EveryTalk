@@ -7,6 +7,8 @@ import {
   Download,
   Edit3,
   ExternalLink,
+  Eye,
+  EyeOff,
   FileCode,
   FolderOpen,
   Globe,
@@ -35,6 +37,7 @@ import {
   X,
 } from 'lucide-react'
 import { apiBaseUrl } from './auth'
+import { extractMcpApiKey, mergeMcpApiKeyHeaders } from './settings-contract'
 import { isBuiltinModel } from './builtin-models'
 import { ModelIcon } from './ModelIcon'
 import { ModelParametersFields } from './ModelParametersFields'
@@ -443,6 +446,9 @@ export function SettingsPanel(props: {
     url: string
     transportType: 'SSE' | 'HTTP'
     apiKey: string
+    showApiKey: boolean
+    hasEncryptedHeaders: boolean
+    keyTouched: boolean
   }>()
 
   // 技能商店 / 新建技能 / 编辑技能规则状态
@@ -963,6 +969,9 @@ export function SettingsPanel(props: {
                         url: '',
                         transportType: 'HTTP',
                         apiKey: '',
+                        showApiKey: false,
+                        hasEncryptedHeaders: false,
+                        keyTouched: false,
                       })
                     }
                   >
@@ -1040,16 +1049,20 @@ export function SettingsPanel(props: {
                               type="button"
                               className="et-card-icon-btn"
                               title="打开编辑 MCP 服务器对话框"
-                              onClick={() =>
+                              onClick={() => {
+                                const parsed = extractMcpApiKey(val.headers)
                                 setMcpEditor({
                                   record: item,
                                   preset: (str(val.preset, 'CUSTOM') as 'CUSTOM' | 'CONTEXT7' | 'EXA_SEARCH' | 'FIRECRAWL'),
                                   name,
                                   url: str(val.url),
                                   transportType: str(val.transportType, 'HTTP') === 'SSE' ? 'SSE' : 'HTTP',
-                                  apiKey: '',
+                                  apiKey: parsed.apiKey,
+                                  showApiKey: false,
+                                  hasEncryptedHeaders: parsed.hasEncryptedHeaders,
+                                  keyTouched: false,
                                 })
-                              }
+                              }}
                             >
                               <Edit3 size={14} />
                             </button>
@@ -3154,7 +3167,7 @@ export function SettingsPanel(props: {
             <div className="et-dialog-header">
               <div>
                 <h3>{mcpEditor.record ? '编辑 MCP 服务器连接' : '新建 MCP 服务器连接'}</h3>
-                <small>支持预设一键接入 Context7、Exa、Firecrawl 或自定义 SSE / Streamable HTTP 端点</small>
+                <small>支持预设一键接入 Context7、Exa、Firecrawl 或自定义 SSE / Streamable HTTP 端点与密钥认证</small>
               </div>
               <button type="button" onClick={() => setMcpEditor(undefined)}>
                 <X size={18} />
@@ -3204,8 +3217,20 @@ export function SettingsPanel(props: {
                     status: 'connected',
                     tools: defaultTools,
                   }
-                  if (mcpEditor.apiKey.trim()) {
+                  if (mcpEditor.preset === 'CUSTOM') {
+                    delete nextValue.apiKey
+                    if (!mcpEditor.hasEncryptedHeaders || mcpEditor.keyTouched) {
+                      const mergedHeaders = mergeMcpApiKeyHeaders(mcpEditor.apiKey, existingVal.headers)
+                      if (mergedHeaders.length > 0 || existingVal.headers !== undefined) {
+                        nextValue.headers = mergedHeaders
+                      } else {
+                        delete nextValue.headers
+                      }
+                    }
+                  } else if (mcpEditor.apiKey.trim()) {
                     nextValue.apiKey = mcpEditor.apiKey.trim()
+                    // 预设更新密钥时清除旧 headers，交由合同层写入最新认证头。
+                    delete nextValue.headers
                   }
                   await saveSetting('mcp_configs', keyId, nextValue, mcpEditor.record)
                   setMcpEditor(undefined)
@@ -3264,40 +3289,78 @@ export function SettingsPanel(props: {
                           })
                         }
                       >
-                        <option value="SSE">SSE (Server-Sent Events)</option>
                         <option value="HTTP">Streamable HTTP</option>
+                        <option value="SSE">SSE (Server-Sent Events)</option>
                       </select>
                     </label>
                   ) : (
                     <label className="et-form-field">
                       <span className="et-form-label">认证 API Key</span>
-                      <input
-                        type="password"
-                        required={
-                          MCP_SERVER_PRESETS.find(p => p.id === mcpEditor.preset)?.requiresKey &&
-                          !mcpEditor.record
-                        }
-                        value={mcpEditor.apiKey}
-                        onChange={e => setMcpEditor({ ...mcpEditor, apiKey: e.target.value })}
-                        placeholder={
-                          MCP_SERVER_PRESETS.find(p => p.id === mcpEditor.preset)?.keyPlaceholder ?? 'API Key'
-                        }
-                      />
+                      <div className="et-secret-input-wrap">
+                        <input
+                          type={mcpEditor.showApiKey ? 'text' : 'password'}
+                          required={
+                            MCP_SERVER_PRESETS.find(p => p.id === mcpEditor.preset)?.requiresKey &&
+                            !mcpEditor.record
+                          }
+                          value={mcpEditor.apiKey}
+                          onChange={e => setMcpEditor({ ...mcpEditor, apiKey: e.target.value, keyTouched: true })}
+                          placeholder={
+                            mcpEditor.hasEncryptedHeaders && !mcpEditor.keyTouched
+                              ? '已配置密钥，留空保持不变'
+                              : (MCP_SERVER_PRESETS.find(p => p.id === mcpEditor.preset)?.keyPlaceholder ?? 'API Key')
+                          }
+                        />
+                        <button
+                          type="button"
+                          className="et-secret-toggle-btn"
+                          aria-label={mcpEditor.showApiKey ? '隐藏密钥' : '显示密钥'}
+                          onClick={() => setMcpEditor({ ...mcpEditor, showApiKey: !mcpEditor.showApiKey })}
+                        >
+                          {mcpEditor.showApiKey ? <Eye size={16} /> : <EyeOff size={16} />}
+                        </button>
+                      </div>
                     </label>
                   )}
                 </div>
 
                 {mcpEditor.preset === 'CUSTOM' && (
-                  <label className="et-form-field">
-                    <span className="et-form-label">MCP 服务器 URL</span>
-                    <input
-                      required
-                      type="url"
-                      value={mcpEditor.url}
-                      onChange={e => setMcpEditor({ ...mcpEditor, url: e.target.value })}
-                      placeholder="https://example.com/mcp"
-                    />
-                  </label>
+                  <>
+                    <label className="et-form-field">
+                      <span className="et-form-label">MCP 服务器 URL</span>
+                      <input
+                        required
+                        type="url"
+                        value={mcpEditor.url}
+                        onChange={e => setMcpEditor({ ...mcpEditor, url: e.target.value })}
+                        placeholder="https://example.com/mcp"
+                      />
+                    </label>
+
+                    <label className="et-form-field">
+                      <span className="et-form-label">API Key / 令牌（可选）</span>
+                      <div className="et-secret-input-wrap">
+                        <input
+                          type={mcpEditor.showApiKey ? 'text' : 'password'}
+                          value={mcpEditor.apiKey}
+                          onChange={e => setMcpEditor({ ...mcpEditor, apiKey: e.target.value, keyTouched: true })}
+                          placeholder={
+                            mcpEditor.hasEncryptedHeaders && !mcpEditor.keyTouched
+                              ? '已配置密钥，留空保持不变'
+                              : 'sk-…（自动作为 Authorization: Bearer 请求头发送）'
+                          }
+                        />
+                        <button
+                          type="button"
+                          className="et-secret-toggle-btn"
+                          aria-label={mcpEditor.showApiKey ? '隐藏密钥' : '显示密钥'}
+                          onClick={() => setMcpEditor({ ...mcpEditor, showApiKey: !mcpEditor.showApiKey })}
+                        >
+                          {mcpEditor.showApiKey ? <Eye size={16} /> : <EyeOff size={16} />}
+                        </button>
+                      </div>
+                    </label>
+                  </>
                 )}
               </div>
 

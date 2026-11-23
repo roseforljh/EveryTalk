@@ -25,6 +25,8 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.android.everytalk.R
@@ -482,28 +484,35 @@ internal fun mcpNameFromUrl(url: String): String {
     return label.replaceFirstChar { it.uppercase() }
 }
 
-/** 每行一个 `名称: 值`；有一行格式不对就返回 null，让表单提示错误。 */
-internal fun parseMcpHeaders(text: String): List<Pair<String, String>>? =
-    text.lines().filter { it.isNotBlank() }.map { line ->
-        val name = line.substringBefore(':', "").trim()
-        if (name.isEmpty()) return null
-        name to line.substringAfter(':').trim()
-    }
+/** 从已保存的请求头里提取 `Authorization: Bearer <token>`，编辑表单时回填密钥框。 */
+internal fun mcpApiKeyOf(headers: List<Pair<String, String>>): String {
+    val auth = headers.firstOrNull { it.first.equals("Authorization", ignoreCase = true) } ?: return ""
+    val value = auth.second.trim()
+    return if (value.startsWith("Bearer ", ignoreCase = true)) value.substring(7).trim() else ""
+}
 
 /**
  * 通用表单转配置：地址以 /sse 结尾走 SSE，其余走 Streamable HTTP；
- * 编辑且地址未改时保留原传输方式。地址或请求头不合法返回 null。
+ * 编辑且地址未改时保留原传输方式，并保留除 Authorization 之外的历史请求头。
  */
 internal fun buildMcpServerConfig(
     url: String,
     name: String,
-    headersText: String,
+    apiKey: String = "",
     existing: McpServerConfig? = null,
 ): McpServerConfig? {
     val trimmedUrl = url.trim()
     val uri = runCatching { URI(trimmedUrl) }.getOrNull() ?: return null
     if (uri.scheme !in setOf("http", "https") || uri.host.isNullOrBlank()) return null
-    val headers = parseMcpHeaders(headersText) ?: return null
+    val trimmedKey = apiKey.trim()
+    val preservedHeaders = existing?.commonOptions?.headers
+        ?.filterNot { it.first.equals("Authorization", ignoreCase = true) }
+        .orEmpty()
+    val headers = if (trimmedKey.isNotEmpty()) {
+        listOf("Authorization" to "Bearer $trimmedKey") + preservedHeaders
+    } else {
+        preservedHeaders
+    }
     val options = McpCommonOptions(
         enable = existing?.enabled ?: true,
         name = name.trim().ifEmpty { mcpNameFromUrl(trimmedUrl) },
@@ -517,7 +526,7 @@ internal fun buildMcpServerConfig(
 }
 
 /**
- * 通用添加/编辑 MCP 服务器：只填地址、名称和请求头。
+ * 通用添加/编辑第三方 MCP 服务器：地址、名称与可选 API Key 密钥。
  */
 @Composable
 fun AddMcpServerDialog(
@@ -527,15 +536,14 @@ fun AddMcpServerDialog(
 ) {
     var url by remember { mutableStateOf(existingConfig?.url.orEmpty()) }
     var name by remember { mutableStateOf(existingConfig?.name.orEmpty()) }
-    var headersText by remember {
-        mutableStateOf(existingConfig?.commonOptions?.headers?.joinToString("\n") { "${it.first}: ${it.second}" }.orEmpty())
-    }
-    val config = buildMcpServerConfig(url, name, headersText, existingConfig)
-    val urlError = url.isNotBlank() && buildMcpServerConfig(url, "", "") == null
-    val headersError = parseMcpHeaders(headersText) == null
+    var apiKey by remember { mutableStateOf(mcpApiKeyOf(existingConfig?.commonOptions?.headers.orEmpty())) }
+    var apiKeyVisible by remember { mutableStateOf(false) }
+    val config = buildMcpServerConfig(url, name, apiKey, existingConfig)
+    val urlError = url.isNotBlank() && buildMcpServerConfig(url, "") == null
     val dialogBg = appDialogContainerColor()
     val content = appDialogContentColor()
     val border = appDialogBorderColor()
+    val subtleText = MaterialTheme.colorScheme.onSurfaceVariant
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -576,14 +584,25 @@ fun AddMcpServerDialog(
                     colors = DialogTextFieldColors,
                 )
                 OutlinedTextField(
-                    value = headersText,
-                    onValueChange = { headersText = it },
-                    label = { Text(stringResource(R.string.mcp_headers_label)) },
-                    placeholder = { Text("Authorization: Bearer …") },
-                    minLines = 2,
-                    maxLines = 5,
-                    isError = headersError,
-                    supportingText = if (headersError) { { Text(stringResource(R.string.mcp_headers_invalid)) } } else null,
+                    value = apiKey,
+                    onValueChange = { apiKey = it },
+                    label = { Text(stringResource(R.string.mcp_api_key_optional_label)) },
+                    placeholder = { Text("sk-…") },
+                    singleLine = true,
+                    visualTransformation = if (apiKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { apiKeyVisible = !apiKeyVisible }) {
+                            Icon(
+                                painter = painterResource(if (apiKeyVisible) R.drawable.ic_eye else R.drawable.ic_eye_off),
+                                contentDescription = stringResource(
+                                    if (apiKeyVisible) R.string.settings_hide_key else R.string.settings_show_key,
+                                ),
+                                modifier = Modifier.size(20.dp),
+                                tint = subtleText,
+                            )
+                        }
+                    },
+                    supportingText = { Text(stringResource(R.string.mcp_api_key_bearer_hint)) },
                     modifier = Modifier.fillMaxWidth(),
                     shape = AppDialogTextFieldShape,
                     colors = DialogTextFieldColors,
